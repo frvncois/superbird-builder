@@ -1,0 +1,1053 @@
+{
+  "id": "2f8e520d-402d-499d-840c-068ff3ba744b",
+  "name": "Superb Studio",
+  "pages": [
+    {
+      "id": "db1d6389-3251-4ac8-adfd-65c140503bb6",
+      "name": "Home",
+      "path": "/",
+      "status": "published",
+      "code": "@setup\n\tname: Home\n\tslug: /\n\tstatus: published\n\tlocale: en\n:body\n\t:Navbar\n\t\t:div\n\t\t\t:link:\n\t\t\t:link:\n\t\t\t:link:\n\t\t\t:link:\n\t\t\t:div\n\t\t\t\t:link:\n\t\t\t\t:link:\n\t\t\tdiv:\n\t\tdiv:\n\tNavbar:\n\t:section\n\t\t:h1:\n\t\t:paragraph:\n\t\t:link:\n\tsection:\n\t:section\n\t\t:h2:\n\t\t:collection-list(service)\n\t\t\t:div\n\t\t\t\t:h3(title):\n\t\t\t\t:paragraph(description):\n\t\t\tdiv:\n\t\tcollection-list:\n\tsection:\nbody:",
+      "elements": [
+        {
+          "id": "ed5a2ec8-30a9-467c-b93f-548940d920fd",
+          "type": "body",
+          "content": "",
+          "children": [
+            {
+              "id": "ecb89638-b834-4ae8-8b88-dd6026181268",
+              "type": "Navbar",
+              "content": "",
+              "children": [
+                {
+                  "id": "8357740d-1cfc-4e44-8484-773ae6a5dfec",
+                  "type": "div",
+                  "content": "",
+                  "children": [
+                    {
+                      "id": "e7b77ff5-261c-474d-ac6c-6d9ce83e7d28",
+                      "type": "link",
+                      "content": "",
+                      "children": [],
+                      "endLine": 8,
+                      "line": 8
+                    },
+                    {
+                      "id": "d76087f5-2740-4e80-b1c3-1952640ea58b",
+                      "type": "link",
+                      "content": "",
+                      "children": [],
+                      "endLine": 9,
+                      "line": 9
+                    },
+                    {
+                      "id": "4f76bf02-d1f5-4c98-bc04-f26ee40e5894",
+                      "type": "link",
+                      "content": "",
+                      "children": [],
+                      "endLine": 10,
+                      "line": 10
+                    },
+                    {
+                      "id": "da72d97a-3483-43ff-a426-7f439854fc16",
+                      "type": "link",
+                      "content": "",
+                      "children": [],
+                      "endLine": 11,
+                      "line": 11
+                    },
+                    {
+                      "id": "a541bbcc-f121-4643-885c-129d37774211",
+                      "type": "div",
+                      "content": "",
+                      "children": [
+                        {
+                          "id": "65baa692-6209-45fc-a4d4-c1ce902aef98",
+                          "type": "link",
+                          "content": "",
+                          "children": [],
+                          "endLine": 13,
+                          "line": 13
+                        },
+                        {
+                          "id": "39b4c7e2-3a98-44ce-bdb5-9e4389d915c2",
+                          "type": "link",
+                          "content": "",
+                          "children": [],
+                          "endLine": 14,
+                          "line": 14
+                        }
+                      ],
+                      "endLine": 15,
+                      "line": 12
+                    }
+                  ],
+                  "endLine": 16,
+                  "line": 7
+                }
+              ],
+              "endLine": 17,
+              "line": 6
+            },
+            {
+              "id": "90d6f70e-7495-47a9-a896-9b519aaf1097",
+              "type": "section",
+              "content": "",
+              "children": [
+                {
+                  "id": "90ae1d09-3300-4e8a-8b24-041b70dde262",
+                  "type": "h1",
+                  "content": "We build superb websites",
+                  "children": [],
+                  "endLine": 19,
+                  "line": 19,
+                  "classes": "max-w-3xl text-6xl font-bold tracking-tight",
+                  "locales": {
+                    "fr": {
+                      "content": "Nous créons des sites superbes"
+                    }
+                  }
+                },
+                {
+                  "id": "db701f03-72ef-4da7-8a59-e5924b6124a7",
+                  "type": "paragraph",
+                  "content": "Design, development and everything in between — shipped with care.",
+                  "children": [],
+                  "endLine": 20,
+                  "line": 20,
+                  "classes": "max-w-xl text-lg text-gray-600",
+                  "locales": {
+                    "fr": {
+                      "content": "Design, développement et tout le reste — livrés avec soin."
+                    }
+                  }
+                },
+                {
+                  "id": "3e7b0513-1407-421e-8d29-89780f332d62",
+                  "type": "link",
+                  "content": "See our services",
+                  "children": [],
+                  "endLine": 21,
+                  "line": 21,
+                  "classes": "rounded-full bg-black px-6 py-3 text-sm font-medium text-white hover:bg-gray-800",
+                  "link": "/services",
+                  "locales": {
+                    "fr": {
+                      "content": "Voir nos services"
+                    }
+                  }
+                }
+              ],
+              "endLine": 22,
+              "line": 18,
+              "classes": "flex flex-col items-center gap-6 px-8 py-28 text-center",
+              "interactions": [
+                {
+                  "trigger": "appear",
+                  "targetId": null,
+                  "toClasses": "bg-amber-50",
+                  "duration": "duration-700",
+                  "easing": "ease-out",
+                  "id": "0b0804f7-17cb-46ac-91b3-cddec8963766"
+                }
+              ]
+            },
+            {
+              "id": "a1a3c74b-4f4d-425b-bc38-4a7e4b6d6155",
+              "type": "section",
+              "content": "",
+              "children": [
+                {
+                  "id": "d8aee592-5bd2-4878-9741-0ada9508cf55",
+                  "type": "h2",
+                  "content": "What we do",
+                  "children": [],
+                  "endLine": 24,
+                  "line": 24,
+                  "classes": "text-3xl font-bold",
+                  "locales": {
+                    "fr": {
+                      "content": "Ce que nous faisons"
+                    }
+                  }
+                },
+                {
+                  "id": "b00069b3-59c0-49d0-afcb-b46d404fd641",
+                  "type": "collection-list",
+                  "content": "",
+                  "children": [
+                    {
+                      "id": "a7c7d441-281f-4b04-8db6-ef5ef4b43a8b",
+                      "type": "div",
+                      "content": "",
+                      "children": [
+                        {
+                          "id": "6190e7b4-1144-4bab-8f0b-52b671f71d34",
+                          "type": "h3",
+                          "content": "",
+                          "children": [],
+                          "endLine": 27,
+                          "line": 27,
+                          "arg": "title",
+                          "classes": "text-xl font-semibold"
+                        },
+                        {
+                          "id": "46427e96-09d2-4b8a-8cd4-6bdf88e9736a",
+                          "type": "paragraph",
+                          "content": "",
+                          "children": [],
+                          "endLine": 28,
+                          "line": 28,
+                          "arg": "description",
+                          "classes": "text-sm text-gray-600"
+                        }
+                      ],
+                      "endLine": 29,
+                      "line": 26,
+                      "classes": "flex flex-col gap-2 rounded-2xl border border-gray-200 p-6",
+                      "interactions": [
+                        {
+                          "trigger": "hover",
+                          "targetId": null,
+                          "toClasses": "shadow-lg -translate-y-1",
+                          "duration": "duration-300",
+                          "easing": "ease-out",
+                          "id": "af6d2e95-f47e-4bbc-b583-1a54ac8b2986"
+                        }
+                      ]
+                    }
+                  ],
+                  "endLine": 30,
+                  "line": 25,
+                  "arg": "service",
+                  "classes": "grid grid-cols-2 gap-6"
+                }
+              ],
+              "endLine": 31,
+              "line": 23,
+              "classes": "flex flex-col gap-8 px-8 py-20"
+            }
+          ],
+          "endLine": 32,
+          "line": 5
+        }
+      ]
+    },
+    {
+      "id": "91d33f80-154b-4df5-8e69-79f72e4be0e2",
+      "name": "About",
+      "path": "/about",
+      "status": "published",
+      "code": "@setup\n\tname: About\n\tslug: /about\n\tstatus: published\n\tlocale: en\n:body\n\t:Navbar\n\t\t:div\n\t\t\t:link:\n\t\t\t:link:\n\t\t\t:link:\n\t\t\t:link:\n\t\t\t:div\n\t\t\t\t:link:\n\t\t\t\t:link:\n\t\t\tdiv:\n\t\tdiv:\n\tNavbar:\n\t:section\n\t\t:image:\n\t\t:h1:\n\t\t:paragraph:\n\t\t:paragraph:\n\tsection:\nbody:",
+      "elements": [
+        {
+          "id": "3344981d-b10f-454d-b749-380c3d79487b",
+          "type": "body",
+          "content": "",
+          "children": [
+            {
+              "id": "b30077a0-1242-4609-beb4-0c24cc95a057",
+              "type": "Navbar",
+              "content": "",
+              "children": [
+                {
+                  "id": "5e26e658-979f-4eb0-b70c-61351729c7d1",
+                  "type": "div",
+                  "content": "",
+                  "children": [
+                    {
+                      "id": "65cb5a08-cd3e-4388-b027-ab40b9cd404d",
+                      "type": "link",
+                      "content": "",
+                      "children": [],
+                      "endLine": 8,
+                      "line": 8
+                    },
+                    {
+                      "id": "2d6f2cf5-50e2-4094-a2ed-648f4333f571",
+                      "type": "link",
+                      "content": "",
+                      "children": [],
+                      "endLine": 9,
+                      "line": 9
+                    },
+                    {
+                      "id": "c2e2f964-1760-4201-ae63-6332aa1a8bb9",
+                      "type": "link",
+                      "content": "",
+                      "children": [],
+                      "endLine": 10,
+                      "line": 10
+                    },
+                    {
+                      "id": "c2d11f07-3529-499a-81cd-1e76d0e97d14",
+                      "type": "link",
+                      "content": "",
+                      "children": [],
+                      "endLine": 11,
+                      "line": 11
+                    },
+                    {
+                      "id": "bcf11be5-65f3-47a6-8ef8-8622d90c0137",
+                      "type": "div",
+                      "content": "",
+                      "children": [
+                        {
+                          "id": "9673feb8-9185-4025-9096-e26c82963eee",
+                          "type": "link",
+                          "content": "",
+                          "children": [],
+                          "endLine": 13,
+                          "line": 13
+                        },
+                        {
+                          "id": "d2382af0-0bcc-44e4-8feb-7aea96de71ac",
+                          "type": "link",
+                          "content": "",
+                          "children": [],
+                          "endLine": 14,
+                          "line": 14
+                        }
+                      ],
+                      "endLine": 15,
+                      "line": 12
+                    }
+                  ],
+                  "endLine": 16,
+                  "line": 7
+                }
+              ],
+              "endLine": 17,
+              "line": 6
+            },
+            {
+              "id": "a8abd6c1-cf4a-4731-b688-03d28289efc7",
+              "type": "section",
+              "content": "",
+              "children": [
+                {
+                  "id": "7bda9c9d-0cf1-4cce-9bae-bf2e9ba2b502",
+                  "type": "image",
+                  "content": "",
+                  "children": [],
+                  "endLine": 19,
+                  "line": 19,
+                  "classes": "size-24 rounded-3xl",
+                  "src": "data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%3Crect%20width%3D%22120%22%20height%3D%22120%22%20rx%3D%2224%22%20fill%3D%22%23111%22%2F%3E%3Ccircle%20cx%3D%2260%22%20cy%3D%2252%22%20r%3D%2222%22%20fill%3D%22%23fbbf24%22%2F%3E%3Cpath%20d%3D%22M24%2096c10-18%2062-18%2072%200%22%20stroke%3D%22%23fbbf24%22%20stroke-width%3D%228%22%20fill%3D%22none%22%2F%3E%3C%2Fsvg%3E"
+                },
+                {
+                  "id": "eaf13d24-7b2b-4178-b1f6-fb1f159d20c6",
+                  "type": "h1",
+                  "content": "A small studio with big standards",
+                  "children": [],
+                  "endLine": 20,
+                  "line": 20,
+                  "classes": "text-5xl font-bold tracking-tight",
+                  "locales": {
+                    "fr": {
+                      "content": "Un petit studio, de grandes exigences"
+                    }
+                  }
+                },
+                {
+                  "id": "36897ebc-75f3-4a5a-9b38-a2f00071680b",
+                  "type": "paragraph",
+                  "content": "We are a two-person team that has been building for the web since 2012. Every project gets the same attention, whether it ships in a week or a year.",
+                  "children": [],
+                  "endLine": 21,
+                  "line": 21,
+                  "classes": "text-lg text-gray-600",
+                  "locales": {
+                    "fr": {
+                      "content": "Nous sommes une équipe de deux personnes qui construit pour le web depuis 2012. Chaque projet reçoit la même attention, qu’il soit livré en une semaine ou en un an."
+                    }
+                  }
+                },
+                {
+                  "id": "a2c62930-6d23-4cbd-ab8b-3f2392438fd8",
+                  "type": "paragraph",
+                  "content": "No account managers, no hand-offs — you talk to the people doing the work.",
+                  "children": [],
+                  "endLine": 22,
+                  "line": 22,
+                  "classes": "text-lg text-gray-600",
+                  "locales": {
+                    "fr": {
+                      "content": "Pas d’intermédiaires — vous parlez directement aux personnes qui font le travail."
+                    }
+                  }
+                }
+              ],
+              "endLine": 23,
+              "line": 18,
+              "classes": "mx-auto flex max-w-2xl flex-col gap-6 px-8 py-20",
+              "interactions": [
+                {
+                  "trigger": "appear",
+                  "targetId": null,
+                  "toClasses": "scale-100 opacity-100",
+                  "duration": "duration-700",
+                  "easing": "ease-out",
+                  "id": "f16caadf-2be6-4910-9253-f266bf13bed4"
+                }
+              ]
+            }
+          ],
+          "endLine": 24,
+          "line": 5
+        }
+      ]
+    },
+    {
+      "id": "3604d015-994c-434b-b189-5afaae88e653",
+      "name": "Services",
+      "path": "/services",
+      "status": "published",
+      "code": "@setup\n\tname: Services\n\tslug: /services\n\tstatus: published\n\tlocale: en\n:body\n\t:Navbar\n\t\t:div\n\t\t\t:link:\n\t\t\t:link:\n\t\t\t:link:\n\t\t\t:link:\n\t\t\t:div\n\t\t\t\t:link:\n\t\t\t\t:link:\n\t\t\tdiv:\n\t\tdiv:\n\tNavbar:\n\t:section\n\t\t:h1:\n\t\t:paragraph:\n\t\t:collection-list(service)\n\t\t\t:div\n\t\t\t\t:h3(title):\n\t\t\t\t:paragraph(description):\n\t\t\tdiv:\n\t\tcollection-list:\n\tsection:\nbody:",
+      "elements": [
+        {
+          "id": "b83d203c-d6df-4517-be00-6e2f343bc48d",
+          "type": "body",
+          "content": "",
+          "children": [
+            {
+              "id": "d7346469-06ec-4a2d-9b99-52b58cab819c",
+              "type": "Navbar",
+              "content": "",
+              "children": [
+                {
+                  "id": "93d1be81-7309-4423-a134-489df724fb0b",
+                  "type": "div",
+                  "content": "",
+                  "children": [
+                    {
+                      "id": "2e47e5f9-4942-48ba-ac05-208abf6b690d",
+                      "type": "link",
+                      "content": "",
+                      "children": [],
+                      "endLine": 8,
+                      "line": 8
+                    },
+                    {
+                      "id": "744b257d-19ca-460a-8743-345251201825",
+                      "type": "link",
+                      "content": "",
+                      "children": [],
+                      "endLine": 9,
+                      "line": 9
+                    },
+                    {
+                      "id": "fb78869d-e644-4592-989d-19af8a69ee78",
+                      "type": "link",
+                      "content": "",
+                      "children": [],
+                      "endLine": 10,
+                      "line": 10
+                    },
+                    {
+                      "id": "2fc21719-6c27-45c2-8ab1-99f09375feb8",
+                      "type": "link",
+                      "content": "",
+                      "children": [],
+                      "endLine": 11,
+                      "line": 11
+                    },
+                    {
+                      "id": "1aff8cb5-07e9-402a-bb6d-bb030dca9547",
+                      "type": "div",
+                      "content": "",
+                      "children": [
+                        {
+                          "id": "fcb9700f-2839-4123-ad11-546eb2223c0b",
+                          "type": "link",
+                          "content": "",
+                          "children": [],
+                          "endLine": 13,
+                          "line": 13
+                        },
+                        {
+                          "id": "56b857d5-820f-49ef-b439-0bef9f6da263",
+                          "type": "link",
+                          "content": "",
+                          "children": [],
+                          "endLine": 14,
+                          "line": 14
+                        }
+                      ],
+                      "endLine": 15,
+                      "line": 12
+                    }
+                  ],
+                  "endLine": 16,
+                  "line": 7
+                }
+              ],
+              "endLine": 17,
+              "line": 6
+            },
+            {
+              "id": "f0129179-f063-406c-a7e0-7356694994d1",
+              "type": "section",
+              "content": "",
+              "children": [
+                {
+                  "id": "00f8055e-f873-4748-a03c-14d313193f28",
+                  "type": "h1",
+                  "content": "Services",
+                  "children": [],
+                  "endLine": 19,
+                  "line": 19,
+                  "classes": "text-5xl font-bold tracking-tight",
+                  "locales": {
+                    "fr": {
+                      "content": "Services"
+                    }
+                  }
+                },
+                {
+                  "id": "f5324db6-c673-4695-9aac-75352f2471d8",
+                  "type": "paragraph",
+                  "content": "Four things, done properly.",
+                  "children": [],
+                  "endLine": 20,
+                  "line": 20,
+                  "classes": "max-w-xl text-lg text-gray-600",
+                  "locales": {
+                    "fr": {
+                      "content": "Quatre choses, faites correctement."
+                    }
+                  }
+                },
+                {
+                  "id": "e6bbce31-55f3-4c52-a36a-51e9e2c5727e",
+                  "type": "collection-list",
+                  "content": "",
+                  "children": [
+                    {
+                      "id": "884ac956-6d5d-4d10-aeaa-c520a59cca95",
+                      "type": "div",
+                      "content": "",
+                      "children": [
+                        {
+                          "id": "802d4e88-039c-4cb6-8ef2-2c1e3028ef20",
+                          "type": "h3",
+                          "content": "",
+                          "children": [],
+                          "endLine": 23,
+                          "line": 23,
+                          "arg": "title",
+                          "classes": "text-2xl font-semibold"
+                        },
+                        {
+                          "id": "3e2fd905-8dcc-4fd2-9608-0ec662e73afa",
+                          "type": "paragraph",
+                          "content": "",
+                          "children": [],
+                          "endLine": 24,
+                          "line": 24,
+                          "arg": "description",
+                          "classes": "text-gray-600"
+                        }
+                      ],
+                      "endLine": 25,
+                      "line": 22,
+                      "classes": "flex flex-col gap-2 rounded-2xl border border-gray-200 p-8",
+                      "interactions": [
+                        {
+                          "trigger": "hover",
+                          "targetId": null,
+                          "toClasses": "shadow-lg border-gray-400",
+                          "duration": "duration-300",
+                          "easing": "ease-out",
+                          "id": "6b739971-2811-4b5b-b6e8-6b3d30159959"
+                        }
+                      ]
+                    }
+                  ],
+                  "endLine": 26,
+                  "line": 21,
+                  "arg": "service",
+                  "classes": "grid grid-cols-2 gap-6"
+                }
+              ],
+              "endLine": 27,
+              "line": 18,
+              "classes": "flex flex-col gap-8 px-8 py-20"
+            }
+          ],
+          "endLine": 28,
+          "line": 5
+        }
+      ]
+    },
+    {
+      "id": "48a84e1a-587c-4f6e-b724-64bca9135950",
+      "name": "Contact",
+      "path": "/contact",
+      "status": "published",
+      "code": "@setup\n\tname: Contact\n\tslug: /contact\n\tstatus: published\n\tlocale: en\n:body\n\t:Navbar\n\t\t:div\n\t\t\t:link:\n\t\t\t:link:\n\t\t\t:link:\n\t\t\t:link:\n\t\t\t:div\n\t\t\t\t:link:\n\t\t\t\t:link:\n\t\t\tdiv:\n\t\tdiv:\n\tNavbar:\n\t:section\n\t\t:h1:\n\t\t:paragraph:\n\t\t:form\n\t\t\t:label:\n\t\t\t:input:\n\t\t\t:label:\n\t\t\t:input:\n\t\t\t:button:\n\t\tform:\n\tsection:\nbody:",
+      "elements": [
+        {
+          "id": "e81dd363-7dac-4ed6-b5c0-0d03bb9da8f7",
+          "type": "body",
+          "content": "",
+          "children": [
+            {
+              "id": "a4fd7c19-2abd-4e60-9c08-1466ca3fc0a0",
+              "type": "Navbar",
+              "content": "",
+              "children": [
+                {
+                  "id": "aa3b93e8-6b5f-4d48-9ddd-956f472a8f2d",
+                  "type": "div",
+                  "content": "",
+                  "children": [
+                    {
+                      "id": "18aeb2ae-3efc-4c74-88de-7baf539e2213",
+                      "type": "link",
+                      "content": "",
+                      "children": [],
+                      "endLine": 8,
+                      "line": 8
+                    },
+                    {
+                      "id": "bfd3ecb3-1bb0-4657-966f-a96820730d22",
+                      "type": "link",
+                      "content": "",
+                      "children": [],
+                      "endLine": 9,
+                      "line": 9
+                    },
+                    {
+                      "id": "4d3ed374-2918-47de-af28-7b6c482b2b95",
+                      "type": "link",
+                      "content": "",
+                      "children": [],
+                      "endLine": 10,
+                      "line": 10
+                    },
+                    {
+                      "id": "8b57328c-1e59-42a7-9882-4d1f50ef21a6",
+                      "type": "link",
+                      "content": "",
+                      "children": [],
+                      "endLine": 11,
+                      "line": 11
+                    },
+                    {
+                      "id": "be418051-2e26-4595-8be9-065fd70fa15c",
+                      "type": "div",
+                      "content": "",
+                      "children": [
+                        {
+                          "id": "64e1f30f-b689-41b3-b41f-50099b2d0c50",
+                          "type": "link",
+                          "content": "",
+                          "children": [],
+                          "endLine": 13,
+                          "line": 13
+                        },
+                        {
+                          "id": "cdd28355-7bdd-47d9-86bd-9cb81c016770",
+                          "type": "link",
+                          "content": "",
+                          "children": [],
+                          "endLine": 14,
+                          "line": 14
+                        }
+                      ],
+                      "endLine": 15,
+                      "line": 12
+                    }
+                  ],
+                  "endLine": 16,
+                  "line": 7
+                }
+              ],
+              "endLine": 17,
+              "line": 6
+            },
+            {
+              "id": "7b796049-2dc7-4ae6-a8b3-51995f55ef91",
+              "type": "section",
+              "content": "",
+              "children": [
+                {
+                  "id": "45d8fcaa-aa1b-4d6e-b19e-1f0ed8ab710d",
+                  "type": "h1",
+                  "content": "Say hello",
+                  "children": [],
+                  "endLine": 19,
+                  "line": 19,
+                  "classes": "text-5xl font-bold tracking-tight",
+                  "locales": {
+                    "fr": {
+                      "content": "Dites bonjour"
+                    }
+                  }
+                },
+                {
+                  "id": "7217d054-2fd3-49cd-8f5b-a65947031fba",
+                  "type": "paragraph",
+                  "content": "We answer every message within a day.",
+                  "children": [],
+                  "endLine": 20,
+                  "line": 20,
+                  "classes": "text-lg text-gray-600",
+                  "locales": {
+                    "fr": {
+                      "content": "Nous répondons à chaque message en moins d’un jour."
+                    }
+                  }
+                },
+                {
+                  "id": "29743d31-b129-470c-91ed-c6b07374d513",
+                  "type": "form",
+                  "content": "",
+                  "children": [
+                    {
+                      "id": "0776e370-52a4-487e-93d6-c0d48c17bf5d",
+                      "type": "label",
+                      "content": "Your email",
+                      "children": [],
+                      "endLine": 22,
+                      "line": 22,
+                      "classes": "text-sm font-medium",
+                      "locales": {
+                        "fr": {
+                          "content": "Votre courriel"
+                        }
+                      }
+                    },
+                    {
+                      "id": "5ba92fe4-37e0-4df6-be83-e493d134117f",
+                      "type": "input",
+                      "content": "",
+                      "children": [],
+                      "endLine": 23,
+                      "line": 23,
+                      "classes": "rounded-lg border border-gray-300 px-4 py-2"
+                    },
+                    {
+                      "id": "5a5c88a6-a438-4505-8778-713040be0745",
+                      "type": "label",
+                      "content": "Message",
+                      "children": [],
+                      "endLine": 24,
+                      "line": 24,
+                      "classes": "text-sm font-medium",
+                      "locales": {
+                        "fr": {
+                          "content": "Message"
+                        }
+                      }
+                    },
+                    {
+                      "id": "b6bcd3a2-28df-419d-9e83-4d7d47729a27",
+                      "type": "input",
+                      "content": "",
+                      "children": [],
+                      "endLine": 25,
+                      "line": 25,
+                      "classes": "rounded-lg border border-gray-300 px-4 py-2"
+                    },
+                    {
+                      "id": "3edab39a-40f6-4e4d-b677-b05d7036b380",
+                      "type": "button",
+                      "content": "Send",
+                      "children": [],
+                      "endLine": 26,
+                      "line": 26,
+                      "classes": "mt-2 rounded-full bg-black px-6 py-3 text-sm font-medium text-white hover:bg-gray-800",
+                      "locales": {
+                        "fr": {
+                          "content": "Envoyer"
+                        }
+                      },
+                      "interactions": [
+                        {
+                          "trigger": "click",
+                          "targetId": null,
+                          "toClasses": "bg-emerald-600",
+                          "duration": "duration-300",
+                          "easing": "ease-out",
+                          "id": "7d8d59d0-27ac-4505-9462-0fe4c4a83972"
+                        }
+                      ]
+                    }
+                  ],
+                  "endLine": 27,
+                  "line": 21,
+                  "classes": "flex flex-col gap-3"
+                }
+              ],
+              "endLine": 28,
+              "line": 18,
+              "classes": "mx-auto flex max-w-xl flex-col gap-6 px-8 py-20"
+            }
+          ],
+          "endLine": 29,
+          "line": 5
+        }
+      ]
+    },
+    {
+      "id": "8a186629-37bc-4240-a838-44fee1c9efb3",
+      "name": "Service template",
+      "path": "/service",
+      "status": "published",
+      "code": "@setup\n\tname: Service template\n\tslug: /service\n\tstatus: published\n\tlocale: en\n:body(service)\n\t:section\n\t\t:h1(title):\n\t\t:paragraph(description):\n\tsection:\nbody:",
+      "elements": [
+        {
+          "id": "05af034c-0942-4511-9ced-afa269d71224",
+          "type": "body",
+          "content": "",
+          "children": [
+            {
+              "id": "2aa1c4cc-f8b1-4e63-923a-cf52431587db",
+              "type": "section",
+              "content": "",
+              "children": [
+                {
+                  "id": "c33d422b-4a14-4640-8cb1-452730773f10",
+                  "type": "h1",
+                  "content": "",
+                  "children": [],
+                  "endLine": 7,
+                  "line": 7,
+                  "arg": "title",
+                  "classes": "text-5xl font-bold tracking-tight"
+                },
+                {
+                  "id": "650debe6-d5c3-453c-9003-f3aea070b03c",
+                  "type": "paragraph",
+                  "content": "",
+                  "children": [],
+                  "endLine": 8,
+                  "line": 8,
+                  "arg": "description",
+                  "classes": "text-lg text-gray-600"
+                }
+              ],
+              "endLine": 9,
+              "line": 6,
+              "classes": "mx-auto flex max-w-2xl flex-col gap-4 px-8 py-20"
+            }
+          ],
+          "endLine": 10,
+          "line": 5,
+          "arg": "service"
+        }
+      ],
+      "collectionId": "6581e27c-87eb-44f9-b231-8e985e3d6581"
+    }
+  ],
+  "components": [
+    {
+      "id": "9fa63b96-022b-4eb3-974a-bcf35da68294",
+      "name": "Navbar",
+      "root": {
+        "id": "cb3d0d2a-50e8-4438-97d5-364a1be4b808",
+        "type": "Navbar",
+        "content": "",
+        "children": [
+          {
+            "id": "38b5cb6d-3d77-41a2-9a74-9b86faaba12b",
+            "type": "div",
+            "content": "",
+            "classes": "flex items-center justify-between border-b border-gray-200 px-8 py-4",
+            "children": [
+              {
+                "id": "373ac48b-b5d4-4945-8b2f-d02e5f77f3b4",
+                "type": "link",
+                "content": "Home",
+                "classes": "text-sm font-medium text-gray-700 hover:text-black",
+                "link": "/",
+                "locales": {
+                  "fr": {
+                    "content": "Accueil"
+                  }
+                },
+                "children": []
+              },
+              {
+                "id": "069485df-df69-40c6-95d0-1985db877f32",
+                "type": "link",
+                "content": "About",
+                "classes": "text-sm font-medium text-gray-700 hover:text-black",
+                "link": "/about",
+                "locales": {
+                  "fr": {
+                    "content": "À propos"
+                  }
+                },
+                "children": []
+              },
+              {
+                "id": "023258fe-5c92-44d5-a3e4-0e3862ff3671",
+                "type": "link",
+                "content": "Services",
+                "classes": "text-sm font-medium text-gray-700 hover:text-black",
+                "link": "/services",
+                "locales": {
+                  "fr": {
+                    "content": "Services"
+                  }
+                },
+                "children": []
+              },
+              {
+                "id": "10bf78a7-1232-4226-bf0b-64a698842090",
+                "type": "link",
+                "content": "Contact",
+                "classes": "text-sm font-medium text-gray-700 hover:text-black",
+                "link": "/contact",
+                "locales": {
+                  "fr": {
+                    "content": "Contact"
+                  }
+                },
+                "children": []
+              },
+              {
+                "id": "8813618a-ef2c-4520-994d-22ab5a096998",
+                "type": "div",
+                "content": "",
+                "classes": "flex items-center gap-2 text-xs text-gray-400",
+                "children": [
+                  {
+                    "id": "5ca7db5a-e284-4312-86d2-40e679203924",
+                    "type": "link",
+                    "content": "EN",
+                    "classes": "hover:text-black",
+                    "link": "/en",
+                    "children": []
+                  },
+                  {
+                    "id": "858b097d-0bed-47ff-b2f0-dbe57356a84a",
+                    "type": "link",
+                    "content": "FR",
+                    "classes": "hover:text-black",
+                    "link": "/fr",
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "collections": [
+    {
+      "id": "6581e27c-87eb-44f9-b231-8e985e3d6581",
+      "name": "service",
+      "fields": [
+        {
+          "id": "aa1a0ecd-bba8-4c5f-a301-b62f4cac9fd4",
+          "name": "title",
+          "type": "text"
+        },
+        {
+          "id": "003016cd-55e5-49d1-904e-45d7e2b7b7d5",
+          "name": "description",
+          "type": "text"
+        }
+      ],
+      "templatePageId": "8a186629-37bc-4240-a838-44fee1c9efb3",
+      "entries": [
+        {
+          "id": "0c6b59c3-def3-4240-a284-8dca4b5de0bc",
+          "name": "Design",
+          "slug": "design",
+          "values": {
+            "title": "Design",
+            "description": "Interfaces that feel obvious — research, wireframes, and pixel-perfect UI."
+          },
+          "locales": {
+            "fr": {
+              "title": "Design",
+              "description": "Des interfaces évidentes — recherche, maquettes et UI au pixel près."
+            }
+          },
+          "createdAt": 1787165647001
+        },
+        {
+          "id": "fdb33d5c-1e5f-47f8-be34-64457d3f7c0e",
+          "name": "Development",
+          "slug": "development",
+          "values": {
+            "title": "Development",
+            "description": "Fast, accessible websites built on modern foundations."
+          },
+          "locales": {
+            "fr": {
+              "title": "Développement",
+              "description": "Des sites rapides et accessibles, bâtis sur des fondations modernes."
+            }
+          },
+          "createdAt": 1787165647002
+        },
+        {
+          "id": "e5e3347b-de90-4ccd-a7e0-fe649abd3e8b",
+          "name": "Branding",
+          "slug": "branding",
+          "values": {
+            "title": "Branding",
+            "description": "A voice and identity your customers remember."
+          },
+          "locales": {
+            "fr": {
+              "title": "Image de marque",
+              "description": "Une voix et une identité que vos clients retiennent."
+            }
+          },
+          "createdAt": 1787165647003
+        },
+        {
+          "id": "a8d2cac3-9cf5-4d7b-a00e-c8865f4f974c",
+          "name": "SEO",
+          "slug": "seo",
+          "values": {
+            "title": "SEO",
+            "description": "Content and structure that search engines love."
+          },
+          "locales": {
+            "fr": {
+              "title": "Référencement",
+              "description": "Un contenu et une structure que les moteurs de recherche adorent."
+            }
+          },
+          "createdAt": 1787165647004
+        }
+      ]
+    }
+  ],
+  "breakpoints": [
+    {
+      "id": "c34aea94-84ed-45da-8cf3-7a78b4119246",
+      "name": "Desktop",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "id": "32044296-2ebf-4c99-86de-2ba352c8af64",
+      "name": "Tablet",
+      "width": 768,
+      "height": 1024
+    },
+    {
+      "id": "70a5c198-f55f-4661-8da2-762dc535b837",
+      "name": "Mobile",
+      "width": 390,
+      "height": 844
+    }
+  ],
+  "comments": [],
+  "locales": [
+    "en",
+    "fr"
+  ],
+  "defaultLocale": "en"
+}

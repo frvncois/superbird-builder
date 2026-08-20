@@ -1,0 +1,106 @@
+<script setup lang="ts">
+import { computed, onMounted, ref } from 'vue'
+import { Check, CircleAlert } from 'lucide-vue-next'
+import ModalDialog from '@/components/modal/ModalDialog.vue'
+import ButtonUI from '@/components/ui/ButtonUI.vue'
+import { usePublish } from '@/composables/usePublish'
+
+// visual minimum so the ring doesn't flash on a fast local POST
+const MIN_DURATION = 800
+
+const emit = defineEmits<{
+  close: []
+}>()
+
+const { markPublished } = usePublish()
+
+const published = ref(false)
+const error = ref<string | null>(null)
+const progress = ref(0) // 0 → 1, drives the ring fill
+let cancelled = false
+
+// ring geometry
+const R = 34
+const CIRC = 2 * Math.PI * R
+const dashoffset = computed(() => CIRC * (1 - progress.value))
+
+async function publish() {
+  error.value = null
+  progress.value = 0
+  // double rAF: let the empty ring paint first, THEN grow it — otherwise
+  // the browser never sees the start state and skips the transition
+  requestAnimationFrame(() => requestAnimationFrame(() => (progress.value = 1)))
+  const started = Date.now()
+  try {
+    await markPublished()
+    const remaining = MIN_DURATION - (Date.now() - started)
+    if (remaining > 0) await new Promise((r) => setTimeout(r, remaining))
+    if (!cancelled) published.value = true
+  } catch (e) {
+    if (!cancelled) {
+      progress.value = 0
+      error.value = e instanceof Error ? e.message : 'Publish failed'
+    }
+  }
+}
+
+onMounted(publish)
+
+function cancel() {
+  cancelled = true
+  emit('close')
+}
+
+function viewLive() {
+  // hard navigation: the public site always boots fresh
+  window.open('/', '_blank')
+}
+</script>
+
+<template>
+  <ModalDialog :title="published ? 'Published' : 'Publishing'" size="sm" @close="cancel">
+    <div class="flex flex-col items-center gap-4 py-4">
+      <div class="relative flex size-24 items-center justify-center">
+        <svg class="size-24 -rotate-90" viewBox="0 0 80 80">
+          <circle cx="40" cy="40" :r="R" fill="none" stroke="var(--muted)" stroke-width="4" />
+          <circle
+            cx="40"
+            cy="40"
+            :r="R"
+            fill="none"
+            :stroke="error ? 'var(--danger)' : published ? 'var(--success)' : 'var(--foreground)'"
+            stroke-width="4"
+            stroke-linecap="round"
+            :stroke-dasharray="CIRC"
+            :style="{
+              strokeDashoffset: dashoffset,
+              transition: `stroke-dashoffset ${MIN_DURATION}ms linear, stroke 0.2s`,
+            }"
+          />
+        </svg>
+        <Check v-if="published" class="absolute size-8 text-success" />
+        <CircleAlert v-else-if="error" class="absolute size-8 text-danger" />
+      </div>
+
+      <p class="text-sm font-medium">
+        {{ published ? 'Published!' : error ? 'Publish failed' : 'Publishing your site…' }}
+      </p>
+      <p v-if="error" class="text-xs text-danger">{{ error }}</p>
+      <p v-else-if="!published" class="text-xs text-muted-foreground">
+        You can still cancel before it goes live.
+      </p>
+    </div>
+
+    <template #actions>
+      <template v-if="published">
+        <ButtonUI variant="outline" size="sm" @click="emit('close')">Close</ButtonUI>
+        <ButtonUI variant="default" size="sm" @click="viewLive">View live</ButtonUI>
+      </template>
+      <template v-else-if="error">
+        <ButtonUI variant="outline" size="sm" @click="cancel">Close</ButtonUI>
+        <ButtonUI variant="default" size="sm" @click="publish">Retry</ButtonUI>
+      </template>
+      <ButtonUI v-else variant="outline" size="sm" @click="cancel">Cancel</ButtonUI>
+    </template>
+  </ModalDialog>
+</template>

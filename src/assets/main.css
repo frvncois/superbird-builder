@@ -1,0 +1,97 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/geist';
+@import '@fontsource-variable/geist-mono';
+
+/* Dark is the default theme */
+:root {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --input: oklch(24.776% 0.00003 271.152);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --primary: oklch(0.985 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --accent: oklch(0.371 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --success: oklch(67.795% 0.14069 152.642);
+  --pending: oklch(82.444% 0.12144 90.081);
+  --danger: oklch(64.087% 0.17546 20.635);
+
+  /* Code editor syntax — VS Code "Moonlight" palette */
+  --editor-fg: #c8d3f5;
+  --editor-comment: #7a88cf;
+  --editor-keyword: #c099ff;
+  --editor-arg: #ff966c;
+  --editor-string: #c3e88d;
+  --editor-punct: #86e1fc;
+  --editor-component: #ffc777;
+}
+
+.light {
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --input: oklch(0.922 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --accent: oklch(0.922 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --success: oklch(0.627 0.194 149.21);
+  --pending: oklch(0.681 0.162 75.83);
+  --danger: oklch(60.49% 0.08577 16.016);
+
+  /* Moonlight hues darkened for a white background */
+  --editor-fg: #3b4261;
+  --editor-comment: #8489b3;
+  --editor-keyword: #8d5bd6;
+  --editor-arg: #c65f3d;
+  --editor-string: #587f3a;
+  --editor-punct: #1e88b0;
+  --editor-component: #b8862b;
+}
+
+@theme inline {
+  --font-sans: 'Geist Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'Geist Mono Variable', ui-monospace, monospace;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-input: var(--input);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-success: var(--success);
+  --color-pending: var(--pending);
+  --color-danger: var(--danger);
+
+  --color-editor-fg: var(--editor-fg);
+  --color-editor-comment: var(--editor-comment);
+  --color-editor-keyword: var(--editor-keyword);
+  --color-editor-arg: var(--editor-arg);
+  --color-editor-string: var(--editor-string);
+  --color-editor-punct: var(--editor-punct);
+  --color-editor-component: var(--editor-component);
+}
+
+body {
+  @apply bg-background text-foreground font-sans antialiased select-none;
+}
+
+/* text-selection guard: nothing in the app chrome is selectable; form
+   fields and the code editor re-enable it (the editor clamps its
+   selection to the :body … body: region), and canvas text elements
+   opt back in with `select-text` */
+input,
+textarea {
+  user-select: text;
+}
