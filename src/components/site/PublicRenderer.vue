@@ -14,103 +14,48 @@ import EntryScope from '@/components/shared/EntryScope.vue'
 import { useLocale } from '@/composables/useLocale'
 import { useRenderNode } from '@/composables/useRenderNode'
 import { useRuntimeEnv } from '@/composables/useRuntimeEnv'
-import { useCollections } from '@/composables/useCollections'
-import { refDisplay } from '@/lib/shared/fields.js'
-import { isRich, sanitizeRich } from '@/lib/shared/richtext.js'
 import type { ElementNode } from '@/types/editor'
 
 const props = defineProps<{ node: ElementNode }>()
 
 const router = useRouter()
-const { nodeContent, nodeSrc, entryValue, activeLocale, defaultLocale, locales } = useLocale()
-const { entryPath, collections } = useCollections()
+const { activeLocale, defaultLocale, locales } = useLocale()
 
-// shared rendering core (also used by the editor's ElementRenderer)
+// shared rendering core (also used by the editor's ElementRenderer):
+// content/src/rich precedence, link resolution and base classes all live
+// there — a value-less field binding renders empty here (the editor passes
+// fieldPlaceholders to show {field} instead)
 const {
   def,
-  mapping,
-  scope,
-  classesFor,
-  scopedClassesFor,
   listCollection,
   listEntries,
   itemCollection,
   itemEntry,
   itemTemplateChildren,
   selfNested,
-  boundField,
-  boundEntry,
   condition,
   backgroundInfo,
-  ofTrigger,
-  fireIn,
-  unfireIn,
-  toggleIn,
+  displayContent,
+  richContent,
+  srcAttr,
+  linkRaw,
+  baseClasses,
+  hoverHandlers,
+  fireClickInteractions,
   el,
 } = useRenderNode(() => props.node, { runtimeEnv: useRuntimeEnv().env })
 
-// locale-aware content: a bound field with no value renders empty on the
-// public site (the editor shows a {field} placeholder instead)
-const displayContent = computed(() => {
-  // an active condition swap wins over every other content source
-  if (condition.value.content != null && condition.value.content !== '') {
-    return condition.value.content
-  }
-  if (boundField.value) {
-    if (['reference', 'multi-reference'].includes(boundField.value.type)) {
-      return boundEntry.value ? refDisplay(collections.value, boundField.value, boundEntry.value) : ''
-    }
-    return boundEntry.value ? (entryValue(boundEntry.value, boundField.value.name).value ?? '') : ''
-  }
-  return (
-    nodeContent(props.node).value ||
-    (mapping.value ? nodeContent(mapping.value.master).value : undefined) ||
-    def.value?.defaultContent
-  )
-})
-
-const srcAttr = computed(() => {
-  if (condition.value.src) return condition.value.src
-  if (boundField.value?.type === 'image') {
-    const bound = boundEntry.value
-      ? entryValue(boundEntry.value, boundField.value.name).value
-      : undefined
-    if (bound) return bound
-  }
-  return nodeSrc(props.node).value || undefined
-})
-
-// rich content renders through the shared sanitizer via v-html
-const richContent = computed(() =>
-  isRich(displayContent.value) ? sanitizeRich(displayContent.value) : null,
-)
-
 const classes = computed(() => [
-  // the body fills the viewport column like it fills the canvas frame
-  props.node.type === 'body' && 'flex-1',
   // a linked non-anchor element still reads as clickable
   linkTarget.value && def.value?.tag !== 'a' && 'cursor-pointer',
-  mapping.value ? mapping.value.master.classes : props.node.classes,
-  mapping.value
-    ? scopedClassesFor(mapping.value.master.id, mapping.value.root, mapping.value.instanceId)
-    : classesFor(props.node.id),
-  backgroundInfo.value?.hostClass,
+  baseClasses.value,
 ])
 
 // --- links ---
 
-// any element with a link navigates — not just <a>. '@item' resolves to the
-// current entry's page and is inert outside an entry scope.
 const linkTarget = computed(() => {
-  let raw = props.node.link ?? mapping.value?.master.link
-  if (raw === '@item') {
-    if (!scope?.entry) return null
-    raw = entryPath(scope.collection, scope.entry)
-  }
+  const raw = linkRaw.value
   if (!raw) return null
-  // same scheme allowlist the static export enforces — drops javascript:,
-  // data:, etc. so a link can't execute in this preview
-  if (!/^(\/|#|https?:|mailto:|tel:)/i.test(raw)) return null
   const internal = raw.startsWith('/')
   let href = raw
   if (internal) {
@@ -129,7 +74,7 @@ const linkTarget = computed(() => {
 
 const handlers = {
   click(e: MouseEvent) {
-    for (const interaction of ofTrigger('click')) toggleIn(interaction.id)
+    fireClickInteractions()
     const target = linkTarget.value
     if (!target) return
     if (target.internal) {
@@ -141,12 +86,7 @@ const handlers = {
       window.open(target.href, '_blank', 'noopener')
     }
   },
-  mouseenter() {
-    for (const interaction of ofTrigger('hover')) fireIn(interaction.id)
-  },
-  mouseleave() {
-    for (const interaction of ofTrigger('hover')) unfireIn(interaction.id)
-  },
+  ...hoverHandlers,
 }
 </script>
 
