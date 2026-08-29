@@ -13,10 +13,10 @@
 //    is read live from the user record, so a role change takes effect at once.
 
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
-import { mkdir, writeFile, rename } from 'node:fs/promises'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { writeAtomic } from './util.mjs'
 
 const DATA_DIR = join(fileURLToPath(new URL('..', import.meta.url)), 'server', 'data')
 const USERS_FILE = join(DATA_DIR, 'users.json')
@@ -29,13 +29,6 @@ const INVITE_TTL = 7 * 24 * 60 * 60 * 1000 // 7 days
 const COOKIE = 'sb_session'
 
 export const ROLES = ['admin', 'editor', 'contributor']
-
-async function writeAtomic(file, data) {
-  await mkdir(DATA_DIR, { recursive: true })
-  const tmp = `${file}.tmp`
-  await writeFile(tmp, data)
-  await rename(tmp, file)
-}
 
 function readJson(file) {
   try {

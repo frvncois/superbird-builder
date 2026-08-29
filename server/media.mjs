@@ -19,6 +19,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import sharp from 'sharp'
 import { sessionUser } from './auth.mjs'
+import { fail, send, writeAtomic } from './util.mjs'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const DATA_DIR = join(ROOT, 'server', 'data')
@@ -63,13 +64,6 @@ const SIZE_CAPS = {
   document: 25 * 1024 * 1024,
   font: 25 * 1024 * 1024,
 }
-
-function send(res, status, body, type = 'application/json', headers = {}) {
-  res.writeHead(status, { 'content-type': type, ...headers })
-  res.end(body)
-}
-
-const fail = (res, status, error) => send(res, status, JSON.stringify({ error }))
 
 // ---------- request guards ----------
 
@@ -226,9 +220,7 @@ async function loadIndex() {
 }
 
 async function writeIndex() {
-  await mkdir(MEDIA_DIR, { recursive: true })
-  await writeFile(`${INDEX_FILE}.tmp`, JSON.stringify(index, null, 2))
-  await rename(`${INDEX_FILE}.tmp`, INDEX_FILE)
+  await writeAtomic(INDEX_FILE, JSON.stringify(index, null, 2))
 }
 
 // mutations run one at a time — files + index always change together

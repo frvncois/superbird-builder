@@ -16,12 +16,13 @@
 //         PUBLISH_TOKEN optionally allows CI publishes)
 
 import { createServer } from 'node:http'
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { readFile, rm } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { extname, join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { exportSite } from './export.mjs'
 import { handleMedia, handleMediaFile, originAllowed } from './media.mjs'
+import { fail, send, writeAtomic } from './util.mjs'
 import {
   ROLES,
   acceptInvite,
@@ -88,11 +89,6 @@ const MIME = {
   '.ico': 'image/x-icon',
 }
 
-function send(res, status, body, type = 'application/json', headers = {}) {
-  res.writeHead(status, { 'content-type': type, ...headers })
-  res.end(body)
-}
-
 /** reads a request body with the size cap; null when too large */
 async function readBody(req) {
   const chunks = []
@@ -118,76 +114,76 @@ async function handleAuth(req, res, path) {
   }
   if (path === '/api/auth/setup' && req.method === 'POST') {
     // bootstrap the first admin — only when no users exist yet
-    if (!needsSetup()) return send(res, 403, JSON.stringify({ error: 'account already exists' }))
+    if (!needsSetup()) return fail(res, 403, 'account already exists')
     const body = await readBody(req)
     let email, password, name
     try {
       ;({ email, password, name } = JSON.parse(body ?? ''))
     } catch {
-      return send(res, 400, JSON.stringify({ error: 'invalid request' }))
+      return fail(res, 400, 'invalid request')
     }
-    if (!isEmail(email)) return send(res, 400, JSON.stringify({ error: 'invalid email' }))
+    if (!isEmail(email)) return fail(res, 400, 'invalid email')
     if (typeof password !== 'string' || password.length < 8) {
-      return send(res, 400, JSON.stringify({ error: 'password must be at least 8 characters' }))
+      return fail(res, 400, 'password must be at least 8 characters')
     }
     const user = await createFirstAdmin(email, password, typeof name === 'string' ? name : '')
-    if (!user) return send(res, 403, JSON.stringify({ error: 'account already exists' }))
+    if (!user) return fail(res, 403, 'account already exists')
     return send(res, 200, JSON.stringify(userProfile(user)), 'application/json', {
       'set-cookie': sessionCookieHeader(createSession(user.id)),
     })
   }
   if (path === '/api/auth/update' && req.method === 'POST') {
     const user = sessionUser(req)
-    if (!user) return send(res, 401, JSON.stringify({ error: 'unauthorized' }))
+    if (!user) return fail(res, 401, 'unauthorized')
     const body = await readBody(req)
     let name, email, password, currentPassword
     try {
       ;({ name, email, password, currentPassword } = JSON.parse(body ?? ''))
     } catch {
-      return send(res, 400, JSON.stringify({ error: 'invalid request' }))
+      return fail(res, 400, 'invalid request')
     }
     if (email !== undefined && !isEmail(email)) {
-      return send(res, 400, JSON.stringify({ error: 'invalid email' }))
+      return fail(res, 400, 'invalid email')
     }
     if (password !== undefined && password !== '') {
       if (typeof password !== 'string' || password.length < 8) {
-        return send(res, 400, JSON.stringify({ error: 'password must be at least 8 characters' }))
+        return fail(res, 400, 'password must be at least 8 characters')
       }
       if (!verifyUserPassword(user, currentPassword ?? '')) {
-        return send(res, 403, JSON.stringify({ error: 'current password is incorrect' }))
+        return fail(res, 403, 'current password is incorrect')
       }
     }
     // guard against colliding with another user's email
     if (email && email.toLowerCase() !== user.email) {
       const clash = findUserByEmail(email)
       if (clash && clash.id !== user.id) {
-        return send(res, 409, JSON.stringify({ error: 'that email is already in use' }))
+        return fail(res, 409, 'that email is already in use')
       }
     }
     const updated = await updateUser(user.id, { name, email, password })
     return send(res, 200, JSON.stringify(userProfile(updated)))
   }
   if (path === '/api/auth/login' && req.method === 'POST') {
-    if (needsSetup()) return send(res, 403, JSON.stringify({ error: 'no account yet' }))
+    if (needsSetup()) return fail(res, 403, 'no account yet')
     const ip = req.socket.remoteAddress ?? '?'
     const body = await readBody(req)
     let email, password
     try {
       ;({ email, password } = JSON.parse(body ?? ''))
     } catch {
-      return send(res, 400, JSON.stringify({ error: 'invalid request' }))
+      return fail(res, 400, 'invalid request')
     }
     if (!loginAllowed(ip, email)) {
-      return send(res, 429, JSON.stringify({ error: 'too many attempts — try again later' }))
+      return fail(res, 429, 'too many attempts — try again later')
     }
     const user = verifyLogin(email, password)
     if (!user) {
       recordLoginFailure(ip, email)
-      return send(res, 401, JSON.stringify({ error: 'invalid credentials' }))
+      return fail(res, 401, 'invalid credentials')
     }
     // never issue a session to an un-provisioned account (no valid role)
     if (!hasValidRole(user)) {
-      return send(res, 403, JSON.stringify({ error: 'account is not provisioned — contact an admin' }))
+      return fail(res, 403, 'account is not provisioned — contact an admin')
     }
     return send(res, 200, JSON.stringify(userProfile(user)), 'application/json', {
       'set-cookie': sessionCookieHeader(createSession(user.id)),
@@ -200,7 +196,7 @@ async function handleAuth(req, res, path) {
       'set-cookie': clearCookieHeader(),
     })
   }
-  return send(res, 404, JSON.stringify({ error: 'not found' }))
+  return fail(res, 404, 'not found')
 }
 
 // ---------- invites (public: link lookup + acceptance) ----------
@@ -208,7 +204,7 @@ async function handleAuth(req, res, path) {
 async function handleInvite(req, res, path) {
   const ip = req.socket.remoteAddress ?? '?'
   if (!inviteAllowed(ip)) {
-    return send(res, 429, JSON.stringify({ error: 'too many attempts — try again later' }))
+    return fail(res, 429, 'too many attempts — try again later')
   }
   recordInviteAttempt(ip)
 
@@ -218,7 +214,7 @@ async function handleInvite(req, res, path) {
 
   if (!accept && req.method === 'GET') {
     const invite = findInviteByToken(token)
-    if (!invite) return send(res, 404, JSON.stringify({ error: 'invalid or expired invite' }))
+    if (!invite) return fail(res, 404, 'invalid or expired invite')
     // inviteView carries invitedBy; add the project name for the welcome
     return send(res, 200, JSON.stringify({ ...inviteView(invite), projectName: await currentProjectName() }))
   }
@@ -228,25 +224,25 @@ async function handleInvite(req, res, path) {
     try {
       ;({ password } = JSON.parse(body ?? ''))
     } catch {
-      return send(res, 400, JSON.stringify({ error: 'invalid request' }))
+      return fail(res, 400, 'invalid request')
     }
     if (typeof password !== 'string' || password.length < 8) {
-      return send(res, 400, JSON.stringify({ error: 'password must be at least 8 characters' }))
+      return fail(res, 400, 'password must be at least 8 characters')
     }
     const result = await acceptInvite(token, password)
-    if (result.error) return send(res, 400, JSON.stringify({ error: result.error }))
+    if (result.error) return fail(res, 400, result.error)
     return send(res, 200, JSON.stringify(userProfile(result.user)), 'application/json', {
       'set-cookie': sessionCookieHeader(createSession(result.user.id)),
     })
   }
-  return send(res, 404, JSON.stringify({ error: 'not found' }))
+  return fail(res, 404, 'not found')
 }
 
 // ---------- user management ----------
 
 async function handleUsers(req, res, path) {
   const admin = sessionUser(req)
-  if (!admin) return send(res, 401, JSON.stringify({ error: 'unauthorized' }))
+  if (!admin) return fail(res, 401, 'unauthorized')
 
   // team visibility for everyone: a redacted, read-only membership view (no
   // tokens/ids). Gated only on being authenticated — sits BEFORE the admin gate.
@@ -255,7 +251,7 @@ async function handleUsers(req, res, path) {
   }
 
   // everything else is admin-only
-  if (admin.role !== 'admin') return send(res, 403, JSON.stringify({ error: 'forbidden' }))
+  if (admin.role !== 'admin') return fail(res, 403, 'forbidden')
 
   if (path === '/api/users' && req.method === 'GET') {
     return send(res, 200, JSON.stringify({ users: listUsers(), invites: listInvites() }))
@@ -266,12 +262,12 @@ async function handleUsers(req, res, path) {
     try {
       ;({ name, email, role } = JSON.parse(body ?? ''))
     } catch {
-      return send(res, 400, JSON.stringify({ error: 'invalid request' }))
+      return fail(res, 400, 'invalid request')
     }
-    if (!isEmail(email)) return send(res, 400, JSON.stringify({ error: 'invalid email' }))
-    if (!ROLES.includes(role)) return send(res, 400, JSON.stringify({ error: 'invalid role' }))
+    if (!isEmail(email)) return fail(res, 400, 'invalid email')
+    if (!ROLES.includes(role)) return fail(res, 400, 'invalid role')
     if (findUserByEmail(email)) {
-      return send(res, 409, JSON.stringify({ error: 'that email already has an account' }))
+      return fail(res, 409, 'that email already has an account')
     }
     // record who invited them, for the branded accept page
     const { invite, token } = await createInvite({ name, email, role, invitedBy: admin.name })
@@ -290,13 +286,13 @@ async function handleUsers(req, res, path) {
     try {
       patch = JSON.parse(body ?? '')
     } catch {
-      return send(res, 400, JSON.stringify({ error: 'invalid request' }))
+      return fail(res, 400, 'invalid request')
     }
     if (patch.role !== undefined && !ROLES.includes(patch.role)) {
-      return send(res, 400, JSON.stringify({ error: 'invalid role' }))
+      return fail(res, 400, 'invalid role')
     }
     const updated = await updateInvite(tail.slice('invite/'.length), patch)
-    if (!updated) return send(res, 404, JSON.stringify({ error: 'not found' }))
+    if (!updated) return fail(res, 404, 'not found')
     return send(res, 200, JSON.stringify(updated))
   }
   const id = tail
@@ -306,19 +302,19 @@ async function handleUsers(req, res, path) {
     try {
       ;({ role } = JSON.parse(body ?? ''))
     } catch {
-      return send(res, 400, JSON.stringify({ error: 'invalid request' }))
+      return fail(res, 400, 'invalid request')
     }
-    if (!ROLES.includes(role)) return send(res, 400, JSON.stringify({ error: 'invalid role' }))
+    if (!ROLES.includes(role)) return fail(res, 400, 'invalid role')
     const updated = await setUserRole(id, role)
-    if (!updated) return send(res, 409, JSON.stringify({ error: 'cannot change that role' }))
+    if (!updated) return fail(res, 409, 'cannot change that role')
     return send(res, 200, JSON.stringify(userProfile(updated)))
   }
   if (id && req.method === 'DELETE') {
     const ok = await deleteUser(id)
-    if (!ok) return send(res, 409, JSON.stringify({ error: 'cannot remove that user' }))
+    if (!ok) return fail(res, 409, 'cannot remove that user')
     return send(res, 200, JSON.stringify({ ok: true }))
   }
-  return send(res, 404, JSON.stringify({ error: 'not found' }))
+  return fail(res, 404, 'not found')
 }
 
 // ---------- authed key-value store (the editor's persistence) ----------
@@ -341,12 +337,12 @@ async function currentProjectName() {
 
 async function handleStore(req, res, path, query) {
   // any authenticated user (incl. contributors editing content) may use the store
-  if (!sessionUser(req)) return send(res, 401, JSON.stringify({ error: 'unauthorized' }))
+  if (!sessionUser(req)) return fail(res, 401, 'unauthorized')
 
   if (path === '/api/store' && req.method === 'GET') {
     const keys = (query.get('keys') ?? '').split(',').filter(Boolean)
     if (!keys.length || keys.some((k) => !STORE_KEY_RE.test(k))) {
-      return send(res, 400, JSON.stringify({ error: 'invalid keys' }))
+      return fail(res, 400, 'invalid keys')
     }
     const out = {}
     for (const key of keys) {
@@ -360,22 +356,19 @@ async function handleStore(req, res, path, query) {
   }
 
   const key = decodeURIComponent(path.slice('/api/store/'.length))
-  if (!STORE_KEY_RE.test(key)) return send(res, 400, JSON.stringify({ error: 'invalid key' }))
+  if (!STORE_KEY_RE.test(key)) return fail(res, 400, 'invalid key')
 
   if (req.method === 'PUT') {
     const body = await readBody(req)
-    if (body === null) return send(res, 400, JSON.stringify({ error: 'too large' }))
-    await mkdir(STORE_DIR, { recursive: true })
-    const file = storeFile(key)
-    await writeFile(`${file}.tmp`, body)
-    await rename(`${file}.tmp`, file)
+    if (body === null) return fail(res, 400, 'too large')
+    await writeAtomic(storeFile(key), body)
     return send(res, 200, JSON.stringify({ ok: true }))
   }
   if (req.method === 'DELETE') {
     await rm(storeFile(key), { force: true })
     return send(res, 200, JSON.stringify({ ok: true }))
   }
-  return send(res, 404, JSON.stringify({ error: 'not found' }))
+  return fail(res, 404, 'not found')
 }
 
 async function handleGet(res) {
@@ -396,7 +389,7 @@ async function handleGet(res) {
     }
     send(res, 200, JSON.stringify(publicSnapshot))
   } catch {
-    send(res, 404, JSON.stringify({ error: 'nothing published yet' }))
+    fail(res, 404, 'nothing published yet')
   }
 }
 
@@ -406,22 +399,19 @@ async function handlePost(req, res) {
   const bearerOk = TOKEN && req.headers.authorization === `Bearer ${TOKEN}`
   if (!bearerOk) {
     const user = sessionUser(req)
-    if (!user) return send(res, 401, JSON.stringify({ error: 'unauthorized' }))
-    if (user.role === 'contributor') return send(res, 403, JSON.stringify({ error: 'forbidden' }))
+    if (!user) return fail(res, 401, 'unauthorized')
+    if (user.role === 'contributor') return fail(res, 403, 'forbidden')
   }
   const raw = await readBody(req)
-  if (raw === null) return send(res, 400, JSON.stringify({ error: 'snapshot too large' }))
+  if (raw === null) return fail(res, 400, 'snapshot too large')
   let parsed
   try {
     parsed = JSON.parse(raw)
     if (!Array.isArray(parsed.pages) || !parsed.pages.length) throw new Error('no pages')
   } catch {
-    return send(res, 400, JSON.stringify({ error: 'invalid project snapshot' }))
+    return fail(res, 400, 'invalid project snapshot')
   }
-  await mkdir(DATA_DIR, { recursive: true })
-  const tmp = `${SNAPSHOT}.tmp`
-  await writeFile(tmp, raw)
-  await rename(tmp, SNAPSHOT) // atomic: readers never see a partial write
+  await writeAtomic(SNAPSHOT, raw) // atomic: readers never see a partial write
   // static export: on failure the snapshot stays saved and the previous
   // exported site stays live (atomic swap inside exportSite)
   try {
@@ -432,8 +422,8 @@ async function handlePost(req, res) {
     // message (never leak fs paths / compiler internals in the response) —
     // except errors the exporter explicitly marked safe to expose
     console.error(err)
-    if (err?.expose) return send(res, 502, JSON.stringify({ error: err.message }))
-    send(res, 500, JSON.stringify({ error: 'export failed — check the server logs' }))
+    if (err?.expose) return fail(res, 502, err.message)
+    fail(res, 500, 'export failed — check the server logs')
   }
 }
 
@@ -483,7 +473,7 @@ createServer(async (req, res) => {
     // mutating API request must be same-origin. Non-browser clients send no
     // Origin header and pass — the CI bearer publish keeps working.
     if (path.startsWith('/api/') && req.method !== 'GET' && !originAllowed(req)) {
-      return send(res, 403, JSON.stringify({ error: 'cross-origin request rejected' }))
+      return fail(res, 403, 'cross-origin request rejected')
     }
     if (path === '/api/published' && req.method === 'GET') return await handleGet(res)
     if (path === '/api/published' && req.method === 'POST') return await handlePost(req, res)
@@ -498,7 +488,7 @@ createServer(async (req, res) => {
     if (path === '/api/media' || path.startsWith('/api/media/')) {
       return await handleMedia(req, res, path, url.searchParams)
     }
-    if (path.startsWith('/api/')) return send(res, 404, JSON.stringify({ error: 'not found' }))
+    if (path.startsWith('/api/')) return fail(res, 404, 'not found')
     // library assets first; unknown /media/ paths fall through to the
     // exported site (its hashed files live under the same prefix)
     if (path.startsWith('/media/')) {
@@ -507,7 +497,7 @@ createServer(async (req, res) => {
     return await handleStatic(req, res)
   } catch (err) {
     console.error(err)
-    send(res, 500, JSON.stringify({ error: 'internal error' }))
+    fail(res, 500, 'internal error')
   }
 }).listen(PORT, () => {
   console.log(`superbird server on http://localhost:${PORT}${TOKEN ? ' (publish token required)' : ''}`)
