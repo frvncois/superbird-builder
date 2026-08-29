@@ -2,8 +2,8 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { usePanel } from '@/composables/usePanel'
 import { RotateCcw, X } from 'lucide-vue-next'
+import { STYLE_SECTIONS } from '@/lib/styleCatalog'
 import {
-  STYLE_SECTIONS,
   matchClass,
   sliderClasses,
   sliderLabels,
