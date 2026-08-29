@@ -12,6 +12,15 @@ import { ref } from 'vue'
 const cache = new Map<string, string>()
 const hydratedKeys = new Set<string>()
 
+/** the session is gone/invalid — hard-reload to login, exactly once. Shared
+ * by every authed API caller so no path keeps working on a dead session. */
+let bouncing = false
+export function onUnauthorized() {
+  if (bouncing) return
+  bouncing = true
+  window.location.assign('/admin/login')
+}
+
 /** last write failure, cleared on the next success (drives save status) */
 export const storeError = ref<string | null>(null)
 /** number of keys with unflushed or in-flight writes */
@@ -69,7 +78,7 @@ async function flush(key: string) {
       })
       if (res.status === 401) {
         // session expired mid-work — back to login (hard reload)
-        window.location.assign('/admin/login')
+        onUnauthorized()
         return
       }
       if (!res.ok) throw new Error(`save failed (${res.status})`)
@@ -91,7 +100,7 @@ export async function hydrateStore(keys: string[]): Promise<void> {
   if (!missing.length) return
   const res = await fetch(`/api/store?keys=${missing.map(encodeURIComponent).join(',')}`)
   if (res.status === 401) {
-    window.location.assign('/admin/login')
+    onUnauthorized()
     await new Promise(() => {}) // navigation is taking over
   }
   if (!res.ok) throw new Error(`store fetch failed (${res.status})`)
@@ -112,32 +121,4 @@ export async function flushStore(): Promise<void> {
     await new Promise((r) => setTimeout(r, 50))
     if (storeError.value) return // stuck on an error — don't hang forever
   }
-}
-
-/**
- * One-time import of a pre-auth localStorage project into the server
- * store. Runs only when the server has no editor data at all and the
- * browser still holds the old keys. localStorage is left untouched as
- * a backup.
- */
-export async function migrateLocalToServer(): Promise<void> {
-  await hydrateStore(['superbird-branches', 'superbird-project:main'])
-  if (storeGet('superbird-branches') || storeGet('superbird-project:main')) return
-
-  const legacy = localStorage.getItem('superbird-project')
-  const keys = Object.keys(localStorage).filter(
-    (k) =>
-      k.startsWith('superbird-project:') ||
-      k.startsWith('superbird-base:') ||
-      k === 'superbird-branches' ||
-      k === 'superbird-published-baseline' ||
-      k === 'superbird-published-info',
-  )
-  if (!keys.length && !legacy) return
-
-  for (const key of keys) storeSet(key, localStorage.getItem(key)!)
-  if (legacy && !localStorage.getItem('superbird-project:main')) {
-    storeSet('superbird-project:main', legacy)
-  }
-  await flushStore()
 }

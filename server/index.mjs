@@ -1,6 +1,8 @@
 // Superbird server: auth, editor storage, publishing, static site.
 // POST /api/auth/setup|login|logout, GET /api/auth/me — session cookie
 // GET/PUT/DELETE /api/store[...]  🔒 the editor's persistence (per key)
+// /api/media[...]                 🔒 media library (see media.mjs)
+// /media/:id, /media/thumb/:id    🌐 library bytes (falls back to exported site)
 // POST /api/published             🔒 snapshot + static export
 // GET  /api/published             🌐 public (smtp redacted)
 // /admin*, /assets/*              → the built SPA from dist/ (the editor)
@@ -19,19 +21,39 @@ import { existsSync } from 'node:fs'
 import { extname, join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { exportSite } from './export.mjs'
+import { handleMedia, handleMediaFile, originAllowed } from './media.mjs'
 import {
+  ROLES,
+  acceptInvite,
   clearCookieHeader,
-  createAccount,
+  createFirstAdmin,
+  createInvite,
   createSession,
+  deleteUser,
   destroySession,
-  getAccount,
+  findInviteByToken,
+  findUserByEmail,
+  hasValidRole,
+  inviteAllowed,
+  inviteView,
+  listInvites,
+  listInvitesPublic,
+  listMembers,
+  listUsers,
   loginAllowed,
-  recordFailure,
-  requireSession,
+  needsSetup,
+  recordInviteAttempt,
+  recordLoginFailure,
+  revokeInvite,
+  updateInvite,
   sessionCookieHeader,
   sessionTokenOf,
-  updateAccount,
-  verifyPassword,
+  sessionUser,
+  setUserRole,
+  updateUser,
+  userProfile,
+  verifyLogin,
+  verifyUserPassword,
 } from './auth.mjs'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
@@ -85,16 +107,18 @@ async function readBody(req) {
 
 // ---------- auth endpoints ----------
 
-async function handleAuth(req, res, path) {
-  const profile = () => ({ email: getAccount().email, name: getAccount().name ?? '' })
+const isEmail = (v) => typeof v === 'string' && /.+@.+\..+/.test(v)
 
+async function handleAuth(req, res, path) {
   if (path === '/api/auth/me' && req.method === 'GET') {
-    if (!getAccount()) return send(res, 401, JSON.stringify({ needsSetup: true }))
-    if (!requireSession(req)) return send(res, 401, JSON.stringify({ needsSetup: false }))
-    return send(res, 200, JSON.stringify(profile()))
+    if (needsSetup()) return send(res, 401, JSON.stringify({ needsSetup: true }))
+    const user = sessionUser(req)
+    if (!user) return send(res, 401, JSON.stringify({ needsSetup: false }))
+    return send(res, 200, JSON.stringify(userProfile(user)))
   }
   if (path === '/api/auth/setup' && req.method === 'POST') {
-    if (getAccount()) return send(res, 403, JSON.stringify({ error: 'account already exists' }))
+    // bootstrap the first admin — only when no users exist yet
+    if (!needsSetup()) return send(res, 403, JSON.stringify({ error: 'account already exists' }))
     const body = await readBody(req)
     let email, password, name
     try {
@@ -102,20 +126,19 @@ async function handleAuth(req, res, path) {
     } catch {
       return send(res, 400, JSON.stringify({ error: 'invalid request' }))
     }
-    if (!/.+@.+\..+/.test(email ?? '')) {
-      return send(res, 400, JSON.stringify({ error: 'invalid email' }))
-    }
+    if (!isEmail(email)) return send(res, 400, JSON.stringify({ error: 'invalid email' }))
     if (typeof password !== 'string' || password.length < 8) {
       return send(res, 400, JSON.stringify({ error: 'password must be at least 8 characters' }))
     }
-    await createAccount(email, password, typeof name === 'string' ? name : '')
-    const token = createSession()
-    return send(res, 200, JSON.stringify(profile()), 'application/json', {
-      'set-cookie': sessionCookieHeader(token),
+    const user = await createFirstAdmin(email, password, typeof name === 'string' ? name : '')
+    if (!user) return send(res, 403, JSON.stringify({ error: 'account already exists' }))
+    return send(res, 200, JSON.stringify(userProfile(user)), 'application/json', {
+      'set-cookie': sessionCookieHeader(createSession(user.id)),
     })
   }
   if (path === '/api/auth/update' && req.method === 'POST') {
-    if (!requireSession(req)) return send(res, 401, JSON.stringify({ error: 'unauthorized' }))
+    const user = sessionUser(req)
+    if (!user) return send(res, 401, JSON.stringify({ error: 'unauthorized' }))
     const body = await readBody(req)
     let name, email, password, currentPassword
     try {
@@ -123,26 +146,30 @@ async function handleAuth(req, res, path) {
     } catch {
       return send(res, 400, JSON.stringify({ error: 'invalid request' }))
     }
-    if (email !== undefined && !/.+@.+\..+/.test(email)) {
+    if (email !== undefined && !isEmail(email)) {
       return send(res, 400, JSON.stringify({ error: 'invalid email' }))
     }
     if (password !== undefined && password !== '') {
       if (typeof password !== 'string' || password.length < 8) {
         return send(res, 400, JSON.stringify({ error: 'password must be at least 8 characters' }))
       }
-      if (!verifyPassword(currentPassword ?? '')) {
+      if (!verifyUserPassword(user, currentPassword ?? '')) {
         return send(res, 403, JSON.stringify({ error: 'current password is incorrect' }))
       }
     }
-    await updateAccount({ name, email, password })
-    return send(res, 200, JSON.stringify(profile()))
+    // guard against colliding with another user's email
+    if (email && email.toLowerCase() !== user.email) {
+      const clash = findUserByEmail(email)
+      if (clash && clash.id !== user.id) {
+        return send(res, 409, JSON.stringify({ error: 'that email is already in use' }))
+      }
+    }
+    const updated = await updateUser(user.id, { name, email, password })
+    return send(res, 200, JSON.stringify(userProfile(updated)))
   }
   if (path === '/api/auth/login' && req.method === 'POST') {
-    if (!getAccount()) return send(res, 403, JSON.stringify({ error: 'no account yet' }))
+    if (needsSetup()) return send(res, 403, JSON.stringify({ error: 'no account yet' }))
     const ip = req.socket.remoteAddress ?? '?'
-    if (!loginAllowed(ip)) {
-      return send(res, 429, JSON.stringify({ error: 'too many attempts — try again later' }))
-    }
     const body = await readBody(req)
     let email, password
     try {
@@ -150,18 +177,20 @@ async function handleAuth(req, res, path) {
     } catch {
       return send(res, 400, JSON.stringify({ error: 'invalid request' }))
     }
-    const ok =
-      typeof email === 'string' &&
-      email.toLowerCase() === getAccount().email &&
-      typeof password === 'string' &&
-      verifyPassword(password)
-    if (!ok) {
-      recordFailure(ip)
+    if (!loginAllowed(ip, email)) {
+      return send(res, 429, JSON.stringify({ error: 'too many attempts — try again later' }))
+    }
+    const user = verifyLogin(email, password)
+    if (!user) {
+      recordLoginFailure(ip, email)
       return send(res, 401, JSON.stringify({ error: 'invalid credentials' }))
     }
-    const token = createSession()
-    return send(res, 200, JSON.stringify({ email: getAccount().email }), 'application/json', {
-      'set-cookie': sessionCookieHeader(token),
+    // never issue a session to an un-provisioned account (no valid role)
+    if (!hasValidRole(user)) {
+      return send(res, 403, JSON.stringify({ error: 'account is not provisioned — contact an admin' }))
+    }
+    return send(res, 200, JSON.stringify(userProfile(user)), 'application/json', {
+      'set-cookie': sessionCookieHeader(createSession(user.id)),
     })
   }
   if (path === '/api/auth/logout' && req.method === 'POST') {
@@ -174,6 +203,124 @@ async function handleAuth(req, res, path) {
   return send(res, 404, JSON.stringify({ error: 'not found' }))
 }
 
+// ---------- invites (public: link lookup + acceptance) ----------
+
+async function handleInvite(req, res, path) {
+  const ip = req.socket.remoteAddress ?? '?'
+  if (!inviteAllowed(ip)) {
+    return send(res, 429, JSON.stringify({ error: 'too many attempts — try again later' }))
+  }
+  recordInviteAttempt(ip)
+
+  const rest = path.slice('/api/invite/'.length)
+  const accept = rest.endsWith('/accept')
+  const token = decodeURIComponent(accept ? rest.slice(0, -'/accept'.length) : rest)
+
+  if (!accept && req.method === 'GET') {
+    const invite = findInviteByToken(token)
+    if (!invite) return send(res, 404, JSON.stringify({ error: 'invalid or expired invite' }))
+    // inviteView carries invitedBy; add the project name for the welcome
+    return send(res, 200, JSON.stringify({ ...inviteView(invite), projectName: await currentProjectName() }))
+  }
+  if (accept && req.method === 'POST') {
+    const body = await readBody(req)
+    let password
+    try {
+      ;({ password } = JSON.parse(body ?? ''))
+    } catch {
+      return send(res, 400, JSON.stringify({ error: 'invalid request' }))
+    }
+    if (typeof password !== 'string' || password.length < 8) {
+      return send(res, 400, JSON.stringify({ error: 'password must be at least 8 characters' }))
+    }
+    const result = await acceptInvite(token, password)
+    if (result.error) return send(res, 400, JSON.stringify({ error: result.error }))
+    return send(res, 200, JSON.stringify(userProfile(result.user)), 'application/json', {
+      'set-cookie': sessionCookieHeader(createSession(result.user.id)),
+    })
+  }
+  return send(res, 404, JSON.stringify({ error: 'not found' }))
+}
+
+// ---------- user management ----------
+
+async function handleUsers(req, res, path) {
+  const admin = sessionUser(req)
+  if (!admin) return send(res, 401, JSON.stringify({ error: 'unauthorized' }))
+
+  // team visibility for everyone: a redacted, read-only membership view (no
+  // tokens/ids). Gated only on being authenticated — sits BEFORE the admin gate.
+  if (path === '/api/users/members' && req.method === 'GET') {
+    return send(res, 200, JSON.stringify({ users: listMembers(), invites: listInvitesPublic() }))
+  }
+
+  // everything else is admin-only
+  if (admin.role !== 'admin') return send(res, 403, JSON.stringify({ error: 'forbidden' }))
+
+  if (path === '/api/users' && req.method === 'GET') {
+    return send(res, 200, JSON.stringify({ users: listUsers(), invites: listInvites() }))
+  }
+  if (path === '/api/users/invite' && req.method === 'POST') {
+    const body = await readBody(req)
+    let name, email, role
+    try {
+      ;({ name, email, role } = JSON.parse(body ?? ''))
+    } catch {
+      return send(res, 400, JSON.stringify({ error: 'invalid request' }))
+    }
+    if (!isEmail(email)) return send(res, 400, JSON.stringify({ error: 'invalid email' }))
+    if (!ROLES.includes(role)) return send(res, 400, JSON.stringify({ error: 'invalid role' }))
+    if (findUserByEmail(email)) {
+      return send(res, 409, JSON.stringify({ error: 'that email already has an account' }))
+    }
+    // record who invited them, for the branded accept page
+    const { invite, token } = await createInvite({ name, email, role, invitedBy: admin.name })
+    return send(res, 200, JSON.stringify({ ...inviteView(invite), token }))
+  }
+
+  // /api/users/invite/:id  (revoke / edit)   and   /api/users/:id  (role / delete)
+  const tail = path.slice('/api/users/'.length)
+  if (tail.startsWith('invite/') && req.method === 'DELETE') {
+    const ok = await revokeInvite(tail.slice('invite/'.length))
+    return send(res, ok ? 200 : 404, JSON.stringify(ok ? { ok: true } : { error: 'not found' }))
+  }
+  if (tail.startsWith('invite/') && req.method === 'PATCH') {
+    const body = await readBody(req)
+    let patch
+    try {
+      patch = JSON.parse(body ?? '')
+    } catch {
+      return send(res, 400, JSON.stringify({ error: 'invalid request' }))
+    }
+    if (patch.role !== undefined && !ROLES.includes(patch.role)) {
+      return send(res, 400, JSON.stringify({ error: 'invalid role' }))
+    }
+    const updated = await updateInvite(tail.slice('invite/'.length), patch)
+    if (!updated) return send(res, 404, JSON.stringify({ error: 'not found' }))
+    return send(res, 200, JSON.stringify(updated))
+  }
+  const id = tail
+  if (id && req.method === 'PATCH') {
+    const body = await readBody(req)
+    let role
+    try {
+      ;({ role } = JSON.parse(body ?? ''))
+    } catch {
+      return send(res, 400, JSON.stringify({ error: 'invalid request' }))
+    }
+    if (!ROLES.includes(role)) return send(res, 400, JSON.stringify({ error: 'invalid role' }))
+    const updated = await setUserRole(id, role)
+    if (!updated) return send(res, 409, JSON.stringify({ error: 'cannot change that role' }))
+    return send(res, 200, JSON.stringify(userProfile(updated)))
+  }
+  if (id && req.method === 'DELETE') {
+    const ok = await deleteUser(id)
+    if (!ok) return send(res, 409, JSON.stringify({ error: 'cannot remove that user' }))
+    return send(res, 200, JSON.stringify({ ok: true }))
+  }
+  return send(res, 404, JSON.stringify({ error: 'not found' }))
+}
+
 // ---------- authed key-value store (the editor's persistence) ----------
 
 const STORE_DIR = join(DATA_DIR, 'store')
@@ -181,8 +328,20 @@ const STORE_KEY_RE = /^[A-Za-z0-9:_-]{1,100}$/
 
 const storeFile = (key) => join(STORE_DIR, key.replaceAll(':', '__') + '.json')
 
+/** the current project name from the main-branch store blob (for the invite
+ * welcome). Best-effort — '' when there's nothing stored yet. */
+async function currentProjectName() {
+  try {
+    const name = JSON.parse(await readFile(storeFile('superbird-project:main'), 'utf8'))?.name
+    return typeof name === 'string' ? name : ''
+  } catch {
+    return ''
+  }
+}
+
 async function handleStore(req, res, path, query) {
-  if (!requireSession(req)) return send(res, 401, JSON.stringify({ error: 'unauthorized' }))
+  // any authenticated user (incl. contributors editing content) may use the store
+  if (!sessionUser(req)) return send(res, 401, JSON.stringify({ error: 'unauthorized' }))
 
   if (path === '/api/store' && req.method === 'GET') {
     const keys = (query.get('keys') ?? '').split(',').filter(Boolean)
@@ -242,10 +401,13 @@ async function handleGet(res) {
 }
 
 async function handlePost(req, res) {
-  // the session is the credential; PUBLISH_TOKEN stays as a CI escape hatch
+  // the session is the credential; PUBLISH_TOKEN stays as a CI escape hatch.
+  // Publishing is admin/editor only — contributors are content-only.
   const bearerOk = TOKEN && req.headers.authorization === `Bearer ${TOKEN}`
-  if (!requireSession(req) && !bearerOk) {
-    return send(res, 401, JSON.stringify({ error: 'unauthorized' }))
+  if (!bearerOk) {
+    const user = sessionUser(req)
+    if (!user) return send(res, 401, JSON.stringify({ error: 'unauthorized' }))
+    if (user.role === 'contributor') return send(res, 403, JSON.stringify({ error: 'forbidden' }))
   }
   const raw = await readBody(req)
   if (raw === null) return send(res, 400, JSON.stringify({ error: 'snapshot too large' }))
@@ -267,14 +429,18 @@ async function handlePost(req, res) {
     send(res, 200, JSON.stringify({ ok: true, ...stats }))
   } catch (err) {
     // full detail to the server log only; the client gets a generic
-    // message (never leak fs paths / compiler internals in the response)
+    // message (never leak fs paths / compiler internals in the response) —
+    // except errors the exporter explicitly marked safe to expose
     console.error(err)
+    if (err?.expose) return send(res, 502, JSON.stringify({ error: err.message }))
     send(res, 500, JSON.stringify({ error: 'export failed — check the server logs' }))
   }
 }
 
 async function handleStatic(req, res) {
   const path = normalize(decodeURIComponent(new URL(req.url, 'http://x').pathname))
+  // content-type is authoritative (extension-mapped) — never sniffed
+  const NOSNIFF = { 'x-content-type-options': 'nosniff' }
 
   // the editor SPA: /admin routes, its built assets, and real dist files
   const distFile = join(DIST, path)
@@ -284,7 +450,7 @@ async function handleStatic(req, res) {
     const target = isDistFile ? distFile : join(DIST, 'index.html')
     try {
       const data = await readFile(target)
-      return send(res, 200, data, MIME[extname(target)] ?? 'application/octet-stream')
+      return send(res, 200, data, MIME[extname(target)] ?? 'application/octet-stream', NOSNIFF)
     } catch {
       return send(res, 404, 'Not found — run `npm run build` first.', 'text/plain')
     }
@@ -299,10 +465,10 @@ async function handleStatic(req, res) {
       : join(SITE, path, 'index.html')
   try {
     const data = await readFile(target)
-    send(res, 200, data, MIME[extname(target)] ?? 'application/octet-stream')
+    send(res, 200, data, MIME[extname(target)] ?? 'application/octet-stream', NOSNIFF)
   } catch {
     try {
-      send(res, 404, await readFile(join(SITE, '404.html')), MIME['.html'])
+      send(res, 404, await readFile(join(SITE, '404.html')), MIME['.html'], NOSNIFF)
     } catch {
       send(res, 404, 'Nothing published yet.', 'text/plain')
     }
@@ -313,13 +479,31 @@ createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://x')
     const path = url.pathname
+    // CSRF defense-in-depth (on top of the SameSite=Lax cookie): every
+    // mutating API request must be same-origin. Non-browser clients send no
+    // Origin header and pass — the CI bearer publish keeps working.
+    if (path.startsWith('/api/') && req.method !== 'GET' && !originAllowed(req)) {
+      return send(res, 403, JSON.stringify({ error: 'cross-origin request rejected' }))
+    }
     if (path === '/api/published' && req.method === 'GET') return await handleGet(res)
     if (path === '/api/published' && req.method === 'POST') return await handlePost(req, res)
     if (path.startsWith('/api/auth/')) return await handleAuth(req, res, path)
+    if (path.startsWith('/api/invite/')) return await handleInvite(req, res, path)
+    if (path === '/api/users' || path.startsWith('/api/users/')) {
+      return await handleUsers(req, res, path)
+    }
     if (path === '/api/store' || path.startsWith('/api/store/')) {
       return await handleStore(req, res, path, url.searchParams)
     }
+    if (path === '/api/media' || path.startsWith('/api/media/')) {
+      return await handleMedia(req, res, path, url.searchParams)
+    }
     if (path.startsWith('/api/')) return send(res, 404, JSON.stringify({ error: 'not found' }))
+    // library assets first; unknown /media/ paths fall through to the
+    // exported site (its hashed files live under the same prefix)
+    if (path.startsWith('/media/')) {
+      if (await handleMediaFile(req, res, path, url.searchParams)) return
+    }
     return await handleStatic(req, res)
   } catch (err) {
     console.error(err)

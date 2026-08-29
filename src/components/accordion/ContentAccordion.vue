@@ -6,7 +6,7 @@ const accordion = inject(accordionKey)!
 </script>
 
 <template>
-  <div v-if="accordion.open.value" class="flex flex-col gap-2 pl-6.5 pr-1.5 pb-2">
+  <div v-if="accordion.open.value" class="flex flex-col gap-2 pb-2">
     <slot />
   </div>
 </template>

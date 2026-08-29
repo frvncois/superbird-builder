@@ -11,7 +11,7 @@
         <slot name="left" />
       </aside>
 
-      <main class="overflow-y-auto bg-muted/30 rounded-xl mb-2">
+      <main class="overflow-y-auto bg-muted/25 rounded-xl mb-2 border border-accent/50">
         <slot />
       </main>
 

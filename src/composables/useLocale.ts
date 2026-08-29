@@ -2,6 +2,7 @@ import { computed, ref, watch } from 'vue'
 import { useProject } from './useProject'
 import { parseSetup, replaceSetup } from '@/lib/document'
 import { reconcile } from '@/lib/syntax'
+import { walkNodes } from '@/lib/tree'
 import type { CollectionEntry, ElementNode } from '@/types/editor'
 
 /** the locale being edited/previewed — runtime editor state, shared
@@ -50,10 +51,28 @@ export function useLocale() {
     activeLocale.value = locales.value.includes(code) ? code : defaultLocale.value
   }
 
-  /** overrides are kept so re-adding a removed locale restores them */
-  function removeLocale(code: string) {
+  /**
+   * Hard-deletes a locale AND all its translation overrides across the project
+   * (page elements, component masters, collection entries). The default locale
+   * holds the base content, so it can never be deleted. One mutation → undoable.
+   */
+  function deleteLocale(code: string) {
     if (code === defaultLocale.value) return
     project.value.locales = project.value.locales.filter((l) => l !== code)
+    const purge = (node: ElementNode) => {
+      if (!node.locales?.[code]) return
+      delete node.locales[code]
+      if (!Object.keys(node.locales).length) delete node.locales
+    }
+    for (const page of project.value.pages) walkNodes(page.elements, purge)
+    for (const comp of project.value.components) walkNodes([comp.root], purge)
+    for (const collection of project.value.collections) {
+      for (const entry of collection.entries) {
+        if (!entry.locales?.[code]) continue
+        delete entry.locales[code]
+        if (!Object.keys(entry.locales).length) delete entry.locales
+      }
+    }
   }
 
   /**
@@ -89,12 +108,18 @@ export function useLocale() {
       : { value: node.src, translated: false }
   }
 
+  // reference fields store ids (possibly arrays) — those never read as text
+  function baseEntryText(entry: CollectionEntry, field: string): string | undefined {
+    const raw = entry.values[field]
+    return typeof raw === 'string' ? raw : undefined
+  }
+
   function entryValue(entry: CollectionEntry, field: string): LocalizedValue {
-    if (isDefault.value) return { value: entry.values[field], translated: true }
+    if (isDefault.value) return { value: baseEntryText(entry, field), translated: true }
     const override = entry.locales?.[activeLocale.value]?.[field]
     return override
       ? { value: override, translated: true }
-      : { value: entry.values[field], translated: false }
+      : { value: baseEntryText(entry, field), translated: false }
   }
 
   // --- panel edits (raw override, no fallback) ---
@@ -135,7 +160,9 @@ export function useLocale() {
 
   function editEntryValue(entry: CollectionEntry, field: string): string {
     return (
-      (isDefault.value ? entry.values[field] : entry.locales?.[activeLocale.value]?.[field]) ?? ''
+      (isDefault.value
+        ? baseEntryText(entry, field)
+        : entry.locales?.[activeLocale.value]?.[field]) ?? ''
     )
   }
 
@@ -163,7 +190,7 @@ export function useLocale() {
     isDefault,
     addLocale,
     setActiveLocale,
-    removeLocale,
+    deleteLocale,
     setDefaultLocale,
     nodeContent,
     nodeSrc,

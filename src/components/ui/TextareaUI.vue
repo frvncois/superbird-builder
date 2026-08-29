@@ -22,6 +22,6 @@ defineExpose({ focus: () => el.value?.focus() })
     :rows="rows"
     spellcheck="false"
     :placeholder="placeholder"
-    class="w-full resize-y rounded-lg bg-input px-2 py-1.5 text-xs outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-accent"
+    class="w-full resize-y rounded-lg border border-input px-2 py-1.5 text-xs outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-accent"
   />
 </template>

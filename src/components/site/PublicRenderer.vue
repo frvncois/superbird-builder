@@ -10,40 +10,56 @@
 // code and has no autosave watcher, so it is inert here.
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
-import EntryScope from '@/components/editor/EntryScope.vue'
+import EntryScope from '@/components/shared/EntryScope.vue'
 import { useLocale } from '@/composables/useLocale'
 import { useRenderNode } from '@/composables/useRenderNode'
+import { useRuntimeEnv } from '@/composables/useRuntimeEnv'
+import { useCollections } from '@/composables/useCollections'
+import { refDisplay } from '@/lib/shared/fields.js'
+import { isRich, sanitizeRich } from '@/lib/shared/richtext.js'
 import type { ElementNode } from '@/types/editor'
 
 const props = defineProps<{ node: ElementNode }>()
 
 const router = useRouter()
 const { nodeContent, nodeSrc, entryValue, activeLocale, defaultLocale, locales } = useLocale()
+const { entryPath, collections } = useCollections()
 
 // shared rendering core (also used by the editor's ElementRenderer)
 const {
   def,
   mapping,
+  scope,
   classesFor,
   scopedClassesFor,
   listCollection,
+  listEntries,
   itemCollection,
   itemEntry,
   itemTemplateChildren,
   selfNested,
   boundField,
   boundEntry,
+  condition,
+  backgroundInfo,
   ofTrigger,
   fireIn,
   unfireIn,
   toggleIn,
   el,
-} = useRenderNode(() => props.node)
+} = useRenderNode(() => props.node, { runtimeEnv: useRuntimeEnv().env })
 
 // locale-aware content: a bound field with no value renders empty on the
 // public site (the editor shows a {field} placeholder instead)
 const displayContent = computed(() => {
+  // an active condition swap wins over every other content source
+  if (condition.value.content != null && condition.value.content !== '') {
+    return condition.value.content
+  }
   if (boundField.value) {
+    if (['reference', 'multi-reference'].includes(boundField.value.type)) {
+      return boundEntry.value ? refDisplay(collections.value, boundField.value, boundEntry.value) : ''
+    }
     return boundEntry.value ? (entryValue(boundEntry.value, boundField.value.name).value ?? '') : ''
   }
   return (
@@ -54,6 +70,7 @@ const displayContent = computed(() => {
 })
 
 const srcAttr = computed(() => {
+  if (condition.value.src) return condition.value.src
   if (boundField.value?.type === 'image') {
     const bound = boundEntry.value
       ? entryValue(boundEntry.value, boundField.value.name).value
@@ -63,20 +80,33 @@ const srcAttr = computed(() => {
   return nodeSrc(props.node).value || undefined
 })
 
+// rich content renders through the shared sanitizer via v-html
+const richContent = computed(() =>
+  isRich(displayContent.value) ? sanitizeRich(displayContent.value) : null,
+)
+
 const classes = computed(() => [
   // the body fills the viewport column like it fills the canvas frame
   props.node.type === 'body' && 'flex-1',
+  // a linked non-anchor element still reads as clickable
+  linkTarget.value && def.value?.tag !== 'a' && 'cursor-pointer',
   mapping.value ? mapping.value.master.classes : props.node.classes,
   mapping.value
     ? scopedClassesFor(mapping.value.master.id, mapping.value.root, mapping.value.instanceId)
     : classesFor(props.node.id),
+  backgroundInfo.value?.hostClass,
 ])
 
 // --- links ---
 
+// any element with a link navigates — not just <a>. '@item' resolves to the
+// current entry's page and is inert outside an entry scope.
 const linkTarget = computed(() => {
-  if (def.value?.tag !== 'a') return null
-  const raw = props.node.link ?? mapping.value?.master.link
+  let raw = props.node.link ?? mapping.value?.master.link
+  if (raw === '@item') {
+    if (!scope?.entry) return null
+    raw = entryPath(scope.collection, scope.entry)
+  }
   if (!raw) return null
   // same scheme allowlist the static export enforces — drops javascript:,
   // data:, etc. so a link can't execute in this preview
@@ -100,9 +130,15 @@ const linkTarget = computed(() => {
 const handlers = {
   click(e: MouseEvent) {
     for (const interaction of ofTrigger('click')) toggleIn(interaction.id)
-    if (linkTarget.value?.internal) {
+    const target = linkTarget.value
+    if (!target) return
+    if (target.internal) {
       e.preventDefault()
-      router.push(linkTarget.value.href)
+      router.push(target.href)
+    } else if (def.value?.tag !== 'a') {
+      // non-anchor elements have no native navigation — do it ourselves
+      e.preventDefault()
+      window.open(target.href, '_blank', 'noopener')
     }
   },
   mouseenter() {
@@ -117,6 +153,8 @@ const handlers = {
 <!-- branch order: collection-list (repeats children per entry),
      collection-item (one entry through its template), void, default -->
 <template>
+  <!-- condition-hidden elements are dropped entirely, like the static export -->
+  <template v-if="condition.visible">
   <component
     :is="def?.tag ?? 'div'"
     v-if="node.type === 'collection-list'"
@@ -125,12 +163,14 @@ const handlers = {
     :class="classes"
     v-on="handlers"
   >
-    <template v-if="listCollection && listCollection.entries.length">
+    <template v-if="listCollection && listEntries.length">
       <EntryScope
-        v-for="entry in listCollection.entries"
+        v-for="(entry, i) in listEntries"
         :key="entry.id"
         :collection="listCollection"
         :entry="entry"
+        :index="i"
+        :count="listEntries.length"
       >
         <PublicRenderer
           v-for="child in node.children"
@@ -171,13 +211,25 @@ const handlers = {
     ref="el"
     :id="node.htmlId || undefined"
     :src="srcAttr"
-    :href="linkTarget?.href"
+    :href="def?.tag === 'a' ? linkTarget?.href : undefined"
     :class="classes"
+    :style="backgroundInfo?.style || undefined"
     v-on="handlers"
   >
+    <video
+      v-if="backgroundInfo?.kind === 'video'"
+      :src="backgroundInfo.url"
+      autoplay
+      muted
+      loop
+      playsinline
+      :class="backgroundInfo.layerClass"
+    />
     <template v-if="!node.children.length">
-      {{ displayContent }}
+      <span v-if="richContent !== null" v-html="richContent"></span>
+      <template v-else>{{ displayContent }}</template>
     </template>
     <PublicRenderer v-for="child in node.children" :key="child.id" :node="child" />
   </component>
+  </template>
 </template>

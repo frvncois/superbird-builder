@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, type Component } from 'vue'
 
-type Variant = 'default' | 'outline' | 'ghost' | 'icon'
+type Variant = 'default' | 'outline' | 'ghost' | 'icon' | 'mono'
 type Size = 'default' | 'lg' | 'sm' | 'xs'
 
 const props = withDefaults(
@@ -25,14 +25,17 @@ const base =
 
 const variants: Record<Variant, string> = {
   default: 'bg-primary text-primary-foreground hover:bg-primary',
-  outline: 'border border-input bg-transparent hover:bg-accent/30 hover:text-accent-foreground',
+  outline: 'border border-accent bg-transparent hover:bg-accent/30 hover:text-accent-foreground',
   ghost: 'bg-transparent hover:bg-accent/30 hover:text-accent-foreground',
   icon: 'bg-transparent hover:text-accent-foreground',
+  mono: 'bg-transparent font-mono hover:bg-accent/30 hover:text-accent-foreground',
 }
 
 const sizes: Record<Size, string> = {
+  // sm matches DropdownUI's trigger (h-9 px-3 text-xs, icon size-3.5) so header
+  // dropdowns, buttons and the mode switch line up at the same height
   default: 'h-9 px-4 text-sm [&_svg]:size-4',
-  sm: 'h-8 px-3 text-xs [&_svg]:size-3.5',
+  sm: 'h-9 px-3 text-xs [&_svg]:size-3.5',
   lg: 'h-10 px-6 text-base [&_svg]:size-5',
   xs: 'h-6 gap-1 px-2 text-[10px] [&_svg]:size-3',
 }
@@ -40,15 +43,27 @@ const sizes: Record<Size, string> = {
 // The icon variant drops all padding so the button hugs its content
 const iconSizes: Record<Size, string> = {
   default: 'h-9 p-0 text-sm [&_svg]:size-4',
-  sm: 'h-8 p-0 text-xs [&_svg]:size-3.5',
+  sm: 'h-9 p-0 text-xs [&_svg]:size-3.5',
   lg: 'h-10 p-0 text-base [&_svg]:size-5',
   xs: 'h-6 gap-1 p-0 text-[10px] [&_svg]:size-3',
+}
+
+// The mono variant pins the 10px monospace label regardless of size
+const monoSizes: Record<Size, string> = {
+  default: 'h-9 gap-1.5 px-2 text-[10px] [&_svg]:size-3',
+  sm: 'h-9 gap-1.5 px-2 text-[10px] [&_svg]:size-3',
+  lg: 'h-10 gap-1.5 px-3 text-[10px] [&_svg]:size-3',
+  xs: 'h-6 gap-1.5 px-2 text-[10px] [&_svg]:size-3',
 }
 
 const classes = computed(() => [
   base,
   variants[props.variant],
-  props.variant === 'icon' ? iconSizes[props.size] : sizes[props.size],
+  props.variant === 'icon'
+    ? iconSizes[props.size]
+    : props.variant === 'mono'
+      ? monoSizes[props.size]
+      : sizes[props.size],
 ])
 </script>
 

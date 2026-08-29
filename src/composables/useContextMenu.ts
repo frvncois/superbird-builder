@@ -1,14 +1,14 @@
 import { computed, ref } from 'vue'
 import { useElement } from './useElement'
 import type { ElementBlock } from './useElement'
-import type { Interaction } from '@/types/editor'
+import type { InteractionBinding } from '@/types/editor'
 
 const menu = ref<{ x: number; y: number; targetId: string } | null>(null)
 
 // app-internal clipboard (elements aren't representable in the OS one)
 const copiedBlock = ref<ElementBlock | null>(null)
 const copiedClasses = ref<string | null>(null)
-const copiedInteractions = ref<Interaction[] | null>(null)
+const copiedInteractions = ref<InteractionBinding[] | null>(null)
 // tracks whether the most recent copy/cut was an element (vs. text) so the
 // code editor can decide between element-paste and native text-paste on ⌘V
 const clipboardIsElement = ref(false)
@@ -16,11 +16,16 @@ const clipboardIsElement = ref(false)
 export function useContextMenu() {
   const {
     selectedElement,
+    selectedElementIds,
+    isMultiSelect,
     getElement,
     selectElement,
     copyElementBlock,
+    copyElementsBlock,
     pasteElementBlock,
     removeElement,
+    removeElements,
+    wrapSelectionInDiv,
   } = useElement()
 
   const target = computed(() => (menu.value ? getElement(menu.value.targetId) : null))
@@ -31,7 +36,9 @@ export function useContextMenu() {
   function copySelection() {
     const el = selectedElement.value
     if (!el || el.type === 'body') return
-    const block = copyElementBlock(el.id)
+    const block = isMultiSelect.value
+      ? copyElementsBlock(selectedElementIds.value)
+      : copyElementBlock(el.id)
     if (block) {
       copiedBlock.value = block
       clipboardIsElement.value = true
@@ -46,13 +53,24 @@ export function useContextMenu() {
   function duplicateSelection() {
     const el = selectedElement.value
     if (!el || el.type === 'body') return
-    const block = copyElementBlock(el.id)
-    if (block) pasteElementBlock(el.id, block)
+    const ids = selectedElementIds.value
+    const block = isMultiSelect.value ? copyElementsBlock(ids) : copyElementBlock(el.id)
+    // paste after the last element of the (possibly multi-) selection
+    const targetId = isMultiSelect.value ? ids[ids.length - 1]! : el.id
+    if (block) pasteElementBlock(targetId, block)
   }
 
   function deleteSelection() {
     const el = selectedElement.value
-    if (el && el.type !== 'body') removeElement(el.id)
+    if (!el || el.type === 'body') return
+    if (isMultiSelect.value) removeElements(selectedElementIds.value)
+    else removeElement(el.id)
+  }
+
+  function wrapSelection() {
+    const el = selectedElement.value
+    if (!el || el.type === 'body') return
+    wrapSelectionInDiv()
   }
 
   function cutSelection() {
@@ -62,7 +80,9 @@ export function useContextMenu() {
 
   function openMenu(e: MouseEvent, targetId: string) {
     e.preventDefault()
-    selectElement(targetId)
+    // right-clicking inside a multi-selection keeps it, so a menu action can
+    // operate on the whole group; otherwise collapse to the clicked element
+    if (!selectedElementIds.value.includes(targetId)) selectElement(targetId)
     menu.value = { x: e.clientX, y: e.clientY, targetId }
   }
 
@@ -139,5 +159,6 @@ export function useContextMenu() {
     pasteOnSelection,
     duplicateSelection,
     deleteSelection,
+    wrapSelection,
   }
 }

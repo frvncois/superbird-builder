@@ -31,6 +31,7 @@ export function createProject(name: string): Project {
     pages: [createPage('Home', '/')],
     components: [],
     collections: [],
+    interactions: [],
     breakpoints: defaultBreakpoints(),
     comments: [],
     locales: ['en'],

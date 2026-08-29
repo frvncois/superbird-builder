@@ -14,7 +14,7 @@ const model = defineModel<string>()
   <div class="relative w-full">
     <select
       v-model="model"
-      class="h-7 w-full cursor-pointer appearance-none rounded-lg bg-input pr-6 pl-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      class="h-7 w-full cursor-pointer appearance-none rounded-lg bg-input pr-2 pl-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-accent"
     >
       <option v-if="placeholder" value="" disabled hidden>{{ placeholder }}</option>
       <option v-for="option in options" :key="option.value" :value="option.value">

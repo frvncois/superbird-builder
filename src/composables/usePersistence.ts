@@ -6,6 +6,16 @@ import type { Project } from '@/types/editor'
 
 export type SaveStatus = 'saved' | 'pending' | 'error'
 
+/** presentation metadata for each SaveStatus (the header's save pill) */
+export const SAVE_STATES: Record<
+  SaveStatus,
+  { class: string; dot: string; short: string; label: string }
+> = {
+  saved: { class: 'bg-success/10 text-success', dot: 'bg-success', short: 'Saved', label: 'All changes saved' },
+  pending: { class: 'bg-pending/10 text-pending', dot: 'bg-pending', short: 'Saving…', label: 'Saving…' },
+  error: { class: 'bg-danger/10 text-danger', dot: 'bg-danger', short: 'Save failed', label: 'Save failed — click to retry' },
+}
+
 const DEBOUNCE_MS = 500
 const HISTORY_LIMIT = 50
 

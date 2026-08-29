@@ -1,6 +1,6 @@
 import { ref } from 'vue'
 
-/** which right-sidebar popover is open ('style', 'content', …) */
+/** which right-sidebar popover is open ('style', 'data', …) */
 const activePanelId = ref<string | null>(null)
 
 /** panel that should focus its primary input once it renders */

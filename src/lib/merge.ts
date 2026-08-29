@@ -2,6 +2,7 @@ import type {
   Breakpoint,
   Collection,
   ComponentDef,
+  Interaction,
   Page,
   Project,
   ProjectSettings,
@@ -14,8 +15,16 @@ export interface MergeConflict {
   key: string
   label: string
   kind: 'changed' | 'deleted-in-branch' | 'deleted-in-main'
-  /** the branch-side alternative: a page, component, collection, breakpoint set, locale pack, settings, or null (deletion) */
-  theirs: Page | ComponentDef | Collection | Breakpoint[] | LocalePack | ProjectSettings | null
+  /** the branch-side alternative: a page, component, collection, interaction, breakpoint set, locale pack, settings, or null (deletion) */
+  theirs:
+    | Page
+    | ComponentDef
+    | Collection
+    | Interaction
+    | Breakpoint[]
+    | LocalePack
+    | ProjectSettings
+    | null
 }
 
 /** the project-level locale settings, merged as one unit like breakpoints */
@@ -33,138 +42,123 @@ export interface MergeResult {
 const sig = (value: unknown) => JSON.stringify(value ?? null)
 
 /**
+ * Per-item three-way merge of one id-keyed list (pages, components, or
+ * collections — they all follow the identical rule). Items changed only in the
+ * branch merge in; changed on both sides conflict; a deletion on one side while
+ * the other kept editing conflicts too. Every conflict defaults to Main's side;
+ * the user resolves via applyResolutions.
+ */
+function mergeItemList<T extends { id: string }>(
+  base: T[],
+  mine: T[],
+  theirs: T[],
+  keyPrefix: string,
+  labelFn: (item: T) => string,
+): { merged: T[]; conflicts: MergeConflict[] } {
+  const baseMap = new Map(base.map((x) => [x.id, x]))
+  const mineMap = new Map(mine.map((x) => [x.id, x]))
+  const theirMap = new Map(theirs.map((x) => [x.id, x]))
+  const merged: T[] = []
+  const conflicts: MergeConflict[] = []
+  const conflict = (item: T, kind: MergeConflict['kind'], theirsSide: T | null) =>
+    conflicts.push({
+      key: `${keyPrefix}${item.id}`,
+      label: labelFn(item),
+      kind,
+      theirs: theirsSide as MergeConflict['theirs'],
+    })
+
+  for (const mineItem of mine) {
+    const baseItem = baseMap.get(mineItem.id)
+    const theirItem = theirMap.get(mineItem.id)
+    if (!baseItem) {
+      // added on Main after branching
+      merged.push(mineItem)
+      continue
+    }
+    const mineChanged = sig(mineItem) !== sig(baseItem)
+    if (theirItem) {
+      const theirsChanged = sig(theirItem) !== sig(baseItem)
+      if (theirsChanged && !mineChanged) {
+        merged.push(theirItem)
+      } else if (theirsChanged && mineChanged && sig(mineItem) !== sig(theirItem)) {
+        merged.push(mineItem)
+        conflict(mineItem, 'changed', theirItem)
+      } else {
+        merged.push(mineItem)
+      }
+    } else if (!mineChanged) {
+      // deleted in the branch, untouched on Main → accept the deletion
+    } else {
+      merged.push(mineItem)
+      conflict(mineItem, 'deleted-in-branch', null)
+    }
+  }
+
+  for (const theirItem of theirs) {
+    if (mineMap.has(theirItem.id)) continue
+    const baseItem = baseMap.get(theirItem.id)
+    if (!baseItem) {
+      // added in the branch
+      merged.push(theirItem)
+    } else if (sig(theirItem) !== sig(baseItem)) {
+      // Main deleted it but the branch kept editing it
+      conflict(theirItem, 'deleted-in-main', theirItem)
+    }
+  }
+
+  return { merged, conflicts }
+}
+
+/** applies one resolved conflict to its id-keyed list: replace, add, or delete */
+function applyToList<T extends { id: string }>(list: T[], id: string, theirs: T | null) {
+  const at = list.findIndex((x) => x.id === id)
+  if (theirs === null) {
+    if (at !== -1) list.splice(at, 1)
+  } else if (at !== -1) {
+    list[at] = theirs
+  } else {
+    list.push(theirs)
+  }
+}
+
+/**
  * Three-way merge of a branch back into Main, per page (and the shared
  * breakpoint set as one unit). Pages changed only in the branch merge
  * in; changed on both sides they conflict and the user picks a side.
  * Comments are shared across branches and never merged.
  */
 export function computeMerge(base: Project, mine: Project, theirs: Project): MergeResult {
-  const conflicts: MergeConflict[] = []
-  const basePages = new Map(base.pages.map((p) => [p.id, p]))
-  const minePages = new Map(mine.pages.map((p) => [p.id, p]))
-  const theirPages = new Map(theirs.pages.map((p) => [p.id, p]))
-
-  const mergedPages: Page[] = []
-
-  for (const minePage of mine.pages) {
-    const basePage = basePages.get(minePage.id)
-    const theirPage = theirPages.get(minePage.id)
-    if (!basePage) {
-      // added on Main after branching
-      mergedPages.push(minePage)
-      continue
-    }
-    const mineChanged = sig(minePage) !== sig(basePage)
-    if (theirPage) {
-      const theirsChanged = sig(theirPage) !== sig(basePage)
-      if (theirsChanged && !mineChanged) {
-        mergedPages.push(theirPage)
-      } else if (theirsChanged && mineChanged && sig(minePage) !== sig(theirPage)) {
-        mergedPages.push(minePage)
-        conflicts.push({
-          key: `page:${minePage.id}`,
-          label: minePage.name,
-          kind: 'changed',
-          theirs: theirPage,
-        })
-      } else {
-        mergedPages.push(minePage)
-      }
-    } else if (!mineChanged) {
-      // deleted in the branch, untouched on Main → accept the deletion
-    } else {
-      mergedPages.push(minePage)
-      conflicts.push({
-        key: `page:${minePage.id}`,
-        label: minePage.name,
-        kind: 'deleted-in-branch',
-        theirs: null,
-      })
-    }
-  }
-
-  for (const theirPage of theirs.pages) {
-    if (minePages.has(theirPage.id)) continue
-    const basePage = basePages.get(theirPage.id)
-    if (!basePage) {
-      // added in the branch
-      mergedPages.push(theirPage)
-    } else if (sig(theirPage) !== sig(basePage)) {
-      // Main deleted it but the branch kept editing it
-      conflicts.push({
-        key: `page:${theirPage.id}`,
-        label: theirPage.name,
-        kind: 'deleted-in-main',
-        theirs: theirPage,
-      })
-    }
-  }
-
-  // components merge with the same per-item three-way rule as pages
-  const baseComponents = new Map(base.components.map((c) => [c.id, c]))
-  const theirComponents = new Map(theirs.components.map((c) => [c.id, c]))
-  const mergedComponents: ComponentDef[] = []
-  for (const mineComp of mine.components) {
-    const baseComp = baseComponents.get(mineComp.id)
-    const theirComp = theirComponents.get(mineComp.id)
-    if (!baseComp || !theirComp) {
-      mergedComponents.push(mineComp)
-      continue
-    }
-    const mineChanged = sig(mineComp) !== sig(baseComp)
-    const theirsChanged = sig(theirComp) !== sig(baseComp)
-    if (theirsChanged && !mineChanged) {
-      mergedComponents.push(theirComp)
-    } else if (theirsChanged && mineChanged && sig(mineComp) !== sig(theirComp)) {
-      mergedComponents.push(mineComp)
-      conflicts.push({
-        key: `component:${mineComp.id}`,
-        label: `Component ${mineComp.name}`,
-        kind: 'changed',
-        theirs: theirComp,
-      })
-    } else {
-      mergedComponents.push(mineComp)
-    }
-  }
-  for (const theirComp of theirs.components) {
-    if (!mine.components.some((c) => c.id === theirComp.id) && !baseComponents.has(theirComp.id)) {
-      mergedComponents.push(theirComp) // added in the branch
-    }
-  }
-
-  // collections merge with the same per-item three-way rule
-  const baseCollections = new Map(base.collections.map((c) => [c.id, c]))
-  const theirCollections = new Map(theirs.collections.map((c) => [c.id, c]))
-  const mergedCollections: Collection[] = []
-  for (const mineCol of mine.collections) {
-    const baseCol = baseCollections.get(mineCol.id)
-    const theirCol = theirCollections.get(mineCol.id)
-    if (!baseCol || !theirCol) {
-      mergedCollections.push(mineCol)
-      continue
-    }
-    const mineChanged = sig(mineCol) !== sig(baseCol)
-    const theirsChanged = sig(theirCol) !== sig(baseCol)
-    if (theirsChanged && !mineChanged) {
-      mergedCollections.push(theirCol)
-    } else if (theirsChanged && mineChanged && sig(mineCol) !== sig(theirCol)) {
-      mergedCollections.push(mineCol)
-      conflicts.push({
-        key: `collection:${mineCol.id}`,
-        label: `Collection ${mineCol.name}`,
-        kind: 'changed',
-        theirs: theirCol,
-      })
-    } else {
-      mergedCollections.push(mineCol)
-    }
-  }
-  for (const theirCol of theirs.collections) {
-    if (!mine.collections.some((c) => c.id === theirCol.id) && !baseCollections.has(theirCol.id)) {
-      mergedCollections.push(theirCol)
-    }
-  }
+  // pages, components, and collections all follow the same per-item three-way
+  // rule — one shared helper keeps them from drifting apart
+  const pages = mergeItemList(base.pages, mine.pages, theirs.pages, 'page:', (p) => p.name)
+  const components = mergeItemList(
+    base.components,
+    mine.components,
+    theirs.components,
+    'component:',
+    (c) => `Component ${c.name}`,
+  )
+  const collections = mergeItemList(
+    base.collections,
+    mine.collections,
+    theirs.collections,
+    'collection:',
+    (c) => `Collection ${c.name}`,
+  )
+  const interactions = mergeItemList(
+    base.interactions ?? [],
+    mine.interactions ?? [],
+    theirs.interactions ?? [],
+    'interaction:',
+    (i) => `Interaction ${i.name}`,
+  )
+  const conflicts: MergeConflict[] = [
+    ...pages.conflicts,
+    ...components.conflicts,
+    ...collections.conflicts,
+    ...interactions.conflicts,
+  ]
 
   let mergedBreakpoints = mine.breakpoints
   const bpMineChanged = sig(mine.breakpoints) !== sig(base.breakpoints)
@@ -218,9 +212,10 @@ export function computeMerge(base: Project, mine: Project, theirs: Project): Mer
 
   const merged: Project = {
     ...mine,
-    pages: mergedPages,
-    components: mergedComponents,
-    collections: mergedCollections,
+    pages: pages.merged,
+    components: components.merged,
+    collections: collections.merged,
+    interactions: interactions.merged,
     breakpoints: mergedBreakpoints,
     comments: mine.comments,
     locales: mergedLocales.locales,
@@ -252,28 +247,96 @@ export function applyResolutions(
       merged.settings = conflict.theirs as ProjectSettings
       continue
     }
+    // pages / components / collections all resolve the same way: replace the
+    // item, add it back (branch kept an item Main deleted), or drop it
     if (conflict.key.startsWith('component:')) {
-      const componentId = conflict.key.slice('component:'.length)
-      const at = merged.components.findIndex((c) => c.id === componentId)
-      if (at !== -1) merged.components[at] = conflict.theirs as ComponentDef
+      applyToList(
+        merged.components,
+        conflict.key.slice('component:'.length),
+        conflict.theirs as ComponentDef | null,
+      )
       continue
     }
     if (conflict.key.startsWith('collection:')) {
-      const collectionId = conflict.key.slice('collection:'.length)
-      const at = merged.collections.findIndex((c) => c.id === collectionId)
-      if (at !== -1) merged.collections[at] = conflict.theirs as Collection
+      applyToList(
+        merged.collections,
+        conflict.key.slice('collection:'.length),
+        conflict.theirs as Collection | null,
+      )
       continue
     }
-    const pageId = conflict.key.slice('page:'.length)
-    const at = merged.pages.findIndex((p) => p.id === pageId)
-    if (conflict.theirs === null) {
-      // branch deleted the page
-      if (at !== -1) merged.pages.splice(at, 1)
-    } else if (at !== -1) {
-      merged.pages[at] = conflict.theirs as Page
-    } else {
-      merged.pages.push(conflict.theirs as Page)
+    if (conflict.key.startsWith('interaction:')) {
+      applyToList(
+        merged.interactions,
+        conflict.key.slice('interaction:'.length),
+        conflict.theirs as Interaction | null,
+      )
+      continue
     }
+    applyToList(merged.pages, conflict.key.slice('page:'.length), conflict.theirs as Page | null)
   }
   return merged
+}
+
+// ---------- change summary (draft vs its base snapshot) ----------
+
+export interface ChangeSummary {
+  pages: number
+  components: number
+  collections: number
+  interactions: number
+  breakpoints: boolean
+  locales: boolean
+  settings: boolean
+}
+
+/** added + changed + deleted count for one id-keyed list vs its base */
+function countListChanges<T extends { id: string }>(base: T[], current: T[]): number {
+  const baseMap = new Map(base.map((x) => [x.id, x]))
+  let changes = 0
+  for (const item of current) {
+    const baseItem = baseMap.get(item.id)
+    if (!baseItem || sig(item) !== sig(baseItem)) changes++
+    baseMap.delete(item.id)
+  }
+  return changes + baseMap.size // leftovers in baseMap were deleted
+}
+
+/** what a draft touched since it branched — per-list change counts + unit flags */
+export function summarizeChanges(base: Project, current: Project): ChangeSummary {
+  const pack = (p: Project): LocalePack => ({ locales: p.locales, defaultLocale: p.defaultLocale })
+  return {
+    pages: countListChanges(base.pages, current.pages),
+    components: countListChanges(base.components, current.components),
+    collections: countListChanges(base.collections, current.collections),
+    interactions: countListChanges(base.interactions ?? [], current.interactions ?? []),
+    breakpoints: sig(current.breakpoints) !== sig(base.breakpoints),
+    locales: sig(pack(current)) !== sig(pack(base)),
+    settings: sig(current.settings) !== sig(base.settings),
+  }
+}
+
+export function hasChanges(s: ChangeSummary): boolean {
+  return (
+    s.pages + s.components + s.collections + s.interactions > 0 ||
+    s.breakpoints ||
+    s.locales ||
+    s.settings
+  )
+}
+
+/** "3 pages · 1 component · settings" — empty string when nothing changed */
+export function changeSummaryLabel(s: ChangeSummary): string {
+  const count = (n: number, word: string) => (n ? `${n} ${word}${n > 1 ? 's' : ''}` : null)
+  return [
+    count(s.pages, 'page'),
+    count(s.components, 'component'),
+    count(s.collections, 'collection'),
+    count(s.interactions, 'interaction'),
+    s.breakpoints ? 'breakpoints' : null,
+    s.locales ? 'locales' : null,
+    s.settings ? 'settings' : null,
+  ]
+    .filter(Boolean)
+    .join(' · ')
 }

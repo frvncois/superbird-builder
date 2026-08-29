@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, type Component } from 'vue'
+import { type Component } from 'vue'
 import { ChevronDown } from 'lucide-vue-next'
+import { useDropdown } from '@/composables/useDropdown'
 
 withDefaults(
   defineProps<{
@@ -14,19 +15,7 @@ withDefaults(
   { width: 'w-48', variant: 'default' },
 )
 
-const open = ref(false)
-const root = ref<HTMLElement>()
-
-function close() {
-  open.value = false
-}
-
-function onClickOutside(e: MouseEvent) {
-  if (root.value && !root.value.contains(e.target as Node)) close()
-}
-
-onMounted(() => document.addEventListener('click', onClickOutside))
-onBeforeUnmount(() => document.removeEventListener('click', onClickOutside))
+const { open, root, toggle, close } = useDropdown()
 </script>
 
 <template>
@@ -34,15 +23,21 @@ onBeforeUnmount(() => document.removeEventListener('click', onClickOutside))
     <!-- Overlays so the expanding border never pushes the surrounding layout -->
     <div
       class="absolute inset-x-0 top-0 z-50 rounded-xl"
-      :class="variant === 'filled' ? 'bg-secondary' : 'border border-input bg-background'"
+      :class="[
+        variant === 'filled' ? 'bg-muted' : 'border border-accent bg-background',
+        open && 'ring-2 ring-accent/25',
+      ]"
     >
       <div
-        class="flex h-9 cursor-pointer items-center gap-2 px-3 text-xs font-medium select-none"
-        @click="open = !open"
+        class="flex h-8.5 cursor-pointer items-center gap-2 px-3 text-xs font-medium select-none"
+        @click="toggle"
       >
         <component :is="icon" v-if="icon" class="size-3.5 shrink-0 text-muted-foreground" />
         <span class="flex-1 truncate">{{ label }}</span>
-        <ChevronDown class="size-3.5 shrink-0 text-muted-foreground" />
+        <ChevronDown
+          class="size-3.5 shrink-0 text-muted-foreground transition-transform duration-200"
+          :class="{ 'rotate-180': open }"
+        />
       </div>
 
       <!-- Options render inside the wrapper so its border stretches with them -->

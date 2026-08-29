@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue'
 import { currentSnapshot, usePersistence } from './usePersistence'
-import { storeGet, storeSet } from '@/lib/store'
+import { onUnauthorized, storeGet, storeSet } from '@/lib/store'
 
 /** mirror of the last-published snapshot so the Unpublished dot
  * survives editor reloads (server-stored; hydrated by the boot flow) */
@@ -44,6 +44,7 @@ export function usePublish() {
       headers: { 'content-type': 'application/json' },
       body: snapshot,
     })
+    if (res.status === 401) onUnauthorized() // dead session — back to login
     if (!res.ok) {
       const detail = await res.json().catch(() => null)
       throw new Error(detail?.error ?? `publish failed (${res.status})`)

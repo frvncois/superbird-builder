@@ -27,19 +27,22 @@
   --editor-string: #c3e88d;
   --editor-punct: #86e1fc;
   --editor-component: #ffc777;
+
+  /* state/variant class badges (hover:, focus:…) — keyword hue, new names */
+  --state-class: #c099ff;
 }
 
 .light {
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
-  --input: oklch(0.922 0 0);
+  --input: oklch(95.213% 0.00011 271.152);
   --muted: oklch(0.97 0 0);
   --muted-foreground: oklch(0.556 0 0);
   --primary: oklch(0.205 0 0);
   --primary-foreground: oklch(0.985 0 0);
   --secondary: oklch(0.97 0 0);
   --secondary-foreground: oklch(0.205 0 0);
-  --accent: oklch(0.922 0 0);
+  --accent: oklch(78.261% 0.00009 271.152);
   --accent-foreground: oklch(0.205 0 0);
   --success: oklch(0.627 0.194 149.21);
   --pending: oklch(0.681 0.162 75.83);
@@ -53,6 +56,8 @@
   --editor-string: #587f3a;
   --editor-punct: #1e88b0;
   --editor-component: #b8862b;
+
+  --state-class: #8d5bd6;
 }
 
 @theme inline {
@@ -81,6 +86,8 @@
   --color-editor-string: var(--editor-string);
   --color-editor-punct: var(--editor-punct);
   --color-editor-component: var(--editor-component);
+
+  --color-state-class: var(--state-class);
 }
 
 body {
@@ -94,4 +101,30 @@ body {
 input,
 textarea {
   user-select: text;
+}
+
+/* thin muted scrollbar shared across scrollable app chrome (popovers,
+   panels). Matches the code editor's thumb; unlike the editor it is not
+   focus-gated, since these containers never take focus. */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--muted-foreground) 35%, transparent) transparent;
+  /* reserve the scrollbar's width always, so content doesn't shift when the
+     bar appears once the container becomes scrollable */
+  scrollbar-gutter: stable;
+}
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-track,
+.custom-scrollbar::-webkit-scrollbar-corner {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: color-mix(in oklch, var(--muted-foreground) 35%, transparent);
+  border-radius: 9999px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in oklch, var(--muted-foreground) 60%, transparent);
 }

@@ -17,3 +17,22 @@ export function findNode(nodes: ElementNode[], id: string): ElementNode | null {
   }
   return null
 }
+
+/** finds the parent of a node by id (null for roots / not found) */
+export function findParent(nodes: ElementNode[], id: string): ElementNode | null {
+  for (const node of nodes) {
+    if (node.children.some((child) => child.id === id)) return node
+    const match = findParent(node.children, id)
+    if (match) return match
+  }
+  return null
+}
+
+/** true when the node with `id` has an ancestor of the given type */
+export function hasAncestorOfType(nodes: ElementNode[], id: string, type: string): boolean {
+  for (const node of nodes) {
+    if (node.type === type && findNode(node.children, id)) return true
+    if (hasAncestorOfType(node.children, id, type)) return true
+  }
+  return false
+}

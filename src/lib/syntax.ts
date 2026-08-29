@@ -3,10 +3,27 @@ import { ELEMENTS, createNode, isKnownElement, isLeafElement } from './elements'
 import { isComponentType } from './components'
 import { walkNodes } from './tree'
 
-// tokens may carry an argument: :h1(title):, :collection-list(post), :body(post)
-const LEAF = /^:([a-zA-Z][a-zA-Z0-9-]*)(?:\(([a-z0-9-]*)\))?:$/ // :h1: or :Card:
-export const OPEN = /^:([a-zA-Z][a-zA-Z0-9-]*)(?:\(([a-z0-9-]*)\))?$/ // :section or :Card
+// tokens may carry an argument: :h1[title]:, :collection-list[post], :body[post]
+// and an optional link suffix: :link:@item, :div@/about, :button:@https://x
+// args allow a dot for one-hop reference bindings: :h1[author.name]:
+// a '(+)' after the arg slot is the styled marker — display-only, derived from
+// node.classes; the group is non-capturing (and tolerates the mid-typing forms
+// '(', '(+', '()') so it never reaches node.arg and never splits the token
+// the arg's closing ']' is optional so an unclosed bracket mid-typing
+// (':h1[:', ':h1[po:') keeps matching — the node stays in the tree and its
+// identity/classes/content survive reconcile while the arg is being edited
+// a '{+}' after the style marker is the interactions marker — same rules as
+// '(+)' but derived from node.interactions; mid-typing '{', '{+', '{}' tolerated
+const LEAF = /^:([a-zA-Z][a-zA-Z0-9-]*)(?:\[([a-z0-9.-]*)\]?)?(?:\(\+?\)?)?(?:\{\+?\}?)?:(?:@(\S+))?$/ // :h1: or :Card: (+@link)
+export const OPEN = /^:([a-zA-Z][a-zA-Z0-9-]*)(?:\[([a-z0-9.-]*)\]?)?(?:\(\+?\)?)?(?:\{\+?\}?)?(?:@(\S+))?$/ // :section or :Card (+@link)
 export const CLOSE = /^([a-zA-Z][a-zA-Z0-9-]*):$/ // section: or Card:
+
+/** the '@target' suffix a node carries in code → its node.link value
+ * ('item' is the current-entry sentinel, stored as '@item'; else verbatim) */
+export function linkFromToken(target: string | undefined): string | undefined {
+  if (!target) return undefined
+  return target === 'item' ? '@item' : target
+}
 
 const tabs = (n: number) => '\t'.repeat(n)
 
@@ -25,14 +42,31 @@ export function lexLine(text: string): string[] {
     if (text[j] === ':') {
       j++
       while (j < text.length && /[a-zA-Z0-9-]/.test(text[j]!)) j++
-      if (text[j] === '(') {
-        // optional argument: (title) — consumed even while still
+      if (text[j] === '[') {
+        // optional argument: [title] — consumed even while still
         // unclosed, so mid-typing never splits the token across lines
         let k = j + 1
-        while (k < text.length && /[a-z0-9-]/.test(text[k]!)) k++
-        j = text[k] === ')' ? k + 1 : k
+        while (k < text.length && /[a-z0-9.-]/.test(text[k]!)) k++
+        j = text[k] === ']' ? k + 1 : k
+      }
+      if (text[j] === '(') {
+        // styled marker '(+)' — like [arg], consumed even while incomplete
+        j++
+        if (text[j] === '+') j++
+        if (text[j] === ')') j++
+      }
+      if (text[j] === '{') {
+        // interactions marker '{+}' — same treatment
+        j++
+        if (text[j] === '+') j++
+        if (text[j] === '}') j++
       }
       if (text[j] === ':' && !/[a-zA-Z]/.test(text[j + 1] ?? '')) j++ // leaf close
+      // link suffix: @target stays glued to the token (like [arg])
+      if (text[j] === '@') {
+        j++
+        while (j < text.length && !/\s/.test(text[j]!)) j++
+      }
     } else {
       while (j < text.length && /[a-zA-Z0-9-]/.test(text[j]!)) j++
       if (text[j] === ':') j++ // close token
@@ -42,6 +76,62 @@ export function lexLine(text: string): string[] {
     i = j
   }
   return tokens
+}
+
+// token head (indent + :name + optional [arg]) then the marker slot — the
+// anchor for reading/rewriting a line's styled marker without touching the
+// leaf ':' or '@link' tail
+const TOKEN_HEAD = /^(\s*:[a-zA-Z][a-zA-Z0-9-]*(?:\[[a-z0-9.-]*\])?)(\(\+?\)?)?/
+
+/** the marker currently on the line's token: '(+)', or a mid-typing '(', '(+', '()' */
+export function styleMarkerOf(line: string): string | undefined {
+  return line.match(TOKEN_HEAD)?.[2] || undefined
+}
+
+/** the line's token has an unclosed '[' arg — an arg edit in progress */
+export function hasOpenArgBracket(line: string): boolean {
+  return /^\s*:[a-zA-Z][a-zA-Z0-9-]*\[[^\]]*$/.test(line)
+}
+
+/** finalizes an unclosed '[' arg: non-empty → close it (':h1[po' → ':h1[po]'),
+ * empty → remove it (':h1[:' → ':h1:'). No-ops on closed args and non-token
+ * lines. The lookahead excludes arg chars too, so backtracking can never
+ * split a CLOSED arg like '[title]' and re-close it mid-word. */
+export function closeArgBracket(line: string): string {
+  return line.replace(
+    /^(\s*:[a-zA-Z][a-zA-Z0-9-]*)\[([a-z0-9.-]*)(?![\]a-z0-9.-])/,
+    (_, head: string, arg: string) => (arg ? `${head}[${arg}]` : head),
+  )
+}
+
+/** rewrites the line's styled marker: on → exactly '(+)', off → none.
+ * No-ops on lines that don't start with an element token (close lines, @setup).
+ * An existing '{+}' stays in the rest, so ordering '(+){+}' falls out for free. */
+export function withStyleMarker(line: string, on: boolean): string {
+  const m = line.match(TOKEN_HEAD)
+  if (!m || !m[1]) return line
+  const head = m[1]
+  const rest = line.slice(head.length + (m[2]?.length ?? 0))
+  return head + (on ? '(+)' : '') + rest
+}
+
+// like TOKEN_HEAD but the head swallows any (possibly incomplete) style
+// marker, so the '{…}' interactions slot anchors right after it
+const INT_HEAD = /^(\s*:[a-zA-Z][a-zA-Z0-9-]*(?:\[[a-z0-9.-]*\])?(?:\(\+?\)?)?)(\{\+?\}?)?/
+
+/** the interactions marker currently on the line's token: '{+}', or a
+ * mid-typing '{', '{+', '{}' */
+export function interactionMarkerOf(line: string): string | undefined {
+  return line.match(INT_HEAD)?.[2] || undefined
+}
+
+/** rewrites the line's interactions marker: on → exactly '{+}', off → none */
+export function withInteractionMarker(line: string, on: boolean): string {
+  const m = line.match(INT_HEAD)
+  if (!m || !m[1]) return line
+  const head = m[1]
+  const rest = line.slice(head.length + (m[2]?.length ?? 0))
+  return head + (on ? '{+}' : '') + rest
 }
 
 /**
@@ -120,6 +210,7 @@ export function parseSyntax(
           const node = nodeFor(lineIndex, leaf[1]!)
           node.line = node.endLine = lineIndex
           node.arg = leaf[2] || undefined
+          node.link = linkFromToken(leaf[3])
           append(node)
         }
         continue
@@ -131,6 +222,7 @@ export function parseSyntax(
           const node = nodeFor(lineIndex, open[1]!)
           node.line = node.endLine = lineIndex
           node.arg = open[2] || undefined
+          node.link = linkFromToken(open[3])
           append(node)
           stack.push(node)
         }
@@ -247,10 +339,12 @@ export function validateDocument(
   code: string,
   componentNames: string[] = [],
   collectionNames: string[] = [],
+  /** multi-reference field names — also valid as :collection-list args */
+  listFieldNames: string[] = [],
 ): Diagnostic[] {
   const lines = code.split('\n')
   const trimmed = lines.map((l) => l.trim())
-  const start = trimmed.findIndex((t) => t === ':body' || t.startsWith(':body('))
+  const start = trimmed.findIndex((t) => t === ':body' || t.startsWith(':body['))
   const end = trimmed.lastIndexOf('body:')
   if (start === -1 || end <= start) return []
 
@@ -264,11 +358,16 @@ export function validateDocument(
       const close = token.match(CLOSE)
       const name = leaf?.[1] ?? open?.[1]
 
-      // collection embeds — the arg must name a real collection
+      // collection embeds — the arg must name a real collection (a list may
+      // also name a multi-reference field it iterates)
       if (name === 'collection-list' || name === 'collection-item') {
         const arg = leaf?.[2] ?? open?.[2]
-        if (!arg || !collectionNames.includes(arg)) {
-          diags.push({ line: i, message: `Unknown collection ':${name}(${arg ?? ''})'` })
+        const known =
+          !!arg &&
+          (collectionNames.includes(arg) ||
+            (name === 'collection-list' && listFieldNames.includes(arg)))
+        if (!known) {
+          diags.push({ line: i, message: `Unknown collection ':${name}[${arg ?? ''}]'` })
         } else if (open) {
           stack.push({ type: name, line: i })
         }
@@ -427,6 +526,7 @@ export function suggestCompletion(
   before: string,
   currentLine: string,
   componentNames: string[] = [],
+  opts: { pages?: string[]; onTemplate?: boolean } = {},
 ): string | null {
   // blank line (or matching indent) → the contextual flow suggestion
   const flow = suggestNextLine(before)
@@ -435,6 +535,30 @@ export function suggestCompletion(
   const indent = currentLine.match(/^\t*/)![0]
   const typed = currentLine.trim()
   if (!typed) return null
+
+  // typing a link suffix '…@partial' on a complete token → suggest a target:
+  // 'item' (current entry, only in an entry scope), a page path, or a scheme
+  const linkTyped = typed.match(/^(.*?[^@\s])@([^\s@]*)$/)
+  if (linkTyped) {
+    const [, prefix, partial] = linkTyped as unknown as [string, string, string]
+    // prefix must be a complete leaf (:x:) or open (:x) token
+    if (LEAF.test(prefix) || OPEN.test(prefix)) {
+      const inEntryScope =
+        !!opts.onTemplate || analyze(before).stack.some((s) => s.type === 'collection-list')
+      const targets = [
+        ...(inEntryScope ? ['item'] : []),
+        ...(opts.pages ?? []),
+        'https://',
+        'mailto:',
+        'tel:',
+        '#',
+      ]
+      const hit = targets.find((t) => t.toLowerCase().startsWith(partial.toLowerCase()))
+      if (!hit) return null
+      const full = `${indent}${prefix}@${hit}`
+      return full !== currentLine && full.startsWith(currentLine) ? full : null
+    }
+  }
 
   // typing ':name' → complete an element from the registry, or a component
   const openTyped = typed.match(/^:([a-zA-Z0-9-]*)$/)

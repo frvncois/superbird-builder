@@ -21,15 +21,15 @@ export function buildDocument(meta: PageMeta, bodyLines: string[], bodyArg?: str
     `\tslug: ${meta.slug}`,
     `\tstatus: ${meta.status}`,
     `\tlocale: ${meta.locale}`,
-    bodyArg ? `:body(${bodyArg})` : ':body',
+    bodyArg ? `:body[${bodyArg}]` : ':body',
     ...body,
     'body:',
   ].join('\n')
 }
 
-/** the collection bound to the page body, from :body(post) */
+/** the collection bound to the page body, from :body[post] */
 export function extractBodyArg(code: string): string | undefined {
-  return code.match(/^:body\(([a-z0-9-]+)\)$/m)?.[1]
+  return code.match(/^:body\[([a-z0-9-]+)\]$/m)?.[1]
 }
 
 /** normalizes a string into a url slug segment */
@@ -50,7 +50,7 @@ export function replaceSetup(code: string, meta: PageMeta): string {
 export function extractBodyLines(code: string): string[] {
   const lines = code.split('\n')
   const trimmed = lines.map((l) => l.trim())
-  const start = trimmed.findIndex((t) => t === ':body' || t.startsWith(':body('))
+  const start = trimmed.findIndex((t) => t === ':body' || t.startsWith(':body['))
   const end = trimmed.lastIndexOf('body:')
   if (start !== -1 && end > start) return lines.slice(start + 1, end)
   // wrapper damaged → salvage whatever still looks like body content
@@ -61,7 +61,7 @@ export function extractBodyLines(code: string): string[] {
       !t.startsWith('@') &&
       !/^(name|slug|status|locale):/.test(t) &&
       t !== ':body' &&
-      !t.startsWith(':body(') &&
+      !t.startsWith(':body[') &&
       t !== 'body:'
     )
   })
@@ -88,7 +88,7 @@ export function parseSetup(value: string): PageMeta {
  */
 export function setSetupLocale(code: string, locale: string): string {
   const lines = code.split('\n')
-  const bodyOpen = lines.findIndex((l) => /^:body(\(|$)/.test(l.trim()))
+  const bodyOpen = lines.findIndex((l) => /^:body(\[|$)/.test(l.trim()))
   const end = bodyOpen === -1 ? lines.length : bodyOpen
   for (let i = 1; i < end; i++) {
     if (/^\s*locale:/.test(lines[i]!)) {

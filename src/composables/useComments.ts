@@ -1,7 +1,7 @@
 import { computed, ref } from 'vue'
 import { useProject } from './useProject'
 import { usePage } from './usePage'
-import type { Comment } from '@/types/editor'
+import type { Comment, CommentAnchor } from '@/types/editor'
 
 export type CommentVisibility = 'all' | 'pending' | 'resolved' | 'none'
 
@@ -9,6 +9,10 @@ const visibility = ref<CommentVisibility>('all')
 
 /** whether comment pins render on the canvas (off by default) */
 const displayOnCanvas = ref(false)
+
+/** comment-drop tool: while on, the canvas shows a crosshair and a click
+ * anchors a new comment. A toggle (press C on/off), not a momentary hold. */
+const commentMode = ref(false)
 
 // dummy current user until auth/the API is wired in
 export const CURRENT_USER = 'You'
@@ -55,9 +59,10 @@ export function useComments() {
 
   function addComment(at: {
     pageId: string
-    breakpointId: string | null
-    x: number
-    y: number
+    anchor?: CommentAnchor
+    breakpointId?: string | null
+    x?: number
+    y?: number
   }): Comment {
     const comment: Comment = {
       id: crypto.randomUUID(),
@@ -70,6 +75,8 @@ export function useComments() {
     }
     project.value.comments.push(comment)
     displayOnCanvas.value = true // adding a comment reveals the pins
+    // the tool stays armed (like Figma) so you can drop several in a row —
+    // press C again or Esc to leave. The new pin's thread opens for typing.
     activeCommentId.value = comment.id
     return comment
   }
@@ -109,10 +116,17 @@ export function useComments() {
     focusTick.value++
   }
 
+  const toggleCommentMode = () => {
+    commentMode.value = !commentMode.value
+    if (commentMode.value) displayOnCanvas.value = true // show existing pins too
+  }
+  const exitCommentMode = () => (commentMode.value = false)
+
   return {
     comments,
     visibility,
     displayOnCanvas,
+    commentMode,
     activeCommentId,
     activeComment,
     focusTick,
@@ -124,5 +138,7 @@ export function useComments() {
     reply,
     openComment,
     goToComment,
+    toggleCommentMode,
+    exitCommentMode,
   }
 }

@@ -1,0 +1,50 @@
+import type { Collection, CollectionEntry, Page, Project } from '@/types/editor'
+import { slugify } from './document'
+
+export type ResolvedRoute =
+  | { kind: 'page'; page: Page; locale: string }
+  | { kind: 'entry'; page: Page; collection: Collection; entry: CollectionEntry; locale: string }
+  | { kind: 'notfound'; locale: string }
+
+const entrySlug = (entry: CollectionEntry) => entry.slug || slugify(entry.name)
+
+/**
+ * Resolves a site path (as typed in a link or URL) to a page or collection
+ * entry against the project. Shared by the published SiteView (publishedOnly)
+ * and the admin ContentView (which also resolves drafts). Also strips a
+ * leading non-default locale segment and reports the resolved locale.
+ */
+export function resolveSitePath(
+  project: Project,
+  rawPath: string,
+  opts: { publishedOnly?: boolean } = {},
+): ResolvedRoute {
+  let segments = rawPath.split('/').filter(Boolean)
+
+  // locale strip: /fr/... → 'fr' when registered and non-default
+  let locale = project.defaultLocale
+  if (segments.length && project.locales.includes(segments[0]!) && segments[0] !== project.defaultLocale) {
+    locale = segments[0]!
+    segments = segments.slice(1)
+  }
+
+  const path = '/' + segments.join('/')
+  const gate = (p?: Page | null) =>
+    p && (!opts.publishedOnly || p.status === 'published') ? p : null
+
+  // page by exact path ('/' home, plain pages, bare collection templates)
+  const page = gate(project.pages.find((p) => p.path === path))
+  if (page) return { kind: 'page', page, locale }
+
+  // collection entry: /<collection>/<slug>
+  if (segments.length === 2) {
+    const collection = project.collections.find((c) => c.name === segments[0]) ?? null
+    const template = collection
+      ? gate(project.pages.find((p) => p.id === collection.templatePageId))
+      : null
+    const entry = collection?.entries.find((e) => entrySlug(e) === segments[1]) ?? null
+    if (collection && template && entry) return { kind: 'entry', page: template, collection, entry, locale }
+  }
+
+  return { kind: 'notfound', locale }
+}

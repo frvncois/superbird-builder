@@ -1,14 +1,19 @@
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { flushStore } from '@/lib/store'
+
+export type Role = 'admin' | 'editor' | 'contributor'
 
 const email = ref<string | null>(null)
 const name = ref('')
+const role = ref<Role | null>(null)
 const needsSetup = ref(false)
 let checked = false
 
 interface Profile {
+  id?: string
   email: string
   name?: string
+  role?: Role
 }
 
 export function useAuth() {
@@ -22,6 +27,7 @@ export function useAuth() {
         const profile = (await res.json()) as Profile
         email.value = profile.email
         name.value = profile.name ?? ''
+        role.value = profile.role ?? null
       } else {
         const detail = await res.json().catch(() => null)
         needsSetup.value = !!detail?.needsSetup
@@ -46,6 +52,7 @@ export function useAuth() {
   function applyProfile(profile: Profile) {
     email.value = profile.email
     name.value = profile.name ?? ''
+    role.value = profile.role ?? null
     needsSetup.value = false
   }
 
@@ -74,5 +81,9 @@ export function useAuth() {
     window.location.assign('/admin/login')
   }
 
-  return { email, name, needsSetup, check, login, setup, updateAccount, logout }
+  // role-derived capabilities (UI gating; the server enforces the rest)
+  const isAdmin = computed(() => role.value === 'admin')
+  const canBuild = computed(() => role.value === 'admin' || role.value === 'editor')
+
+  return { email, name, role, isAdmin, canBuild, needsSetup, check, login, setup, updateAccount, logout }
 }

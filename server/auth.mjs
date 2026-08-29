@@ -1,18 +1,34 @@
-// Single-user auth: scrypt-hashed account + file-backed sessions.
-// Everything is node core — no dependencies.
+// Multi-user auth: scrypt-hashed users with roles, admin-issued single-use
+// invite links, file-backed sessions. Everything is node core — no deps.
+//
+// Security notes:
+//  - Accounts are only created by (a) first-run setup (bootstrap admin) or
+//    (b) accepting an admin-issued invite. The role is taken from the
+//    server-stored invite, never from the invitee's request.
+//  - Invite tokens are 256-bit random, stored ONLY as a sha256 hash at rest,
+//    single-use, 7-day expiry.
+//  - Password checks are timingSafeEqual; unknown-email logins still run a
+//    scrypt (against a dummy salt) so response timing can't enumerate users.
+//  - Sessions bind to a userId; a deleted user's sessions are destroyed. Role
+//    is read live from the user record, so a role change takes effect at once.
 
-import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
+import { mkdir, writeFile, rename } from 'node:fs/promises'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const DATA_DIR = join(fileURLToPath(new URL('..', import.meta.url)), 'server', 'data')
-const AUTH_FILE = join(DATA_DIR, 'auth.json')
+const USERS_FILE = join(DATA_DIR, 'users.json')
+const INVITES_FILE = join(DATA_DIR, 'invites.json')
 const SESSIONS_FILE = join(DATA_DIR, 'sessions.json')
+const LEGACY_AUTH_FILE = join(DATA_DIR, 'auth.json') // pre-multi-user single account
 
 const SESSION_TTL = 30 * 24 * 60 * 60 * 1000 // 30 days
+const INVITE_TTL = 7 * 24 * 60 * 60 * 1000 // 7 days
 const COOKIE = 'sb_session'
+
+export const ROLES = ['admin', 'editor', 'contributor']
 
 async function writeAtomic(file, data) {
   await mkdir(DATA_DIR, { recursive: true })
@@ -21,77 +37,179 @@ async function writeAtomic(file, data) {
   await rename(tmp, file)
 }
 
-// ---------- account ----------
-
-let account // { name, email, salt, hash } | null | undefined (unloaded)
-
-export function getAccount() {
-  if (account === undefined) {
-    try {
-      account = JSON.parse(readFileSync(AUTH_FILE, 'utf8'))
-    } catch {
-      account = null
-    }
+function readJson(file) {
+  try {
+    return JSON.parse(readFileSync(file, 'utf8'))
+  } catch {
+    return null
   }
-  return account
 }
+
+// ---------- users ----------
+
+// { id, name, email, role, salt, hash, createdAt }
+let users
+let migratedAdminId = null // for one-time session backfill
+
+function loadUsers() {
+  if (users) return users
+  const stored = readJson(USERS_FILE)
+  if (Array.isArray(stored)) {
+    users = stored
+    return users
+  }
+  // migrate a legacy single account into the first admin
+  const legacy = readJson(LEGACY_AUTH_FILE)
+  if (legacy?.email && legacy.hash && legacy.salt) {
+    const admin = {
+      id: randomBytes(12).toString('hex'),
+      name: legacy.name ?? '',
+      email: String(legacy.email).toLowerCase(),
+      role: 'admin',
+      salt: legacy.salt,
+      hash: legacy.hash,
+      createdAt: Date.now(),
+    }
+    users = [admin]
+    migratedAdminId = admin.id
+    writeAtomic(USERS_FILE, JSON.stringify(users)).catch(() => {})
+    return users
+  }
+  users = []
+  return users
+}
+
+const persistUsers = () => writeAtomic(USERS_FILE, JSON.stringify(loadUsers())).catch(() => {})
+
+export const needsSetup = () => loadUsers().length === 0
+export const findUserById = (id) => loadUsers().find((u) => u.id === id) ?? null
+export const findUserByEmail = (email) =>
+  loadUsers().find((u) => u.email === String(email ?? '').toLowerCase()) ?? null
+export const userProfile = (u) => (u ? { id: u.id, name: u.name, email: u.email, role: u.role } : null)
+export const listUsers = () => loadUsers().map(userProfile)
+export const adminCount = () => loadUsers().filter((u) => u.role === 'admin').length
 
 function hashPassword(password, salt) {
   return scryptSync(password, salt, 64).toString('hex')
 }
 
-export async function createAccount(email, password, name = '') {
+// spend comparable CPU on unknown-email logins so timing can't enumerate users
+const DUMMY_SALT = randomBytes(16).toString('hex')
+const DUMMY_HASH = Buffer.from(hashPassword('x'.repeat(24), DUMMY_SALT), 'hex')
+
+function makeCredentials(password) {
   const salt = randomBytes(16).toString('hex')
-  account = { name, email: email.toLowerCase(), salt, hash: hashPassword(password, salt) }
-  await writeAtomic(AUTH_FILE, JSON.stringify(account))
+  return { salt, hash: hashPassword(password, salt) }
 }
 
-/** updates the mutable profile fields; password change re-salts */
-export async function updateAccount({ name, email, password }) {
-  const acct = getAccount()
-  if (!acct) return
-  if (typeof name === 'string') acct.name = name
-  if (typeof email === 'string') acct.email = email.toLowerCase()
-  if (typeof password === 'string' && password) {
-    acct.salt = randomBytes(16).toString('hex')
-    acct.hash = hashPassword(password, acct.salt)
+/** create a user directly — bootstrap admin (setup) or invite acceptance */
+async function createUser({ name, email, password, role }) {
+  const user = {
+    id: randomBytes(12).toString('hex'),
+    name: typeof name === 'string' ? name : '',
+    email: String(email).toLowerCase(),
+    role: ROLES.includes(role) ? role : 'contributor',
+    ...makeCredentials(password),
+    createdAt: Date.now(),
   }
-  await writeAtomic(AUTH_FILE, JSON.stringify(acct))
+  loadUsers().push(user)
+  await persistUsers()
+  return user
 }
 
-export function verifyPassword(password) {
-  const acct = getAccount()
-  if (!acct) return false
-  const computed = scryptSync(password, acct.salt, 64)
-  return timingSafeEqual(Buffer.from(acct.hash, 'hex'), computed)
+/** first-run bootstrap: only succeeds when no users exist yet */
+export async function createFirstAdmin(email, password, name = '') {
+  if (!needsSetup()) return null
+  return createUser({ name, email, password, role: 'admin' })
+}
+
+/** constant-time-ish login: returns the user on success, null otherwise */
+export function verifyLogin(email, password) {
+  const user = findUserByEmail(email)
+  if (!user) {
+    // run a scrypt anyway so timing doesn't reveal whether the email exists
+    timingSafeEqual(scryptSync(String(password ?? ''), DUMMY_SALT, 64), DUMMY_HASH)
+    return null
+  }
+  const computed = scryptSync(String(password ?? ''), user.salt, 64)
+  return timingSafeEqual(Buffer.from(user.hash, 'hex'), computed) ? user : null
+}
+
+export function verifyUserPassword(user, password) {
+  if (!user) return false
+  const computed = scryptSync(String(password ?? ''), user.salt, 64)
+  return timingSafeEqual(Buffer.from(user.hash, 'hex'), computed)
+}
+
+export async function updateUser(id, { name, email, password }) {
+  const user = findUserById(id)
+  if (!user) return null
+  if (typeof name === 'string') user.name = name
+  if (typeof email === 'string') user.email = email.toLowerCase()
+  if (typeof password === 'string' && password) Object.assign(user, makeCredentials(password))
+  await persistUsers()
+  return user
+}
+
+export async function setUserRole(id, role) {
+  const user = findUserById(id)
+  if (!user || !ROLES.includes(role)) return null
+  // never demote the last admin (lockout guard)
+  if (user.role === 'admin' && role !== 'admin' && adminCount() <= 1) return null
+  user.role = role
+  await persistUsers()
+  return user
+}
+
+export async function deleteUser(id) {
+  const user = findUserById(id)
+  if (!user) return false
+  if (user.role === 'admin' && adminCount() <= 1) return false // keep one admin
+  users = loadUsers().filter((u) => u.id !== id)
+  destroyUserSessions(id) // revoke access immediately
+  await persistUsers()
+  return true
 }
 
 // ---------- sessions ----------
 
-const sessions = new Map() // token → { createdAt, expiresAt }
-try {
-  const stored = JSON.parse(readFileSync(SESSIONS_FILE, 'utf8'))
+const sessions = new Map() // token → { userId, createdAt, expiresAt }
+{
+  loadUsers() // ensure migration ran (sets migratedAdminId) before backfill
+  const stored = readJson(SESSIONS_FILE)
   const now = Date.now()
-  for (const [token, s] of Object.entries(stored)) {
-    if (s.expiresAt > now) sessions.set(token, s)
+  if (stored) {
+    for (const [token, s] of Object.entries(stored)) {
+      if (s.expiresAt <= now) continue
+      const userId = s.userId ?? migratedAdminId // backfill pre-multi-user sessions
+      if (userId && findUserById(userId)) sessions.set(token, { ...s, userId })
+    }
   }
-} catch {
-  // no sessions yet
 }
 
-function persistSessions() {
+const persistSessions = () =>
   writeAtomic(SESSIONS_FILE, JSON.stringify(Object.fromEntries(sessions))).catch(() => {})
-}
 
-export function createSession() {
+export function createSession(userId) {
   const token = randomBytes(32).toString('hex')
-  sessions.set(token, { createdAt: Date.now(), expiresAt: Date.now() + SESSION_TTL })
+  sessions.set(token, { userId, createdAt: Date.now(), expiresAt: Date.now() + SESSION_TTL })
   persistSessions()
   return token
 }
 
 export function destroySession(token) {
   if (sessions.delete(token)) persistSessions()
+}
+
+function destroyUserSessions(userId) {
+  let changed = false
+  for (const [token, s] of sessions) {
+    if (s.userId === userId) {
+      sessions.delete(token)
+      changed = true
+    }
+  }
+  if (changed) persistSessions()
 }
 
 function getSession(token) {
@@ -116,47 +234,170 @@ export function parseCookies(req) {
   return out
 }
 
-// Secure by default in production (NODE_ENV=production) or when
-// COOKIE_SECURE=1; COOKIE_SECURE=0 forces it off for local http dev.
 const cookieSecure =
   process.env.COOKIE_SECURE === '0'
     ? false
     : process.env.COOKIE_SECURE === '1' || process.env.NODE_ENV === 'production'
 const secure = cookieSecure ? '; Secure' : ''
 
-export function sessionCookieHeader(token) {
-  return `${COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL / 1000}${secure}`
+export const sessionCookieHeader = (token) =>
+  `${COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL / 1000}${secure}`
+export const clearCookieHeader = () =>
+  `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`
+export const sessionTokenOf = (req) => parseCookies(req)[COOKIE] ?? null
+
+/** a user is only usable if it carries a known role — a missing/invalid role
+ * is treated as un-provisioned and rejected everywhere (never trusted) */
+export const hasValidRole = (user) => !!user && ROLES.includes(user.role)
+
+/** the authenticated user for a request, or null (role is read live).
+ * Users without a valid role are rejected — no ambiguous/partial access. */
+export function sessionUser(req) {
+  const session = getSession(sessionTokenOf(req))
+  const user = session ? findUserById(session.userId) : null
+  return hasValidRole(user) ? user : null
 }
 
-export function clearCookieHeader() {
-  return `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`
+// ---------- invites ----------
+
+// { id, token, tokenHash, email, name, role, invitedBy, createdAt, expiresAt, usedAt }
+// The raw `token` is stored so an admin can re-copy the link after creation
+// (an agreed trade-off: invites are single-use, short-lived, low-privilege —
+// see docs/users-redesign-plan.md). `tokenHash` is kept so acceptance lookups
+// stay hash-based and unchanged.
+let invites = readJson(INVITES_FILE) ?? []
+const persistInvites = () => writeAtomic(INVITES_FILE, JSON.stringify(invites)).catch(() => {})
+const sha256 = (s) => createHash('sha256').update(s).digest('hex')
+
+const inviteActive = (i) => !i.usedAt && i.expiresAt > Date.now()
+
+/** base view (no token) — safe for the public accept page */
+export const inviteView = (i) => ({
+  id: i.id,
+  name: i.name,
+  email: i.email,
+  role: i.role,
+  invitedBy: i.invitedBy ?? '',
+  expiresAt: i.expiresAt,
+})
+
+/** admin view — includes the raw token so the link can be rebuilt */
+const inviteAdminView = (i) => ({ ...inviteView(i), token: i.token ?? null })
+
+/** pending (unused, unexpired) invites for the admin list (with tokens) */
+export const listInvites = () => invites.filter(inviteActive).map(inviteAdminView)
+
+/** redacted pending invites for the all-roles members view (no token/id/name) */
+export const listInvitesPublic = () =>
+  invites.filter(inviteActive).map((i) => ({ email: i.email, role: i.role, expiresAt: i.expiresAt }))
+
+/** redacted member list for the all-roles view (no ids — non-admins have no actions) */
+export const listMembers = () =>
+  loadUsers().map((u) => ({ name: u.name, email: u.email, role: u.role }))
+
+/** create a single-use invite; returns { invite, token } */
+export async function createInvite({ name, email, role, invitedBy }) {
+  const token = randomBytes(32).toString('hex')
+  const invite = {
+    id: randomBytes(12).toString('hex'),
+    token,
+    tokenHash: sha256(token),
+    email: String(email).toLowerCase(),
+    name: typeof name === 'string' ? name : '',
+    role: ROLES.includes(role) ? role : 'contributor',
+    invitedBy: typeof invitedBy === 'string' ? invitedBy : '',
+    createdAt: Date.now(),
+    expiresAt: Date.now() + INVITE_TTL,
+    usedAt: null,
+  }
+  invites.push(invite)
+  await persistInvites()
+  return { invite, token }
 }
 
-export function sessionTokenOf(req) {
-  return parseCookies(req)[COOKIE] ?? null
+/** edit a pending invite: change role, extend the window, or regenerate the
+ * link (new token, old one dies). Returns the admin view or null. */
+export async function updateInvite(id, { role, extend, regenerate } = {}) {
+  const invite = invites.find((i) => i.id === id && inviteActive(i))
+  if (!invite) return null
+  if (role !== undefined) {
+    if (!ROLES.includes(role)) return null
+    invite.role = role
+  }
+  if (extend) invite.expiresAt = Date.now() + INVITE_TTL
+  if (regenerate) {
+    invite.token = randomBytes(32).toString('hex')
+    invite.tokenHash = sha256(invite.token)
+    invite.createdAt = Date.now()
+    invite.expiresAt = Date.now() + INVITE_TTL
+  }
+  await persistInvites()
+  return inviteAdminView(invite)
 }
 
-export function requireSession(req) {
-  return !!getSession(sessionTokenOf(req))
+export async function revokeInvite(id) {
+  const before = invites.length
+  invites = invites.filter((i) => i.id !== id)
+  if (invites.length !== before) await persistInvites()
+  return invites.length !== before
 }
 
-// ---------- login rate limit (per IP, in-memory) ----------
-
-const WINDOW = 15 * 60 * 1000
-const MAX_FAILURES = 10
-const failures = new Map() // ip → { count, windowStart }
-
-export function loginAllowed(ip) {
-  const entry = failures.get(ip)
-  if (!entry || Date.now() - entry.windowStart > WINDOW) return true
-  return entry.count < MAX_FAILURES
+/** the active invite for a raw token, or null */
+export function findInviteByToken(token) {
+  const hash = sha256(String(token ?? ''))
+  return invites.find((i) => i.tokenHash === hash && inviteActive(i)) ?? null
 }
 
-export function recordFailure(ip) {
-  const entry = failures.get(ip)
-  if (!entry || Date.now() - entry.windowStart > WINDOW) {
-    failures.set(ip, { count: 1, windowStart: Date.now() })
-  } else {
-    entry.count++
+/** accept an invite: create the user with the invite's role, mark it used */
+export async function acceptInvite(token, password) {
+  const invite = findInviteByToken(token)
+  if (!invite) return { error: 'invalid or expired invite' }
+  if (findUserByEmail(invite.email)) {
+    invite.usedAt = Date.now()
+    await persistInvites()
+    return { error: 'this email already has an account' }
+  }
+  const user = await createUser({
+    name: invite.name,
+    email: invite.email,
+    password,
+    role: invite.role, // role is fixed server-side — never from the client
+  })
+  invite.usedAt = Date.now()
+  await persistInvites()
+  return { user }
+}
+
+// ---------- rate limiting (per key, in-memory sliding window) ----------
+
+function limiter(windowMs, max) {
+  const hits = new Map() // key → { count, windowStart }
+  return {
+    allowed(key) {
+      const e = hits.get(key)
+      if (!e || Date.now() - e.windowStart > windowMs) return true
+      return e.count < max
+    },
+    record(key) {
+      const e = hits.get(key)
+      if (!e || Date.now() - e.windowStart > windowMs) {
+        hits.set(key, { count: 1, windowStart: Date.now() })
+      } else {
+        e.count++
+      }
+    },
   }
 }
+
+const loginByIp = limiter(15 * 60 * 1000, 10)
+const loginByEmail = limiter(15 * 60 * 1000, 10)
+const inviteByIp = limiter(15 * 60 * 1000, 30)
+
+export const loginAllowed = (ip, email) =>
+  loginByIp.allowed(ip) && loginByEmail.allowed(String(email ?? '').toLowerCase())
+export function recordLoginFailure(ip, email) {
+  loginByIp.record(ip)
+  loginByEmail.record(String(email ?? '').toLowerCase())
+}
+export const inviteAllowed = (ip) => inviteByIp.allowed(ip)
+export const recordInviteAttempt = (ip) => inviteByIp.record(ip)

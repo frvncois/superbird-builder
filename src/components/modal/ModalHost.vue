@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted } from 'vue'
 
-type Size = 'sm' | 'default' | 'lg'
+type Size = 'sm' | 'default' | 'lg' | 'xl' | 'full'
 
 withDefaults(
   defineProps<{
@@ -18,6 +18,10 @@ const sizes: Record<Size, string> = {
   sm: 'w-80',
   default: 'w-[28rem]',
   lg: 'w-[40rem]',
+  // xl is a fixed-size, two-pane dialog that manages its own inner scrolling
+  xl: 'w-[840px] h-[560px] max-w-[calc(100vw-2rem)] max-h-[calc(100vh-2rem)]',
+  // full is a near-viewport surface (documentation center) that manages its own inner scrolling
+  full: 'w-[min(92vw,1200px)] h-[88vh]',
 }
 
 function onKeydown(e: KeyboardEvent) {
@@ -30,12 +34,15 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
 
 <template>
   <div
-    class="fixed inset-0 z-100 flex items-center justify-center bg-black/50"
+    class="fixed inset-0 z-100 flex items-center justify-center bg-black/50 backdrop-blur-xs"
     @click.self="$emit('close')"
   >
     <div
-      class="max-h-[85vh] overflow-y-auto rounded-xl border border-input bg-background shadow-lg"
-      :class="sizes[size]"
+      class="rounded-2xl border border-input bg-background shadow-lg"
+      :class="[
+        sizes[size],
+        size === 'xl' || size === 'full' ? 'overflow-auto' : 'max-h-[85vh] overflow-y-auto',
+      ]"
     >
       <slot />
     </div>

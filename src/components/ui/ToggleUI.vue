@@ -8,7 +8,7 @@ const model = defineModel<boolean>({ default: false })
     role="switch"
     :aria-checked="model"
     class="relative inline-flex h-4 w-7 shrink-0 cursor-pointer items-center rounded-full transition-colors outline-none focus-visible:ring-2 focus-visible:ring-accent"
-    :class="model ? 'bg-foreground' : 'bg-muted'"
+    :class="model ? 'bg-foreground' : 'bg-accent'"
     @click="model = !model"
   >
     <span

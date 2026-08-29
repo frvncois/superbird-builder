@@ -15,9 +15,9 @@ function pick(value: string) {
 </script>
 
 <template>
-  <div class="relative flex min-w-0 flex-1 items-center gap-2">
+  <div class="relative shrink-0">
     <button
-      class="size-5 shrink-0 cursor-pointer rounded-full border border-input"
+      class="size-6 shrink-0 cursor-pointer rounded-md border border-input"
       :style="{ backgroundColor: hex }"
       :title="model"
       @click="open = !open"
@@ -25,7 +25,7 @@ function pick(value: string) {
 
     <div
       v-if="open"
-      class="absolute top-full left-0 z-30 mt-1 rounded-md border border-input bg-background p-2 shadow-md"
+      class="absolute top-full right-0 z-30 mt-1 rounded-md border border-input bg-background p-2 shadow-md"
     >
       <div class="flex max-h-44 flex-col gap-0.5 overflow-y-auto pr-1">
         <div v-for="(hexes, name) in TAILWIND_COLORS" :key="name" class="flex gap-0.5">

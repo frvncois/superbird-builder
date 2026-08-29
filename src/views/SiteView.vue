@@ -10,22 +10,21 @@ import { migrateStoredProject } from '@/lib/storage'
 import { useProject } from '@/composables/useProject'
 import { usePage } from '@/composables/usePage'
 import { useLocale } from '@/composables/useLocale'
-import { useCollections } from '@/composables/useCollections'
 import { useInteraction } from '@/composables/useInteraction'
 import { useThemeTokens } from '@/composables/useThemeTokens'
 import { applyTitleTemplate } from '@/lib/settings'
-import EntryScope from '@/components/editor/EntryScope.vue'
+import { resolveSitePath, type ResolvedRoute } from '@/lib/navigation'
+import EntryScope from '@/components/shared/EntryScope.vue'
 import PublicRenderer from '@/components/site/PublicRenderer.vue'
 
 // runtime Tailwind so user-typed class strings in the snapshot compile —
 // parallel dynamic chunk, off the blocking render path
 void import('@tailwindcss/browser')
-import type { Collection, CollectionEntry, Page, Project } from '@/types/editor'
+import type { Project } from '@/types/editor'
 
 const { project } = useProject()
 const { setActivePage } = usePage()
 const { setActiveLocale } = useLocale()
-const { entrySlug } = useCollections()
 const { fired } = useInteraction()
 const route = useRoute()
 
@@ -48,44 +47,10 @@ fetch('/api/published')
   .catch(() => {})
   .finally(() => (loading.value = false))
 
-type Resolved =
-  | { kind: 'page'; page: Page }
-  | { kind: 'entry'; page: Page; collection: Collection; entry: CollectionEntry }
-  | { kind: 'notfound' }
-
-const resolved = computed<Resolved>(() => {
+const resolved = computed<ResolvedRoute>(() => {
   const site = snapshot.value
-  if (!site) return { kind: 'notfound' }
-
-  // locale strip: /fr/... → 'fr' when registered and non-default
-  let segments = route.path.split('/').filter(Boolean)
-  if (
-    segments.length &&
-    site.locales.includes(segments[0]!) &&
-    segments[0] !== site.defaultLocale
-  ) {
-    segments = segments.slice(1)
-  }
-
-  const path = '/' + segments.join('/')
-  const published = (p?: Page | null) => (p && p.status === 'published' ? p : null)
-
-  // page by exact path ('/' home, plain pages, bare collection templates)
-  const page = published(site.pages.find((p) => p.path === path))
-  if (page) return { kind: 'page', page }
-
-  // collection entry: /<collection>/<slug>
-  if (segments.length === 2) {
-    const collection = site.collections.find((c) => c.name === segments[0]) ?? null
-    const template = collection
-      ? published(site.pages.find((p) => p.id === collection.templatePageId))
-      : null
-    const entry = collection?.entries.find((e) => entrySlug(e) === segments[1]) ?? null
-    if (collection && template && entry) return { kind: 'entry', page: template, collection, entry }
-  }
-
-  // drafts and unknown paths
-  return { kind: 'notfound' }
+  if (!site) return { kind: 'notfound', locale: 'en' }
+  return resolveSitePath(site, route.path, { publishedOnly: true })
 })
 
 // point the shared singletons at the rendered page + locale, and clear
@@ -94,15 +59,8 @@ watch(
   [resolved, () => route.path],
   () => {
     const site = snapshot.value
-    if (site) {
-      const first = route.path.split('/').filter(Boolean)[0]
-      setActiveLocale(
-        first && site.locales.includes(first) && first !== site.defaultLocale
-          ? first
-          : site.defaultLocale,
-      )
-    }
     const r = resolved.value
+    setActiveLocale(r.locale)
     if (r.kind !== 'notfound') setActivePage(r.page.id)
     fired.value = new Set()
     document.title =

@@ -42,7 +42,7 @@ export function useCollections() {
     const label = name.charAt(0).toUpperCase() + name.slice(1)
     const code = buildDocument(
       { name: label, slug: `/${name}`, status: 'published', locale: project.value.defaultLocale },
-      ['\t:section', '\t\t:h1(title):', '\tsection:'],
+      ['\t:section', '\t\t:h1[title]:', '\tsection:'],
       name,
     )
     const page: Page = {
@@ -143,7 +143,7 @@ export function useCollections() {
     page.id = crypto.randomUUID()
     walkNodes(page.elements, (node) => {
       node.id = crypto.randomUUID()
-      if (node.type === 'body') node.arg = name // rebind :body(name) to the copy
+      if (node.type === 'body') node.arg = name // rebind :body[name] to the copy
     })
     page.name = `${label} template`
     page.path = `/${name}`
@@ -153,17 +153,38 @@ export function useCollections() {
       name,
     )
 
+    // entries get fresh ids, so self-references must follow them (fields
+    // pointing at OTHER collections keep targeting the originals)
+    const entryIdMap = new Map(collection.entries.map((e) => [e.id, crypto.randomUUID()]))
+    const copyId = crypto.randomUUID()
+    const selfRefFields = collection.fields.filter(
+      (f) =>
+        (f.type === 'reference' || f.type === 'multi-reference') &&
+        f.refCollectionId === collection.id,
+    )
     const copy: Collection = {
-      id: crypto.randomUUID(),
+      id: copyId,
       name,
-      fields: collection.fields.map((f) => ({ ...f, id: crypto.randomUUID() })),
-      templatePageId: page.id,
-      entries: collection.entries.map((e) => ({
-        ...e,
+      fields: collection.fields.map((f) => ({
+        ...f,
         id: crypto.randomUUID(),
-        values: { ...e.values },
-        locales: e.locales ? JSON.parse(JSON.stringify(e.locales)) : undefined,
+        refCollectionId: f.refCollectionId === collection.id ? copyId : f.refCollectionId,
       })),
+      templatePageId: page.id,
+      entries: collection.entries.map((e) => {
+        const values = { ...e.values }
+        for (const f of selfRefFields) {
+          const v = values[f.name]
+          if (Array.isArray(v)) values[f.name] = v.map((id) => entryIdMap.get(id) ?? id)
+          else if (typeof v === 'string' && v) values[f.name] = entryIdMap.get(v) ?? v
+        }
+        return {
+          ...e,
+          id: entryIdMap.get(e.id)!,
+          values,
+          locales: e.locales ? JSON.parse(JSON.stringify(e.locales)) : undefined,
+        }
+      }),
     }
     page.collectionId = copy.id
     project.value.pages.push(page)

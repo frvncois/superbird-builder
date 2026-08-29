@@ -13,6 +13,10 @@ import { compile, optimize } from '@tailwindcss/node'
 // re-exports this same module) — one source of truth, no drift.
 import { ELEMENTS_DATA as ELEMENTS } from '../src/lib/shared/elements.js'
 import { themeBlock, applyTitleTemplate } from '../src/lib/shared/tokens.js'
+import { resolveBinding, resolveListScope, refDisplay } from '../src/lib/shared/fields.js'
+import { evaluateConditions, staticMatch } from '../src/lib/shared/conditions.js'
+import { isRich, sanitizeRich } from '../src/lib/shared/richtext.js'
+import { backgroundRender } from '../src/lib/shared/background.js'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const RUNTIME = join(ROOT, 'server', 'site-runtime.js')
@@ -35,7 +39,20 @@ const MIME_EXT = {
   'image/vnd.microsoft.icon': 'ico',
   'video/mp4': 'mp4',
   'video/webm': 'webm',
+  'audio/mpeg': 'mp3',
+  'audio/wav': 'wav',
+  'audio/ogg': 'ogg',
+  'application/pdf': 'pdf',
+  'font/woff2': 'woff2',
+  'font/woff': 'woff',
+  'font/ttf': 'ttf',
+  'font/otf': 'otf',
 }
+
+// media library storage (see server/media.mjs) — referenced assets are
+// copied into the export under hashed names so the site stays fully static
+const MEDIA_LIB = join(fileURLToPath(new URL('..', import.meta.url)), 'server', 'data', 'media')
+const LIB_REF_RE = /^\/media\/([a-f0-9]{16})$/
 
 // project-settings helpers shared verbatim with the client
 // (src/lib/settings.ts re-exports these) — token validation, the @theme
@@ -80,8 +97,12 @@ const nodeContent = (node, locale, def) =>
 
 const nodeSrc = (node, locale, def) => (locale !== def && node.locales?.[locale]?.src) || node.src
 
+// reference fields store ids (possibly arrays) — those never read as text
+const baseEntryText = (entry, field) =>
+  typeof entry.values[field] === 'string' ? entry.values[field] : undefined
+
 const entryValue = (entry, field, locale, def) =>
-  (locale !== def && entry.locales?.[locale]?.[field]) || entry.values[field]
+  (locale !== def && entry.locales?.[locale]?.[field]) || baseEntryText(entry, field)
 
 // ---------- component master pairing (mirror useComponents masterMap) ----------
 
@@ -146,12 +167,25 @@ function scopedTargets(root, masterId) {
 
 // ---------- media extraction ----------
 
-function extractMedia(project) {
+async function extractMedia(project) {
   const files = new Map() // relPath -> Buffer
-  const paths = new Map() // dataUrl -> '/media/...' | null (dropped)
+  const paths = new Map() // dataUrl | '/media/<id>' -> '/media/<hash>.<ext>' | null (dropped)
+  const libraryRefs = new Set() // '/media/<id>' strings, resolved after the scan
+
+  const store = (value, buffer, ext) => {
+    const hash = createHash('sha1').update(buffer).digest('hex').slice(0, 12)
+    const rel = `media/${hash}.${ext}`
+    files.set(rel, buffer)
+    paths.set(value, `/${rel}`)
+  }
 
   const intern = (value) => {
-    if (typeof value !== 'string' || !value.startsWith('data:')) return
+    if (typeof value !== 'string') return
+    if (LIB_REF_RE.test(value)) {
+      libraryRefs.add(value)
+      return
+    }
+    if (!value.startsWith('data:')) return
     if (paths.has(value)) return
     const match = value.match(/^data:([^;,]+)(;base64)?,/)
     const ext = match && MIME_EXT[match[1]]
@@ -162,14 +196,13 @@ function extractMedia(project) {
     }
     const payload = value.slice(match[0].length)
     const buffer = match[2] ? Buffer.from(payload, 'base64') : Buffer.from(decodeURIComponent(payload))
-    const hash = createHash('sha1').update(buffer).digest('hex').slice(0, 12)
-    const rel = `media/${hash}.${ext}`
-    files.set(rel, buffer)
-    paths.set(value, `/${rel}`)
+    store(value, buffer, ext)
   }
 
   const scanNode = (node) => {
     intern(node.src)
+    intern(node.background)
+    intern(node.conditions?.swapSrc)
     for (const override of Object.values(node.locales ?? {})) intern(override.src)
   }
   intern(project.settings?.favicon)
@@ -186,24 +219,70 @@ function extractMedia(project) {
     }
   }
 
+  // resolve library refs: copy referenced bytes out of the media store so the
+  // exported site is self-contained (deployable anywhere, immutable names)
+  let assetsById = new Map()
+  if (libraryRefs.size) {
+    let index = { assets: [] }
+    try {
+      index = JSON.parse(await readFile(join(MEDIA_LIB, 'index.json'), 'utf8'))
+    } catch {
+      /* no library yet — every ref drops below */
+    }
+    assetsById = new Map((index.assets ?? []).map((a) => [a.id, a]))
+    for (const ref of libraryRefs) {
+      const id = LIB_REF_RE.exec(ref)[1]
+      const asset = assetsById.get(id)
+      const ext = asset && MIME_EXT[asset.mime]
+      if (!ext) {
+        console.warn(`export: dropping missing/unsupported media asset ${id}`)
+        paths.set(ref, null)
+        continue
+      }
+      try {
+        store(ref, await readFile(join(MEDIA_LIB, 'files', id)), ext)
+      } catch {
+        console.warn(`export: media asset ${id} has no file on disk — dropped`)
+        paths.set(ref, null)
+      }
+    }
+  }
+
   const rewrite = (value) =>
-    typeof value === 'string' && value.startsWith('data:') ? (paths.get(value) ?? undefined) : value
-  return { rewrite, files }
+    typeof value === 'string' && (value.startsWith('data:') || LIB_REF_RE.test(value))
+      ? (paths.get(value) ?? undefined)
+      : value
+  /** default alt text from the library asset a src references, if any */
+  const altFor = (value) => {
+    const id = typeof value === 'string' ? LIB_REF_RE.exec(value)?.[1] : null
+    return (id && assetsById.get(id)?.alt) || ''
+  }
+  /** 'image' | 'video' | null for a media ref, from its library asset mime */
+  const kindFor = (value) => {
+    const id = typeof value === 'string' ? LIB_REF_RE.exec(value)?.[1] : null
+    const mime = id && assetsById.get(id)?.mime
+    if (!mime) return null
+    return mime.startsWith('image/') ? 'image' : mime.startsWith('video/') ? 'video' : null
+  }
+  return { rewrite, altFor, kindFor, files }
 }
 
 // ---------- CSS ----------
 
 function collectCandidates(project) {
   const candidates = new Set()
+  const anim = new Map((project.interactions ?? []).map((a) => [a.id, a]))
   const add = (classString) => {
     for (const token of (classString ?? '').split(/\s+/)) if (token) candidates.add(token)
   }
   const scanNode = (node) => {
     add(node.classes)
-    for (const i of node.interactions ?? []) {
-      add(i.toClasses)
-      add(i.duration)
-      add(i.easing)
+    for (const b of node.interactions ?? []) {
+      const a = anim.get(b.interactionId)
+      if (!a) continue
+      add(a.toClasses)
+      add(a.duration)
+      add(a.easing)
       candidates.add('transition-all')
     }
   }
@@ -228,56 +307,90 @@ async function buildCss(candidates, settings) {
 function classFor(node, ctx) {
   const mapping = ctx.mm.get(node.id)
   const parts = [node.type === 'body' && BODY_EXTRA, mapping ? mapping.master.classes : node.classes]
-  if (mapping) {
-    for (const i of scopedTargets(mapping.root, mapping.master.id)) {
-      parts.push(`transition-all ${i.duration} ${i.easing}`)
-    }
-  } else {
-    for (const i of ctx.plainTargets.get(node.id) ?? []) {
-      parts.push(`transition-all ${i.duration} ${i.easing}`)
-    }
+  const bindings = mapping
+    ? scopedTargets(mapping.root, mapping.master.id)
+    : (ctx.plainTargets.get(node.id) ?? [])
+  for (const b of bindings) {
+    const a = ctx.anim.get(b.interactionId)
+    if (a) parts.push(`transition-all ${a.duration} ${a.easing}`)
   }
   return parts.filter(Boolean).join(' ').trim()
 }
 
-function attrsFor(node, ctx) {
+/**
+ * Final href for a linked node, or null. '@item' resolves to the current
+ * entry's page; scheme-allowlisted; internal links get locale-prefixed.
+ * Mirrors PublicRenderer/ContentRenderer linkTarget — keep the three in sync.
+ */
+function resolveHref(node, ctx) {
+  const mapping = ctx.mm.get(node.id)
+  let raw = node.link ?? mapping?.master.link
+  if (raw === '@item') {
+    raw = ctx.scope?.entry
+      ? `/${ctx.scope.collection.name}/${entrySlug(ctx.scope.entry)}`
+      : null
+  }
+  if (!raw || !SAFE_HREF.test(raw)) return null
+  let href = raw
+  if (raw.startsWith('/')) {
+    const first = raw.split('/')[1] ?? ''
+    if (ctx.project.locales.includes(first)) {
+      if (first === ctx.defaultLocale) href = raw.slice(first.length + 1) || '/'
+    } else if (ctx.locale !== ctx.defaultLocale) {
+      href = `/${ctx.locale}${raw === '/' ? '' : raw}`
+    }
+  }
+  return href
+}
+
+/** wraps a non-anchor linked element in an <a> so it navigates without JS;
+ * display:contents keeps the wrapper out of the layout */
+function linkWrap(html, node, ctx) {
+  if (ELEMENTS[node.type]?.tag === 'a') return html
+  const href = resolveHref(node, ctx)
+  return href ? `<a href="${escapeHtml(href)}" class="contents">${html}</a>` : html
+}
+
+function attrsFor(node, ctx, cond, runtime, bg) {
   const mapping = ctx.mm.get(node.id)
   const def = ELEMENTS[node.type]
   const attrs = []
   if (node.htmlId) attrs.push(`id="${escapeHtml(node.htmlId)}"`)
 
-  const classes = classFor(node, ctx)
-  if (classes) attrs.push(`class="${escapeHtml(classes)}"`)
+  // browser-evaluated condition (viewport/date/query): site.js reads this.
+  // A 'show' effect starts hidden so nothing flashes before evaluation.
+  if (runtime) {
+    attrs.push(`data-cond="${escapeHtml(JSON.stringify(runtime))}"`)
+    if (runtime.e === 'show') attrs.push('hidden')
+  }
 
-  // src: bound image field first, else the node's own (locale-aware)
-  const field = ctx.scope
-    ? ctx.scope.collection.fields.find((f) => f.name === node.arg)
+  const classes = [classFor(node, ctx), bg?.hostClass].filter(Boolean).join(' ')
+  if (classes) attrs.push(`class="${escapeHtml(classes)}"`)
+  if (bg?.style) attrs.push(`style="${escapeHtml(bg.style)}"`)
+
+  // src: condition swap first, then bound image field (possibly through a
+  // reference hop), else the node's own (locale-aware)
+  const binding = ctx.scope
+    ? resolveBinding(ctx.project.collections, ctx.scope.collection, ctx.scope.entry, node.arg)
     : null
-  let src
-  if (field?.type === 'image' && ctx.scope.entry) {
-    src = entryValue(ctx.scope.entry, field.name, ctx.locale, ctx.defaultLocale)
+  let src = cond?.src || undefined
+  if (!src && binding?.field.type === 'image' && binding.entry) {
+    src = entryValue(binding.entry, binding.field.name, ctx.locale, ctx.defaultLocale)
   }
   src ||= nodeSrc(node, ctx.locale, ctx.defaultLocale)
+  const rawSrc = src // pre-rewrite value — library alt lookup keys on it
   src = ctx.rewrite(src)
   if (src) attrs.push(`src="${escapeHtml(src)}"`)
+  // images always carry alt: the library asset's default, or '' (decorative)
+  if (def?.tag === 'img') attrs.push(`alt="${escapeHtml(ctx.altFor?.(rawSrc) ?? '')}"`)
 
   // href: link elements only, scheme-allowlisted, locale-prefixed internals.
-  // Locale-explicit links (/fr, /en/about) are absolute — never re-prefixed,
-  // default-locale prefix normalizes away (locale-switcher authoring).
+  // href on <a> elements; non-anchor linked elements are wrapped instead
+  // (see renderNode). Locale-explicit links are absolute; default-locale
+  // prefix normalizes away (locale-switcher authoring).
   if (def?.tag === 'a') {
-    const raw = node.link ?? mapping?.master.link
-    if (raw && SAFE_HREF.test(raw)) {
-      let href = raw
-      if (raw.startsWith('/')) {
-        const first = raw.split('/')[1] ?? ''
-        if (ctx.project.locales.includes(first)) {
-          if (first === ctx.defaultLocale) href = raw.slice(first.length + 1) || '/'
-        } else if (ctx.locale !== ctx.defaultLocale) {
-          href = `/${ctx.locale}${raw === '/' ? '' : raw}`
-        }
-      }
-      attrs.push(`href="${escapeHtml(href)}"`)
-    }
+    const href = resolveHref(node, ctx)
+    if (href) attrs.push(`href="${escapeHtml(href)}"`)
   }
 
   // interaction wiring for the runtime
@@ -285,7 +398,7 @@ function attrsFor(node, ctx) {
   if (triggers.length) {
     const list = triggers.map((i) => {
       const key = mapping ? `${i.id}@${mapping.instanceId}` : i.id
-      ctx.fx[key] = i.toClasses
+      ctx.fx[key] = ctx.anim.get(i.interactionId)?.toClasses ?? ''
       return { t: i.trigger, k: key }
     })
     attrs.push(`data-int="${escapeHtml(JSON.stringify(list))}"`)
@@ -301,23 +414,75 @@ function attrsFor(node, ctx) {
   return attrs.length ? ' ' + attrs.join(' ') : ''
 }
 
+/**
+ * Condition evaluation for a node (mirrors useRenderNode.condition).
+ * Fully static specs resolve here: hidden → drop, swap → baked. A spec
+ * whose static rules pass but that also has runtime rules defers to the
+ * browser instead: `runtime` describes the data-cond attribute to emit
+ * (rules + effect + pre-sanitized swap payload) and site.js evaluates it.
+ */
+function conditionFor(node, ctx) {
+  const mapping = ctx.mm.get(node.id)
+  const spec = (mapping ? mapping.master.conditions : node.conditions) ?? null
+  if (!spec?.rules?.length) return { cond: { visible: true }, runtime: null }
+  const condCtx = {
+    collections: ctx.project.collections ?? [],
+    collection: ctx.scope?.collection ?? null,
+    entry: ctx.scope?.entry ?? null,
+    locale: ctx.locale,
+    defaultLocale: ctx.defaultLocale,
+    pagePath: ctx.pagePath,
+    index: ctx.scope?.index,
+    count: ctx.scope?.count,
+  }
+  const { matched, runtime } = staticMatch(spec, condCtx)
+  if (!runtime.length) return { cond: evaluateConditions(spec, condCtx), runtime: null }
+  if (!matched) {
+    // static rules already fail — the spec can never fully match
+    if (spec.effect === 'show') return { cond: { visible: false }, runtime: null }
+    return { cond: { visible: true }, runtime: null } // hide/swap render plainly
+  }
+  const attr = { e: spec.effect, r: runtime.map((r) => ({ p: r.path, o: r.op, v: r.value })) }
+  if (spec.effect === 'swap') {
+    if (spec.swapContent) {
+      attr.h = isRich(spec.swapContent)
+      attr.c = attr.h ? sanitizeRich(spec.swapContent) : spec.swapContent
+    }
+    if (spec.swapSrc) attr.s = ctx.rewrite(spec.swapSrc)
+  }
+  return { cond: { visible: true }, runtime: attr }
+}
+
 function renderNode(node, ctx) {
   const def = ELEMENTS[node.type]
   const tag = def?.tag ?? 'div'
 
+  // condition-hidden elements are dropped from the static output entirely
+  const { cond, runtime } = conditionFor(node, ctx)
+  if (!cond.visible) return ''
+  if (runtime) ctx.flags.condRuntime = true
+
   if (node.type === 'collection-list') {
-    const collection = node.arg
-      ? ctx.project.collections.find((c) => c.name === node.arg)
-      : null
-    const inner = collection
-      ? collection.entries
-          .map((entry) => {
-            const inner2 = { ...ctx, scope: { collection, entry } }
+    // the arg names a collection (all entries) or a multi-reference field
+    // of the surrounding scope entry (mirrors useRenderNode.listScope)
+    const list = resolveListScope(
+      ctx.project.collections,
+      ctx.scope?.collection ?? null,
+      ctx.scope?.entry ?? null,
+      node.arg,
+    )
+    const inner = list
+      ? list.entries
+          .map((entry, index) => {
+            const inner2 = {
+              ...ctx,
+              scope: { collection: list.collection, entry, index, count: list.entries.length },
+            }
             return node.children.map((child) => renderNode(child, inner2)).join('')
           })
           .join('')
       : ''
-    return `<${tag}${attrsFor(node, ctx)}>${inner}</${tag}>`
+    return linkWrap(`<${tag}${attrsFor(node, ctx, cond, runtime)}>${inner}</${tag}>`, node, ctx)
   }
 
   if (node.type === 'collection-item') {
@@ -339,25 +504,40 @@ function renderNode(node, ctx) {
         inner = body.children.map((child) => renderNode(child, inner2)).join('')
       }
     }
-    return `<${tag}${attrsFor(node, ctx)}>${inner}</${tag}>`
+    return linkWrap(`<${tag}${attrsFor(node, ctx, cond, runtime)}>${inner}</${tag}>`, node, ctx)
   }
 
-  if (def?.void) return `<${tag}${attrsFor(node, ctx)}>`
+  if (def?.void) return linkWrap(`<${tag}${attrsFor(node, ctx, cond, runtime)}>`, node, ctx)
+
+  // background media: image → CSS bg on the host, video → a layer behind content
+  const bg = backgroundFor(node, ctx)
+  const bgLayer =
+    bg?.kind === 'video'
+      ? `<video src="${escapeHtml(bg.url)}" autoplay muted loop playsinline class="${escapeHtml(bg.layerClass)}"></video>`
+      : ''
 
   let inner
   if (node.children.length) {
     inner = node.children.map((child) => renderNode(child, ctx)).join('')
   } else {
     const mapping = ctx.mm.get(node.id)
-    const field = ctx.scope
-      ? ctx.scope.collection.fields.find((f) => f.name === node.arg)
+    // binding may hop one reference ('author.name') — mirrors useRenderNode
+    const binding = ctx.scope
+      ? resolveBinding(ctx.project.collections, ctx.scope.collection, ctx.scope.entry, node.arg)
       : null
     let text
-    if (field) {
-      // bound fields with no entry/value render empty on the public site
-      text = ctx.scope.entry
-        ? (entryValue(ctx.scope.entry, field.name, ctx.locale, ctx.defaultLocale) ?? '')
-        : ''
+    if (cond.content != null && cond.content !== '') {
+      // an active condition swap wins over every other content source
+      text = cond.content
+    } else if (binding) {
+      const { field, entry } = binding
+      // bound fields with no entry/value render empty on the public site;
+      // a directly-bound reference reads as the referenced entry name(s)
+      if (field.type === 'reference' || field.type === 'multi-reference') {
+        text = entry ? refDisplay(ctx.project.collections, field, entry) : ''
+      } else {
+        text = entry ? (entryValue(entry, field.name, ctx.locale, ctx.defaultLocale) ?? '') : ''
+      }
     } else {
       text =
         nodeContent(node, ctx.locale, ctx.defaultLocale) ||
@@ -365,13 +545,31 @@ function renderNode(node, ctx) {
         def?.defaultContent ||
         ''
     }
-    inner = escapeHtml(text)
+    // rich text emits its sanitized subset; anything else is fully escaped
+    inner = isRich(text) ? sanitizeRich(text) : escapeHtml(text)
   }
-  return `<${tag}${attrsFor(node, ctx)}>${inner}</${tag}>`
+  return linkWrap(`<${tag}${attrsFor(node, ctx, cond, runtime, bg)}>${bgLayer}${inner}</${tag}>`, node, ctx)
+}
+
+/** background-media descriptor for a node (mirrors useRenderNode.backgroundInfo) */
+function backgroundFor(node, ctx) {
+  const mapping = ctx.mm.get(node.id)
+  const styleNode = mapping ? mapping.master : node
+  const ref = styleNode.background
+  if (!ref) return null
+  const url = ctx.rewrite(ref)
+  const kind = ctx.kindFor(ref)
+  const tokens = (styleNode.classes ?? '').split(/\s+/).filter(Boolean)
+  return backgroundRender(kind, url, tokens)
+}
+
+/** wrap author JS in a <script>, escaping any literal </script so it can't break out */
+function scriptTag(js) {
+  return js && js.trim() ? `<script>${js.replace(/<\/script/gi, '<\\/script')}</script>` : ''
 }
 
 /** the shared head + body-open shell for every exported page */
-function renderShell(project, rewrite, { locale, title, description, path }) {
+function renderShell(project, rewrite, { locale, title, description, path, headScript }) {
   const settings = project.settings ?? {}
   const seo = settings.seo ?? {}
   const domain = settings.domain || ''
@@ -397,6 +595,7 @@ function renderShell(project, rewrite, { locale, title, description, path }) {
   }
   // owner-authored raw head HTML, last — same trust level as the site itself
   if (settings.customCode?.head) head += settings.customCode.head
+  if (headScript) head += headScript // per-page head script
   head += `</head>`
 
   const fontStyle = settings.fonts?.family
@@ -405,31 +604,42 @@ function renderShell(project, rewrite, { locale, title, description, path }) {
   return head + `<body class="${SHELL_CLASSES}"${fontStyle}>`
 }
 
-function renderPage(route, project, rewrite) {
+function renderPage(route, project, media) {
   const { page, locale, scope, outPath } = route
   const ctx = {
     project,
     locale,
     defaultLocale: project.defaultLocale,
     scope,
+    pagePath: page.path,
     mm: buildMasterMap(page.elements, project.components),
     plainTargets: buildPlainTargets(page, project),
+    // saved-interaction id → animation, for resolving bindings to timing/classes
+    anim: new Map((project.interactions ?? []).map((a) => [a.id, a])),
     fx: {},
-    rewrite,
+    rewrite: media.rewrite,
+    altFor: media.altFor,
+    kindFor: media.kindFor,
+    // shared by reference across per-scope ctx spreads, unlike plain fields
+    flags: { condRuntime: false },
   }
   const body = page.elements.map((node) => renderNode(node, ctx)).join('')
   const hasInteractions = Object.keys(ctx.fx).length > 0
-  const tail = hasInteractions
-    ? `<script type="application/json" id="int-fx">${JSON.stringify(ctx.fx).replaceAll('</', '<\\/')}</script><script src="/site.js" defer></script>`
+  const needsRuntime = hasInteractions || ctx.flags.condRuntime
+  const fxTag = hasInteractions
+    ? `<script type="application/json" id="int-fx">${JSON.stringify(ctx.fx).replaceAll('</', '<\\/')}</script>`
     : ''
+  const tail = needsRuntime ? `${fxTag}<script src="/site.js" defer></script>` : ''
   const seo = project.settings?.seo ?? {}
-  const shell = renderShell(project, rewrite, {
+  const shell = renderShell(project, media.rewrite, {
     locale,
     title: page.seo?.title ?? applyTitleTemplate(seo.titleTemplate, page.name),
     description: page.seo?.description ?? seo.description ?? '',
     path: '/' + (outPath ?? '').replace(/index\.html$/, ''),
+    headScript: scriptTag(page.customCode?.head),
   })
-  return `${shell}${body}${tail}</body></html>`
+  // per-page body script runs last, before </body> (DOM + runtime ready)
+  return `${shell}${body}${tail}${scriptTag(page.customCode?.body)}</body></html>`
 }
 
 function renderNotFound(project, rewrite) {
@@ -492,7 +702,7 @@ function enumerateRoutes(project) {
 // ---------- top level ----------
 
 export async function exportSite(project, outDir) {
-  const media = extractMedia(project)
+  const media = await extractMedia(project)
   const css = await buildCss(collectCandidates(project), project.settings)
   const runtime = await readFile(RUNTIME)
 
@@ -523,7 +733,7 @@ export async function exportSite(project, outDir) {
   for (const route of routes) {
     if (written.has(route.outPath)) continue // page paths win over entry collisions
     written.add(route.outPath)
-    await write(route.outPath, renderPage(route, project, media.rewrite))
+    await write(route.outPath, renderPage(route, project, media))
   }
 
   // atomic swap: the old site stays live until the new one is complete

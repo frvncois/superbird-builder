@@ -31,7 +31,7 @@ const suppressed = ref(false)
   >
     <slot />
     <span
-      class="pointer-events-none absolute z-100 rounded-xl border border-input font-mono uppercase bg-background px-4 py-2 text-[10px] tracking-wider whitespace-nowrap opacity-0 shadow-md transition-opacity delay-100"
+      class="pointer-events-none absolute z-100 rounded-xl border border-input font-mono bg-background px-4 py-2 text-[10px] tracking-wider whitespace-nowrap opacity-0 transition-opacity delay-100"
       :class="[positions[side], !suppressed && 'group-hover/tooltip:opacity-100']"
     >
       {{ text }}

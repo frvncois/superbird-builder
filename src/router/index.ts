@@ -7,9 +7,19 @@ const router = createRouter({
     {
       path: '/admin',
       name: 'editor',
-      component: () => import('@/views/EditorView.vue'),
+      component: () => import('@/views/BuildView.vue'),
     },
     { path: '/admin/editor', redirect: '/admin' },
+    {
+      path: '/admin/content',
+      name: 'content',
+      component: () => import('@/views/ContentView.vue'),
+    },
+    {
+      path: '/admin/invite/:token',
+      name: 'invite',
+      component: () => import('@/views/SetPasswordView.vue'),
+    },
     {
       path: '/admin/login',
       name: 'login',
@@ -45,8 +55,12 @@ router.beforeEach(async (to, from) => {
   const auth = useAuth()
   await auth.check()
   const authed = !!auth.email.value
-  if (to.name === 'editor' && !authed) {
+  if ((to.name === 'editor' || to.name === 'content') && !authed) {
     return auth.needsSetup.value ? '/admin/setup' : '/admin/login'
+  }
+  // contributors are content-only — keep them out of the build view
+  if (to.name === 'editor' && authed && auth.role.value === 'contributor') {
+    return '/admin/content'
   }
   if ((to.name === 'login' || to.name === 'setup') && authed) return '/admin'
   if (to.name === 'login' && auth.needsSetup.value) return '/admin/setup'
