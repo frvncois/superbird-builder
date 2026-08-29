@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, type Component } from 'vue'
+import { type Component } from 'vue'
 import { MoreHorizontal } from 'lucide-vue-next'
+import { useDropdown } from '@/composables/useDropdown'
 
 // Compact floating menu: a trigger (default = ⋯ icon button) opens a small
 // panel of slotted items. Reused for row overflow menus and pickers. Items get
@@ -30,29 +31,12 @@ const props = withDefaults(
 
 const triggerIcon = props.icon ?? MoreHorizontal
 
-const open = ref(false)
-const root = ref<HTMLElement>()
-const close = () => (open.value = false)
-
-function onClickOutside(e: MouseEvent) {
-  if (root.value && !root.value.contains(e.target as Node)) close()
-}
-function onKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape') close()
-}
-onMounted(() => {
-  document.addEventListener('click', onClickOutside)
-  window.addEventListener('keydown', onKeydown)
-})
-onBeforeUnmount(() => {
-  document.removeEventListener('click', onClickOutside)
-  window.removeEventListener('keydown', onKeydown)
-})
+const { open, root, toggle, close } = useDropdown({ escape: true })
 </script>
 
 <template>
   <div ref="root" class="relative shrink-0">
-    <button type="button" :class="triggerClass" :disabled="disabled" @click="open = !open">
+    <button type="button" :class="triggerClass" :disabled="disabled" @click="toggle">
       <slot name="trigger">
         <component :is="triggerIcon" class="size-3.5" />
       </slot>
