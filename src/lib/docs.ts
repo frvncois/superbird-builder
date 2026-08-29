@@ -3,6 +3,7 @@
 // callouts, and code examples with static rendered previews.
 
 import type { Component } from 'vue'
+import { slugify } from './document'
 import {
   Zap,
   Braces,
@@ -61,7 +62,7 @@ export const DOC_GROUPS = ['Basics', 'Building', 'Content', 'Collaboration', 'Re
 
 /** stable anchor id for a heading block inside a section */
 export function docHeadingId(sectionId: string, text: string): string {
-  return `${sectionId}--${text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`
+  return `${sectionId}--${slugify(text)}`
 }
 
 /** headings of a section, in order — feeds the outline rail and search */
