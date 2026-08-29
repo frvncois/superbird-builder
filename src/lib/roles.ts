@@ -14,4 +14,3 @@ export const ROLE_INFO: RoleInfo[] = [
 ]
 
 export const roleLabel = (role: Role) => ROLE_INFO.find((r) => r.value === role)?.label ?? role
-export const roleBlurb = (role: Role) => ROLE_INFO.find((r) => r.value === role)?.blurb ?? ''

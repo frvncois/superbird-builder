@@ -122,18 +122,6 @@ export const spacingScheme: Scheme = {
   parse: (token, prefix) => parseTail(token, prefix),
 }
 
-/** flex/grid gap — base 'gap'; slot suffix dash-joined (gap-x, gap-y). Tailwind
- * has no per-side gap, so callers restrict this scheme to the All + X·Y tiers. */
-export const gapScheme: Scheme = {
-  steps: SPACING,
-  slot: (base, s) => (s === 'all' ? base : `${base}-${s}`),
-  className: (prefix, step) => `${prefix}-${step}`,
-  parse: (token, prefix) => {
-    const m = token.match(new RegExp(`^${escapeRe(prefix)}-(.+)$`))
-    return m && SPACING.includes(m[1]!) ? m[1]! : null
-  },
-}
-
 /** border width — base 'border'; slot suffix dash-joined (border-x, border-t).
  * '1' is the bare class (`border`), and only 0/2/4/8 take a numeric suffix. */
 export const BORDER_STEPS = ['0', '1', '2', '4', '8']
