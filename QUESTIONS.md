@@ -16,6 +16,10 @@ Items the autonomous run deliberately did NOT change (risky / ambiguous / behavi
 7. **F13 — `SettingsPanel.vue:332` hand-rolls `Math.round(bytes/1024) KB`** instead of `formatBytes` (`lib/media.ts:26`). Unifying changes the displayed string for >1 MB sites. *Recommendation: use `formatBytes`; the current display is wrong for large sites anyway.*
 8. **F22 — `readBody` (index.mjs) vs `readBodyRaw(req, limit)` (media.mjs)**: unifying means deciding whether store/auth POST bodies should also get a size limit (currently unlimited — see SECURITY.md pass). *Recommendation: unify on the limited version with a generous default; unlimited request bodies on an authed-but-public endpoint are a DoS surface.*
 
+## Observed during the run (not my doing)
+
+12. **The five `docs/*.md` files are deleted in the working tree** (`docs/audit-simplification-optimization.md`, `media-library-plan.md`, `security-media-and-origin.md`, `security-structural-enforcement.md`, `users-redesign-plan.md`) — unstaged `D` entries that appeared on disk during the autonomous run; no command of mine touches `docs/`, and no commit contains the deletion. Note CLAUDE.md still references `docs/security-structural-enforcement.md`. *Recommendation: if the deletion was intentional, commit it and update CLAUDE.md's reference; if not, `git checkout -- docs/` restores them.*
+
 ## Structural decisions deferred
 
 9. **A4 foldering nuance** — `components/site/ContentRenderer.vue` and `CommentLayer.vue` are admin-only but live in `site/`. Moving them is a pure rename with ~4 import updates. Left alone because REVIEW.md forbids renames beyond what a move requires and the current placement doesn't leak code into the public bundle. *Recommendation: move both to `components/editor/canvas/` (imported only by CanvasEditor/ContentView) in a later tidy-up.*
