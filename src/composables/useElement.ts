@@ -3,7 +3,7 @@ import { usePage } from './usePage'
 import { hasOpenArgBracket, interactionMarkerOf, reconcile, styleMarkerOf, withInteractionMarker, withStyleMarker } from '@/lib/syntax'
 import { isKnownElement } from '@/lib/elements'
 import { isComponentType } from '@/lib/components'
-import { findNode, walkNodes } from '@/lib/tree'
+import { deepClone, findNode, walkNodes } from '@/lib/tree'
 import type { ConditionSpec, ElementNode, InteractionBinding } from '@/types/editor'
 
 /** per-node settings captured alongside a copied code block, DFS order */
@@ -35,9 +35,9 @@ function captureProps(n: ElementNode): NodeProps {
     htmlId: n.htmlId,
     src: n.src,
     link: n.link,
-    locales: n.locales ? JSON.parse(JSON.stringify(n.locales)) : undefined,
-    interactions: n.interactions ? JSON.parse(JSON.stringify(n.interactions)) : undefined,
-    conditions: n.conditions ? JSON.parse(JSON.stringify(n.conditions)) : undefined,
+    locales: n.locales ? deepClone(n.locales) : undefined,
+    interactions: n.interactions ? deepClone(n.interactions) : undefined,
+    conditions: n.conditions ? deepClone(n.conditions) : undefined,
   }
 }
 
@@ -302,7 +302,7 @@ export function useElement() {
         if (p.htmlId) n.htmlId = p.htmlId
         if (p.src) n.src = p.src
         if (p.link) n.link = p.link
-        if (p.locales) n.locales = JSON.parse(JSON.stringify(p.locales))
+        if (p.locales) n.locales = deepClone(p.locales)
         if (p.interactions) {
           n.interactions = p.interactions.map((x) => ({
             ...x,
@@ -312,7 +312,7 @@ export function useElement() {
           }))
         }
         if (p.conditions) {
-          const spec = JSON.parse(JSON.stringify(p.conditions)) as ConditionSpec
+          const spec = deepClone(p.conditions) as ConditionSpec
           for (const rule of spec.rules) rule.id = crypto.randomUUID()
           n.conditions = spec
         }

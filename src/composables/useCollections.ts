@@ -3,7 +3,7 @@ import { useProject } from './useProject'
 import { usePage } from './usePage'
 import { buildDocument, extractBodyLines, slugify } from '@/lib/document'
 import { parseSyntax } from '@/lib/syntax'
-import { walkNodes } from '@/lib/tree'
+import { deepClone, walkNodes } from '@/lib/tree'
 import type { Collection, CollectionEntry, CollectionField, Page } from '@/types/editor'
 
 /** entry loaded into the template canvas for editing */
@@ -117,7 +117,7 @@ export function useCollections() {
       name: `${source.name} copy`,
       slug,
       values: { ...source.values },
-      locales: source.locales ? JSON.parse(JSON.stringify(source.locales)) : undefined,
+      locales: source.locales ? deepClone(source.locales) : undefined,
       createdAt: Date.now(),
     }
     collection.entries.push(entry)
@@ -139,7 +139,7 @@ export function useCollections() {
     while (collectionByName(name)) name = `${collection.name}-copy-${n++}`
     const label = name.charAt(0).toUpperCase() + name.slice(1)
 
-    const page = JSON.parse(JSON.stringify(template)) as Page
+    const page = deepClone(template) as Page
     page.id = crypto.randomUUID()
     walkNodes(page.elements, (node) => {
       node.id = crypto.randomUUID()
@@ -182,7 +182,7 @@ export function useCollections() {
           ...e,
           id: entryIdMap.get(e.id)!,
           values,
-          locales: e.locales ? JSON.parse(JSON.stringify(e.locales)) : undefined,
+          locales: e.locales ? deepClone(e.locales) : undefined,
         }
       }),
     }

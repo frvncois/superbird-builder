@@ -7,6 +7,7 @@ import type {
   Project,
   ProjectSettings,
 } from '@/types/editor'
+import { deepClone } from './tree'
 
 export type Resolution = 'mine' | 'theirs'
 
@@ -230,7 +231,7 @@ export function applyResolutions(
   result: MergeResult,
   choices: Record<string, Resolution>,
 ): Project {
-  const merged = JSON.parse(JSON.stringify(result.merged)) as Project
+  const merged = deepClone(result.merged) as Project
   for (const conflict of result.conflicts) {
     if (choices[conflict.key] !== 'theirs') continue
     if (conflict.key === 'breakpoints') {
