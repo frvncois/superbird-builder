@@ -22,7 +22,7 @@ import { sessionUser } from './auth.mjs'
 import { fail, send, writeAtomic } from './util.mjs'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
-const DATA_DIR = join(ROOT, 'server', 'data')
+const DATA_DIR = process.env.SB_DATA_DIR || join(ROOT, 'server', 'data')
 const MEDIA_DIR = join(DATA_DIR, 'media')
 const FILES_DIR = join(MEDIA_DIR, 'files')
 const THUMBS_DIR = join(MEDIA_DIR, 'thumbs')

@@ -58,7 +58,10 @@ import {
 } from './auth.mjs'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
-const DATA_DIR = join(ROOT, 'server', 'data')
+// SB_DATA_DIR overrides the runtime data location (deploys / isolated e2e);
+// defaults to server/data. Use an ABSOLUTE path — the exporter's write-path
+// backstop rejects a relative one. auth.mjs and media.mjs honor the same var.
+const DATA_DIR = process.env.SB_DATA_DIR || join(ROOT, 'server', 'data')
 const SNAPSHOT = join(DATA_DIR, 'published.json')
 const SITE = join(DATA_DIR, 'site')
 const DIST = join(ROOT, 'dist')

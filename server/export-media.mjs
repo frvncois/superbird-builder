@@ -32,7 +32,10 @@ const MIME_EXT = {
 
 // media library storage (see server/media.mjs) — referenced assets are
 // copied into the export under hashed names so the site stays fully static
-const MEDIA_LIB = join(fileURLToPath(new URL('..', import.meta.url)), 'server', 'data', 'media')
+const MEDIA_LIB = join(
+  process.env.SB_DATA_DIR || join(fileURLToPath(new URL('..', import.meta.url)), 'server', 'data'),
+  'media',
+)
 const LIB_REF_RE = /^\/media\/([a-f0-9]{16})$/
 
 export async function extractMedia(project) {

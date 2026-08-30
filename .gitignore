@@ -40,3 +40,8 @@ __screenshots__/
 
 # publish server data
 server/data
+
+# e2e
+.e2e-data
+test-results
+playwright-report
