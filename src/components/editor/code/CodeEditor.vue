@@ -7,6 +7,7 @@ import { usePanel } from '@/composables/usePanel'
 import { usePersistence } from '@/composables/usePersistence'
 import { useComponents } from '@/composables/useComponents'
 import { useInsertDrag } from '@/composables/useInsertDrag'
+import { useDropdown } from '@/composables/useDropdown'
 import { expandComponentInstances, isComponentType } from '@/lib/components'
 import { isKnownElement } from '@/lib/elements'
 import { useCollections } from '@/composables/useCollections'
@@ -217,8 +218,7 @@ const code = computed({
 // --- status mini-dropdown: a caret on the @setup status line ---
 
 const PAGE_STATUSES = ['draft', 'published']
-const statusOpen = ref(false)
-const statusRef = ref<HTMLElement>()
+const { open: statusOpen, root: statusRef } = useDropdown()
 
 const statusLine = computed(() => {
   const lines = code.value.split('\n')
@@ -243,14 +243,6 @@ function setStatus(status: string) {
 
 // the active locale is chosen from the app header now; the code editor's setup
 // line just reflects it (via rawSource's setSetupLocale substitution)
-
-function onSetupMenuClickOutside(e: MouseEvent) {
-  if (statusOpen.value && statusRef.value && !statusRef.value.contains(e.target as Node)) {
-    statusOpen.value = false
-  }
-}
-onMounted(() => document.addEventListener('click', onSetupMenuClickOutside))
-onBeforeUnmount(() => document.removeEventListener('click', onSetupMenuClickOutside))
 
 /**
  * ⌘C/⌘X/⌘V/⌘D on the selected element while editing code. With text

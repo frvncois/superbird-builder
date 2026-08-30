@@ -1036,28 +1036,3 @@ export function applyClass(
 
   return { tokens: next }
 }
-
-/** The class a property starts with when the user adds it */
-export function defaultClass(prop: StyleProperty): string {
-  if (prop.default) return prop.default
-  const control = prop.control
-  switch (control.kind) {
-    case 'select':
-    case 'icons':
-      return control.options[0]!.class
-    case 'color':
-      return `${control.prefix}-slate-500`
-    case 'slider': {
-      const classesList = sliderClasses(control)
-      // explicit-class sliders (bare/named/signed) neutralise on their '0'
-      // stop when present; prefix+stops sliders keep the original mid default
-      if (control.classes) {
-        const zero = sliderLabels(control).indexOf('0')
-        return classesList[zero !== -1 ? zero : Math.min(4, classesList.length - 1)]!
-      }
-      return `${control.prefix}-${control.stops![4] ?? control.stops![0]}`
-    }
-    case 'input':
-      return `${control.prefix}-auto`
-  }
-}

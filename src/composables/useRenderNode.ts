@@ -5,7 +5,8 @@ import { useCollections } from './useCollections'
 import { useInteraction } from './useInteraction'
 import { useComponents } from './useComponents'
 import { entryKey } from '@/components/shared/EntryScope.vue'
-import { resolveBinding, resolveListScope } from '@/lib/shared/fields.js'
+import { refDisplay, resolveBinding, resolveListScope } from '@/lib/shared/fields.js'
+import { isRich, sanitizeRich } from '@/lib/shared/richtext.js'
 import { backgroundRender } from '@/lib/shared/background.js'
 import { useMedia, kindOfMime } from './useMedia'
 import { evaluateConditions } from '@/lib/shared/conditions.js'
@@ -19,6 +20,13 @@ export interface ConditionResult {
   src?: string
 }
 
+/** a resolved content/src value; `untranslated` marks a default-locale
+ * fallback rendered under a non-default locale (the editor dims these) */
+export interface LocalizedDisplay {
+  value: string | undefined
+  untranslated: boolean
+}
+
 /** browser state runtime condition rules test against */
 export interface RuntimeEnv {
   viewport: number
@@ -27,11 +35,13 @@ export interface RuntimeEnv {
 }
 
 /**
- * The rendering core shared VERBATIM by the editor's ElementRenderer and
- * the published site's PublicRenderer: element/tag resolution, component
- * master mapping, collection/entry-scope resolution, interaction firing,
- * and the scroll-into-view observer. Each renderer keeps its own content
- * precedence, class composition, links and event handlers on top.
+ * The rendering core shared VERBATIM by the editor's ElementRenderer,
+ * content mode's ContentRenderer and the published site's PublicRenderer:
+ * element/tag resolution, component master mapping, collection/entry-scope
+ * resolution, interaction firing, the scroll-into-view observer, and the
+ * content/src/rich/link resolution (condition swap → bound field → own →
+ * mapped master → element default). Each renderer keeps its own selection
+ * chrome, extra classes and event handlers on top.
  */
 export function useRenderNode(
   getNode: () => ElementNode,
@@ -40,6 +50,9 @@ export function useRenderNode(
      * against it — the published-site preview passes the real browser env;
      * the editor omits it so those rules read as matching */
     runtimeEnv?: () => RuntimeEnv
+    /** editor only: a value-less field binding renders a {field}
+     * placeholder instead of the site's empty string */
+    fieldPlaceholders?: boolean
   },
 ) {
   const node = computed(getNode)
@@ -48,8 +61,8 @@ export function useRenderNode(
     useInteraction()
   const { masterFor } = useComponents()
   const { pages, activePage } = usePage()
-  const { collections, collectionByName, activeCollection, activeEntry } = useCollections()
-  const { activeLocale, defaultLocale } = useLocale()
+  const { collections, collectionByName, activeCollection, activeEntry, entryPath } = useCollections()
+  const { activeLocale, defaultLocale, nodeContent, nodeSrc, entryValue } = useLocale()
   const { assetForSrc } = useMedia()
 
   const def = computed(() => ELEMENTS[node.value.type])
@@ -138,6 +151,86 @@ export function useRenderNode(
     return backgroundRender(kind, bg, tokens)
   })
 
+  // --- content / src / rich / alt (shared precedence) ---
+
+  const contentInfo = computed<LocalizedDisplay>(() => {
+    // an active condition swap wins over every other content source
+    if (condition.value.content != null && condition.value.content !== '') {
+      return { value: condition.value.content, untranslated: false }
+    }
+    if (boundField.value) {
+      // a reference field bound directly (no `.field` hop) reads as the
+      // referenced entry name(s)
+      if (['reference', 'multi-reference'].includes(boundField.value.type)) {
+        const names = boundEntry.value
+          ? refDisplay(collections.value, boundField.value, boundEntry.value)
+          : ''
+        if (names) return { value: names, untranslated: false }
+        return { value: opts?.fieldPlaceholders ? `{${boundField.value.name}}` : '', untranslated: false }
+      }
+      const info = boundEntry.value ? entryValue(boundEntry.value, boundField.value.name) : null
+      if (info?.value) return { value: info.value, untranslated: !info.translated }
+      return { value: opts?.fieldPlaceholders ? `{${boundField.value.name}}` : '', untranslated: false }
+    }
+    const own = nodeContent(node.value)
+    if (own.value) return { value: own.value, untranslated: !own.translated }
+    const master = mapping.value ? nodeContent(mapping.value.master) : null
+    if (master?.value) return { value: master.value, untranslated: !master.translated }
+    return { value: def.value?.defaultContent, untranslated: false }
+  })
+  const displayContent = computed(() => contentInfo.value.value)
+
+  // rich content renders through the shared sanitizer via v-html
+  const richContent = computed(() =>
+    isRich(displayContent.value) ? sanitizeRich(displayContent.value) : null,
+  )
+
+  const srcInfo = computed<LocalizedDisplay>(() => {
+    if (condition.value.src) return { value: condition.value.src, untranslated: false }
+    if (boundField.value?.type === 'image') {
+      const info = boundEntry.value ? entryValue(boundEntry.value, boundField.value.name) : null
+      if (info?.value) return { value: info.value, untranslated: !info.translated }
+    }
+    const own = nodeSrc(node.value)
+    return { value: own.value || undefined, untranslated: !!own.value && !own.translated }
+  })
+  const srcAttr = computed(() => srcInfo.value.value)
+
+  // images carry the library asset's default alt (no per-node alt field yet)
+  const altAttr = computed(() =>
+    def.value?.tag === 'img' ? (assetForSrc(srcAttr.value)?.alt ?? '') : undefined,
+  )
+
+  // --- links ---
+
+  // any element with a link navigates — not just <a>. '@item' resolves to
+  // the current entry's page and is inert outside an entry scope. Same
+  // scheme allowlist the static export enforces — drops javascript:,
+  // data:, etc. Renderers turn the raw value into their own href/nav.
+  const linkRaw = computed(() => {
+    let raw = node.value.link ?? mapping.value?.master.link
+    if (raw === '@item') {
+      if (!scope?.entry) return null
+      raw = entryPath(scope.collection, scope.entry)
+    }
+    if (!raw) return null
+    if (!/^(\/|#|https?:|mailto:|tel:)/i.test(raw)) return null
+    return raw
+  })
+
+  // --- classes (shared core; renderers append their own chrome) ---
+
+  const baseClasses = computed(() => [
+    // the body fills its frame/viewport column
+    node.value.type === 'body' && 'flex-1',
+    mapping.value ? mapping.value.master.classes : node.value.classes,
+    mapping.value
+      ? scopedClassesFor(mapping.value.master.id, mapping.value.root, mapping.value.instanceId)
+      : classesFor(node.value.id),
+    // background media makes the host relative (video layer) / applies bg image
+    backgroundInfo.value?.hostClass,
+  ])
+
   // --- interactions ---
 
   const ofTrigger = (trigger: 'hover' | 'click' | 'appear') =>
@@ -157,6 +250,20 @@ export function useRenderNode(
   function toggleIn(id: string) {
     if (mapping.value) toggleScoped(id, mapping.value.instanceId)
     else toggle(id)
+  }
+
+  // ready-made hover handlers — renderers spread these into their own
+  // handlers object; click stays per-renderer (selection/nav differ)
+  const hoverHandlers = {
+    mouseenter() {
+      for (const interaction of ofTrigger('hover')) fireIn(interaction.id)
+    },
+    mouseleave() {
+      for (const interaction of ofTrigger('hover')) unfireIn(interaction.id)
+    },
+  }
+  function fireClickInteractions() {
+    for (const interaction of ofTrigger('click')) toggleIn(interaction.id)
   }
 
   // fire 'appear' interactions the first time the element scrolls into view
@@ -189,10 +296,20 @@ export function useRenderNode(
     boundEntry,
     condition,
     backgroundInfo,
+    contentInfo,
+    displayContent,
+    richContent,
+    srcInfo,
+    srcAttr,
+    altAttr,
+    linkRaw,
+    baseClasses,
     ofTrigger,
     fireIn,
     unfireIn,
     toggleIn,
+    hoverHandlers,
+    fireClickInteractions,
     el,
   }
 }

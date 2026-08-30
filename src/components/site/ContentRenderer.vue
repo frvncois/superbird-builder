@@ -31,74 +31,28 @@ import { useCollections } from '@/composables/useCollections'
 import { useMedia } from '@/composables/useMedia'
 import { useMediaLibrary } from '@/composables/useMediaLibrary'
 import { resolveSitePath } from '@/lib/navigation'
-import { refDisplay } from '@/lib/shared/fields.js'
-import { isRich, sanitizeRich } from '@/lib/shared/richtext.js'
 import type { ElementNode } from '@/types/editor'
 
 const props = defineProps<{ node: ElementNode }>()
 
 const { project } = useProject()
 const { setActivePage } = usePage()
-const { openEntry, activeEntryId, entryPath } = useCollections()
+const { openEntry, activeEntryId } = useCollections()
 const {
-  nodeContent, nodeSrc, entryValue, setNodeContent, setNodeSrc, setEntryValue, setActiveLocale,
+  entryValue, setNodeContent, setNodeSrc, setEntryValue, setActiveLocale,
 } = useLocale()
 const { openMenu, editRequest, consumeEditRequest } = useContentEditing()
 
 const {
-  def, mapping, scope, classesFor, scopedClassesFor,
+  def,
   listCollection, listEntries, itemCollection, itemEntry, itemTemplateChildren, selfNested,
-  boundField, boundEntry, condition, backgroundInfo, ofTrigger, fireIn, unfireIn, toggleIn, el,
+  boundField, boundEntry, condition, backgroundInfo,
+  displayContent, richContent, srcAttr, altAttr, linkRaw, baseClasses,
+  hoverHandlers, fireClickInteractions, el,
 } = useRenderNode(() => props.node)
 
-const { collections } = useCollections()
-
-const displayContent = computed(() => {
-  // an active condition swap wins over every other content source
-  if (condition.value.content != null && condition.value.content !== '') {
-    return condition.value.content
-  }
-  if (boundField.value) {
-    if (['reference', 'multi-reference'].includes(boundField.value.type)) {
-      return boundEntry.value ? refDisplay(collections.value, boundField.value, boundEntry.value) : ''
-    }
-    return boundEntry.value ? (entryValue(boundEntry.value, boundField.value.name).value ?? '') : ''
-  }
-  return (
-    nodeContent(props.node).value ||
-    (mapping.value ? nodeContent(mapping.value.master).value : undefined) ||
-    def.value?.defaultContent
-  )
-})
-
-// rich content renders through the shared sanitizer via v-html
-const richContent = computed(() =>
-  isRich(displayContent.value) ? sanitizeRich(displayContent.value) : null,
-)
-
-const srcAttr = computed(() => {
-  if (condition.value.src) return condition.value.src
-  if (boundField.value?.type === 'image') {
-    const bound = boundEntry.value
-      ? entryValue(boundEntry.value, boundField.value.name).value
-      : undefined
-    if (bound) return bound
-  }
-  return nodeSrc(props.node).value || undefined
-})
-
-// images carry the library asset's default alt (no per-node alt field yet)
-const altAttr = computed(() =>
-  def.value?.tag === 'img' ? (useMedia().assetForSrc(srcAttr.value)?.alt ?? '') : undefined,
-)
-
 const classes = computed(() => [
-  props.node.type === 'body' && 'flex-1',
-  mapping.value ? mapping.value.master.classes : props.node.classes,
-  mapping.value
-    ? scopedClassesFor(mapping.value.master.id, mapping.value.root, mapping.value.instanceId)
-    : classesFor(props.node.id),
-  backgroundInfo.value?.hostClass,
+  baseClasses.value,
   // hidden-by-condition elements stay editable here, just dimmed
   !condition.value.visible && 'opacity-30',
 ])
@@ -169,17 +123,10 @@ watch(editRequest, () => {
 
 // --- links (state-driven navigation) ---
 
-// any element with a link navigates — not just <a>. '@item' resolves to the
-// current entry's page and is inert outside an entry scope.
+// '@item' resolution + scheme allowlist live in the render core
 const linkTarget = computed(() => {
-  let raw = props.node.link ?? mapping.value?.master.link
-  if (raw === '@item') {
-    if (!scope?.entry) return null
-    raw = entryPath(scope.collection, scope.entry)
-  }
-  if (!raw) return null
-  if (!/^(\/|#|https?:|mailto:|tel:)/i.test(raw)) return null
-  return { raw, internal: raw.startsWith('/') }
+  const raw = linkRaw.value
+  return raw ? { raw, internal: raw.startsWith('/') } : null
 })
 
 // hover affordance: a soft accent outline marks anything double-click/click
@@ -215,7 +162,7 @@ const handlers = {
   // inside a link must cancel the LINK's pending navigation, not its own).
   click(e: MouseEvent) {
     if (editing.value) return
-    for (const interaction of ofTrigger('click')) toggleIn(interaction.id)
+    fireClickInteractions()
     if (linkTarget.value?.internal) {
       e.preventDefault()
       const raw = linkTarget.value.raw
@@ -237,12 +184,7 @@ const handlers = {
     if (!editable.value) return
     openMenu(e, props.node.id)
   },
-  mouseenter() {
-    for (const interaction of ofTrigger('hover')) fireIn(interaction.id)
-  },
-  mouseleave() {
-    for (const interaction of ofTrigger('hover')) unfireIn(interaction.id)
-  },
+  ...hoverHandlers,
 }
 </script>
 

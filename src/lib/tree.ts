@@ -1,5 +1,11 @@
 import type { ElementNode } from '@/types/editor'
 
+/** structural deep clone via JSON round-trip — for plain serializable data
+ * (pages, nodes, entries, the project itself) */
+export function deepClone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T
+}
+
 /** depth-first visit of every node in the element tree */
 export function walkNodes(nodes: ElementNode[], visit: (node: ElementNode) => void) {
   for (const node of nodes) {

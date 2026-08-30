@@ -2,7 +2,7 @@ import { computed, ref } from 'vue'
 import { useProject } from './useProject'
 import { createPage } from '@/lib/factories'
 import { buildDocument, extractBodyArg, extractBodyLines } from '@/lib/document'
-import { walkNodes } from '@/lib/tree'
+import { deepClone, walkNodes } from '@/lib/tree'
 import type { Page } from '@/types/editor'
 
 const activePageId = ref<string | null>(null)
@@ -30,7 +30,7 @@ export function usePage() {
   function duplicatePage(id: string): Page | null {
     const page = pages.value.find((p) => p.id === id)
     if (!page) return null
-    const clone = JSON.parse(JSON.stringify(page)) as Page
+    const clone = deepClone(page) as Page
     clone.id = crypto.randomUUID()
     walkNodes(clone.elements, (n) => (n.id = crypto.randomUUID()))
     delete clone.collectionId // a duplicated collection template is handled separately

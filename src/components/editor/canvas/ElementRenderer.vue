@@ -8,11 +8,7 @@ import { useContextMenu } from '@/composables/useContextMenu'
 import { useLocale } from '@/composables/useLocale'
 import { useRenderNode } from '@/composables/useRenderNode'
 import { useInlineEdit } from '@/composables/useInlineEdit'
-import { useMedia } from '@/composables/useMedia'
-import { useCollections } from '@/composables/useCollections'
 import { useConditions } from '@/composables/useConditions'
-import { refDisplay } from '@/lib/shared/fields.js'
-import { isRich, sanitizeRich } from '@/lib/shared/richtext.js'
 import type { ElementNode } from '@/types/editor'
 
 const props = defineProps<{ node: ElementNode }>()
@@ -21,7 +17,7 @@ const { selectedElement, selectedElementIds, selectElement, draggingId, dropTarg
 const { canvasReorder } = useReorderAnimation()
 const { pickingFor, pickTarget } = useInteraction()
 const { openMenu } = useContextMenu()
-const { nodeContent, nodeSrc, entryValue, setNodeContent, setEntryValue } = useLocale()
+const { entryValue, setNodeContent, setEntryValue } = useLocale()
 
 // shared rendering core (also used by the public site's PublicRenderer):
 // def/mapping, collection + entry-scope resolution, interaction firing,
@@ -29,8 +25,6 @@ const { nodeContent, nodeSrc, entryValue, setNodeContent, setEntryValue } = useL
 const {
   def,
   mapping,
-  classesFor,
-  scopedClassesFor,
   listCollection,
   listEntries,
   itemCollection,
@@ -41,69 +35,24 @@ const {
   boundEntry,
   condition,
   backgroundInfo,
-  ofTrigger,
-  fireIn,
-  unfireIn,
-  toggleIn,
+  contentInfo,
+  displayContent,
+  richContent,
+  srcInfo,
+  srcAttr,
+  altAttr,
+  baseClasses,
+  hoverHandlers,
+  fireClickInteractions,
   el,
-} = useRenderNode(() => props.node)
+} = useRenderNode(() => props.node, { fieldPlaceholders: true })
 
-// locale-aware reads: same precedence as before, but each source is
-// resolved through the active locale; `untranslated` marks a real
-// default-locale value shown as fallback under a non-default locale
-const { collections } = useCollections()
 const { previewConditions } = useConditions()
 
 // hidden-by-condition elements stay on the canvas dimmed (still editable);
 // the Data panel's preview toggle fully hides them like the published site
 const conditionHidden = computed(() => !condition.value.visible)
 const suppressed = computed(() => conditionHidden.value && previewConditions.value)
-
-const contentInfo = computed<{ value: string | undefined; untranslated: boolean }>(() => {
-  // an active condition swap wins over every other content source
-  if (condition.value.content != null && condition.value.content !== '') {
-    return { value: condition.value.content, untranslated: false }
-  }
-  if (boundField.value) {
-    // a reference field bound directly (no `.field` hop) reads as the
-    // referenced entry name(s)
-    if (['reference', 'multi-reference'].includes(boundField.value.type)) {
-      const names = boundEntry.value
-        ? refDisplay(collections.value, boundField.value, boundEntry.value)
-        : ''
-      if (names) return { value: names, untranslated: false }
-      return { value: `{${boundField.value.name}}`, untranslated: false }
-    }
-    const info = boundEntry.value ? entryValue(boundEntry.value, boundField.value.name) : null
-    if (info?.value) return { value: info.value, untranslated: !info.translated }
-    return { value: `{${boundField.value.name}}`, untranslated: false }
-  }
-  const own = nodeContent(props.node)
-  if (own.value) return { value: own.value, untranslated: !own.translated }
-  const master = mapping.value ? nodeContent(mapping.value.master) : null
-  if (master?.value) return { value: master.value, untranslated: !master.translated }
-  return { value: def.value?.defaultContent, untranslated: false }
-})
-const displayContent = computed(() => contentInfo.value.value)
-// rich content renders through the shared sanitizer via v-html
-const richContent = computed(() =>
-  isRich(displayContent.value) ? sanitizeRich(displayContent.value) : null,
-)
-
-const srcInfo = computed<{ value: string | undefined; untranslated: boolean }>(() => {
-  if (condition.value.src) return { value: condition.value.src, untranslated: false }
-  if (boundField.value?.type === 'image') {
-    const info = boundEntry.value ? entryValue(boundEntry.value, boundField.value.name) : null
-    if (info?.value) return { value: info.value, untranslated: !info.translated }
-  }
-  const own = nodeSrc(props.node)
-  return { value: own.value || undefined, untranslated: !!own.value && !own.translated }
-})
-const srcAttr = computed(() => srcInfo.value.value)
-// images carry the library asset's default alt (no per-node alt field yet)
-const altAttr = computed(() =>
-  def.value?.tag === 'img' ? (useMedia().assetForSrc(srcAttr.value)?.alt ?? '') : undefined,
-)
 
 const untranslated = computed(
   () =>
@@ -126,20 +75,14 @@ const highlighted = computed(
 )
 
 const classes = computed(() => [
-  // the body covers its whole breakpoint frame by default
-  props.node.type === 'body' && 'flex-1',
+  // core: body flex-1, master/own classes, interaction classes, bg host
+  baseClasses.value,
   // text-selection guard: only elements actually showing text content
   // are selectable; containers and chrome stay select-none
   !def.value?.void &&
     !props.node.children.length &&
     !['body', 'collection-list', 'collection-item'].includes(props.node.type) &&
     'select-text',
-  mapping.value ? mapping.value.master.classes : props.node.classes,
-  mapping.value
-    ? scopedClassesFor(mapping.value.master.id, mapping.value.root, mapping.value.instanceId)
-    : classesFor(props.node.id),
-  // background media makes the host relative (video layer) / applies bg image
-  backgroundInfo.value?.hostClass,
   // untranslated fallback content renders dimmed under a non-default locale
   untranslated.value && 'opacity-60',
   // hidden-by-condition elements dim harder but stay editable
@@ -207,7 +150,7 @@ const handlers = {
       pickTarget(mapping.value ? mapping.value.master.id : props.node.id)
       return
     }
-    for (const interaction of ofTrigger('click')) toggleIn(interaction.id)
+    fireClickInteractions()
     selectElement(props.node.id)
     requestEditorFocus() // land the caret on this element's line in the code editor
   },
@@ -215,12 +158,7 @@ const handlers = {
     e.stopPropagation()
     openMenu(e, props.node.id)
   },
-  mouseenter() {
-    for (const interaction of ofTrigger('hover')) fireIn(interaction.id)
-  },
-  mouseleave() {
-    for (const interaction of ofTrigger('hover')) unfireIn(interaction.id)
-  },
+  ...hoverHandlers,
   dragstart(e: DragEvent) {
     if (props.node.type === 'body') return
     e.stopPropagation()

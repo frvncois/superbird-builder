@@ -2,6 +2,7 @@ import { computed, ref } from 'vue'
 import { useElement } from './useElement'
 import type { ElementBlock } from './useElement'
 import type { InteractionBinding } from '@/types/editor'
+import { deepClone } from '@/lib/tree'
 
 const menu = ref<{ x: number; y: number; targetId: string } | null>(null)
 
@@ -122,7 +123,7 @@ export function useContextMenu() {
 
   function copyInteractions() {
     if (target.value) {
-      copiedInteractions.value = JSON.parse(JSON.stringify(target.value.interactions ?? []))
+      copiedInteractions.value = deepClone(target.value.interactions ?? [])
     }
   }
 
