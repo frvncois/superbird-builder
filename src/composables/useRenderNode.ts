@@ -13,6 +13,10 @@ import { evaluateConditions } from '@/lib/shared/conditions.js'
 import { useLocale } from './useLocale'
 import type { CollectionEntry, ElementNode } from '@/types/editor'
 
+// media src/background scheme allowlist — mirrors SAFE_SRC in server/export.mjs
+// (href schemes plus inline image/video data URLs); blocks javascript:/data:html
+const SAFE_SRC = /^(\/|#|https?:|mailto:|tel:|data:image\/|data:video\/)/i
+
 export interface ConditionResult {
   visible: boolean
   /** set while an active 'swap' effect overrides content/media */
@@ -143,7 +147,7 @@ export function useRenderNode(
   const backgroundInfo = computed(() => {
     const styleNode = mapping.value ? mapping.value.master : node.value
     const bg = styleNode.background || undefined
-    if (!bg) return null
+    if (!bg || !SAFE_SRC.test(bg)) return null
     const asset = assetForSrc(bg)
     const mediaKind = asset ? kindOfMime(asset.mime) : null
     const kind = mediaKind === 'image' || mediaKind === 'video' ? mediaKind : null
@@ -194,7 +198,10 @@ export function useRenderNode(
     const own = nodeSrc(node.value)
     return { value: own.value || undefined, untranslated: !!own.value && !own.translated }
   })
-  const srcAttr = computed(() => srcInfo.value.value)
+  const srcAttr = computed(() => {
+    const v = srcInfo.value.value
+    return v && SAFE_SRC.test(v) ? v : undefined
+  })
 
   // images carry the library asset's default alt (no per-node alt field yet)
   const altAttr = computed(() =>

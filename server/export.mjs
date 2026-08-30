@@ -29,6 +29,10 @@ const NOTFOUND_CLASSES =
   'flex flex-1 flex-col items-center justify-center gap-2 text-4xl font-semibold text-sm text-neutral-500'
 
 const SAFE_HREF = /^(\/|#|https?:|mailto:|tel:)/i
+// media src/background: the href allowlist plus inline image/video data URLs.
+// Blocks javascript:/data:text-html etc. — harmless today (no iframe/script
+// element exists) but a hard gate before any such element is ever added.
+const SAFE_SRC = /^(\/|#|https?:|mailto:|tel:|data:image\/|data:video\/)/i
 
 // project-settings helpers shared verbatim with the client
 // (src/lib/settings.ts re-exports these) — token validation, the @theme
@@ -247,7 +251,7 @@ function attrsFor(node, ctx, cond, runtime, bg) {
   src ||= nodeSrc(node, ctx.locale, ctx.defaultLocale)
   const rawSrc = src // pre-rewrite value — library alt lookup keys on it
   src = ctx.rewrite(src)
-  if (src) attrs.push(`src="${escapeHtml(src)}"`)
+  if (src && SAFE_SRC.test(src)) attrs.push(`src="${escapeHtml(src)}"`)
   // images always carry alt: the library asset's default, or '' (decorative)
   if (def?.tag === 'img') attrs.push(`alt="${escapeHtml(ctx.altFor?.(rawSrc) ?? '')}"`)
 
@@ -315,7 +319,10 @@ function conditionFor(node, ctx) {
       attr.h = isRich(spec.swapContent)
       attr.c = attr.h ? sanitizeRich(spec.swapContent) : spec.swapContent
     }
-    if (spec.swapSrc) attr.s = ctx.rewrite(spec.swapSrc)
+    if (spec.swapSrc) {
+      const s = ctx.rewrite(spec.swapSrc)
+      if (s && SAFE_SRC.test(s)) attr.s = s
+    }
   }
   return { cond: { visible: true }, runtime: attr }
 }
@@ -425,6 +432,7 @@ function backgroundFor(node, ctx) {
   const ref = styleNode.background
   if (!ref) return null
   const url = ctx.rewrite(ref)
+  if (!SAFE_SRC.test(url)) return null
   const kind = ctx.kindFor(ref)
   const tokens = (styleNode.classes ?? '').split(/\s+/).filter(Boolean)
   return backgroundRender(kind, url, tokens)
