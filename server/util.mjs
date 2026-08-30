@@ -1,12 +1,21 @@
 // Shared server helpers — single home for the response + atomic-write
 // primitives that index.mjs, auth.mjs and media.mjs previously each
 // hand-rolled (AUDIT.md F20/F21).
+import { timingSafeEqual } from 'node:crypto'
 import { mkdir, rename, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
 export function send(res, status, body, type = 'application/json', headers = {}) {
   res.writeHead(status, { 'content-type': type, ...headers })
   res.end(body)
+}
+
+/** constant-time string equality (length-safe — differing lengths return false
+ * without leaking via an early exit) */
+export function timingSafeEqualStr(a, b) {
+  const ab = Buffer.from(String(a))
+  const bb = Buffer.from(String(b))
+  return ab.length === bb.length && timingSafeEqual(ab, bb)
 }
 
 export const fail = (res, status, error) => send(res, status, JSON.stringify({ error }))

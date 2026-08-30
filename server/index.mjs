@@ -22,7 +22,7 @@ import { extname, join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { exportSite } from './export.mjs'
 import { handleMedia, handleMediaFile, originAllowed } from './media.mjs'
-import { fail, send, writeAtomic } from './util.mjs'
+import { fail, send, timingSafeEqualStr, writeAtomic } from './util.mjs'
 import {
   ROLES,
   acceptInvite,
@@ -464,7 +464,7 @@ async function handleGet(res) {
 async function handlePost(req, res) {
   // the session is the credential; PUBLISH_TOKEN stays as a CI escape hatch.
   // Publishing is admin/editor only — contributors are content-only.
-  const bearerOk = TOKEN && req.headers.authorization === `Bearer ${TOKEN}`
+  const bearerOk = !!TOKEN && timingSafeEqualStr(req.headers.authorization ?? '', `Bearer ${TOKEN}`)
   if (!bearerOk) {
     const user = sessionUser(req)
     if (!user) return fail(res, 401, 'unauthorized')
