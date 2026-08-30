@@ -1,8 +1,33 @@
 # REPORT.md — Autonomous cleanup & review (REVIEW.md)
 
-Run date: 2026-08-29 · Baseline: `main` @ `456566b` · Model ran unattended through all 5 passes.
+Run date: 2026-08-29 (audit) · Landed to `main`: 2026-08-30 · Baseline: `456566b`.
 
-**Read this first:** the four working branches are **stacked, not independent** — each was created on top of the previous (`main` → `chore/dead-code-and-dedup` → `chore/architecture-boundaries` → `audit/security` → `perf/measured-only`). Review/merge them in that order, or cherry-pick. Nothing is merged. All output docs (AUDIT, QUESTIONS, BOUNDARIES, SECURITY, PERF, this file) live on the branch of the pass that produced them; the perf tip contains the whole stack.
+**Status: all five passes complete and MERGED to `main`; the follow-up fixes below are landed too.** The four review branches have been merged in order and deleted. From this point `main` is the single line of history. A Playwright smoke (`npm run test:e2e`) now runs alongside the build as the gate.
+
+---
+
+## 0. Landed to `main` in the 2026-08-30 session
+
+Owner manually verified the app (clicked through `/admin`, `/admin/content`, a published route) and confirmed the `docs/` deletion was intentional. Then, one commit per step, each gated by `rm -rf dist && npm run build` + `npm run test:e2e`:
+
+| Commit | What |
+|---|---|
+| `61d7acd` | Remove obsolete `docs/*.md`; repoint CLAUDE.md's stale ref to SECURITY.md |
+| `7baac10 87be46c b23106b 806e7a3` | Merge the 5-pass stack (dead-code → boundaries → security → perf) |
+| `3ae51ad` | **Playwright smoke** — setup→edit→publish→assert published text→auth-guard; `SB_DATA_DIR` for isolated runs |
+| `c8efe7d` | **S1** — contributor project-store writes 403 on customCode/smtp change or no-baseline (fail-closed) |
+| `4d30442` | **S3** — session tokens stored as sha256 at rest |
+| `629063d` | **S4** — raw invite token no longer stored; regenerate re-issues |
+| `237b560` | **F10/Q4** — canonical `slugify` for new page slugs |
+| `d4f5e54` | **P1/Q5** — ConfirmModal on collection + entry delete |
+| `7c14496` | **F11/Q6** — `timeAgoShort` moved into `lib/time` |
+| `52c92c2` | **F13/Q7** — `formatBytes` for the published-size readout |
+| `e1145b3` | **S7** — scheme-gate `src`/`background`/`swapSrc` (exporter + render core) |
+| `d417691` | **S12** — timing-safe `PUBLISH_TOKEN` compare |
+
+Each security fix was verified against an isolated server (real invite→accept flow where relevant); tables are in the individual commit messages. The audit-run history (below) is unchanged for reference.
+
+---
 
 ## 1. Summary per pass
 
@@ -22,16 +47,9 @@ Run date: 2026-08-29 · Baseline: `main` @ `456566b` · Model ran unattended thr
 - **Security findings:** 1 HIGH (deferred to owner, patch written), 6 MED, 8 LOW — 0 fixed autonomously (Phase B scope = CRITICAL/HIGH; the one HIGH is documented-intentional-adjacent and needs e2e).
 - **Perf:** export 17 ms @208 nodes → 75 ms @16k (sub-linear); site.js 4.5 kb; 0 fixes.
 
-## 3. Branches awaiting review
+## 3. Branches (all merged, deleted)
 
-| Branch | Commits | Merge recommendation |
-|---|---|---|
-| `chore/dead-code-and-dedup` | 9 | **Safe to merge first.** Pure dead-code removal + dedup, all behavior-preserving, build green. Review the renderer-core commit (`e27acc4`) most closely — largest change; equivalence notes are in its message. |
-| `chore/architecture-boundaries` | 3 | **Safe.** Two mechanical module splits (no logic change); export split verified byte-identical. Merge after dead-code branch. |
-| `audit/security` | 1 | **Docs only** (SECURITY.md + QUESTIONS.md). Merge freely; then action QUESTIONS.md item 14. |
-| `perf/measured-only` | 1 | **Docs only** (PERF.md). Merge freely. |
-
-Caveat: branches are stacked, so a straight merge of the tip brings all four. To take them piecemeal, merge in order.
+The four review branches (`chore/dead-code-and-dedup`, `chore/architecture-boundaries`, `audit/security`, `perf/measured-only`) were merged into `main` in order (`--no-ff`, build green after each) and deleted. Nothing is outstanding on a branch. The largest change to eyeball in history is the renderer-core dedup (`e27acc4`); the module splits (`7e1fac1`, `ae43f44`) are mechanical and the export split was verified byte-identical.
 
 ## 4. QUESTIONS.md digest (deferred decisions, with recommendations)
 
@@ -47,17 +65,23 @@ Caveat: branches are stacked, so a straight merge of the tip brings all four. To
 
 Plus an observation (item 12): the five `docs/*.md` files are **deleted in the working tree** — not by any command in this run and not committed. CLAUDE.md still references `docs/security-structural-enforcement.md`. Restore with `git checkout -- docs/` or commit the deletion and update CLAUDE.md.
 
-## 5. Skipped / remaining (priority order)
+## 5. Remaining — explicitly out of scope for the 2026-08-30 session
 
-- **HIGH:** SECURITY S1 (item 14 above) — the one item the owner must decide.
-- **Security MED (triage in SECURITY.md):** S2 CSS-injection via `url()`; S3 hash session tokens at rest (easy, safe — good first fix); S4 invite raw token at rest; S5 no CSP on export/admin; S6 exported-SVG CSP.
-- **Security LOW:** S7 `src` scheme allowlist (harmless today, CRITICAL if an iframe/embed element is ever added — do it pre-emptively); S8–S14 (rate-limit keying, lockout DoS, snapshot validation, store quota, timing-safe token, member-email exposure, email re-auth).
-- **Oversized:** CodeEditor.vue split (item 13).
-- **Audit LOW (all in AUDIT.md):** 13 unnecessary `export` keywords; F12–F27 minor duplications; P2–P6 pattern nits. None touched (autonomous triage = HIGH/MED only).
+Landed this session: S1, S3, S4, S7, S12; F10, F11, F13, P1; the Playwright smoke. **Still open** (deliberately not touched — the owner scoped these out):
+
+- **Security MED:** S2 CSS-injection via `url()` in background/font-family; S5 no CSP on export/admin SPA; S6 exported-SVG re-sanitize / CSP.
+- **Security LOW:** S8 rate-limit keying (X-Forwarded-For); S9 account-lockout DoS; S10 publish-snapshot schema validation; S11 per-user store quota; S13 member-email exposure to contributors; S14 email change without re-auth.
+- **Oversized:** `CodeEditor.vue` split (QUESTIONS item 13 — staged plan recorded; now unblocked since the smoke exists).
+- **Deferred cleanups (QUESTIONS 8–11):** F22 `readBody` unification; `components/site/` foldering move; `Role` type relocation; F24 style-control shape.
+- **Audit LOW (AUDIT.md):** 13 unnecessary `export` keywords; F12/F14–F27 minor duplications; P2–P6 pattern nits.
+
+Note: with the Playwright smoke now in place, the two biggest remaining items (CodeEditor split, and the MED security hardening) are materially safer to take on next.
 
 ## 6. Verification status
 
-- **Every branch built green** at each commit: `rm -rf dist && npm run build` (vue-tsc typecheck + vite) — the repo's only static gate (no test runner exists). Confirmed again on the `perf/measured-only` tip: ✓ built.
+- **Gate is now build + e2e:** every commit this session passed `rm -rf dist && npm run build` (vue-tsc + vite) **and** `npm run test:e2e` (Playwright smoke). `main` tip is green on both.
+- Security fixes additionally verified against an isolated server (`SB_DATA_DIR`) driving the real invite→accept flow; per-fix result tables live in the commit messages.
+- **Every audit branch built green** at each commit during the original run (below, historical).
 - **Server:** `node --check` on all server files; live smoke on a scratch port (auth/me 401, store 401 via `fail()`, published 200).
 - **Export:** sha256 of every exported file byte-identical before/after the `export.mjs` split (16 files, 10 routes).
 - **slugify dedup:** property-tested equivalent across 12 inputs before swapping.
