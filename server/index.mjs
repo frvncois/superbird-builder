@@ -338,9 +338,70 @@ async function currentProjectName() {
   }
 }
 
+// canonical (key-order-insensitive) serialization, so a re-serialized but
+// semantically identical field never reads as a change
+function stableStringify(v) {
+  if (Array.isArray(v)) return '[' + v.map(stableStringify).join(',') + ']'
+  if (v && typeof v === 'object') {
+    return (
+      '{' +
+      Object.keys(v)
+        .sort()
+        .map((k) => JSON.stringify(k) + ':' + stableStringify(v[k]))
+        .join(',') +
+      '}'
+    )
+  }
+  return JSON.stringify(v ?? null)
+}
+
+// the fields a contributor must never change: custom code (published as raw
+// <script>) and mail credentials (SECURITY.md S1)
+function sensitiveProjectFields(project) {
+  const settings = project?.settings ?? {}
+  return {
+    smtp: settings.smtp ?? null,
+    customCode: settings.customCode ?? null,
+    pages: Array.isArray(project?.pages)
+      ? project.pages.map((p) => [p?.id ?? null, p?.customCode ?? null])
+      : [],
+  }
+}
+
+/**
+ * For a contributor writing a project key: reject (returns an error string)
+ * when the write would change customCode or smtp vs the stored copy. The
+ * contributor UI (content mode) can't touch those fields, so a legitimate
+ * autosave carries them unchanged and passes; only a hand-crafted PUT trips
+ * it. Returns null when the write is allowed.
+ */
+async function contributorProjectRejection(key, body) {
+  let current
+  try {
+    current = JSON.parse(await readFile(storeFile(key), 'utf8'))
+  } catch {
+    // fail closed: a contributor has no legitimate reason to write a project
+    // with no stored baseline (only an admin seeds one). A backup restore or
+    // wiped seed must not silently open a write window for the whole blob.
+    return 'contributors cannot create a project'
+  }
+  let incoming
+  try {
+    incoming = JSON.parse(body)
+  } catch {
+    return 'invalid project snapshot'
+  }
+  const before = stableStringify(sensitiveProjectFields(current))
+  const after = stableStringify(sensitiveProjectFields(incoming))
+  return before === after ? null : 'contributors cannot change custom code or mail settings'
+}
+
+const isProjectKey = (key) => key.startsWith('superbird-project:')
+
 async function handleStore(req, res, path, query) {
   // any authenticated user (incl. contributors editing content) may use the store
-  if (!sessionUser(req)) return fail(res, 401, 'unauthorized')
+  const user = sessionUser(req)
+  if (!user) return fail(res, 401, 'unauthorized')
 
   if (path === '/api/store' && req.method === 'GET') {
     const keys = (query.get('keys') ?? '').split(',').filter(Boolean)
@@ -364,6 +425,10 @@ async function handleStore(req, res, path, query) {
   if (req.method === 'PUT') {
     const body = await readBody(req)
     if (body === null) return fail(res, 400, 'too large')
+    if (user.role === 'contributor' && isProjectKey(key)) {
+      const rejection = await contributorProjectRejection(key, body)
+      if (rejection) return fail(res, 403, rejection)
+    }
     await writeAtomic(storeFile(key), body)
     return send(res, 200, JSON.stringify({ ok: true }))
   }
