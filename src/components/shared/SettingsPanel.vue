@@ -35,6 +35,7 @@ import { useAuth } from '@/composables/useAuth'
 import UsersSettings from '@/components/shared/UsersSettings.vue'
 import { FONT_STACKS, tokenNameError } from '@/lib/settings'
 import { timeAgo } from '@/lib/time'
+import { formatBytes } from '@/lib/media'
 
 const { project, renameProject } = useProject()
 const { settings, addToken, removeToken } = useSettings()
@@ -329,7 +330,7 @@ async function republish() {
               <template v-if="publishedInfo">
                 <p class="text-xs">Last published {{ timeAgo(publishedInfo.publishedAt) }}</p>
                 <p class="text-[10px] text-muted-foreground">
-                  {{ publishedInfo.routes }} routes · {{ Math.round(publishedInfo.bytes / 1024) }} KB
+                  {{ publishedInfo.routes }} routes · {{ formatBytes(publishedInfo.bytes) }}
                 </p>
               </template>
               <p v-else class="text-xs text-muted-foreground">Never published yet.</p>
