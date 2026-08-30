@@ -28,6 +28,7 @@ import { useBranches } from '@/composables/useBranches'
 import { usePanel } from '@/composables/usePanel'
 import { useHeaderNav } from '@/composables/useHeaderNav'
 import { useLocaleQuickAdd } from '@/composables/useLocaleQuickAdd'
+import type { Collection, CollectionEntry } from '@/types/editor'
 
 const props = defineProps<{ mode: 'editor' | 'content' }>()
 const isContent = computed(() => props.mode === 'content')
@@ -59,6 +60,11 @@ const creatingCollection = ref(false)
 const publishing = ref(false)
 const accountOpen = ref(false)
 const settingsOpen = ref(false)
+
+// pending destructive deletes — confirmed through ConfirmModal like the other
+// deletes in this header (locale/media/branch)
+const confirmingCollection = ref<Collection | null>(null)
+const confirmingEntry = ref<{ collection: Collection; entry: CollectionEntry } | null>(null)
 
 // --- localization ---
 
@@ -178,7 +184,7 @@ function goMode(mode: 'editor' | 'content') {
                 <ButtonUI
                   variant="icon" size="sm" :icon="Trash2" title="Delete collection"
                   class="w-7 shrink-0 text-muted-foreground opacity-0 group-hover/row:opacity-100"
-                  @click.stop="removeCollection(collection)"
+                  @click.stop="confirmingCollection = collection"
                 />
               </template>
               <ButtonUI
@@ -204,7 +210,7 @@ function goMode(mode: 'editor' | 'content') {
               <ButtonUI
                 variant="icon" size="sm" :icon="Trash2" :title="`Delete ${collection.name}`"
                 class="w-7 shrink-0 text-muted-foreground opacity-0 group-hover/row:opacity-100"
-                @click.stop="removeEntry(collection, entry.id)"
+                @click.stop="confirmingEntry = { collection, entry }"
               />
             </div>
           </template>
@@ -333,6 +339,20 @@ function goMode(mode: 'editor' | 'content') {
     :message="`Delete ${confirmingLocale.toUpperCase()} and all of its translated content? The default locale keeps its content.`"
     @confirm="((deleteLocale(confirmingLocale)), (confirmingLocale = null))"
     @close="confirmingLocale = null"
+  />
+  <ConfirmModal
+    v-if="confirmingCollection"
+    title="Delete collection"
+    :message="`Delete the collection “${confirmingCollection.name}”? Its template page and all ${confirmingCollection.entries.length} ${confirmingCollection.entries.length === 1 ? 'entry' : 'entries'} will be permanently deleted.`"
+    @confirm="((removeCollection(confirmingCollection)), (confirmingCollection = null))"
+    @close="confirmingCollection = null"
+  />
+  <ConfirmModal
+    v-if="confirmingEntry"
+    title="Delete entry"
+    :message="`Delete “${confirmingEntry.entry.name}” from ${confirmingEntry.collection.name}? This can’t be undone.`"
+    @confirm="((removeEntry(confirmingEntry.collection, confirmingEntry.entry.id)), (confirmingEntry = null))"
+    @close="confirmingEntry = null"
   />
   <CreateCollectionModal v-if="creatingCollection" @close="creatingCollection = false" />
   <PublishDialog v-if="publishing" @close="publishing = false" />
