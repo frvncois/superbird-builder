@@ -1,7 +1,7 @@
 import { computed, ref } from 'vue'
 import { useProject } from './useProject'
 import { createPage } from '@/lib/factories'
-import { buildDocument, extractBodyArg, extractBodyLines } from '@/lib/document'
+import { buildDocument, extractBodyArg, extractBodyLines, slugify } from '@/lib/document'
 import { deepClone, walkNodes } from '@/lib/tree'
 import type { Page } from '@/types/editor'
 
@@ -19,7 +19,7 @@ export function usePage() {
 
   const homePage = computed(() => pages.value.find((p) => p.path === '/') ?? pages.value[0]!)
 
-  function addPage(name: string, path = `/${name.toLowerCase().replace(/\s+/g, '-')}`): Page {
+  function addPage(name: string, path = `/${slugify(name)}`): Page {
     const page = createPage(name, path, project.value.defaultLocale)
     project.value.pages.push(page)
     return page
