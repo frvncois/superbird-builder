@@ -12,6 +12,7 @@ import ApplyDraftModal from '@/components/editor/drafts/ApplyDraftModal.vue'
 import { useBranches, MAIN_ID } from '@/composables/useBranches'
 import { useDocumentation } from '@/composables/useDocumentation'
 import { changeSummaryLabel, hasChanges } from '@/lib/merge'
+import { timeAgoShort } from '@/lib/time'
 import type { BranchMeta, DraftStatus } from '@/composables/useBranches'
 
 const {
@@ -60,16 +61,6 @@ function statusLine(id: string): string {
   if (!status) return ''
   if (!hasChanges(status.summary)) return 'No changes yet'
   return `${changeSummaryLabel(status.summary)} changed`
-}
-
-function timeAgo(ts: number): string {
-  const mins = Math.floor((Date.now() - ts) / 60_000)
-  if (mins < 1) return 'just now'
-  if (mins < 60) return `${mins}m ago`
-  const hours = Math.floor(mins / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  return days === 1 ? 'yesterday' : `${days} days ago`
 }
 
 // --- apply / discard flows ---
@@ -128,7 +119,7 @@ function closeApply() {
       <div class="flex flex-col gap-0.5">
         <div class="flex items-baseline justify-between gap-2">
           <span class="min-w-0 truncate text-xs font-medium">{{ draft.name }}</span>
-          <span class="shrink-0 text-[10px] text-muted-foreground">{{ timeAgo(draft.createdAt) }}</span>
+          <span class="shrink-0 text-[10px] text-muted-foreground">{{ timeAgoShort(draft.createdAt) }}</span>
         </div>
         <p v-if="draft.description" class="text-[10px] text-muted-foreground">
           {{ draft.description }}
