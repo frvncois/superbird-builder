@@ -18,3 +18,11 @@ export async function writeAtomic(file, data) {
   await writeFile(tmp, data)
   await rename(tmp, file)
 }
+
+/** depth-first visit of every node in an element tree (mirrors src/lib/tree.ts) */
+export function walkNodes(nodes, visit) {
+  for (const node of nodes) {
+    visit(node)
+    walkNodes(node.children ?? [], visit)
+  }
+}
