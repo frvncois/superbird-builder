@@ -101,8 +101,16 @@ function regenerate(i: InviteRow) {
     `Create a fresh link for ${i.email}? The current link will stop working immediately.`,
     'Regenerate',
     async () => {
-      await updateInvite(i.id!, { regenerate: true })
-      flashNotice(`New link created for ${i.email}`)
+      // the raw token is no longer stored server-side, so the fresh link is
+      // surfaced once here (copied straight to the clipboard) — there is no
+      // re-copy from the list afterward
+      const updated = await updateInvite(i.id!, { regenerate: true })
+      if (updated?.token) {
+        await navigator.clipboard.writeText(inviteLink(updated.token)).catch(() => {})
+        flashNotice(`New link for ${i.email} copied to clipboard`)
+      } else {
+        flashNotice(`New link created for ${i.email}`)
+      }
     },
   )
 }

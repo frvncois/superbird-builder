@@ -262,11 +262,11 @@ export function sessionUser(req) {
 
 // ---------- invites ----------
 
-// { id, token, tokenHash, email, name, role, invitedBy, createdAt, expiresAt, usedAt }
-// The raw `token` is stored so an admin can re-copy the link after creation
-// (an agreed trade-off: invites are single-use, short-lived, low-privilege —
-// see docs/users-redesign-plan.md). `tokenHash` is kept so acceptance lookups
-// stay hash-based and unchanged.
+// { id, tokenHash, email, name, role, invitedBy, createdAt, expiresAt, usedAt }
+// Only the sha256 `tokenHash` is stored — never the raw token. The raw link is
+// shown once, in the create/regenerate response; a lost link is re-issued via
+// regenerate (which mints a new token). A leaked invites.json can no longer be
+// used to accept a pending invite.
 let invites = readJson(INVITES_FILE) ?? []
 const persistInvites = () => writeAtomic(INVITES_FILE, JSON.stringify(invites)).catch(() => {})
 
@@ -282,11 +282,9 @@ export const inviteView = (i) => ({
   expiresAt: i.expiresAt,
 })
 
-/** admin view — includes the raw token so the link can be rebuilt */
-const inviteAdminView = (i) => ({ ...inviteView(i), token: i.token ?? null })
-
-/** pending (unused, unexpired) invites for the admin list (with tokens) */
-export const listInvites = () => invites.filter(inviteActive).map(inviteAdminView)
+/** pending (unused, unexpired) invites for the admin list. No raw token — it
+ * is not stored; a lost link is re-issued via regenerate. */
+export const listInvites = () => invites.filter(inviteActive).map(inviteView)
 
 /** redacted pending invites for the all-roles members view (no token/id/name) */
 export const listInvitesPublic = () =>
@@ -301,8 +299,7 @@ export async function createInvite({ name, email, role, invitedBy }) {
   const token = randomBytes(32).toString('hex')
   const invite = {
     id: randomBytes(12).toString('hex'),
-    token,
-    tokenHash: sha256(token),
+    tokenHash: sha256(token), // raw token is returned once, never stored
     email: String(email).toLowerCase(),
     name: typeof name === 'string' ? name : '',
     role: ROLES.includes(role) ? role : 'contributor',
@@ -326,14 +323,16 @@ export async function updateInvite(id, { role, extend, regenerate } = {}) {
     invite.role = role
   }
   if (extend) invite.expiresAt = Date.now() + INVITE_TTL
+  let freshToken = null
   if (regenerate) {
-    invite.token = randomBytes(32).toString('hex')
-    invite.tokenHash = sha256(invite.token)
+    freshToken = randomBytes(32).toString('hex')
+    invite.tokenHash = sha256(freshToken) // store only the hash of the new token
     invite.createdAt = Date.now()
     invite.expiresAt = Date.now() + INVITE_TTL
   }
   await persistInvites()
-  return inviteAdminView(invite)
+  // the fresh raw link is surfaced once here; null when not regenerated
+  return { ...inviteView(invite), token: freshToken }
 }
 
 export async function revokeInvite(id) {
