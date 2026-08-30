@@ -6,7 +6,8 @@
 //    (b) accepting an admin-issued invite. The role is taken from the
 //    server-stored invite, never from the invitee's request.
 //  - Invite tokens are 256-bit random, stored ONLY as a sha256 hash at rest,
-//    single-use, 7-day expiry.
+//    single-use, 7-day expiry. Session tokens are likewise 256-bit random and
+//    stored only as their sha256 hash (the raw token lives only in the cookie).
 //  - Password checks are timingSafeEqual; unknown-email logins still run a
 //    scrypt (against a dummy salt) so response timing can't enumerate users.
 //  - Sessions bind to a userId; a deleted user's sessions are destroyed. Role
@@ -30,6 +31,8 @@ const INVITE_TTL = 7 * 24 * 60 * 60 * 1000 // 7 days
 const COOKIE = 'sb_session'
 
 export const ROLES = ['admin', 'editor', 'contributor']
+
+const sha256 = (s) => createHash('sha256').update(s).digest('hex')
 
 function readJson(file) {
   try {
@@ -167,16 +170,19 @@ export async function deleteUser(id) {
 
 // ---------- sessions ----------
 
-const sessions = new Map() // token → { userId, createdAt, expiresAt }
+// keyed by sha256(token), never the raw token — a leaked sessions.json can't
+// be replayed as live cookies. Sessions written before this change were keyed
+// by the raw token; they no longer match and are simply re-authenticated.
+const sessions = new Map() // sha256(token) → { userId, createdAt, expiresAt }
 {
   loadUsers() // ensure migration ran (sets migratedAdminId) before backfill
   const stored = readJson(SESSIONS_FILE)
   const now = Date.now()
   if (stored) {
-    for (const [token, s] of Object.entries(stored)) {
+    for (const [key, s] of Object.entries(stored)) {
       if (s.expiresAt <= now) continue
       const userId = s.userId ?? migratedAdminId // backfill pre-multi-user sessions
-      if (userId && findUserById(userId)) sessions.set(token, { ...s, userId })
+      if (userId && findUserById(userId)) sessions.set(key, { ...s, userId })
     }
   }
 }
@@ -186,20 +192,20 @@ const persistSessions = () =>
 
 export function createSession(userId) {
   const token = randomBytes(32).toString('hex')
-  sessions.set(token, { userId, createdAt: Date.now(), expiresAt: Date.now() + SESSION_TTL })
+  sessions.set(sha256(token), { userId, createdAt: Date.now(), expiresAt: Date.now() + SESSION_TTL })
   persistSessions()
-  return token
+  return token // raw token goes to the cookie; only its hash is stored
 }
 
 export function destroySession(token) {
-  if (sessions.delete(token)) persistSessions()
+  if (sessions.delete(sha256(token))) persistSessions()
 }
 
 function destroyUserSessions(userId) {
   let changed = false
-  for (const [token, s] of sessions) {
+  for (const [key, s] of sessions) {
     if (s.userId === userId) {
-      sessions.delete(token)
+      sessions.delete(key)
       changed = true
     }
   }
@@ -207,10 +213,12 @@ function destroyUserSessions(userId) {
 }
 
 function getSession(token) {
-  const session = token && sessions.get(token)
+  if (!token) return null
+  const key = sha256(token)
+  const session = sessions.get(key)
   if (!session) return null
   if (session.expiresAt <= Date.now()) {
-    sessions.delete(token)
+    sessions.delete(key)
     persistSessions()
     return null
   }
@@ -261,7 +269,6 @@ export function sessionUser(req) {
 // stay hash-based and unchanged.
 let invites = readJson(INVITES_FILE) ?? []
 const persistInvites = () => writeAtomic(INVITES_FILE, JSON.stringify(invites)).catch(() => {})
-const sha256 = (s) => createHash('sha256').update(s).digest('hex')
 
 const inviteActive = (i) => !i.usedAt && i.expiresAt > Date.now()
 
