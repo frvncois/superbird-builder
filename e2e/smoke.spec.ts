@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test'
 
 // End-to-end smoke: first-run setup → load the demo project → edit a text
-// node in content mode → publish → assert the edit on the published route →
+// node in the Preview surface → publish → assert the edit on the published route →
 // assert the admin route redirects to login when logged out. Runs against an
 // isolated server (see playwright.config.ts). Not a suite — one happy path
 // plus the auth guard.
@@ -25,8 +25,9 @@ test('setup, edit content, publish, view live, auth guard', async ({ page, conte
   //    in memory to the published "Brume" coffee site
   await page.goto('/admin?demo')
 
-  // 4. edit the home page's hero heading in content mode
-  await page.getByRole('button', { name: 'Content' }).click()
+  // 4. edit the home page's hero heading in the Preview surface
+  await page.getByRole('button', { name: 'Preview' }).click()
+  await page.waitForURL(/\/admin\/preview/, { timeout: 30_000 })
   const hero = page.locator('h1', { hasText: 'Coffee roasted' }).first()
   await expect(hero).toBeVisible({ timeout: 30_000 })
   // dispatch the dblclick directly: a decorative hero layer sits over the h1
@@ -37,7 +38,7 @@ test('setup, edit content, publish, view live, auth guard', async ({ page, conte
   await expect(editSpan).toBeFocused()
   await page.keyboard.press('ControlOrMeta+A')
   await page.keyboard.type(marker)
-  await page.keyboard.press('Escape') // content-mode inline edit saves on Escape
+  await page.keyboard.press('Escape') // preview inline edit saves on Escape
   await expect(page.locator('h1', { hasText: marker }).first()).toBeVisible()
 
   // 5. publish (the dialog auto-runs the publish on open)
