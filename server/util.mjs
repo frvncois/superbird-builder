@@ -20,11 +20,14 @@ export function timingSafeEqualStr(a, b) {
 
 export const fail = (res, status, error) => send(res, status, JSON.stringify({ error }))
 
-/** write via tmp file + rename so readers never see a partial write */
+/** write via tmp file + rename so readers never see a partial write.
+ * Data files carry secrets (sessions, invite tokens, smtp creds, the GitHub
+ * token), so the tmp file is created 0600 and rename carries the mode over —
+ * owner-only on shared hosts. Data dirs likewise 0700. */
 export async function writeAtomic(file, data) {
-  await mkdir(dirname(file), { recursive: true })
+  await mkdir(dirname(file), { recursive: true, mode: 0o700 })
   const tmp = `${file}.tmp`
-  await writeFile(tmp, data)
+  await writeFile(tmp, data, { mode: 0o600 })
   await rename(tmp, file)
 }
 

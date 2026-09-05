@@ -16,7 +16,7 @@
 //         PUBLISH_TOKEN optionally allows CI publishes)
 
 import { createServer } from 'node:http'
-import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { extname, join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -783,6 +783,14 @@ createServer(async (req, res) => {
     console.error(err)
     fail(res, 500, 'internal error')
   }
-}).listen(PORT, () => {
+}).listen(PORT, async () => {
+  // owner-only data dir: one chmod at the root protects every secret beneath
+  // (users/sessions/invites/publish.json) even for files written pre-upgrade
+  try {
+    await mkdir(DATA_DIR, { recursive: true, mode: 0o700 })
+    await chmod(DATA_DIR, 0o700)
+  } catch (err) {
+    console.warn('could not restrict data dir permissions:', err.message)
+  }
   console.log(`superbird server on http://localhost:${PORT}${TOKEN ? ' (publish token required)' : ''}`)
 })
