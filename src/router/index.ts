@@ -17,22 +17,26 @@ const router = createRouter({
       path: '/preview',
       name: 'preview',
       component: () => import('@/views/PreviewView.vue'),
+      meta: { title: 'Preview — Guano' },
     },
     { path: '/content', redirect: '/preview' },
     {
       path: '/invite/:token',
       name: 'invite',
       component: () => import('@/views/SetPasswordView.vue'),
+      meta: { title: 'Join — Guano' },
     },
     {
       path: '/login',
       name: 'login',
       component: () => import('@/views/LoginView.vue'),
+      meta: { title: 'Log in — Guano' },
     },
     {
       path: '/setup',
       name: 'setup',
       component: () => import('@/views/SetupView.vue'),
+      meta: { title: 'Set up — Guano' },
     },
     // any stray /admin/* URL falls back to the editor (which auth-gates)
     { path: '/:pathMatch(.*)*', redirect: '/' },
@@ -54,6 +58,11 @@ router.beforeEach(async (to) => {
   if (to.name === 'login' && auth.needsSetup.value) return '/setup'
   if (to.name === 'setup' && !auth.needsSetup.value && !authed) return '/login'
   return true
+})
+
+// per-view tab titles; the build view (no meta) keeps the plain product name
+router.afterEach((to) => {
+  document.title = (to.meta.title as string | undefined) ?? 'Guano'
 })
 
 export default router
