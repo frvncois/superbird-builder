@@ -16,6 +16,8 @@ import { resolveBinding, resolveListScope, refDisplay } from '../src/lib/shared/
 import { evaluateConditions, staticMatch } from '../src/lib/shared/conditions.js'
 import { isRich, sanitizeRich } from '../src/lib/shared/richtext.js'
 import { backgroundRender } from '../src/lib/shared/background.js'
+import { SAFE_HREF, SAFE_SRC } from '../src/lib/shared/urls.js'
+import { slugify, entrySlug } from '../src/lib/shared/slug.js'
 import { walkNodes } from './util.mjs'
 import { extractMedia } from './export-media.mjs'
 
@@ -39,27 +41,11 @@ function baseBodyCss(settings) {
 const NOTFOUND_CLASSES =
   'flex flex-1 flex-col items-center justify-center gap-2 text-4xl font-semibold text-sm text-neutral-500'
 
-const SAFE_HREF = /^(\/|#|https?:|mailto:|tel:)/i
-// media src/background: the href allowlist plus inline image/video data URLs.
-// Blocks javascript:/data:text-html etc. — harmless today (no iframe/script
-// element exists) but a hard gate before any such element is ever added.
-const SAFE_SRC = /^(\/|#|https?:|mailto:|tel:|data:image\/|data:video\/)/i
-
 // project-settings helpers shared verbatim with the client
 // (src/lib/settings.ts re-exports these) — token validation, the @theme
 // builder and the title template
 
-// ---------- tiny helpers (duplicated from src/lib) ----------
-
-function slugify(value) {
-  return value
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-}
-
-const entrySlug = (entry) => entry.slug || slugify(entry.name)
+// ---------- tiny helpers ----------
 
 /** slugify each path segment so a user-typed slug/locale/name can't escape
  * the output dir (`..` → '' → dropped) while legitimate nesting survives */

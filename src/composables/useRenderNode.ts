@@ -13,11 +13,8 @@ import { backgroundRender } from '@/lib/shared/background.js'
 import { useMedia, kindOfMime } from './useMedia'
 import { evaluateConditions } from '@/lib/shared/conditions.js'
 import { useLocale } from './useLocale'
+import { SAFE_SRC } from '@/lib/shared/urls.js'
 import type { CollectionEntry, ElementNode } from '@/types/editor'
-
-// media src/background scheme allowlist — mirrors SAFE_SRC in server/export.mjs
-// (href schemes plus inline image/video data URLs); blocks javascript:/data:html
-const SAFE_SRC = /^(\/|#|https?:|mailto:|tel:|data:image\/|data:video\/)/i
 
 export interface ConditionResult {
   visible: boolean

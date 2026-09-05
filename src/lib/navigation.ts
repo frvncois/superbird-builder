@@ -1,12 +1,10 @@
 import type { Collection, CollectionEntry, Page, Project } from '@/types/editor'
-import { slugify } from './document'
+import { entrySlug } from './shared/slug.js'
 
 export type ResolvedRoute =
   | { kind: 'page'; page: Page; locale: string }
   | { kind: 'entry'; page: Page; collection: Collection; entry: CollectionEntry; locale: string }
   | { kind: 'notfound'; locale: string }
-
-const entrySlug = (entry: CollectionEntry) => entry.slug || slugify(entry.name)
 
 /**
  * Resolves a site path (as typed in a link or URL) to a page or collection

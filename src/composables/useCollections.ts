@@ -2,6 +2,7 @@ import { computed, ref } from 'vue'
 import { useProject } from './useProject'
 import { usePage } from './usePage'
 import { buildDocument, extractBodyLines, slugify } from '@/lib/document'
+import { entrySlug } from '@/lib/shared/slug.js'
 import { parseSyntax } from '@/lib/syntax'
 import { deepClone, walkNodes } from '@/lib/tree'
 import type { Collection, CollectionEntry, CollectionField, Page } from '@/types/editor'
@@ -94,11 +95,6 @@ export function useCollections() {
     }
     collection.entries.push(entry)
     return entry
-  }
-
-  /** an entry's own slug, or one derived from its name (older entries) */
-  function entrySlug(entry: CollectionEntry): string {
-    return entry.slug || slugify(entry.name)
   }
 
   /** full route path of an entry: /<collection>/<slug> */

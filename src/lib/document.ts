@@ -50,14 +50,9 @@ export function extractBodyDecor(code: string): string | undefined {
   return line?.match(/^:body(?:\[[a-z0-9-]*\]?)?((?:\(\+?\)?)?(?:\{\+?\}?)?)$/)?.[1] || undefined
 }
 
-/** normalizes a string into a url slug segment */
-export function slugify(value: string): string {
-  return value
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-}
+// url slug normalization lives in shared/ (the exporter derives published
+// file paths from the same copy); re-exported here for existing importers
+export { slugify } from './shared/slug.js'
 
 /** rebuilds a document with new @setup values but the same body */
 export function replaceSetup(code: string, meta: PageMeta): string {

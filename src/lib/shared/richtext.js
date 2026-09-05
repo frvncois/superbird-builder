@@ -8,6 +8,8 @@
 // are stripped (their text kept), text is entity-escaped, and open tags
 // are balanced so a fragment can never break out of its element.
 
+import { SAFE_HREF } from './urls.js'
+
 const ALLOWED = {
   b: {},
   strong: {},
@@ -20,8 +22,6 @@ const ALLOWED = {
   li: {},
   a: { href: true },
 }
-
-const SAFE_HREF = /^(https?:|mailto:|tel:|\/|#)/i
 
 const escapeText = (s) => s.replaceAll('<', '&lt;').replaceAll('>', '&gt;')
 const escapeAttr = (s) => s.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;')
