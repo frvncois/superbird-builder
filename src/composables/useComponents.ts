@@ -1,4 +1,4 @@
-import { computed, effectScope, ref, watch } from 'vue'
+import { computed, effectScope, watch } from 'vue'
 import { useProject } from './useProject'
 import { usePage } from './usePage'
 import { useElement } from './useElement'
@@ -6,9 +6,6 @@ import { reconcile } from '@/lib/syntax'
 import { normalizeComponentName, isComponentType, serializeNode } from '@/lib/components'
 import { findNode, walkNodes } from '@/lib/tree'
 import type { ComponentDef, ElementNode, Page } from '@/types/editor'
-
-/** element id awaiting a component name (drives the create modal) */
-const namingFor = ref<string | null>(null)
 
 let syncStarted = false
 let syncing = false
@@ -314,7 +311,6 @@ export function useComponents() {
 
   return {
     components,
-    namingFor,
     findComponent,
     masterFor,
     findMasterNode,

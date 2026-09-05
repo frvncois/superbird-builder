@@ -1,19 +1,7 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import {
-  Code,
-  Globe,
-  LogOut,
-  Palette,
-  Plus,
-  Rocket,
-  Search,
-  Settings2,
-  Trash2,
-  Users,
-} from 'lucide-vue-next'
+import { computed, onMounted, ref, watch } from 'vue'
+import { LogOut, Palette, Plus, Rocket, Settings2, Trash2, Users } from 'lucide-vue-next'
 import ModalHost from '@/components/modal/ModalHost.vue'
-import ConfirmModal from '@/components/modal/ConfirmModal.vue'
 import TabsUI from '@/components/tabs/TabsUI.vue'
 import TabUI from '@/components/tabs/TabUI.vue'
 import TabPanelUI from '@/components/tabs/TabPanelUI.vue'
@@ -31,24 +19,33 @@ import { useSettings } from '@/composables/useSettings'
 import { useLocale } from '@/composables/useLocale'
 import { usePage } from '@/composables/usePage'
 import { usePublish } from '@/composables/usePublish'
+import { useBranches } from '@/composables/useBranches'
 import { useAuth } from '@/composables/useAuth'
+import { useModal } from '@/composables/useModal'
 import UsersSettings from '@/components/shared/UsersSettings.vue'
 import { FONT_STACKS, tokenNameError } from '@/lib/settings'
 import { timeAgo } from '@/lib/time'
 import { formatBytes } from '@/lib/media'
+import { downloadBlob } from '@/lib/download'
 
 const { project, renameProject } = useProject()
 const { settings, addToken, removeToken } = useSettings()
 const { locales, defaultLocale, addLocale, deleteLocale, setDefaultLocale } = useLocale()
-const confirmingLocale = ref<string | null>(null)
+
+async function confirmDeleteLocale(loc: string) {
+  const ok = await confirm({
+    title: 'Delete locale',
+    message: `Delete ${loc.toUpperCase()} and all of its translated content? The default locale keeps its content.`,
+  })
+  if (ok) deleteLocale(loc)
+}
 const { pages, activePage } = usePage()
 const { publishedInfo, markPublished } = usePublish()
+const { onMain } = useBranches()
 const { email: authEmail, isAdmin, canBuild, logout } = useAuth()
+const { confirm } = useModal()
 
-// --- modal open/close (controlled by the parent; Esc + backdrop close
-// handled by ModalHost) ---
-
-defineProps<{ open: boolean }>()
+// opened via useModal (mounted = open); Esc/backdrop close through the host
 const emit = defineEmits<{ close: [] }>()
 
 const active = ref('general')
@@ -65,21 +62,16 @@ const NAV = computed(() => {
         { id: 'design', label: 'Design', icon: Palette },
       ],
     },
-    {
-      label: 'Site',
-      items: [
-        { id: 'seo', label: 'SEO', icon: Search },
-        { id: 'site', label: 'Site', icon: Globe },
-      ],
-    },
   ]
+  if (canBuild.value)
+    groups.push({
+      label: 'Publish',
+      items: [{ id: 'publish', label: 'Publish', icon: Rocket }],
+    })
   if (isAdmin.value)
     groups.push({
       label: 'Admin',
-      items: [
-        { id: 'users', label: 'Users', icon: Users },
-        { id: 'advanced', label: 'Advanced', icon: Code },
-      ],
+      items: [{ id: 'users', label: 'Users', icon: Users }],
     })
   return groups
 })
@@ -169,17 +161,113 @@ async function republish() {
   republishing.value = true
   republishError.value = null
   try {
-    await markPublished()
+    await markPublished(settings.value.publishing.method)
   } catch (e) {
     republishError.value = e instanceof Error ? e.message : 'Publish failed'
   } finally {
     republishing.value = false
   }
 }
+
+// --- publish method ---
+
+const publishMethodOptions = [
+  { label: 'Server', value: 'server' },
+  { label: 'Download .zip', value: 'zip' },
+  { label: 'GitHub', value: 'github' },
+]
+
+// GitHub token is write-only: the server never echoes it, we only learn
+// whether one is set (on mount) and can replace it.
+const ghTokenSet = ref(false)
+const ghToken = ref('')
+const ghSaving = ref(false)
+const ghError = ref<string | null>(null)
+
+onMounted(async () => {
+  if (!canBuild.value) return
+  try {
+    const res = await fetch('/api/publish-config')
+    if (res.ok) ghTokenSet.value = (await res.json())?.github?.tokenSet ?? false
+  } catch {
+    /* best-effort — leave ghTokenSet false */
+  }
+})
+
+async function saveGhToken() {
+  ghSaving.value = true
+  ghError.value = null
+  try {
+    const res = await fetch('/api/publish-config', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ github: { token: ghToken.value } }),
+    })
+    if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? 'Save failed')
+    ghTokenSet.value = (await res.json())?.github?.tokenSet ?? false
+    ghToken.value = ''
+  } catch (e) {
+    ghError.value = e instanceof Error ? e.message : 'Save failed'
+  } finally {
+    ghSaving.value = false
+  }
+}
+
+// --- export / import ---
+
+const exporting = ref(false)
+const exportError = ref<string | null>(null)
+async function exportPackage() {
+  exporting.value = true
+  exportError.value = null
+  try {
+    const res = await fetch('/api/project-export')
+    if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? 'Export failed')
+    downloadBlob(await res.blob(), 'superbird-project.zip')
+  } catch (e) {
+    exportError.value = e instanceof Error ? e.message : 'Export failed'
+  } finally {
+    exporting.value = false
+  }
+}
+
+async function exportSiteZip() {
+  exportError.value = null
+  try {
+    await markPublished('zip')
+  } catch (e) {
+    exportError.value = e instanceof Error ? e.message : 'Export failed'
+  }
+}
+
+const importInput = ref<HTMLInputElement>()
+const importing = ref(false)
+const importError = ref<string | null>(null)
+async function onImportFile(e: Event) {
+  const file = (e.target as HTMLInputElement).files?.[0]
+  if (importInput.value) importInput.value.value = '' // allow re-picking the same file
+  if (!file) return
+  const ok = await confirm({
+    title: 'Replace entire project?',
+    message:
+      'Importing a package replaces ALL pages, branches, settings and media for every user. This cannot be undone.',
+  })
+  if (!ok) return
+  importing.value = true
+  importError.value = null
+  try {
+    const res = await fetch('/api/project-import', { method: 'POST', body: file })
+    if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? 'Import failed')
+    location.reload()
+  } catch (e) {
+    importError.value = e instanceof Error ? e.message : 'Import failed'
+    importing.value = false
+  }
+}
 </script>
 
 <template>
-  <ModalHost v-if="open" size="xl" @close="emit('close')">
+  <ModalHost size="xl" @close="emit('close')">
     <TabsUI v-model:active="active" class="flex h-full min-w-0 flex-1 !flex-row !gap-0">
       <!-- left sidebar: grouped nav + pinned account footer -->
       <div class="flex w-48 shrink-0 flex-col border-r border-input">
@@ -198,7 +286,7 @@ async function republish() {
         </nav>
         <!-- account / danger zone -->
         <div class="flex flex-col gap-1.5 border-t border-input p-3">
-          <p class="truncate text-[10px] text-muted-foreground" :title="authEmail ?? ''">
+          <p v-tooltip="authEmail" class="truncate text-[10px] text-muted-foreground">
             {{ authEmail }}
           </p>
           <ButtonUI variant="outline" size="xs" :icon="LogOut" class="w-full !text-danger" @click="logout">
@@ -235,7 +323,7 @@ async function republish() {
                   v-for="l in locales"
                   :key="l"
                   :removable="l !== defaultLocale"
-                  @remove="confirmingLocale = l"
+                  @remove="confirmDeleteLocale(l)"
                 >
                   {{ l }}
                 </BadgeUI>
@@ -244,6 +332,53 @@ async function republish() {
                 <InputUI v-model="newLocale" placeholder="e.g. fr" @keydown.enter="onAddLocale" />
                 <ButtonUI variant="outline" size="sm" :icon="Plus" @click="onAddLocale">Add</ButtonUI>
               </div>
+            </SettingsGroup>
+            <SettingsGroup
+              title="SEO — Site defaults"
+              description="Used on every page unless a page overrides them. %s in the title template is replaced by the page name."
+            >
+              <RowUI label="Site name">
+                <InputUI v-model="settings.seo.siteName" placeholder="My Site" />
+              </RowUI>
+              <RowUI label="Title">
+                <InputUI v-model="settings.seo.titleTemplate" placeholder="%s — My Site" class="font-mono" />
+              </RowUI>
+              <TextareaUI v-model="settings.seo.description" placeholder="Site description" :rows="2" />
+              <RowUI label="OG image">
+                <UploadUI v-model="ogImage" />
+              </RowUI>
+            </SettingsGroup>
+            <SettingsGroup title="SEO — Per page" description="Override the defaults for a single page.">
+              <RowUI label="Page">
+                <SelectUI v-model="seoPageId" :options="pageOptions" />
+              </RowUI>
+              <RowUI label="Title">
+                <InputUI v-model="pageSeoTitle" placeholder="Overrides the template" />
+              </RowUI>
+              <TextareaUI v-model="pageSeoDescription" placeholder="Page description" :rows="2" />
+            </SettingsGroup>
+            <SettingsGroup
+              v-if="isAdmin"
+              title="Custom head code"
+              description="Raw HTML injected into <head> of exported pages. Runs with full access to your published site."
+            >
+              <TextareaUI
+                v-model="settings.customCode.head"
+                :rows="8"
+                class="font-mono"
+                placeholder="Scripts, meta tags, styles…"
+              />
+            </SettingsGroup>
+            <SettingsGroup
+              v-if="isAdmin"
+              title="SMTP"
+              description="Outgoing mail credentials, stored with the project for future use — not verified or used yet."
+            >
+              <RowUI label="Host"><InputUI v-model="settings.smtp.host" placeholder="smtp.example.com" /></RowUI>
+              <RowUI label="Port"><InputUI v-model="settings.smtp.port" placeholder="587" /></RowUI>
+              <RowUI label="User"><InputUI v-model="settings.smtp.user" /></RowUI>
+              <RowUI label="Password"><InputUI v-model="settings.smtp.password" type="password" /></RowUI>
+              <RowUI label="From"><InputUI v-model="settings.smtp.from" placeholder="hello@example.com" /></RowUI>
             </SettingsGroup>
           </TabPanelUI>
 
@@ -281,34 +416,45 @@ async function republish() {
             </SettingsGroup>
           </TabPanelUI>
 
-          <TabPanelUI class="gap-4" id="seo">
+          <TabPanelUI v-if="canBuild" class="gap-4" id="publish">
             <SettingsGroup
-              title="Site defaults"
-              description="Used on every page unless a page overrides them. %s in the title template is replaced by the page name."
+              title="Publish method"
+              description="How the Publish button ships your site. The local preview at / always refreshes too."
             >
-              <RowUI label="Site name">
-                <InputUI v-model="settings.seo.siteName" placeholder="My Site" />
+              <RowUI label="Method">
+                <SelectUI v-model="settings.publishing.method" :options="publishMethodOptions" />
               </RowUI>
-              <RowUI label="Title">
-                <InputUI v-model="settings.seo.titleTemplate" placeholder="%s — My Site" class="font-mono" />
-              </RowUI>
-              <TextareaUI v-model="settings.seo.description" placeholder="Site description" :rows="2" />
-              <RowUI label="OG image">
-                <UploadUI v-model="ogImage" />
-              </RowUI>
+              <template v-if="settings.publishing.method === 'github'">
+                <RowUI label="Repository">
+                  <InputUI v-model="settings.publishing.github.repo" placeholder="owner/name" class="font-mono" />
+                </RowUI>
+                <RowUI label="Branch">
+                  <InputUI v-model="settings.publishing.github.branch" placeholder="main" class="font-mono" />
+                </RowUI>
+                <p class="text-[10px] text-muted-foreground">
+                  Publishing sends the exported site to this GitHub repo. The branch is fully
+                  replaced on every publish — a root README or CNAME would be deleted.
+                </p>
+                <RowUI label="Token">
+                  <div class="flex w-full gap-1.5">
+                    <InputUI
+                      v-model="ghToken"
+                      type="password"
+                      :placeholder="ghTokenSet ? 'Token saved — enter to replace' : 'ghp_…'"
+                      class="font-mono"
+                    />
+                    <ButtonUI variant="outline" size="sm" :disabled="ghSaving || !ghToken" @click="saveGhToken">
+                      {{ ghSaving ? 'Saving…' : 'Save' }}
+                    </ButtonUI>
+                  </div>
+                </RowUI>
+                <p class="text-[10px] text-muted-foreground">
+                  Token is stored on the server and never shown again.
+                </p>
+                <p v-if="ghError" class="text-[10px] text-danger">{{ ghError }}</p>
+              </template>
             </SettingsGroup>
-            <SettingsGroup title="Per page" description="Override the defaults for a single page.">
-              <RowUI label="Page">
-                <SelectUI v-model="seoPageId" :options="pageOptions" />
-              </RowUI>
-              <RowUI label="Title">
-                <InputUI v-model="pageSeoTitle" placeholder="Overrides the template" />
-              </RowUI>
-              <TextareaUI v-model="pageSeoDescription" placeholder="Page description" :rows="2" />
-            </SettingsGroup>
-          </TabPanelUI>
 
-          <TabPanelUI class="gap-4" id="site">
             <SettingsGroup
               title="Domain"
               description="Used for canonical and social URLs in the published site."
@@ -322,15 +468,21 @@ async function republish() {
                 />
               </RowUI>
             </SettingsGroup>
+
             <SettingsGroup
-              v-if="canBuild"
               title="Publishing"
-              description="Rebuild and redeploy the static site from the current project."
+              description="Rebuild and redeploy the static site from Main."
             >
+              <p v-if="!onMain" class="text-[10px] text-pending">
+                You're on a draft — publishing ships Main; draft changes are not included.
+              </p>
               <template v-if="publishedInfo">
                 <p class="text-xs">Last published {{ timeAgo(publishedInfo.publishedAt) }}</p>
                 <p class="text-[10px] text-muted-foreground">
                   {{ publishedInfo.routes }} routes · {{ formatBytes(publishedInfo.bytes) }}
+                  <template v-if="publishedInfo.commit">
+                    · {{ publishedInfo.commit.slice(0, 7) }}
+                  </template>
                 </p>
               </template>
               <p v-else class="text-xs text-muted-foreground">Never published yet.</p>
@@ -346,45 +498,57 @@ async function republish() {
               </ButtonUI>
               <p v-if="republishError" class="text-[10px] text-danger">{{ republishError }}</p>
             </SettingsGroup>
+
+            <SettingsGroup
+              title="Export"
+              description="Download a copy of your project or the built static site."
+            >
+              <ButtonUI
+                v-if="isAdmin"
+                variant="outline"
+                size="sm"
+                class="w-full"
+                :disabled="exporting"
+                @click="exportPackage"
+              >
+                {{ exporting ? 'Preparing…' : 'Download project package (.zip)' }}
+              </ButtonUI>
+              <ButtonUI variant="outline" size="sm" class="w-full" @click="exportSiteZip">
+                Download static site (.zip)
+              </ButtonUI>
+              <p v-if="exportError" class="text-[10px] text-danger">{{ exportError }}</p>
+            </SettingsGroup>
+
+            <SettingsGroup
+              v-if="isAdmin"
+              title="Import"
+              description="Restores a project package. Replaces everything."
+            >
+              <input
+                ref="importInput"
+                type="file"
+                accept=".zip,application/zip"
+                class="hidden"
+                @change="onImportFile"
+              />
+              <ButtonUI
+                variant="outline"
+                size="sm"
+                class="w-full"
+                :disabled="importing"
+                @click="importInput?.click()"
+              >
+                {{ importing ? 'Importing…' : 'Choose package…' }}
+              </ButtonUI>
+              <p v-if="importError" class="text-[10px] text-danger">{{ importError }}</p>
+            </SettingsGroup>
           </TabPanelUI>
 
           <TabPanelUI v-if="isAdmin" id="users">
             <UsersSettings />
           </TabPanelUI>
-
-          <TabPanelUI v-if="isAdmin" class="gap-4" id="advanced">
-            <SettingsGroup
-              title="Custom head code"
-              description="Raw HTML injected into <head> of exported pages. Runs with full access to your published site."
-            >
-              <TextareaUI
-                v-model="settings.customCode.head"
-                :rows="8"
-                class="font-mono"
-                placeholder="Scripts, meta tags, styles…"
-              />
-            </SettingsGroup>
-            <SettingsGroup
-              title="SMTP"
-              description="Outgoing mail credentials, stored with the project for future use — not verified or used yet."
-            >
-              <RowUI label="Host"><InputUI v-model="settings.smtp.host" placeholder="smtp.example.com" /></RowUI>
-              <RowUI label="Port"><InputUI v-model="settings.smtp.port" placeholder="587" /></RowUI>
-              <RowUI label="User"><InputUI v-model="settings.smtp.user" /></RowUI>
-              <RowUI label="Password"><InputUI v-model="settings.smtp.password" type="password" /></RowUI>
-              <RowUI label="From"><InputUI v-model="settings.smtp.from" placeholder="hello@example.com" /></RowUI>
-            </SettingsGroup>
-          </TabPanelUI>
         </div>
       </div>
     </TabsUI>
   </ModalHost>
-
-  <ConfirmModal
-    v-if="confirmingLocale"
-    title="Delete locale"
-    :message="`Delete ${confirmingLocale.toUpperCase()} and all of its translated content? The default locale keeps its content.`"
-    @confirm="((deleteLocale(confirmingLocale)), (confirmingLocale = null))"
-    @close="confirmingLocale = null"
-  />
 </template>

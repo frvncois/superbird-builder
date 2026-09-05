@@ -7,15 +7,12 @@ import {
 } from 'lucide-vue-next'
 import DropdownUI from '@/components/ui/DropdownUI.vue'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
-import TooltipUI from '@/components/ui/TooltipUI.vue'
-import PopoverUI from '@/components/popover/PopoverUI.vue'
 import CommentsEditor from '@/components/shared/CommentsEditor.vue'
 import MainLogo from '@/assets/MainLogo.vue'
 import SettingsPanel from '@/components/shared/SettingsPanel.vue'
 import AccountModal from '@/components/shared/AccountModal.vue'
 import PublishDialog from '@/components/shared/PublishDialog.vue'
 import CreateCollectionModal from '@/components/shared/CreateCollectionModal.vue'
-import ConfirmModal from '@/components/modal/ConfirmModal.vue'
 import { usePage } from '@/composables/usePage'
 import { useCollections } from '@/composables/useCollections'
 import { useProject } from '@/composables/useProject'
@@ -24,14 +21,16 @@ import { usePersistence, SAVE_STATES } from '@/composables/usePersistence'
 import { usePublish } from '@/composables/usePublish'
 import { useLocale } from '@/composables/useLocale'
 import { useMediaLibrary } from '@/composables/useMediaLibrary'
+import { useModal } from '@/composables/useModal'
+import { usePopover } from '@/composables/usePopover'
 import { useBranches } from '@/composables/useBranches'
 import { usePanel } from '@/composables/usePanel'
 import { useHeaderNav } from '@/composables/useHeaderNav'
 import { useLocaleQuickAdd } from '@/composables/useLocaleQuickAdd'
 import type { Collection, CollectionEntry } from '@/types/editor'
 
-const props = defineProps<{ mode: 'editor' | 'content' }>()
-const isContent = computed(() => props.mode === 'content')
+const props = defineProps<{ mode: 'build' | 'preview' }>()
+const isPreview = computed(() => props.mode === 'preview')
 
 const router = useRouter()
 
@@ -42,7 +41,7 @@ const {
 } = useCollections()
 const { regularPages, activeIcon, isActivePage, openPage, createPage, newEntry } = useHeaderNav()
 const { project } = useProject()
-// contributors are content-only: no build view, no publishing, no settings
+// contributors are preview-only: no build view, no publishing, no settings
 const { name: accountName, email: accountEmail, canBuild, logout } = useAuth()
 const { status, saveNow } = usePersistence()
 const { hasUnpublishedChanges } = usePublish()
@@ -51,34 +50,69 @@ const { openLibrary } = useMediaLibrary()
 const { activeBranch, onMain } = useBranches()
 const { openPanel } = usePanel()
 
-/** the draft pill jumps to the Drafts panel — build view only (no sidebar in content mode) */
+/** the draft pill jumps to the Drafts panel — build view only (no sidebar in Preview) */
 function openDrafts() {
-  if (!isContent.value && canBuild.value) openPanel('branches')
+  if (!isPreview.value && canBuild.value) openPanel('branches')
 }
 
-const creatingCollection = ref(false)
-const publishing = ref(false)
-const accountOpen = ref(false)
-const settingsOpen = ref(false)
+const { openModal, confirm } = useModal()
+const { togglePopover } = usePopover()
 
-// pending destructive deletes — confirmed through ConfirmModal like the other
-// deletes in this header (locale/media/branch)
-const confirmingCollection = ref<Collection | null>(null)
-const confirmingEntry = ref<{ collection: Collection; entry: CollectionEntry } | null>(null)
+// comments popover, anchored below its header button in the app PopoverHost
+const commentsBtn = ref<InstanceType<typeof ButtonUI>>()
+function toggleComments() {
+  const anchor = commentsBtn.value?.$el as HTMLElement | undefined
+  if (!anchor) return
+  togglePopover({
+    id: 'comments',
+    component: CommentsEditor,
+    anchor,
+    placement: 'bottom-end',
+    title: 'Comments',
+    icon: MessageCircle,
+    closeOnOutside: true,
+  })
+}
+
+// destructive deletes go through the app-level confirm() modal
+async function confirmDeleteCollection(collection: Collection) {
+  const n = collection.entries.length
+  const ok = await confirm({
+    title: 'Delete collection',
+    message: `Delete the collection “${collection.name}”? Its template page and all ${n} ${n === 1 ? 'entry' : 'entries'} will be permanently deleted.`,
+  })
+  if (ok) removeCollection(collection)
+}
+
+async function confirmDeleteEntry(collection: Collection, entry: CollectionEntry) {
+  const ok = await confirm({
+    title: 'Delete entry',
+    message: `Delete “${entry.name}” from ${collection.name}? This can’t be undone.`,
+  })
+  if (ok) removeEntry(collection, entry.id)
+}
+
+async function confirmDeleteLocale(loc: string) {
+  const ok = await confirm({
+    title: 'Delete locale',
+    message: `Delete ${loc.toUpperCase()} and all of its translated content? The default locale keeps its content.`,
+  })
+  if (ok) deleteLocale(loc)
+}
 
 // --- localization ---
 
 const localeLabel = computed(() => activeLocale.value.toUpperCase())
 const {
   addingLocale, newLocale, newLocaleInput,
-  startAddLocale, confirmAddLocale, confirmingLocale,
+  startAddLocale, confirmAddLocale,
 } = useLocaleQuickAdd()
 
-// --- Build / Content switch ---
+// --- Build / Preview switch ---
 
-function goMode(mode: 'editor' | 'content') {
+function goMode(mode: 'build' | 'preview') {
   if (mode === props.mode) return
-  router.push(mode === 'content' ? '/admin/content' : '/admin')
+  router.push(mode === 'preview' ? '/preview' : '/')
 }
 </script>
 
@@ -92,7 +126,7 @@ function goMode(mode: 'editor' | 'content') {
             v-if="canBuild"
             variant="ghost" size="sm" :icon="Settings"
             class="w-full justify-start text-muted-foreground"
-            @click="((settingsOpen = true), close())"
+            @click="((openModal(SettingsPanel)), close())"
           >
             Project Settings
           </ButtonUI>
@@ -116,7 +150,7 @@ function goMode(mode: 'editor' | 'content') {
             </div>
           </div>
           <div class="mt-1 flex gap-1">
-            <ButtonUI variant="outline" size="sm" class="flex-1 justify-center" @click="((accountOpen = true), close())">
+            <ButtonUI variant="outline" size="sm" class="flex-1 justify-center" @click="((openModal(AccountModal)), close())">
               My account
             </ButtonUI>
             <ButtonUI variant="outline" size="sm" class="flex-1 justify-center" @click="logout">
@@ -135,8 +169,8 @@ function goMode(mode: 'editor' | 'content') {
             <Files class="size-3.5 shrink-0 text-muted-foreground" />
             <span class="flex-1 text-xs font-medium">Pages</span>
             <ButtonUI
-              v-if="!isContent"
-              variant="icon" size="sm" :icon="Plus" title="Create page"
+              v-if="!isPreview"
+              variant="icon" size="sm" :icon="Plus" tooltip="Create page"
               class="w-7 text-muted-foreground"
               @click.stop="((createPage()), close())"
             />
@@ -150,15 +184,15 @@ function goMode(mode: 'editor' | 'content') {
             >
               <span class="truncate">{{ page.name }}</span>
             </ButtonUI>
-            <template v-if="!isContent">
+            <template v-if="!isPreview">
               <ButtonUI
-                variant="icon" size="sm" :icon="Copy" title="Duplicate page"
+                variant="icon" size="sm" :icon="Copy" tooltip="Duplicate page"
                 class="w-7 shrink-0 text-muted-foreground opacity-0 group-hover/row:opacity-100"
                 @click.stop="duplicatePage(page.id)"
               />
               <ButtonUI
                 v-if="page.id !== homePage.id"
-                variant="icon" size="sm" :icon="Trash2" title="Delete page"
+                variant="icon" size="sm" :icon="Trash2" tooltip="Delete page"
                 class="w-7 shrink-0 text-muted-foreground opacity-0 group-hover/row:opacity-100"
                 @click.stop="removePage(page.id)"
               />
@@ -175,20 +209,20 @@ function goMode(mode: 'editor' | 'content') {
               >
                 {{ collection.name }}
               </button>
-              <template v-if="!isContent">
+              <template v-if="!isPreview">
                 <ButtonUI
-                  variant="icon" size="sm" :icon="Copy" title="Duplicate collection"
+                  variant="icon" size="sm" :icon="Copy" tooltip="Duplicate collection"
                   class="w-7 shrink-0 text-muted-foreground opacity-0 group-hover/row:opacity-100"
                   @click.stop="duplicateCollection(collection)"
                 />
                 <ButtonUI
-                  variant="icon" size="sm" :icon="Trash2" title="Delete collection"
+                  variant="icon" size="sm" :icon="Trash2" tooltip="Delete collection"
                   class="w-7 shrink-0 text-muted-foreground opacity-0 group-hover/row:opacity-100"
-                  @click.stop="confirmingCollection = collection"
+                  @click.stop="confirmDeleteCollection(collection)"
                 />
               </template>
               <ButtonUI
-                variant="icon" size="sm" :icon="Plus" :title="`New ${collection.name}`"
+                variant="icon" size="sm" :icon="Plus" :tooltip="`New ${collection.name}`"
                 class="w-7 shrink-0 text-muted-foreground"
                 @click.stop="((newEntry(collection)), close())"
               />
@@ -203,24 +237,24 @@ function goMode(mode: 'editor' | 'content') {
                 <span class="truncate">{{ entry.name }}</span>
               </ButtonUI>
               <ButtonUI
-                variant="icon" size="sm" :icon="Copy" :title="`Duplicate ${collection.name}`"
+                variant="icon" size="sm" :icon="Copy" :tooltip="`Duplicate ${collection.name}`"
                 class="w-7 shrink-0 text-muted-foreground opacity-0 group-hover/row:opacity-100"
                 @click.stop="duplicateEntry(collection, entry.id)"
               />
               <ButtonUI
-                variant="icon" size="sm" :icon="Trash2" :title="`Delete ${collection.name}`"
+                variant="icon" size="sm" :icon="Trash2" :tooltip="`Delete ${collection.name}`"
                 class="w-7 shrink-0 text-muted-foreground opacity-0 group-hover/row:opacity-100"
-                @click.stop="confirmingEntry = { collection, entry }"
+                @click.stop="confirmDeleteEntry(collection, entry)"
               />
             </div>
           </template>
 
-          <template v-if="!isContent">
+          <template v-if="!isPreview">
             <div class="mx-2 my-1 h-px bg-input" />
             <ButtonUI
               variant="ghost" size="sm" :icon="Layers"
               class="w-full justify-start text-muted-foreground"
-              @click="((creatingCollection = true), close())"
+              @click="((openModal(CreateCollectionModal)), close())"
             >
               Create collection
             </ButtonUI>
@@ -242,9 +276,9 @@ function goMode(mode: 'editor' | 'content') {
             </ButtonUI>
             <ButtonUI
               v-if="loc !== defaultLocale"
-              variant="icon" size="sm" :icon="Trash2" title="Delete locale"
+              variant="icon" size="sm" :icon="Trash2" tooltip="Delete locale"
               class="w-7 shrink-0 text-muted-foreground opacity-0 group-hover/loc:opacity-100 hover:text-danger"
-              @click.stop="confirmingLocale = loc"
+              @click.stop="confirmDeleteLocale(loc)"
             />
           </div>
 
@@ -271,25 +305,30 @@ function goMode(mode: 'editor' | 'content') {
       </DropdownUI>
 
       <!-- comments (both modes) -->
-      <PopoverUI :icon="MessageCircle" title="Comments" width="w-72">
-        <CommentsEditor />
-      </PopoverUI>
+      <ButtonUI
+        ref="commentsBtn"
+        :icon="MessageCircle"
+        variant="outline"
+        tooltip="Comments"
+        tooltip-side="bottom"
+        @click="toggleComments"
+      />
 
-      <!-- Build / Content switch (contributors are content-only) -->
+      <!-- Build / Preview switch (contributors are preview-only) -->
       <div v-if="canBuild" class="flex rounded-xl border border-accent p-1 h-9 text-xs">
         <button
           class="flex cursor-pointer items-center rounded-lg px-4 font-medium"
-          :class="!isContent ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'"
-          @click="goMode('editor')"
+          :class="!isPreview ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'"
+          @click="goMode('build')"
         >
           Build
         </button>
         <button
           class="flex cursor-pointer items-center rounded-lg px-4 font-medium"
-          :class="isContent ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'"
-          @click="goMode('content')"
+          :class="isPreview ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'"
+          @click="goMode('preview')"
         >
-          Content
+          Preview
         </button>
       </div>
     </div>
@@ -299,63 +338,35 @@ function goMode(mode: 'editor' | 'content') {
       <ButtonUI
         variant="mono" size="sm" :icon="GitBranch"
         :class="onMain ? 'text-muted-foreground' : 'text-pending'"
-        :title="onMain ? 'Editing the main branch' : `Editing draft “${activeBranch.name}” — changes aren’t live`"
+        :tooltip="onMain ? 'Editing Main' : `Editing draft “${activeBranch.name}” — merge into Main, then publish to go live`"
+        tooltip-side="bottom"
         @click="openDrafts"
       >
         {{ onMain ? 'Main branch' : activeBranch.name }}
       </ButtonUI>
       <button
+        v-tooltip.bottom="SAVE_STATES[status].label"
         type="button"
         class="flex items-center gap-1.5 rounded-full px-2 py-1 font-mono text-[10px]"
         :class="SAVE_STATES[status].class"
-        :title="SAVE_STATES[status].label"
         @click="saveNow"
       >
         <span class="size-1.5 rounded-full" :class="SAVE_STATES[status].dot" />
         {{ SAVE_STATES[status].short }}
       </button>
       <template v-if="canBuild">
-        <ButtonUI variant="default" size="sm" :icon="Rocket" @click="publishing = true">
+        <span
+          v-tooltip.bottom="hasUnpublishedChanges ? 'Main has unpublished changes' : 'Everything is published'"
+          class="flex w-6 items-center justify-center"
+          :class="hasUnpublishedChanges ? 'text-pending' : 'text-success'"
+        >
+          <CircleDot class="size-3.5" />
+        </span>
+        <ButtonUI variant="default" size="sm" :icon="Rocket" @click="openModal(PublishDialog)">
           Publish
         </ButtonUI>
-        <TooltipUI
-          :text="hasUnpublishedChanges ? 'Unpublished changes' : 'Everything is published'"
-          side="bottom"
-        >
-          <ButtonUI
-            variant="icon" size="sm" :icon="CircleDot" class="w-6"
-            :class="hasUnpublishedChanges ? 'text-pending' : 'text-success'"
-            @click="publishing = true"
-          />
-        </TooltipUI>
       </template>
     </div>
   </div>
 
-  <!-- header-triggered modals, shared by both views -->
-  <ConfirmModal
-    v-if="confirmingLocale"
-    title="Delete locale"
-    :message="`Delete ${confirmingLocale.toUpperCase()} and all of its translated content? The default locale keeps its content.`"
-    @confirm="((deleteLocale(confirmingLocale)), (confirmingLocale = null))"
-    @close="confirmingLocale = null"
-  />
-  <ConfirmModal
-    v-if="confirmingCollection"
-    title="Delete collection"
-    :message="`Delete the collection “${confirmingCollection.name}”? Its template page and all ${confirmingCollection.entries.length} ${confirmingCollection.entries.length === 1 ? 'entry' : 'entries'} will be permanently deleted.`"
-    @confirm="((removeCollection(confirmingCollection)), (confirmingCollection = null))"
-    @close="confirmingCollection = null"
-  />
-  <ConfirmModal
-    v-if="confirmingEntry"
-    title="Delete entry"
-    :message="`Delete “${confirmingEntry.entry.name}” from ${confirmingEntry.collection.name}? This can’t be undone.`"
-    @confirm="((removeEntry(confirmingEntry.collection, confirmingEntry.entry.id)), (confirmingEntry = null))"
-    @close="confirmingEntry = null"
-  />
-  <CreateCollectionModal v-if="creatingCollection" @close="creatingCollection = false" />
-  <PublishDialog v-if="publishing" @close="publishing = false" />
-  <AccountModal :open="accountOpen" @close="accountOpen = false" />
-  <SettingsPanel :open="settingsOpen" @close="settingsOpen = false" />
 </template>

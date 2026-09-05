@@ -21,6 +21,7 @@ const update = (v: string[]) => emit('update:modelValue', v)
       label="Margin"
       base="m"
       allow-negative
+      :allow-keywords="['auto']"
       :model-value="modelValue"
       :baseline="baseline"
       class="border-t border-input pt-3"

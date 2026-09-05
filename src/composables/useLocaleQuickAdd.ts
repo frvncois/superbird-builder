@@ -27,8 +27,5 @@ export function useLocaleQuickAdd() {
     close()
   }
 
-  // locale pending a delete-confirmation
-  const confirmingLocale = ref<string | null>(null)
-
-  return { addingLocale, newLocale, newLocaleInput, startAddLocale, confirmAddLocale, confirmingLocale }
+  return { addingLocale, newLocale, newLocaleInput, startAddLocale, confirmAddLocale }
 }

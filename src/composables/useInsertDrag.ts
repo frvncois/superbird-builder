@@ -14,7 +14,7 @@ export type InsertPayload =
 /** the floating chip's content; null = no drag in flight */
 const payload = ref<InsertPayload | null>(null)
 const pointer = ref({ x: 0, y: 0 })
-/** set for one tick after a drop so PopoverUI ignores the release click */
+/** set for one tick after a drop so open popovers ignore the release click */
 const suppressNextClick = ref(false)
 
 /** the code editor owns fold/scroll geometry, so it registers its own resolver */

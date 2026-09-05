@@ -223,6 +223,13 @@ async function writeIndex() {
   await writeAtomic(INDEX_FILE, JSON.stringify(index, null, 2))
 }
 
+/** drop the in-memory index so the next request re-reads it from disk. Called
+ * after a project import swaps the media dir under us — without this the server
+ * would keep serving the pre-import asset list until a restart. */
+export function resetMediaIndexCache() {
+  index = null
+}
+
 // mutations run one at a time — files + index always change together
 let chain = Promise.resolve()
 function enqueue(fn) {

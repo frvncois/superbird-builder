@@ -31,6 +31,7 @@ export const FONT_STACKS: { label: string; value: string }[] = [
 export function defaultSettings(): ProjectSettings {
   return {
     favicon: undefined,
+    publishing: { method: 'server', github: { repo: '', branch: 'main' } },
     seo: { siteName: '', titleTemplate: '%s', description: '', ogImage: undefined },
     domain: '',
     smtp: { host: '', port: '', user: '', password: '', from: '' },

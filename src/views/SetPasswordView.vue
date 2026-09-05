@@ -56,8 +56,8 @@ async function submit() {
     })
     const detail = await res.json().catch(() => null)
     if (!res.ok) throw new Error(detail?.error ?? 'Could not set the password')
-    // contributors land in Content mode; everyone else in the editor
-    window.location.assign(detail?.role === 'contributor' ? '/admin/content' : '/admin')
+    // contributors land in Preview; everyone else in the editor
+    window.location.assign(detail?.role === 'contributor' ? '/admin/preview' : '/admin')
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Could not set the password'
     busy.value = false

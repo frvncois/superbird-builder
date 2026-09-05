@@ -231,8 +231,8 @@ function onKeydown(e: KeyboardEvent) {
   <div ref="dockRoot" class="absolute bottom-4 left-4 z-40 flex max-w-[calc(100%-2rem)] flex-col-reverse items-start gap-2">
     <!-- the + button is the anchor the panel grows out of -->
     <button
+      v-tooltip.right="'Insert elements (⌘E)'"
       type="button"
-      title="Insert elements (⌘E)"
       class="flex size-11 shrink-0 items-center justify-center rounded-full border border-input bg-background text-muted-foreground shadow-lg transition-all duration-200 hover:bg-accent/30 hover:text-accent-foreground"
       :class="open ? 'rotate-45' : ''"
       @click="togglePalette"
@@ -269,7 +269,6 @@ function onKeydown(e: KeyboardEvent) {
                 v-for="{ item, index } in group.items"
                 :key="item.key"
                 type="button"
-                :title="item.label"
                 :data-idx="index"
                 :data-active="index === active"
                 class="flex aspect-square w-16 shrink-0 cursor-grab touch-none flex-col items-center justify-center gap-1.5 rounded-xl border p-2 transition-colors select-none active:cursor-grabbing"

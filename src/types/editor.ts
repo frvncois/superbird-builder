@@ -18,6 +18,10 @@ export interface InteractionBinding {
   trigger: 'hover' | 'click' | 'appear'
   /** node the effect applies to; null = the trigger element itself */
   targetId: string | null
+  /** breakpoint ids this application is active on; `undefined` = all (the
+   * default). Stored in project breakpoint order; omitted when all are on so
+   * untouched bindings stay byte-identical for merge signatures. */
+  breakpoints?: string[]
 }
 
 /** one AND-combined row of an element's condition — see lib/shared/conditions.js */
@@ -178,9 +182,14 @@ export interface DesignToken {
   value: string
 }
 
+export type PublishMethod = 'server' | 'zip' | 'github'
+
 export interface ProjectSettings {
   /** data URL; extracted to a file at publish */
   favicon?: string
+  /** how the header Publish button ships the site. github config here is
+   * NON-secret — the token lives server-side only (server/data/publish.json) */
+  publishing: { method: PublishMethod; github: { repo: string; branch: string } }
   seo: {
     siteName: string
     /** '%s' = page name */

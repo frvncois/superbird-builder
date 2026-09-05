@@ -18,7 +18,6 @@ defineEmits<{
       variant="icon"
       size="sm"
       :icon="X"
-      title="Close"
       class="w-7 text-muted-foreground"
       @click="$emit('close')"
     />

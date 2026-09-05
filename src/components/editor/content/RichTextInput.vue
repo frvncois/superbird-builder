@@ -51,10 +51,10 @@ defineExpose({ focus: () => editor.value?.focus() })
 <template>
   <div class="flex flex-col gap-2">
     <div class="flex gap-1">
-      <ButtonUI variant="ghost" size="xs" :icon="Bold" title="Bold (⌘B)" @click="exec('bold')" />
-      <ButtonUI variant="ghost" size="xs" :icon="Italic" title="Italic (⌘I)" @click="exec('italic')" />
-      <ButtonUI variant="ghost" size="xs" :icon="Link2" title="Link" @click="makeLink" />
-      <ButtonUI variant="ghost" size="xs" :icon="List" title="Bullet list" @click="exec('insertUnorderedList')" />
+      <ButtonUI variant="ghost" size="xs" :icon="Bold" tooltip="Bold (⌘B)" @click="exec('bold')" />
+      <ButtonUI variant="ghost" size="xs" :icon="Italic" tooltip="Italic (⌘I)" @click="exec('italic')" />
+      <ButtonUI variant="ghost" size="xs" :icon="Link2" tooltip="Link" @click="makeLink" />
+      <ButtonUI variant="ghost" size="xs" :icon="List" tooltip="Bullet list" @click="exec('insertUnorderedList')" />
     </div>
     <div
       ref="editor"

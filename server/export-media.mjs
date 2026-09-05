@@ -45,7 +45,7 @@ export async function extractMedia(project) {
 
   const store = (value, buffer, ext) => {
     const hash = createHash('sha1').update(buffer).digest('hex').slice(0, 12)
-    const rel = `media/${hash}.${ext}`
+    const rel = `assets/media/${hash}.${ext}`
     files.set(rel, buffer)
     paths.set(value, `/${rel}`)
   }

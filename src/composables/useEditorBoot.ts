@@ -8,8 +8,8 @@ import { useMedia } from './useMedia'
 
 // Shared admin-zone boot: hydrate the server-backed store and start
 // persistence. Lives at module scope so it runs exactly once no matter
-// which admin view (BuildView / ContentView) mounts first — a deep-link or
-// refresh at /admin/content boots the same project the editor would.
+// which admin view (BuildView / PreviewView) mounts first — a deep-link or
+// refresh at /admin/preview boots the same project the editor would.
 const ready = ref(false)
 const bootError = ref<string | null>(null)
 let started = false
@@ -40,7 +40,9 @@ export function useEditorBoot() {
       ])
       const meta = storeGet('superbird-branches')
       const activeId = meta ? ((JSON.parse(meta).activeId as string) ?? 'main') : 'main'
-      await hydrateStore([`superbird-project:${activeId}`])
+      // Main's key too: publish/the Unpublished dot always read Main, even
+      // when the session resumes straight onto a draft (hydrateStore de-dupes)
+      await hydrateStore([`superbird-project:${activeId}`, 'superbird-project:main'])
       hydratePublishState()
 
       // fresh install: no stored project yet, so init() will persist the
@@ -59,7 +61,7 @@ export function useEditorBoot() {
 
       // the media index is non-critical to boot — load it in the background so
       // a media outage never blocks the editor; the library modal retries on
-      // open. Both admin views boot through here, so content mode gets it too.
+      // open. Both admin views boot through here, so Preview gets it too.
       void useMedia()
         .loadMedia()
         .catch(() => {})
@@ -67,7 +69,8 @@ export function useEditorBoot() {
       // dev convenience: /admin?demo replaces the project with the
       // generated showcase (public/demo-project.json)
       if (new URLSearchParams(window.location.search).has('demo')) {
-        const res = await fetch('/demo-project.json')
+        // public-dir file — served under the SPA's /admin/ base
+        const res = await fetch(import.meta.env.BASE_URL + 'demo-project.json')
         const demo = res.ok && migrateStoredProject(await res.json())
         if (demo) usePersistence().resetTo(demo)
       }

@@ -12,6 +12,7 @@ import ClassFieldInput from '@/components/editor/style/ClassFieldInput.vue'
 import SelectUI from '@/components/ui/SelectUI.vue'
 import { useElement } from '@/composables/useElement'
 import { useInteraction } from '@/composables/useInteraction'
+import { useProject } from '@/composables/useProject'
 import { useShortcut } from '@/composables/useShortcut'
 import { useComponents } from '@/composables/useComponents'
 import type { Interaction, InteractionBinding } from '@/types/editor'
@@ -28,6 +29,7 @@ const {
   removeBinding,
 } = useInteraction()
 const { masterFor, findMasterNode } = useComponents()
+const { breakpoints } = useProject()
 
 // inside a component instance, interaction edits land on the shared master
 const target = computed(() =>
@@ -135,6 +137,26 @@ function resetTarget(binding: InteractionBinding) {
 function togglePicking(binding: InteractionBinding) {
   pickingFor.value = pickingFor.value === binding ? null : binding
 }
+
+// --- per-application breakpoint scope (all active by default) ---
+
+function isBreakpointOn(binding: InteractionBinding, id: string): boolean {
+  return !binding.breakpoints || binding.breakpoints.includes(id)
+}
+
+function toggleBreakpoint(binding: InteractionBinding, id: string) {
+  const all = breakpoints.value.map((b) => b.id)
+  const on = new Set(binding.breakpoints ?? all)
+  if (on.has(id)) {
+    // keep at least one — an interaction on no breakpoint can never run
+    if (on.size <= 1) return
+    on.delete(id)
+  } else {
+    on.add(id)
+  }
+  // canonicalize: all on → undefined (stays byte-identical); else project order
+  binding.breakpoints = all.every((b) => on.has(b)) ? undefined : all.filter((b) => on.has(b))
+}
 </script>
 
 <template>
@@ -153,7 +175,7 @@ function togglePicking(binding: InteractionBinding) {
             variant="icon"
             size="sm"
             :icon="X"
-            title="Remove from this element"
+            tooltip="Remove from this element"
             class="w-6 shrink-0 text-muted-foreground"
             @click="unapply(binding)"
           />
@@ -166,6 +188,21 @@ function togglePicking(binding: InteractionBinding) {
           :model-value="binding.trigger"
           @update:model-value="(v) => (binding.trigger = v as InteractionBinding['trigger'])"
         />
+      </RowUI>
+
+      <RowUI v-if="breakpoints.length > 1" label="Breakpoints">
+        <div class="flex flex-1 flex-wrap justify-end gap-1">
+          <ButtonUI
+            v-for="bp in breakpoints"
+            :key="bp.id"
+            :variant="isBreakpointOn(binding, bp.id) ? 'outline' : 'ghost'"
+            size="xs"
+            :class="isBreakpointOn(binding, bp.id) ? '' : 'text-muted-foreground opacity-60'"
+            @click="toggleBreakpoint(binding, bp.id)"
+          >
+            {{ bp.name }}
+          </ButtonUI>
+        </div>
       </RowUI>
 
       <RowUI label="Easing">
@@ -208,7 +245,7 @@ function togglePicking(binding: InteractionBinding) {
           variant="icon"
           size="sm"
           :icon="X"
-          title="Reset target to this element"
+          tooltip="Reset target to this element"
           class="w-6 shrink-0 text-muted-foreground"
           @click="resetTarget(binding)"
         />
@@ -255,7 +292,7 @@ function togglePicking(binding: InteractionBinding) {
           variant="ghost"
           size="xs"
           :icon="Trash2"
-          title="Delete interaction"
+          tooltip="Delete interaction"
           class="text-muted-foreground"
           @click="pendingDelete = animation.id"
         />

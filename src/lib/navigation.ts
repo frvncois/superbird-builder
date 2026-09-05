@@ -10,15 +10,11 @@ const entrySlug = (entry: CollectionEntry) => entry.slug || slugify(entry.name)
 
 /**
  * Resolves a site path (as typed in a link or URL) to a page or collection
- * entry against the project. Shared by the published SiteView (publishedOnly)
- * and the admin ContentView (which also resolves drafts). Also strips a
- * leading non-default locale segment and reports the resolved locale.
+ * entry against the project — Preview's in-preview navigation (drafts
+ * included; the published site is static HTML with real links). Also strips
+ * a leading non-default locale segment and reports the resolved locale.
  */
-export function resolveSitePath(
-  project: Project,
-  rawPath: string,
-  opts: { publishedOnly?: boolean } = {},
-): ResolvedRoute {
+export function resolveSitePath(project: Project, rawPath: string): ResolvedRoute {
   let segments = rawPath.split('/').filter(Boolean)
 
   // locale strip: /fr/... → 'fr' when registered and non-default
@@ -29,18 +25,16 @@ export function resolveSitePath(
   }
 
   const path = '/' + segments.join('/')
-  const gate = (p?: Page | null) =>
-    p && (!opts.publishedOnly || p.status === 'published') ? p : null
 
   // page by exact path ('/' home, plain pages, bare collection templates)
-  const page = gate(project.pages.find((p) => p.path === path))
+  const page = project.pages.find((p) => p.path === path) ?? null
   if (page) return { kind: 'page', page, locale }
 
   // collection entry: /<collection>/<slug>
   if (segments.length === 2) {
     const collection = project.collections.find((c) => c.name === segments[0]) ?? null
     const template = collection
-      ? gate(project.pages.find((p) => p.id === collection.templatePageId))
+      ? (project.pages.find((p) => p.id === collection.templatePageId) ?? null)
       : null
     const entry = collection?.entries.find((e) => entrySlug(e) === segments[1]) ?? null
     if (collection && template && entry) return { kind: 'entry', page: template, collection, entry, locale }

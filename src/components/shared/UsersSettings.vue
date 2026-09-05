@@ -3,22 +3,22 @@ import { computed, onMounted, ref } from 'vue'
 import { Check, Copy, Link2, Plus, RefreshCw, Trash2, Clock } from 'lucide-vue-next'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import MenuUI from '@/components/ui/MenuUI.vue'
-import ConfirmModal from '@/components/modal/ConfirmModal.vue'
 import RolePicker from '@/components/editor/users/RolePicker.vue'
 import InviteDialog from '@/components/editor/users/InviteDialog.vue'
 import { useUsers, inviteLink, type InviteRow, type UserRow } from '@/composables/useUsers'
 import { useAuth, type Role } from '@/composables/useAuth'
+import { useModal } from '@/composables/useModal'
 import { roleLabel } from '@/lib/roles'
 
 const { users, invites, isAdmin, load, updateInvite, revokeInvite, setRole, remove } = useUsers()
 const { email: myEmail } = useAuth()
+const { openModal, confirm } = useModal()
 
 const error = ref<string | null>(null)
 const notice = ref<string | null>(null)
 onMounted(() => load().catch((e) => (error.value = e.message)))
 
 const admin = computed(() => isAdmin())
-const inviting = ref(false)
 
 // pending invites shown after members; "(you)" first among members
 const sortedUsers = computed(() =>
@@ -51,14 +51,8 @@ function flashNotice(msg: string) {
 }
 
 // --- confirm dialog (remove / demote / regenerate) ---
-const confirm = ref<{ title: string; message: string; label: string; action: () => Promise<void> } | null>(null)
-function ask(title: string, message: string, label: string, action: () => Promise<void>) {
-  confirm.value = { title, message, label, action }
-}
-async function runConfirm() {
-  const c = confirm.value
-  confirm.value = null
-  if (c) await run(c.action)
+async function ask(title: string, message: string, label: string, action: () => Promise<void>) {
+  if (await confirm({ title, message, confirmLabel: label })) await run(action)
 }
 
 // --- member role change (confirm self-demotion) ---
@@ -66,7 +60,7 @@ function changeUserRole(u: UserRow, role: Role) {
   if (!u.id) return
   const demotingSelf = u.email === myEmail.value && u.role === 'admin' && role !== 'admin'
   if (demotingSelf) {
-    ask(
+    void ask(
       'Give up admin access?',
       "You're changing your own role away from Admin. You'll lose access to member management.",
       'Change role',
@@ -79,7 +73,7 @@ function changeUserRole(u: UserRow, role: Role) {
 
 function removeMember(u: UserRow) {
   if (!u.id) return
-  ask(
+  void ask(
     'Remove member',
     `Remove ${u.name || u.email}? They lose access immediately and are signed out everywhere.`,
     'Remove',
@@ -96,7 +90,7 @@ async function copyInvite(i: InviteRow) {
 
 function regenerate(i: InviteRow) {
   if (!i.id) return
-  ask(
+  void ask(
     'Regenerate link',
     `Create a fresh link for ${i.email}? The current link will stop working immediately.`,
     'Regenerate',
@@ -117,7 +111,7 @@ function regenerate(i: InviteRow) {
 
 function revoke(i: InviteRow) {
   if (!i.id) return
-  ask('Revoke invite', `Revoke the invite for ${i.email}? The link will stop working.`, 'Revoke', () =>
+  void ask('Revoke invite', `Revoke the invite for ${i.email}? The link will stop working.`, 'Revoke', () =>
     revokeInvite(i.id!),
   )
 }
@@ -127,7 +121,7 @@ function revoke(i: InviteRow) {
   <div class="flex flex-col gap-2 p-1">
     <div class="flex items-center justify-between">
       <p class="text-xs font-medium">Users</p>
-      <ButtonUI v-if="admin" size="xs" :icon="Plus" @click="inviting = true">Invite</ButtonUI>
+      <ButtonUI v-if="admin" size="xs" :icon="Plus" @click="openModal(InviteDialog)">Invite</ButtonUI>
     </div>
 
     <div class="flex flex-col rounded-xl border border-input">
@@ -184,7 +178,7 @@ function revoke(i: InviteRow) {
           variant="ghost"
           size="xs"
           :icon="Link2"
-          title="Copy invite link"
+          tooltip="Copy invite link"
           class="text-muted-foreground"
           @click="copyInvite(i)"
         />
@@ -229,15 +223,5 @@ function revoke(i: InviteRow) {
     </p>
     <p v-if="error" class="px-1 text-[10px] text-danger">{{ error }}</p>
 
-    <InviteDialog v-if="inviting" @close="inviting = false" />
-
-    <ConfirmModal
-      v-if="confirm"
-      :title="confirm.title"
-      :message="confirm.message"
-      :confirm-label="confirm.label"
-      @confirm="runConfirm"
-      @close="confirm = null"
-    />
   </div>
 </template>

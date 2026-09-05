@@ -345,7 +345,7 @@ const src = computed({
               variant="icon"
               size="sm"
               :icon="X"
-              title="Remove field"
+              tooltip="Remove field"
               class="w-6 shrink-0 text-muted-foreground"
               @click="removeField(activeCollection!, field.id)"
             />

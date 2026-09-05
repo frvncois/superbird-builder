@@ -164,7 +164,7 @@ const DOT_CLASS = {
         variant="ghost"
         size="xs"
         :icon="RotateCcw"
-        title="Revert"
+        tooltip="Revert"
         class="aspect-square shrink-0 text-muted-foreground"
         @click="revert"
       />
@@ -176,9 +176,9 @@ const DOT_CLASS = {
       <button
         v-for="i in 9"
         :key="i"
+        v-tooltip="cellTitle((i - 1) % 3, Math.floor((i - 1) / 3))"
         type="button"
         class="group flex size-6 items-center justify-center rounded-md transition-colors hover:bg-accent/40"
-        :title="cellTitle((i - 1) % 3, Math.floor((i - 1) / 3))"
         @click="pick((i - 1) % 3, Math.floor((i - 1) / 3))"
       >
         <span

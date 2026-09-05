@@ -14,8 +14,8 @@ import { walkNodes } from './tree'
 // identity/classes/content survive reconcile while the arg is being edited
 // a '{+}' after the style marker is the interactions marker — same rules as
 // '(+)' but derived from node.interactions; mid-typing '{', '{+', '{}' tolerated
-const LEAF = /^:([a-zA-Z][a-zA-Z0-9-]*)(?:\[([a-z0-9.-]*)\]?)?(?:\(\+?\)?)?(?:\{\+?\}?)?:(?:@(\S+))?$/ // :h1: or :Card: (+@link)
-export const OPEN = /^:([a-zA-Z][a-zA-Z0-9-]*)(?:\[([a-z0-9.-]*)\]?)?(?:\(\+?\)?)?(?:\{\+?\}?)?(?:@(\S+))?$/ // :section or :Card (+@link)
+const LEAF = /^:([a-zA-Z][a-zA-Z0-9-]*)(?:\[([a-z0-9.+-]*)\]?)?(?:\(\+?\)?)?(?:\{\+?\}?)?:(?:@(\S+))?$/ // :h1: or :Card: (+@link)
+export const OPEN = /^:([a-zA-Z][a-zA-Z0-9-]*)(?:\[([a-z0-9.+-]*)\]?)?(?:\(\+?\)?)?(?:\{\+?\}?)?(?:@(\S+))?$/ // :section or :Card (+@link)
 export const CLOSE = /^([a-zA-Z][a-zA-Z0-9-]*):$/ // section: or Card:
 
 /** the '@target' suffix a node carries in code → its node.link value
@@ -46,7 +46,7 @@ export function lexLine(text: string): string[] {
         // optional argument: [title] — consumed even while still
         // unclosed, so mid-typing never splits the token across lines
         let k = j + 1
-        while (k < text.length && /[a-z0-9.-]/.test(text[k]!)) k++
+        while (k < text.length && /[a-z0-9.+-]/.test(text[k]!)) k++
         j = text[k] === ']' ? k + 1 : k
       }
       if (text[j] === '(') {
@@ -81,7 +81,13 @@ export function lexLine(text: string): string[] {
 // token head (indent + :name + optional [arg]) then the marker slot — the
 // anchor for reading/rewriting a line's styled marker without touching the
 // leaf ':' or '@link' tail
-const TOKEN_HEAD = /^(\s*:[a-zA-Z][a-zA-Z0-9-]*(?:\[[a-z0-9.-]*\])?)(\(\+?\)?)?/
+const TOKEN_HEAD = /^(\s*:[a-zA-Z][a-zA-Z0-9-]*(?:\[[a-z0-9.+-]*\])?)(\(\+?\)?)?/
+
+/** the :body wrapper's open line — tolerates an arg and (possibly mid-typing)
+ * style/interaction markers: ':body', ':body[post]', ':body(', ':body[post](+){+}'.
+ * Every scaffold matcher must use this so a '(' typed on the body line can't
+ * make the wrapper look damaged (which would respawn a fresh :body). */
+export const isBodyOpenLine = (trimmed: string) => /^:body(?:$|[[({])/.test(trimmed)
 
 /** the marker currently on the line's token: '(+)', or a mid-typing '(', '(+', '()' */
 export function styleMarkerOf(line: string): string | undefined {
@@ -99,7 +105,7 @@ export function hasOpenArgBracket(line: string): boolean {
  * split a CLOSED arg like '[title]' and re-close it mid-word. */
 export function closeArgBracket(line: string): string {
   return line.replace(
-    /^(\s*:[a-zA-Z][a-zA-Z0-9-]*)\[([a-z0-9.-]*)(?![\]a-z0-9.-])/,
+    /^(\s*:[a-zA-Z][a-zA-Z0-9-]*)\[([a-z0-9.+-]*)(?![\]a-z0-9.+-])/,
     (_, head: string, arg: string) => (arg ? `${head}[${arg}]` : head),
   )
 }
@@ -117,7 +123,7 @@ export function withStyleMarker(line: string, on: boolean): string {
 
 // like TOKEN_HEAD but the head swallows any (possibly incomplete) style
 // marker, so the '{…}' interactions slot anchors right after it
-const INT_HEAD = /^(\s*:[a-zA-Z][a-zA-Z0-9-]*(?:\[[a-z0-9.-]*\])?(?:\(\+?\)?)?)(\{\+?\}?)?/
+const INT_HEAD = /^(\s*:[a-zA-Z][a-zA-Z0-9-]*(?:\[[a-z0-9.+-]*\])?(?:\(\+?\)?)?)(\{\+?\}?)?/
 
 /** the interactions marker currently on the line's token: '{+}', or a
  * mid-typing '{', '{+', '{}' */
@@ -132,6 +138,30 @@ export function withInteractionMarker(line: string, on: boolean): string {
   const head = m[1]
   const rest = line.slice(head.length + (m[2]?.length ?? 0))
   return head + (on ? '{+}' : '') + rest
+}
+
+// the '[…]' slot doubles as the data marker: '[+]' means the element carries
+// its own content/media (set via the Data panel or inline editing), while a
+// real '[name]' is a collection-field binding and owns the slot outright
+const DATA_HEAD = /^(\s*:[a-zA-Z][a-zA-Z0-9-]*)(\[[a-z0-9.+-]*\]?)?/
+
+/** the data marker currently on the line's token — only '[+]' counts; a real
+ * arg or a mid-typing '[' is not a marker */
+export function dataMarkerOf(line: string): string | undefined {
+  const slot = line.match(DATA_HEAD)?.[2]
+  return slot === '[+]' ? slot : undefined
+}
+
+/** rewrites the line's data marker: on → exactly '[+]', off → none.
+ * No-ops when the slot holds a real '[arg]' (bindings own the slot) or an
+ * unclosed '[' (an arg edit in progress). */
+export function withDataMarker(line: string, on: boolean): string {
+  const m = line.match(DATA_HEAD)
+  if (!m || !m[1]) return line
+  const slot = m[2]
+  if (slot && slot !== '[+]') return line
+  const rest = line.slice(m[1].length + (slot?.length ?? 0))
+  return m[1] + (on ? '[+]' : '') + rest
 }
 
 /**
@@ -209,7 +239,7 @@ export function parseSyntax(
         if (isKnownElement(leaf[1]!) || isComponentType(leaf[1]!)) {
           const node = nodeFor(lineIndex, leaf[1]!)
           node.line = node.endLine = lineIndex
-          node.arg = leaf[2] || undefined
+          node.arg = leaf[2] && leaf[2] !== '+' ? leaf[2] : undefined
           node.link = linkFromToken(leaf[3])
           append(node)
         }
@@ -221,7 +251,7 @@ export function parseSyntax(
         if (isKnownElement(open[1]!) || isComponentType(open[1]!)) {
           const node = nodeFor(lineIndex, open[1]!)
           node.line = node.endLine = lineIndex
-          node.arg = open[2] || undefined
+          node.arg = open[2] && open[2] !== '+' ? open[2] : undefined
           node.link = linkFromToken(open[3])
           append(node)
           stack.push(node)
@@ -344,7 +374,7 @@ export function validateDocument(
 ): Diagnostic[] {
   const lines = code.split('\n')
   const trimmed = lines.map((l) => l.trim())
-  const start = trimmed.findIndex((t) => t === ':body' || t.startsWith(':body['))
+  const start = trimmed.findIndex(isBodyOpenLine)
   const end = trimmed.lastIndexOf('body:')
   if (start === -1 || end <= start) return []
 
@@ -487,21 +517,12 @@ export function suggestNextLine(before: string): string | null {
   const top = stack[stack.length - 1]
   if (!top) return ':section'
 
-  // just opened an element → suggest its first child
+  // just opened an element → suggest its first child (from the element
+  // registry's `suggest` metadata, falling back to a heading)
   if (last?.kind === 'open') {
     const childIndent = tabs(last.indent + 1)
-    switch (last.type) {
-      case 'body':
-        return `${childIndent}:section`
-      case 'section':
-        return `${childIndent}:div`
-      case 'list':
-        return `${childIndent}:list-item:`
-      case 'form':
-        return `${childIndent}:input:`
-      default:
-        return `${childIndent}:h1:`
-    }
+    const child = ELEMENTS[last.type]?.suggest
+    return `${childIndent}${child ? tokenFor(child) : ':h1:'}`
   }
 
   // after a heading → a paragraph usually follows

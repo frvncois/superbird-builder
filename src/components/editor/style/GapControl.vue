@@ -108,18 +108,18 @@ function disableSplit() {
           variant="ghost"
           size="xs"
           :icon="RotateCcw"
-          title="Revert"
+          tooltip="Revert"
           class="aspect-square shrink-0 text-muted-foreground"
           @click="revert"
         />
       </template>
       <SliderUI :min="0" :max="MAX" :model-value="sliderIdx('gap')" @update:model-value="setUnifiedStop" />
-      <ValueFieldUI :model-value="valueText('gap')" @commit="setUnifiedText" />
+      <ValueFieldUI :model-value="valueText('gap')" :steps="STOPS" @commit="setUnifiedText" />
       <ButtonUI
         variant="ghost"
         size="xs"
         :icon="UnfoldHorizontal"
-        title="Split into X and Y"
+        tooltip="Split into X and Y"
         class="aspect-square shrink-0 text-muted-foreground"
         @click="enableSplit"
       />
@@ -134,7 +134,7 @@ function disableSplit() {
           variant="ghost"
           size="xs"
           :icon="RotateCcw"
-          title="Revert"
+          tooltip="Revert"
           class="aspect-square shrink-0 text-muted-foreground"
           @click="revert"
         />
@@ -145,12 +145,12 @@ function disableSplit() {
         :model-value="sliderIdx('gap-x')"
         @update:model-value="(v) => setAxisStop('gap-x', v)"
       />
-      <ValueFieldUI :model-value="valueText('gap-x')" @commit="(t) => setAxisText('gap-x', t)" />
+      <ValueFieldUI :model-value="valueText('gap-x')" :steps="STOPS" @commit="(t) => setAxisText('gap-x', t)" />
       <ButtonUI
         variant="ghost"
         size="xs"
         :icon="FoldHorizontal"
-        title="Merge X and Y"
+        tooltip="Merge X and Y"
         class="aspect-square shrink-0 text-muted-foreground"
         @click="disableSplit"
       />
@@ -164,7 +164,7 @@ function disableSplit() {
         :model-value="sliderIdx('gap-y')"
         @update:model-value="(v) => setAxisStop('gap-y', v)"
       />
-      <ValueFieldUI :model-value="valueText('gap-y')" @commit="(t) => setAxisText('gap-y', t)" />
+      <ValueFieldUI :model-value="valueText('gap-y')" :steps="STOPS" @commit="(t) => setAxisText('gap-y', t)" />
     </RowUI>
   </template>
 </template>

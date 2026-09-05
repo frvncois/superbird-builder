@@ -74,13 +74,14 @@ function removeConstraint(prefix: string) {
         <ValueFieldUI
           :model-value="valueText(d.key)"
           :validate="isSizeValue"
+          :steps="STEPS"
           @commit="(t) => setText(d.key, t)"
         />
         <ButtonUI
           variant="ghost"
           size="xs"
           :icon="expanded[d.key] ? Minus : Plus"
-          :title="expanded[d.key] ? 'Hide min & max' : 'Add min & max'"
+          :tooltip="expanded[d.key] ? 'Hide min & max' : 'Add min & max'"
           class="aspect-square shrink-0 text-muted-foreground"
           @click="toggle(d.key)"
         />
@@ -105,13 +106,14 @@ function removeConstraint(prefix: string) {
           <ValueFieldUI
             :model-value="valueText(c.prefix)"
             :validate="isSizeValue"
+            :steps="STEPS"
             @commit="(t) => setText(c.prefix, t)"
           />
           <ButtonUI
             variant="ghost"
             size="xs"
             :icon="X"
-            title="Remove"
+            tooltip="Remove"
             class="aspect-square shrink-0 text-muted-foreground"
             @click="removeConstraint(c.prefix)"
           />

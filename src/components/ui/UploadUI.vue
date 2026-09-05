@@ -35,8 +35,8 @@ function onFile(e: Event) {
     <div v-if="model" class="relative">
       <img :src="model" class="max-h-24 w-full rounded-md border border-input object-cover" />
       <button
+        v-tooltip="'Remove file'"
         class="absolute top-1 right-1 flex size-5 cursor-pointer items-center justify-center rounded-md bg-background/80 text-muted-foreground transition-colors hover:text-foreground"
-        title="Remove file"
         @click="model = ''"
       >
         <X class="size-3.5" />

@@ -48,8 +48,21 @@ const targetIndex = computed(() => {
   return index
 })
 
-/** transition setup + (when active) the to-classes contributed by a binding */
-function bindingClasses(binding: InteractionBinding, active: boolean): string {
+/** whether a binding applies at the breakpoint being rendered. `undefined`
+ * breakpoints = all; a null render breakpoint (unknown) never gates. */
+export function bindingActiveAt(binding: InteractionBinding, breakpointId: string | null): boolean {
+  if (!binding.breakpoints || breakpointId === null) return true
+  return binding.breakpoints.includes(breakpointId)
+}
+
+/** transition setup + (when active) the to-classes contributed by a binding.
+ * Contributes nothing at a breakpoint the binding isn't scoped to. */
+function bindingClasses(
+  binding: InteractionBinding,
+  active: boolean,
+  breakpointId: string | null,
+): string {
+  if (!bindingActiveAt(binding, breakpointId)) return ''
   const animation = animationIndex.value.get(binding.interactionId)
   if (!animation) return ''
   const base = `transition-all ${animation.duration} ${animation.easing}`
@@ -62,11 +75,11 @@ export function useInteraction() {
    * always on (so both directions animate), the To-classes only while the
    * interaction is active. Resolved from the shared animation library.
    */
-  function classesFor(nodeId: string): string {
+  function classesFor(nodeId: string, breakpointId: string | null = null): string {
     const targeting = targetIndex.value.get(nodeId)
     if (!targeting?.length) return ''
     return targeting
-      .map((binding) => bindingClasses(binding, fired.value.has(binding.id)))
+      .map((binding) => bindingClasses(binding, fired.value.has(binding.id), breakpointId))
       .filter(Boolean)
       .join(' ')
   }
@@ -110,12 +123,17 @@ export function useInteraction() {
    * every interaction in the component targeting this master node,
    * active when fired in THIS instance's scope.
    */
-  function scopedClassesFor(masterId: string, componentRoot: ElementNode, scope: string): string {
+  function scopedClassesFor(
+    masterId: string,
+    componentRoot: ElementNode,
+    scope: string,
+    breakpointId: string | null = null,
+  ): string {
     const parts: string[] = []
     walkNodes([componentRoot], (owner) => {
       for (const binding of owner.interactions ?? []) {
         if ((binding.targetId ?? owner.id) !== masterId) continue
-        parts.push(bindingClasses(binding, fired.value.has(scopedKey(binding.id, scope))))
+        parts.push(bindingClasses(binding, fired.value.has(scopedKey(binding.id, scope)), breakpointId))
       }
     })
     return parts.filter(Boolean).join(' ')

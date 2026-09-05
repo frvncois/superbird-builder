@@ -14,17 +14,17 @@ function cancelPendingNav() {
 </script>
 
 <script setup lang="ts">
-// Content-mode renderer: the site rendered like a live preview, navigable by
+// Preview-mode renderer: the site rendered like a live preview, navigable by
 // clicking links (state-driven — switches the active page/entry, no URL
 // change), with double-click inline editing of text and image/video src.
-// Built on the same rendering core as PublicRenderer; editing is layered on
+// Built on the shared rendering core (useRenderNode); editing is layered on
 // top. Links follow on single click; double-click edits a link's text.
 import { computed, watch } from 'vue'
 import EntryScope from '@/components/shared/EntryScope.vue'
 import { useLocale } from '@/composables/useLocale'
 import { useRenderNode } from '@/composables/useRenderNode'
 import { useInlineEdit } from '@/composables/useInlineEdit'
-import { useContentEditing } from '@/composables/useContentEditing'
+import { usePreviewEditing } from '@/composables/usePreviewEditing'
 import { useProject } from '@/composables/useProject'
 import { usePage } from '@/composables/usePage'
 import { useCollections } from '@/composables/useCollections'
@@ -41,7 +41,7 @@ const { openEntry, activeEntryId } = useCollections()
 const {
   entryValue, setNodeContent, setNodeSrc, setEntryValue, setActiveLocale,
 } = useLocale()
-const { openMenu, editRequest, consumeEditRequest } = useContentEditing()
+const { openMenu, editRequest, consumeEditRequest } = usePreviewEditing()
 
 const {
   def,
@@ -144,7 +144,7 @@ const hoverAffordance = computed(() => {
 })
 
 function navigate(raw: string) {
-  const resolved = resolveSitePath(project.value, raw, { publishedOnly: false })
+  const resolved = resolveSitePath(project.value, raw)
   if (resolved.kind === 'notfound') return
   setActiveLocale(resolved.locale)
   if (resolved.kind === 'entry') {
@@ -207,7 +207,7 @@ const handlers = {
         :index="i"
         :count="listEntries.length"
       >
-        <ContentRenderer
+        <PreviewRenderer
           v-for="child in node.children"
           :key="`${child.id}:${entry.id}`"
           :node="child"
@@ -227,7 +227,7 @@ const handlers = {
   >
     <template v-if="itemCollection && itemEntry && !selfNested">
       <EntryScope :collection="itemCollection" :entry="itemEntry">
-        <ContentRenderer v-for="child in itemTemplateChildren" :key="child.id" :node="child" />
+        <PreviewRenderer v-for="child in itemTemplateChildren" :key="child.id" :node="child" />
       </EntryScope>
     </template>
   </component>
@@ -280,6 +280,6 @@ const handlers = {
       @blur="finishEditing(false)"
       @keydown="onEditKeydown"
     ></span>
-    <ContentRenderer v-for="child in node.children" :key="child.id" :node="child" />
+    <PreviewRenderer v-for="child in node.children" :key="child.id" :node="child" />
   </component>
 </template>

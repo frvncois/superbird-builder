@@ -20,7 +20,7 @@ defineEmits<{
         <component :is="icon" v-if="icon" class="size-3.5 shrink-0 text-muted-foreground" />
         {{ title }}
       </p>
-      <ButtonUI variant="icon" size="sm" :icon="X" title="Close" class="w-7 text-muted-foreground" @click="$emit('close')" />
+      <ButtonUI variant="icon" size="sm" :icon="X" class="w-7 text-muted-foreground" @click="$emit('close')" />
     </header>
 
     <div class="custom-scrollbar flex max-h-[70vh] flex-col overflow-y-auto">

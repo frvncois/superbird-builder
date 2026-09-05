@@ -5,37 +5,34 @@
 // running and switching views lands on the same page.
 import { computed, nextTick, ref, watch } from 'vue'
 import AppHeader from '@/components/shared/AppHeader.vue'
-import ContentRenderer from '@/components/site/ContentRenderer.vue'
+import PreviewRenderer from '@/components/site/PreviewRenderer.vue'
 import CommentLayer from '@/components/site/CommentLayer.vue'
-import MediaLibraryModal from '@/components/shared/MediaLibraryModal.vue'
 import EntryScope from '@/components/shared/EntryScope.vue'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import { PenLine } from 'lucide-vue-next'
 import { useEditorBoot } from '@/composables/useEditorBoot'
-import { useContentShortcuts } from '@/composables/useContentShortcuts'
+import { usePreviewShortcuts } from '@/composables/usePreviewShortcuts'
 import { usePage } from '@/composables/usePage'
 import { useCollections } from '@/composables/useCollections'
 import { useProject } from '@/composables/useProject'
 import { useThemeTokens } from '@/composables/useThemeTokens'
-import { useContentEditing } from '@/composables/useContentEditing'
+import { usePreviewEditing } from '@/composables/usePreviewEditing'
 import { useComments } from '@/composables/useComments'
 import { useCommentMode } from '@/composables/useCommentMode'
-import { useMediaLibrary } from '@/composables/useMediaLibrary'
 import { anchorFromPoint } from '@/lib/commentAnchor'
 
 // runtime Tailwind so class strings typed in the editor compile in the preview
 void import('@tailwindcss/browser')
 
 // undo/redo + save (⌘Z / ⌘⇧Z / ⌘S); skips the inline text editor
-useContentShortcuts()
+usePreviewShortcuts()
 
 const { ready, bootError, reloadPage } = useEditorBoot()
 const { activePage } = usePage()
 const { collections, activeCollection, activeEntry } = useCollections()
 const { project } = useProject()
-const { menu, closeMenu, requestEdit } = useContentEditing()
+const { menu, closeMenu, requestEdit } = usePreviewEditing()
 const { addComment, activeComment, focusTick } = useComments()
-const { open: mediaOpen, close: closeMediaLibrary } = useMediaLibrary()
 
 // C toggles the comment-drop tool (Esc exits); click drops a comment pinned
 // to the element under the cursor
@@ -86,7 +83,7 @@ const fontStyle = computed(() => ({
 
   <div v-else-if="ready" class="grid h-screen grid-rows-[auto_1fr] overflow-hidden">
     <header class="flex items-center p-2">
-      <AppHeader mode="content" />
+      <AppHeader mode="preview" />
     </header>
 
     <main
@@ -102,17 +99,17 @@ const fontStyle = computed(() => ({
           :collection="activeCollection"
           :entry="activeEntry"
         >
-          <ContentRenderer v-for="node in activePage.elements" :key="node.id" :node="node" />
+          <PreviewRenderer v-for="node in activePage.elements" :key="node.id" :node="node" />
         </EntryScope>
         <EntryScope
           v-else-if="templateCollection"
           :collection="templateCollection"
           :entry="null"
         >
-          <ContentRenderer v-for="node in activePage.elements" :key="node.id" :node="node" />
+          <PreviewRenderer v-for="node in activePage.elements" :key="node.id" :node="node" />
         </EntryScope>
         <template v-else>
-          <ContentRenderer v-for="node in activePage.elements" :key="node.id" :node="node" />
+          <PreviewRenderer v-for="node in activePage.elements" :key="node.id" :node="node" />
         </template>
       </div>
     </main>
@@ -120,7 +117,6 @@ const fontStyle = computed(() => ({
     <!-- floating comment pins over the preview -->
     <CommentLayer :root="mainEl ?? null" />
 
-    <MediaLibraryModal v-if="mediaOpen" @close="closeMediaLibrary" />
 
     <!-- "Edit content" context menu -->
     <template v-if="menu">

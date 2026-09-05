@@ -16,13 +16,15 @@ const TAIL_RE = /^(?:\[.+\]|\d+(?:\.\d+)?)$/
  * The class "tail" (the part after `${prefix}-`) for the typed text, carrying a
  * leading '-' for negatives: `'4' | '1.5' | '[4em]' | '-4' | '-[4px]'`.
  * `null` = unset (empty), `false` = invalid (reject).
+ * Keywords in `allowKeywords` (e.g. `auto`) pass through as a bare tail.
  */
 export function textToTail(
   text: string,
-  opts: { allowNegative?: boolean } = {},
+  opts: { allowNegative?: boolean; allowKeywords?: readonly string[] } = {},
 ): string | null | false {
   const t = text.trim()
   if (t === '') return null
+  if (opts.allowKeywords?.includes(t.toLowerCase())) return t.toLowerCase()
   let neg = false
   let body = t
   if (body.startsWith('-')) {
@@ -55,7 +57,11 @@ export function buildTailClass(prefix: string, tail: string): string {
 }
 
 /** parse a token into its tail for `prefix` (incl. leading '-'), or null */
-export function parseTail(token: string, prefix: string): string | null {
+export function parseTail(
+  token: string,
+  prefix: string,
+  opts: { allowKeywords?: readonly string[] } = {},
+): string | null {
   let neg = false
   let rest: string
   if (token.startsWith(`-${prefix}-`)) {
@@ -66,6 +72,7 @@ export function parseTail(token: string, prefix: string): string | null {
   } else {
     return null
   }
+  if (!neg && opts.allowKeywords?.includes(rest)) return rest
   if (!TAIL_RE.test(rest)) return null
   return neg ? `-${rest}` : rest
 }
@@ -74,10 +81,10 @@ export function parseTail(token: string, prefix: string): string | null {
 export function classToText(
   prefix: string,
   token: string | null | undefined,
-  opts: { allowNegative?: boolean } = {},
+  opts: { allowNegative?: boolean; allowKeywords?: readonly string[] } = {},
 ): string {
   if (!token) return ''
-  const tail = parseTail(token, prefix)
+  const tail = parseTail(token, prefix, opts)
   if (tail === null) return ''
   if (tail.startsWith('-') && !opts.allowNegative) return ''
   return tailToText(tail)
@@ -87,7 +94,7 @@ export function classToText(
 export function textToClass(
   prefix: string,
   text: string,
-  opts: { allowNegative?: boolean } = {},
+  opts: { allowNegative?: boolean; allowKeywords?: readonly string[] } = {},
 ): string | null | false {
   const tail = textToTail(text, opts)
   if (tail === null) return null
@@ -171,6 +178,46 @@ export function isNamedValueClass(
   if (known.includes(token)) return true
   if (!token.startsWith(`${prefix}-`)) return false
   return matchesNamedFormat(format, sizeClassToText(prefix, token))
+}
+
+const roundVal = (n: number) => Math.round(n * 1000) / 1000
+
+/**
+ * Nudge a typed value for keyboard ↑/↓. Bare numbers walk `steps` when given
+ * (else ±1, ±0.1 for fractional); unit-bearing values (`12px`) step the number
+ * and keep the unit; keywords / fractions are left alone (returns null).
+ * `bigger` (Shift) takes a larger jump.
+ */
+export function arrowStepText(
+  text: string,
+  dir: 1 | -1,
+  opts: { steps?: string[]; bigger?: boolean; allowNegative?: boolean } = {},
+): string | null {
+  const cur = text.trim()
+  const big = opts.bigger
+  // number + unit → step the number, keep the unit
+  const unitM = cur.match(/^(-?)(\d*\.?\d+)([a-z%]+)$/i)
+  if (unitM) {
+    const val = (unitM[1] === '-' ? -1 : 1) * parseFloat(unitM[2]!)
+    let n = val + dir * (big ? 10 : 1)
+    if (!opts.allowNegative && n < 0) n = 0
+    return `${roundVal(n)}${unitM[3]}`
+  }
+  // bare number → scale step (if a scale is given) or plain ±step
+  if (cur === '' || /^-?\d*\.?\d+$/.test(cur)) {
+    if (opts.steps?.length) {
+      const idx = nearestStepIndex(opts.steps, cur === '' ? '0' : cur)
+      let next = idx === -1 ? 0 : idx + dir * (big ? 4 : 1)
+      next = Math.max(0, Math.min(opts.steps.length - 1, next))
+      return opts.steps[next]!
+    }
+    const base = cur === '' ? 0 : parseFloat(cur)
+    const inc = big ? 10 : cur.includes('.') ? 0.1 : 1
+    let n = base + dir * inc
+    if (!opts.allowNegative && n < 0) n = 0
+    return `${roundVal(n)}`
+  }
+  return null // fractions (1/2), keywords (auto, full), unknown
 }
 
 /** nearest scale index for a slider/stepper thumb given free-form text; -1 if none */

@@ -217,7 +217,7 @@ const swapSrc = computed({
             variant="icon"
             size="sm"
             :icon="X"
-            title="Remove rule"
+            tooltip="Remove rule"
             class="w-6 shrink-0 text-muted-foreground"
             @click="removeRule(rule)"
           />
@@ -260,7 +260,7 @@ const swapSrc = computed({
           variant="outline"
           size="sm"
           :icon="Trash2"
-          title="Remove all conditions"
+          tooltip="Remove all conditions"
           class="text-danger"
           @click="removeSpec"
         />

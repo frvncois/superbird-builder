@@ -1,8 +1,10 @@
 import { useKeymap } from './useShortcut'
 import { useContextMenu } from './useContextMenu'
 import { usePersistence } from './usePersistence'
-import { useDocumentation } from './useDocumentation'
 import { togglePalette } from './useCommandPalette'
+import { useModal } from './useModal'
+import { useAuth } from './useAuth'
+import PublishDialog from '@/components/shared/PublishDialog.vue'
 
 /**
  * App-wide keyboard shortcuts (registered once from the editor view).
@@ -19,7 +21,15 @@ export function useEditorShortcuts() {
     wrapSelection,
   } = useContextMenu()
   const { undo, redo, saveNow } = usePersistence()
-  const { open: openDocumentation } = useDocumentation()
+  const { openModal, stack } = useModal()
+  const { canBuild } = useAuth()
+
+  // ⌘P opens Publish (build roles only) — dedupe so holding it can't stack modals
+  function openPublish() {
+    if (!canBuild.value) return
+    if (stack.value.some((m) => m.component === PublishDialog)) return
+    void openModal(PublishDialog)
+  }
 
   useKeymap([
     // the element panels have no shortcuts — Style, Data, and Interactions
@@ -39,6 +49,7 @@ export function useEditorShortcuts() {
     { key: 's', mod: true, shift: false, allowInInput: true, handler: saveNow },
     // ⌘E toggles the insert dock; allowInInput so it works from the code editor
     { key: 'e', mod: true, allowInInput: true, handler: togglePalette },
-    { key: '?', handler: () => openDocumentation() },
+    // ⌘P publishes; allowInInput so it overrides the browser print dialog everywhere
+    { key: 'p', mod: true, shift: false, allowInInput: true, handler: openPublish },
   ])
 }

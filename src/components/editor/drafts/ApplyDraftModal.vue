@@ -36,7 +36,7 @@ onMounted(async () => {
     return
   }
   conflicts.value = result.conflicts
-  // every conflict starts on the live site's side — the merge default
+  // every conflict starts on Main's side — the merge default
   choices.value = Object.fromEntries(result.conflicts.map((c) => [c.key, 'mine' as Resolution]))
   summary.value = status?.summary ?? null
   stage.value = 'review'
@@ -46,9 +46,9 @@ onMounted(async () => {
 function sideHints(conflict: MergeConflict): { mine: string; theirs: string } {
   switch (conflict.kind) {
     case 'changed':
-      return { mine: 'Keep the live version', theirs: 'Use the draft version' }
+      return { mine: 'Keep Main’s version', theirs: 'Use the draft version' }
     case 'deleted-in-branch':
-      return { mine: 'Keep it on the site', theirs: 'Delete it from the site' }
+      return { mine: 'Keep it on Main', theirs: 'Delete it from Main' }
     case 'deleted-in-main':
       return { mine: 'Leave it deleted', theirs: 'Restore the draft version' }
   }
@@ -57,11 +57,11 @@ function sideHints(conflict: MergeConflict): { mine: string; theirs: string } {
 function conflictHint(conflict: MergeConflict): string {
   switch (conflict.kind) {
     case 'changed':
-      return 'Edited in the draft and on the live site'
+      return 'Edited in the draft and on Main'
     case 'deleted-in-branch':
-      return 'Deleted in the draft, edited on the live site'
+      return 'Deleted in the draft, edited on Main'
     case 'deleted-in-main':
-      return 'Deleted on the live site, edited in the draft'
+      return 'Deleted on Main, edited in the draft'
   }
 }
 
@@ -85,7 +85,7 @@ async function deleteDraft() {
 
 <template>
   <ModalDialog
-    :title="stage === 'done' ? 'Draft merged' : `Merge “${branch.name}” into the site`"
+    :title="stage === 'done' ? 'Draft merged' : `Merge “${branch.name}” into Main`"
     size="lg"
     @close="emit('close')"
   >
@@ -93,7 +93,7 @@ async function deleteDraft() {
     <div v-if="stage === 'loading' || stage === 'applying'" class="flex items-center gap-2 py-6">
       <LoaderCircle class="size-4 animate-spin text-muted-foreground" />
       <p class="text-xs text-muted-foreground">
-        {{ stage === 'applying' ? 'Merging the draft…' : 'Comparing with the live site…' }}
+        {{ stage === 'applying' ? 'Merging the draft…' : 'Comparing with Main…' }}
       </p>
     </div>
 
@@ -103,8 +103,8 @@ async function deleteDraft() {
         <p class="text-xs text-muted-foreground">
           {{
             isEmpty
-              ? 'This draft has no changes — merging it won’t modify the live site.'
-              : 'These changes will be merged into the live site:'
+              ? 'This draft has no changes — merging it won’t modify Main.'
+              : 'These changes will be merged into Main:'
           }}
         </p>
         <p v-if="summaryLabel" class="text-xs font-medium">{{ summaryLabel }}</p>
@@ -137,7 +137,7 @@ async function deleteDraft() {
                   class="size-3 shrink-0"
                   :class="choices[conflict.key] === side ? 'opacity-100' : 'opacity-0'"
                 />
-                {{ side === 'mine' ? 'Live site' : 'This draft' }}
+                {{ side === 'mine' ? 'Main' : 'This draft' }}
               </span>
               <span class="pl-4.5 text-[10px] text-muted-foreground">
                 {{ sideHints(conflict)[side] }}
@@ -153,11 +153,11 @@ async function deleteDraft() {
       <div class="flex flex-col gap-2 py-2">
         <p class="flex items-center gap-1.5 text-xs font-medium text-success">
           <CircleCheck class="size-4" />
-          “{{ branch.name }}” is now live.
+          “{{ branch.name }}” was merged into Main.
         </p>
         <p class="text-xs text-muted-foreground">
-          You’re back on the live site. Keep the draft to continue working in it, or delete it if
-          you’re done.
+          You’re back on Main — publish when you’re ready to put these changes live. Keep the draft
+          to continue working in it, or delete it if you’re done.
         </p>
       </div>
     </template>

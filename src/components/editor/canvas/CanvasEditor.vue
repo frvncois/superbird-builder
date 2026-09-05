@@ -5,6 +5,7 @@ import { usePage } from '@/composables/usePage'
 import { useProject, MIN_BREAKPOINTS } from '@/composables/useProject'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import ElementRenderer from '@/components/editor/canvas/ElementRenderer.vue'
+import FrameScope from '@/components/editor/canvas/FrameScope.vue'
 import EntryScope from '@/components/shared/EntryScope.vue'
 import CommentMarker from '@/components/shared/CommentMarker.vue'
 import CommentLayer from '@/components/site/CommentLayer.vue'
@@ -19,21 +20,17 @@ import { useSettings } from '@/composables/useSettings'
 import { useThemeTokens } from '@/composables/useThemeTokens'
 import type { Breakpoint } from '@/types/editor'
 
-// Runtime Tailwind compiler so classes typed in the Style panel generate
-// CSS on the fly (the build-time JIT only sees source files). Loaded as a
-// parallel dynamic chunk — it's ~84KB gz and would otherwise block the
-// editor's first paint sitting in the route's static dependency graph.
 void import('@tailwindcss/browser')
 
 const { activePage } = usePage()
-const { breakpoints, canAddBreakpoint, addBreakpoint, removeBreakpoint } = useProject()
+const { breakpoints, canAddBreakpoint, addBreakpoint, removeBreakpoint, setActiveBreakpoint } = useProject()
 
 const canRemoveBreakpoint = computed(() => breakpoints.value.length > MIN_BREAKPOINTS)
 const { visibleComments, addComment, activeComment, focusTick } = useComments()
 const { pickingFor } = useInteraction()
 const { activeCollection, activeEntry } = useCollections()
 const { settings } = useSettings()
-useThemeTokens() // live design tokens (bg-<token>) in the canvas
+useThemeTokens() 
 
 const camera = ref({ x: 80, y: 60, zoom: 0.3 })
 const MIN_ZOOM = 0.15
@@ -42,22 +39,16 @@ const MAX_ZOOM = 4
 const viewport = ref<HTMLElement>()
 const worldEl = ref<HTMLElement>()
 const space = useShortcut('Space')
-// C toggles the comment-drop tool (Esc exits); crosshair + click-to-place gate on it
 const { commentMode } = useCommentMode()
 
 const panning = ref(false)
 let last = { x: 0, y: 0 }
 
-// Safari fires gesture* events for a trackpad pinch; while one is active we
-// ignore ctrl+wheel so a browser that emits both doesn't double-zoom
 let gesturing = false
 let gestureScale = 1
 
-// how many px of the content must always remain inside the viewport,
-// so the breakpoints can never be scrolled fully out of sight
 const PAN_MARGIN = 120
 
-/** keep at least PAN_MARGIN px of the world overlapping the viewport */
 function clampCamera(cam: { x: number; y: number; zoom: number }) {
   const rect = viewport.value?.getBoundingClientRect()
   const world = worldEl.value
@@ -92,7 +83,6 @@ function onPointerUp() {
 
 const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z))
 
-/** set zoom to `next`, keeping the viewport-space point (cx, cy) fixed */
 function zoomAt(next: number, cx: number, cy: number) {
   const { x, y, zoom } = camera.value
   const z = clampZoom(next)
@@ -100,10 +90,9 @@ function zoomAt(next: number, cx: number, cy: number) {
 }
 
 function onWheel(e: WheelEvent) {
-  if (gesturing) return // a Safari pinch gesture is already driving the zoom
+  if (gesturing) return 
   const rect = viewport.value?.getBoundingClientRect()
   if (!rect) return
-  // trackpad pinch arrives as ctrlKey+wheel (Chrome/Firefox); ⌘+wheel too
   if (e.ctrlKey || e.metaKey) {
     zoomAt(camera.value.zoom * Math.exp(-e.deltaY * 0.01), e.clientX - rect.left, e.clientY - rect.top)
   } else {
@@ -115,7 +104,6 @@ function onWheel(e: WheelEvent) {
   }
 }
 
-// Safari trackpad pinch (it uses gesture* events instead of ctrl+wheel)
 function onGestureStart(e: Event) {
   e.preventDefault()
   gesturing = true
@@ -152,26 +140,20 @@ const worldStyle = computed(() => ({
 
 const INITIAL_CAMERA = { x: 80, y: 60, zoom: 0.3 }
 
-/** zoom around the viewport centre by a factor (keyboard zoom) */
 function zoomBy(factor: number) {
   const rect = viewport.value?.getBoundingClientRect()
   if (!rect) return
   zoomAt(camera.value.zoom * factor, rect.width / 2, rect.height / 2)
 }
 
-// ⌘+ zoom in, ⌘- zoom out, ⌘0 reset view — allowInInput so they zoom the canvas
-// (and preventDefault the browser's own zoom) even while the code editor is focused
 useKeymap([
   { key: ['=', '+'], mod: true, allowInInput: true, handler: () => zoomBy(1.2) },
   { key: '-', mod: true, allowInInput: true, handler: () => zoomBy(1 / 1.2) },
   { key: '0', mod: true, allowInInput: true, handler: () => (camera.value = { ...INITIAL_CAMERA }) },
 ])
 
-// --- comments ---
-
 const pageComments = computed(() => visibleComments(activePage.value.id))
 
-// breakpoint frame elements, for anchoring pins and panning to them
 const frameEls: Record<string, HTMLElement> = {}
 function setFrameEl(id: string) {
   return (el: unknown) => {
@@ -179,22 +161,21 @@ function setFrameEl(id: string) {
   }
 }
 
-/** C + click drops a comment anchored to the element under the cursor */
 function placeComment(e: MouseEvent) {
   if (!commentMode.value || !viewport.value) return
   const anchor = anchorFromPoint(e.clientX, e.clientY, viewport.value)
   if (anchor) addComment({ pageId: activePage.value.id, anchor })
 }
 
-// a frame click resolves the element and must not also fire the canvas handler
-function onFrameClick(_bp: Breakpoint, e: MouseEvent) {
+function onFrameClick(bp: Breakpoint, e: MouseEvent) {
+  // clicking a frame makes it the breakpoint the Style panel edits
+  setActiveBreakpoint(bp.id)
   if (!commentMode.value) return
   e.stopPropagation()
   placeComment(e)
 }
 const onCanvasClick = placeComment
 
-// center the camera on the comment the user navigated to from the list
 watch(focusTick, async () => {
   await nextTick()
   const comment = activeComment.value
@@ -202,7 +183,6 @@ watch(focusTick, async () => {
   const { zoom } = camera.value
   const rect = viewport.value.getBoundingClientRect()
 
-  // anchored comment: resolve the element's live rect → world coords → centre
   if (comment.anchor && worldEl.value) {
     const pos = anchorScreenPos(comment.anchor, worldEl.value)
     if (!pos) return
@@ -212,7 +192,6 @@ watch(focusTick, async () => {
     return
   }
 
-  // legacy world-coord comment
   if (comment.x === undefined || comment.y === undefined) return
   let x = comment.x
   let y = comment.y
@@ -249,16 +228,14 @@ watch(focusTick, async () => {
     <div ref="worldEl" class="absolute left-0 top-0 origin-top-left" :style="worldStyle">
       <div class="flex w-max items-stretch">
         <template v-for="(bp, i) in breakpoints" :key="bp.id">
-          <!-- hover strip in the margin before each frame (and after the
-               last, below) — reveals an insert-breakpoint button -->
           <div class="group flex w-40 items-center justify-center" @click.stop>
             <div v-if="canAddBreakpoint(i)" :style="{ transform: `scale(${1 / camera.zoom})` }">
               <ButtonUI
-                variant="outline"
+                variant="ghost"
                 size="sm"
                 :icon="Plus"
-                title="Add breakpoint"
-                class="size-8 rounded-full bg-background opacity-0 shadow-md transition-opacity group-hover:opacity-100"
+                tooltip="Add breakpoint"
+                class="size-8 rounded-full bg-background opacity-50 shadow-md transition-opacity group-hover:opacity-100"
                 @click="addBreakpoint(i)"
               />
             </div>
@@ -272,15 +249,14 @@ watch(focusTick, async () => {
               {{ bp.name }} · {{ bp.width }}
               <button
                 v-if="canRemoveBreakpoint"
-                title="Delete breakpoint"
+                v-tooltip="'Delete breakpoint'"
                 class="cursor-pointer opacity-0 transition-opacity group-hover/frame:opacity-100 hover:text-foreground"
                 @click.stop="removeBreakpoint(bp.id)"
               >
                 <X class="size-3" />
               </button>
             </div>
-          <!-- pins live beside the frame, not inside it, so its
-               overflow-hidden never clips an open comment thread -->
+
           <div :ref="setFrameEl(bp.id)" class="relative">
             <div
               data-frame-drop
@@ -292,25 +268,27 @@ watch(focusTick, async () => {
               }"
               @click.capture="onFrameClick(bp, $event)"
             >
-              <!-- template pages render in the loaded entry's context -->
-              <EntryScope
-                v-if="activeCollection"
-                :collection="activeCollection"
-                :entry="activeEntry"
-              >
-                <ElementRenderer
-                  v-for="node in activePage.elements"
-                  :key="node.id"
-                  :node="node"
-                />
-              </EntryScope>
-              <template v-else>
-                <ElementRenderer
-                  v-for="node in activePage.elements"
-                  :key="node.id"
-                  :node="node"
-                />
-              </template>
+
+              <FrameScope :breakpoint-id="bp.id">
+                <EntryScope
+                  v-if="activeCollection"
+                  :collection="activeCollection"
+                  :entry="activeEntry"
+                >
+                  <ElementRenderer
+                    v-for="node in activePage.elements"
+                    :key="node.id"
+                    :node="node"
+                  />
+                </EntryScope>
+                <template v-else>
+                  <ElementRenderer
+                    v-for="node in activePage.elements"
+                    :key="node.id"
+                    :node="node"
+                  />
+                </template>
+              </FrameScope>
             </div>
             <div
               v-for="comment in pageComments.filter((c) => c.breakpointId === bp.id)"
@@ -333,7 +311,7 @@ watch(focusTick, async () => {
               variant="outline"
               size="sm"
               :icon="Plus"
-              title="Add breakpoint"
+              tooltip="Add breakpoint"
               class="size-8 rounded-full bg-background opacity-0 shadow-md transition-opacity group-hover:opacity-100"
               @click="addBreakpoint(breakpoints.length)"
             />
@@ -351,7 +329,6 @@ watch(focusTick, async () => {
       </div>
     </div>
 
-    <!-- element-anchored comments (shared with content mode), screen-space -->
     <CommentLayer :root="viewport ?? null" />
 
     <InsertDock />

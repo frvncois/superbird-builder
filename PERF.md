@@ -24,12 +24,12 @@ From the demo export (byte-identical to the Pass-3 baseline):
 
 | File | Size |
 |---|---|
-| `site.js` (interaction runtime) | 4.5 kb |
-| `site.css` (compiled Tailwind, minified) | 26 kb |
+| `assets/script.js` (interaction runtime) | 4.5 kb |
+| `assets/style.css` (compiled Tailwind, minified) | 26 kb |
 | `index.html` (208-node home page) | 39 kb |
 | `404.html` | 0.7 kb |
 
-`site.js` ships only when a page uses interactions or runtime conditions (`export.mjs:495-499`); pages without them get zero JS. Nothing approaches the 50 kb-per-file threshold. **No editor code in the output** (verified in Pass 3). **No fix warranted.**
+`assets/script.js` ships only when a page uses interactions or runtime conditions (`export.mjs:495-499`); pages without them get zero JS. Nothing approaches the 50 kb-per-file threshold. **No editor code in the output** (verified in Pass 3). **No fix warranted.**
 
 ### 4. Admin SPA bundle — MEASURED, already well-split
 Heaviest chunks (raw / gzip):

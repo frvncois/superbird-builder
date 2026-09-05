@@ -12,7 +12,7 @@ import { expandComponentInstances, isComponentType } from '@/lib/components'
 import { isKnownElement } from '@/lib/elements'
 import { useCollections } from '@/composables/useCollections'
 import { CircleAlert, CircleCheck, ChevronDown, ChevronRight } from 'lucide-vue-next'
-import { closeArgBracket, hasOpenArgBracket, interactionMarkerOf, reconcile, styleMarkerOf, suggestCompletion, validateDocument, withInteractionMarker, withStyleMarker, OPEN, CLOSE } from '@/lib/syntax'
+import { closeArgBracket, hasOpenArgBracket, interactionMarkerOf, isBodyOpenLine, reconcile, styleMarkerOf, suggestCompletion, validateDocument, withInteractionMarker, withStyleMarker, OPEN, CLOSE } from '@/lib/syntax'
 import { enforceDocument, parseSetup, replaceSetup, setSetupLocale, slugify } from '@/lib/document'
 import { useLocale } from '@/composables/useLocale'
 import { collapseCode, computeFold, expandCode, type FoldRange } from '@/lib/folding'
@@ -26,7 +26,7 @@ const LINE_HEIGHT = 20 // leading-5
 const PAD_Y = 0
 
 const { activePage, pages } = usePage()
-const { selectedElement, selectedElementIds, isMultiSelect, extendSelection, moveSelectionGroup, selectByLine, selectElement, elementAtLine, getElement, draggingId, dropTarget, reorderElement, highlightedElement, editorFocusTick, syncNodeMarkers } =
+const { selectedElement, selectedElementIds, isMultiSelect, extendSelection, moveSelectionGroup, selectByLine, selectElement, elementAtLine, getElement, removeElement, draggingId, dropTarget, reorderElement, highlightedElement, editorFocusTick, syncNodeMarkers } =
   useElement()
 
 const {
@@ -522,6 +522,22 @@ const cursor = ref(0)
 const beforeCursor = computed(() => code.value.slice(0, cursor.value))
 const cursorLine = computed(() => beforeCursor.value.split('\n').length - 1)
 
+// --- custom caret: rendered inside the text overlay so it inherits a lifted
+// row's scale (the native caret lives in the un-scaled textarea and drifts when
+// the focused block scales up). The textarea's own caret is made transparent. ---
+const editorFocused = ref(false)
+const selectionActive = ref(false)
+/** the caret's line text up to the caret column — an invisible copy of it
+ * positions the caret bar at the exact column, tabs and all */
+const caretPrefix = computed(() => beforeCursor.value.slice(beforeCursor.value.lastIndexOf('\n') + 1))
+const caretVisible = computed(() => editorFocused.value && !selectionActive.value)
+const caretRowStyle = computed(() => ({
+  marginTop: `${cursorLine.value * LINE_HEIGHT}px`,
+  transform: isLifted(cursorLine.value) ? 'scale(1.06)' : undefined,
+  transformOrigin: 'left center',
+  transition: 'transform 150ms ease-out',
+}))
+
 /** In the setup block the caret may only sit in the editable value area */
 function snapToEditable(pos: number): number {
   const lines = code.value.split('\n')
@@ -547,7 +563,7 @@ function snapToEditable(pos: number): number {
 function clampSelectionToBody(el: HTMLTextAreaElement) {
   if (el.selectionStart === el.selectionEnd) return
   const lines = el.value.split('\n')
-  const open = lines.findIndex((l) => /^:body(\[|$)/.test(l.trim()))
+  const open = lines.findIndex((l) => isBodyOpenLine(l.trim()))
   const close = lines.findIndex((l) => l.trim() === 'body:')
   const collapse = () => el.setSelectionRange(el.selectionEnd, el.selectionEnd)
   if (open === -1 || close === -1 || close <= open + 1) return collapse()
@@ -564,6 +580,7 @@ function trackCursor() {
   const el = input.value
   if (!el) return
   clampSelectionToBody(el)
+  selectionActive.value = el.selectionStart !== el.selectionEnd
   let pos = el.selectionStart
   if (el.selectionStart === el.selectionEnd) {
     const snapped = snapToEditable(pos)
@@ -1049,11 +1066,11 @@ function tokenizeLine(text: string, dim?: boolean): LinePart[] {
 // then filtered down to the visible display rows
 const styledLines = computed<LinePart[][]>(() => {
   const lines = rawSource.value.split('\n')
-  const bodyOpen = lines.findIndex((l) => /^:body(\[|$)/.test(l.trim()))
+  const bodyOpen = lines.findIndex((l) => isBodyOpenLine(l.trim()))
   let componentDepth = 0
   const real = lines.map((text, i): LinePart[] => {
     const t = text.trim()
-    if (t === '@setup' || /^:body(\[|$)/.test(t) || t === 'body:') return [{ text, tone: 'muted' }]
+    if (t === '@setup' || isBodyOpenLine(t) || t === 'body:') return [{ text, tone: 'muted' }]
     if (COMPONENT_TOKEN.test(t)) {
       if (/^[A-Z]/.test(t)) componentDepth = Math.max(0, componentDepth - 1) // Card:
       else if (!t.endsWith(':')) componentDepth++ // :Card (leaf :Card: leaves depth alone)
@@ -1091,7 +1108,7 @@ const styledLines = computed<LinePart[][]>(() => {
 const placeholderLine = computed(() => {
   const body = activePage.value.elements.find((n) => n.type === 'body')
   if (body && body.children.length > 0) return null
-  const bodyReal = rawSource.value.split('\n').findIndex((l) => /^:body(\[|$)/.test(l.trim()))
+  const bodyReal = rawSource.value.split('\n').findIndex((l) => isBodyOpenLine(l.trim()))
   if (bodyReal === -1) return null
   const line = r2d(bodyReal + 1)
   return cursorLine.value === line ? null : line
@@ -1179,7 +1196,7 @@ function computeEnterEdit(
 
   const lines = value.split('\n')
   const lineIndex = value.slice(0, lineStart).split('\n').length - 1
-  const bodyOpen = lines.findIndex((l) => /^:body(\[|$)/.test(l.trim()))
+  const bodyOpen = lines.findIndex((l) => isBodyOpenLine(l.trim()))
   const bodyClose = lines.findIndex((l) => l.trim() === 'body:')
   // stay within the editable body region — @setup and the scaffold defer
   if (bodyOpen === -1 || bodyClose === -1 || lineIndex <= bodyOpen || lineIndex >= bodyClose) {
@@ -1235,15 +1252,32 @@ const styleParenSession = ref<{ nodeId: string; pageId: string } | null>(null)
 const dataBracketSession = ref<{ nodeId: string; pageId: string } | null>(null)
 const interactionBraceSession = ref<{ nodeId: string; pageId: string } | null>(null)
 
-/** the element whose open line is `real` — panels only target real,
- * non-body elements addressed by their own line */
-function panelTargetAt(real: number): ElementNode | null {
+type PanelKind = 'style' | 'data' | 'interactions'
+
+/** the element whose open line is `real` — panels only target real elements
+ * addressed by their own line. Body takes all three markers (style/interactions
+ * render on its tag; the data '[+]' marks its own content) — but never when its
+ * slot already holds a page-owned collection-template binding ('[name]'). */
+function panelTargetAt(real: number, kind: PanelKind): ElementNode | null {
   const node = elementAtLine(real)
-  if (!node || node.type === 'body' || node.line !== real) return null
+  if (!node || node.line !== real) return null
+  if (node.type === 'body' && kind === 'data' && node.arg !== undefined) return null
   return node
 }
 
-type PanelKind = 'style' | 'data' | 'interactions'
+/** immediately finalizes a just-typed '(' / '{' into its closed marker —
+ * the code never shows a dangling opener; if the panel closes with nothing
+ * added, the truth-sync below removes the marker again */
+function sealMarker(node: ElementNode, kind: 'style' | 'interactions') {
+  const page = activePage.value
+  if (!page || node.line === undefined) return
+  const lines = page.code.split('\n')
+  const seal = kind === 'style' ? withStyleMarker : withInteractionMarker
+  const next = seal(lines[node.line]!, true)
+  if (next === lines[node.line]) return
+  lines[node.line] = next
+  page.code = lines.join('\n')
+}
 
 /** selects the node, records the session, and opens the matching panel */
 function startPanelSession(kind: PanelKind, node: ElementNode) {
@@ -1265,12 +1299,13 @@ function maybeOpenStyleParen(el: HTMLTextAreaElement) {
   const head = value.slice(lineStart, pos).trimStart()
   // closed [arg] required before the paren, so '(' typed inside brackets
   // (or on @setup/close lines) never triggers
-  if (!/^:[a-zA-Z][a-zA-Z0-9-]*(?:\[[a-z0-9.-]*\])?\($/.test(head)) return
-  const node = panelTargetAt(d2r(value.slice(0, pos).split('\n').length - 1))
+  if (!/^:[a-zA-Z][a-zA-Z0-9-]*(?:\[[a-z0-9.+-]*\])?\($/.test(head)) return
+  const node = panelTargetAt(d2r(value.slice(0, pos).split('\n').length - 1), 'style')
   if (!node) return
   // component instances style their shared master — no per-node marker there
   if (isComponentType(node.type) || masterFor(node.id)) return
   startPanelSession('style', node)
+  sealMarker(node, 'style')
 }
 
 /** caret sits right after a bare '{' following the token head (name, optional
@@ -1282,13 +1317,28 @@ function maybeOpenInteractionBrace(el: HTMLTextAreaElement) {
   if (value[pos] === '+' || value[pos] === '}') return // already a marker
   const lineStart = value.lastIndexOf('\n', pos - 2) + 1
   const head = value.slice(lineStart, pos).trimStart()
-  if (!/^:[a-zA-Z][a-zA-Z0-9-]*(?:\[[a-z0-9.-]*\])?(?:\(\+\))?\{$/.test(head)) return
-  const node = panelTargetAt(d2r(value.slice(0, pos).split('\n').length - 1))
+  if (!/^:[a-zA-Z][a-zA-Z0-9-]*(?:\[[a-z0-9.+-]*\])?(?:\(\+\))?\{$/.test(head)) return
+  const node = panelTargetAt(d2r(value.slice(0, pos).split('\n').length - 1), 'interactions')
   if (!node) return
   // component instances get interactions from their shared master — no
   // per-node marker there (same rule as styles)
   if (isComponentType(node.type) || masterFor(node.id)) return
   startPanelSession('interactions', node)
+  sealMarker(node, 'interactions')
+}
+
+/** immediately finalizes a just-typed '[' into the closed '[+]' data marker —
+ * consistent with '(' → '(+)' and '{' → '{+}'. If the panel closes with no
+ * content/arg the truth-sync removes it again; picking a real field binding
+ * replaces '[+]' with '[name]'. */
+function sealDataMarker(node: ElementNode) {
+  const page = activePage.value
+  if (!page || node.line === undefined) return
+  const lines = page.code.split('\n')
+  const next = lines[node.line]!.replace(/^(\s*:[a-zA-Z][a-zA-Z0-9-]*)\[$/, '$1[+]')
+  if (next === lines[node.line]) return
+  lines[node.line] = next
+  page.code = lines.join('\n')
 }
 
 /** caret sits right after a fresh '[' at the end of an element token's name —
@@ -1300,10 +1350,11 @@ function maybeOpenDataBracket(el: HTMLTextAreaElement) {
   const lineStart = value.lastIndexOf('\n', pos - 2) + 1
   const head = value.slice(lineStart, pos).trimStart()
   if (!/^:[a-zA-Z][a-zA-Z0-9-]*\[$/.test(head)) return
-  const node = panelTargetAt(d2r(value.slice(0, pos).split('\n').length - 1))
+  const node = panelTargetAt(d2r(value.slice(0, pos).split('\n').length - 1), 'data')
   if (!node) return
   // component instances allowed — content and args are per-instance
   startPanelSession('data', node)
+  sealDataMarker(node)
 }
 
 // --- caret-dwell reopen: resting the caret inside an existing [ … ], ( … )
@@ -1314,7 +1365,7 @@ function maybeOpenDataBracket(el: HTMLTextAreaElement) {
 
 const CARET_DWELL_MS = 350
 // the token head's three spans, in source order, possibly mid-typing
-const HEAD_SPANS = /^(\s*:[a-zA-Z][a-zA-Z0-9-]*)(\[[a-z0-9.-]*\]?)?(\(\+?\)?)?(\{\+?\}?)?/
+const HEAD_SPANS = /^(\s*:[a-zA-Z][a-zA-Z0-9-]*)(\[[a-z0-9.+-]*\]?)?(\(\+?\)?)?(\{\+?\}?)?/
 
 /** which panel span the (collapsed, editor-focused) caret sits inside */
 function caretSpanKind(): PanelKind | null {
@@ -1341,6 +1392,131 @@ function caretSpanKind(): PanelKind | null {
   return null
 }
 
+/** the container node whose open (':div') or close ('div:') tag line is `real`,
+ * or null when `real` isn't a container boundary. Body is never returned — it's
+ * protected, not deletable. */
+function containerAtTagLine(real: number): ElementNode | null {
+  const node = elementAtLine(real)
+  if (!node || node.type === 'body' || node.line === undefined || node.endLine === undefined) return null
+  if (node.endLine === node.line) return null // leaf, not a block
+  return real === node.line || real === node.endLine ? node : null
+}
+
+/** deletes the whole block a tag line belongs to, then parks the caret on the
+ * element that took its place (removeElement moves selection there) */
+function deleteTagBlock(node: ElementNode) {
+  removeElement(node.id)
+  syncCaretToSelected()
+}
+
+/** true when `line` is the protected page-body open (':body…') or close
+ * ('body:') line — its token may never be edited, only its markers */
+function isBodyTokenLine(line: string): boolean {
+  const t = line.trim()
+  return isBodyOpenLine(t) || t === 'body:'
+}
+
+/** the body token line is read-only: typing/pasting/deleting on it is blocked
+ * at the source (the fix for the "duplicate :body" bug, which came from the
+ * canonical rebuild salvaging a mangled body line). Line breaks and the three
+ * marker openers '(' / '{' / '[' still pass — the user can decorate the body. */
+function onBeforeInput(e: InputEvent) {
+  const el = input.value
+  if (!el) return
+  const value = el.value
+  const start = el.selectionStart
+  const lineStart = value.lastIndexOf('\n', start - 1) + 1
+  const lineEndIdx = value.indexOf('\n', start)
+  const line = value.slice(lineStart, lineEndIdx === -1 ? value.length : lineEndIdx)
+  if (!isBodyTokenLine(line)) return
+  if (e.inputType === 'insertLineBreak' || e.inputType === 'insertParagraph') return
+  if (e.inputType === 'insertText' && (e.data === '(' || e.data === '{' || e.data === '[')) return
+  e.preventDefault()
+}
+
+/** Backspace/Delete treat the display-only markers '(+)' / '[+]' / '{+}'
+ * (including their mid-typing forms) as one character: a single keystroke
+ * removes the whole span, so deleting through a token never parks the caret
+ * inside a marker — where the dwell-reopen would pop the panel mid-deletion.
+ * Real '[args]' stay per-character editable — only marker forms are atomic.
+ * Beyond markers: the body token line is read-only, and deleting an open/close
+ * tag line removes the whole block (its partner tag included). */
+function onDeleteKey(e: KeyboardEvent) {
+  const el = input.value
+  if (!el || el.selectionStart !== el.selectionEnd) return
+  if (e.metaKey || e.ctrlKey || e.altKey) return // word/line deletes stay native
+  const pos = el.selectionStart
+  const value = el.value
+  const lineStart = value.lastIndexOf('\n', pos - 1) + 1
+  const lineEndIdx = value.indexOf('\n', lineStart)
+  const line = value.slice(lineStart, lineEndIdx === -1 ? value.length : lineEndIdx)
+  const col = pos - lineStart
+  const backspace = e.key === 'Backspace'
+
+  // 1) marker spans stay atomic (only meaningful on token lines with markers)
+  const m = line.match(HEAD_SPANS)
+  if (m && m[1]) {
+    let at = m[1].length
+    // spans in source order; the data slot is only atomic in its marker forms
+    const spans: { text: string | undefined; marker: boolean }[] = [
+      { text: m[2], marker: !!m[2] && /^\[\+?\]?$/.test(m[2]) },
+      { text: m[3], marker: true },
+      { text: m[4], marker: true },
+    ]
+    for (const span of spans) {
+      if (!span.text) continue
+      const start = at
+      const end = at + span.text.length
+      at = end
+      if (!span.marker) continue
+      const hit = backspace ? col > start && col <= end : col >= start && col < end
+      if (!hit) continue
+      e.preventDefault()
+      el.value = value.slice(0, lineStart + start) + value.slice(lineStart + end)
+      el.selectionStart = el.selectionEnd = lineStart + start
+      onInput()
+      return
+    }
+  }
+
+  // 2) the body token line is read-only (markers already handled above): block
+  // any edit to it, and any neighbour-line merge that would consume it
+  if (isBodyTokenLine(line)) return e.preventDefault()
+  const prevLine = backspace && col === 0 ? value.slice(value.lastIndexOf('\n', lineStart - 2) + 1, lineStart - 1) : null
+  if (prevLine !== null && isBodyTokenLine(prevLine)) return e.preventDefault()
+  if (!backspace && col === line.length && lineEndIdx !== -1) {
+    const nextEnd = value.indexOf('\n', lineEndIdx + 1)
+    const nextLine = value.slice(lineEndIdx + 1, nextEnd === -1 ? value.length : nextEnd)
+    if (isBodyTokenLine(nextLine)) return e.preventDefault()
+  }
+
+  // 3) whole-block delete: editing an open/close tag line (or merging one away)
+  // removes the entire block, partner tag included
+  const dLine = value.slice(0, pos).split('\n').length - 1
+  const leadingTabs = line.match(/^\t*/)![0].length
+  const openTok = line.trim().match(/^:[a-zA-Z][a-zA-Z0-9-]*/)
+  const isCloseTok = /^[a-zA-Z][a-zA-Z0-9-]*:$/.test(line.trim())
+  const tokenEnd = isCloseTok ? line.length : openTok ? leadingTabs + openTok[0].length : leadingTabs
+  const editsToken = backspace ? col > leadingTabs && col <= tokenEnd : col >= leadingTabs && col < tokenEnd
+  const mergesUp = backspace && col === 0
+  if (editsToken || mergesUp) {
+    const node = containerAtTagLine(d2r(dLine))
+    if (node) {
+      e.preventDefault()
+      deleteTagBlock(node)
+      return
+    }
+  }
+  // Delete at end of a line that pulls the next tag line up
+  if (!backspace && col === line.length && lineEndIdx !== -1) {
+    const node = containerAtTagLine(d2r(dLine + 1))
+    if (node) {
+      e.preventDefault()
+      deleteTagBlock(node)
+    }
+  }
+}
+
 let caretDwellTimer: ReturnType<typeof setTimeout> | null = null
 // spans only (re)open on an entry TRANSITION — a caret already inside when
 // focus returns (e.g. after ESC restores it) doesn't immediately reopen
@@ -1362,7 +1538,7 @@ function trackCaretDwell() {
   caretDwellTimer = setTimeout(() => {
     caretDwellTimer = null
     if (caretSpanKind() !== span || activePanelId.value === span) return
-    const node = panelTargetAt(d2r(cursorLine.value))
+    const node = panelTargetAt(d2r(cursorLine.value), span)
     if (!node) return
     // style/interactions live on component masters — same exclusion as typing
     if (span !== 'data' && (isComponentType(node.type) || masterFor(node.id))) return
@@ -1395,6 +1571,7 @@ function finalizeStyleParen() {
     if (!changed) return
   }
   page.code = lines.join('\n')
+  syncNodeMarkers()
 }
 
 function finalizeDataBracket() {
@@ -1408,12 +1585,17 @@ function finalizeDataBracket() {
   if (node && node.line !== undefined && lines[node.line] !== undefined) {
     const line = lines[node.line]!
     const next = closeArgBracket(line)
-    if (next === line) return // already closed (panel wrote the arg) or retyped
-    lines[node.line] = next
-    // code is authoritative for the arg: a typed arg the close just sealed
-    // becomes node.arg; a removed empty '[' clears it
-    const arg = next.match(/^\s*:[a-zA-Z][a-zA-Z0-9-]*\[([a-z0-9.-]+)\]/)?.[1]
-    node.arg = arg ?? undefined
+    if (next !== line) {
+      lines[node.line] = next
+      // code is authoritative for the arg: a typed arg the close just sealed
+      // becomes node.arg; a removed empty '[' clears it
+      const arg = next.match(/^\s*:[a-zA-Z][a-zA-Z0-9-]*\[([a-z0-9.-]+)\]/)?.[1]
+      node.arg = arg ?? undefined
+      page.code = lines.join('\n')
+    }
+    // whether we just closed an inline arg or the marker was already sealed to
+    // '[+]', let the truth-sync prune an empty '[+]' (no content/media/arg)
+    syncNodeMarkers()
   } else {
     // node gone mid-session — drop any stray unclosed '[' it left behind
     let changed = false
@@ -1423,9 +1605,9 @@ function finalizeDataBracket() {
         changed = true
       }
     }
-    if (!changed) return
+    if (changed) page.code = lines.join('\n')
+    syncNodeMarkers()
   }
-  page.code = lines.join('\n')
 }
 
 function finalizeInteractionBrace() {
@@ -1453,6 +1635,7 @@ function finalizeInteractionBrace() {
     if (!changed) return
   }
   page.code = lines.join('\n')
+  syncNodeMarkers()
 }
 
 watch(activePanelId, (_now, was) => {
@@ -1468,6 +1651,19 @@ watch(
     interactionBraceSession.value = null
   },
 )
+// a session's markers also seal when its element is deselected (e.g. the
+// user clicks another element while the panel stays open) — the code never
+// keeps a stale opener for an element the panel no longer targets
+watch(
+  () => selectedElement.value?.id,
+  (id) => {
+    if (styleParenSession.value && styleParenSession.value.nodeId !== id) finalizeStyleParen()
+    if (dataBracketSession.value && dataBracketSession.value.nodeId !== id) finalizeDataBracket()
+    if (interactionBraceSession.value && interactionBraceSession.value.nodeId !== id) {
+      finalizeInteractionBrace()
+    }
+  },
+)
 
 // keeps '(+)' / '{+}' in step with node.classes / node.interactions no matter
 // where they change (panels, canvas, MCP, paste/duplicate — new node ids
@@ -1476,7 +1672,9 @@ const markersSig = computed(() => {
   const parts: string[] = []
   const visit = (nodes: ElementNode[]) => {
     for (const n of nodes) {
-      parts.push(`${n.id}:${n.classes ?? ''}:${n.interactions?.length ?? 0}`)
+      parts.push(
+        `${n.id}:${n.classes ?? ''}:${n.interactions?.length ?? 0}:${n.arg ?? ''}:${n.content ? 1 : 0}:${n.src ? 1 : 0}`,
+      )
       if (!isComponentType(n.type)) visit(n.children)
     }
   }
@@ -1637,18 +1835,33 @@ function onInput() {
         </div>
       </div>
 
+      <!-- custom caret: mirrors the line prefix (so the bar lands at the exact
+           column) inside a row that scales with a lifted block, keeping the
+           caret glued to the glyphs the native caret would drift from -->
+      <div v-if="caretVisible" class="pointer-events-none absolute inset-0 overflow-hidden px-2">
+        <div :style="{ transform: `translate(${-scroll.left}px, ${-scroll.top}px)` }">
+          <div class="h-5 whitespace-pre" :style="caretRowStyle">
+            <span :key="cursor" class="relative"><span class="invisible">{{ caretPrefix }}</span><span class="code-caret"></span></span>
+          </div>
+        </div>
+      </div>
+
       <textarea
         ref="input"
         v-model="code"
         spellcheck="false"
-        class="code-scrollbar relative h-full w-full resize-none overflow-auto whitespace-pre bg-transparent px-2 text-transparent caret-editor-fg outline-none tab-2"
+        class="code-scrollbar relative h-full w-full resize-none overflow-auto whitespace-pre bg-transparent px-2 text-transparent caret-transparent outline-none tab-2"
         @scroll="syncScroll"
+        @beforeinput="onBeforeInput"
         @input="onInput"
+        @focus="editorFocused = true"
+        @blur="editorFocused = false"
         @click="onEditorClick"
         @keyup="trackCursor"
         @select="trackCursor"
         @contextmenu="onContextMenu"
         @keydown="onShortcutKeydown"
+        @keydown.delete="onDeleteKey"
         @keydown.tab.prevent="onTab"
         @keydown.enter="onEnter"
         @keydown.shift.up="onMoveKey($event, 'up')"
@@ -1722,9 +1935,9 @@ function onInput() {
             v-for="(d, i) in diagnostics"
             :key="i"
             class="flex w-full items-start gap-1.5 px-3 py-1 text-left text-muted-foreground hover:bg-muted/50"
-            @click="jumpToLine(d.line)"
+            @click="jumpToLine(d.line); showDiagnostics = false"
           >
-            <CircleAlert class="mt-px size-3 shrink-0 text-danger" />
+            <CircleAlert class="mt-1 size-3 shrink-0 text-danger" />
             <span>{{ d.message }}</span>
           </button>
         </div>
@@ -1748,6 +1961,34 @@ function onInput() {
 </template>
 
 <style scoped>
+/* custom caret: a thin blinking bar at the right edge of the invisible line
+   prefix. Re-keyed on every caret move so it flicks solid then blinks, like a
+   native caret. */
+.code-caret {
+  position: absolute;
+  right: -0.5px;
+  top: 3px;
+  width: 1px;
+  height: 14px;
+  background: var(--color-editor-fg, currentColor);
+  animation: code-caret-blink 1s steps(1) infinite;
+}
+@keyframes code-caret-blink {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  50.01%,
+  100% {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .code-caret {
+    animation: none;
+  }
+}
+
 /* validation pill: fades in while sliding up, fades out while sliding down */
 .pill-enter-active,
 .pill-leave-active {

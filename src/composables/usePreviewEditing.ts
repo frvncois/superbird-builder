@@ -1,20 +1,20 @@
 import { ref } from 'vue'
 
-// Content-mode editing coordination, shared across the recursive
-// ContentRenderer instances and the ContentView menu.
-export interface ContentMenuState {
+// Preview-mode editing coordination, shared across the recursive
+// PreviewRenderer instances and the PreviewView menu.
+export interface PreviewMenuState {
   x: number
   y: number
   nodeId: string
 }
 
 // the open "Edit content" context menu, or null
-const menu = ref<ContentMenuState | null>(null)
+const menu = ref<PreviewMenuState | null>(null)
 // a node id whose renderer instance should begin editing (menu-driven —
 // Cmd+Click edits directly, so this is only for the context menu path)
 const editRequest = ref<string | null>(null)
 
-export function useContentEditing() {
+export function usePreviewEditing() {
   function openMenu(e: MouseEvent, nodeId: string) {
     e.preventDefault()
     e.stopPropagation()

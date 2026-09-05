@@ -2,11 +2,11 @@
 // POST /api/auth/setup|login|logout, GET /api/auth/me — session cookie
 // GET/PUT/DELETE /api/store[...]  🔒 the editor's persistence (per key)
 // /api/media[...]                 🔒 media library (see media.mjs)
-// /media/:id, /media/thumb/:id    🌐 library bytes (falls back to exported site)
+// /media/:id, /media/thumb/:id    🌐 library bytes (editor media library)
 // POST /api/published             🔒 snapshot + static export
-// GET  /api/published             🌐 public (smtp redacted)
-// /admin*, /assets/*              → the built SPA from dist/ (the editor)
-// everything else                 → the exported static site
+// /admin*                         → the built SPA from dist/ (the editor;
+//                                   Vite base '/admin/' → /admin/assets/*)
+// everything else                 → the exported static site (incl. /assets/*)
 //
 // Dev:    node server/index.mjs   (REQUIRED alongside `npm run dev` —
 //         the editor boots from /api; vite proxies /api here)
@@ -16,13 +16,15 @@
 //         PUBLISH_TOKEN optionally allows CI publishes)
 
 import { createServer } from 'node:http'
-import { readFile, rm } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { extname, join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { exportSite } from './export.mjs'
-import { handleMedia, handleMediaFile, originAllowed } from './media.mjs'
-import { fail, send, timingSafeEqualStr, writeAtomic } from './util.mjs'
+import { handleMedia, handleMediaFile, originAllowed, resetMediaIndexCache } from './media.mjs'
+import { pushSiteToGitHub } from './github.mjs'
+import { createZip, readZip } from './zip.mjs'
+import { fail, readDirFiles, send, timingSafeEqualStr, writeAtomic } from './util.mjs'
 import {
   ROLES,
   acceptInvite,
@@ -64,10 +66,15 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const DATA_DIR = process.env.SB_DATA_DIR || join(ROOT, 'server', 'data')
 const SNAPSHOT = join(DATA_DIR, 'published.json')
 const SITE = join(DATA_DIR, 'site')
+const MEDIA_DIR = join(DATA_DIR, 'media')
+// server-managed publish config — the GitHub token lives here, NEVER in the
+// /api/store project blob (which any authed user can read)
+const PUBLISH_CONFIG = join(DATA_DIR, 'publish.json')
 const DIST = join(ROOT, 'dist')
 const PORT = Number(process.env.PORT) || 4174
 const TOKEN = process.env.PUBLISH_TOKEN || ''
 const MAX_BODY = 10 * 1024 * 1024 // data-URL images make snapshots heavy
+const IMPORT_CAP = 512 * 1024 * 1024 // project package upload ceiling
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -102,6 +109,30 @@ async function readBody(req) {
     chunks.push(chunk)
   }
   return Buffer.concat(chunks).toString('utf8')
+}
+
+/** reads a request body as a raw Buffer with a size cap; null when too large
+ * (zip uploads can't go through the utf8 readBody) */
+async function readBodyRaw(req, cap) {
+  const chunks = []
+  let size = 0
+  for await (const chunk of req) {
+    size += chunk.length
+    if (size > cap) return null
+    chunks.push(chunk)
+  }
+  return Buffer.concat(chunks)
+}
+
+/** the server-managed publish config (holds the GitHub token). Always returns
+ * a well-formed shape so callers can read `.github.token` unconditionally. */
+async function readPublishConfig() {
+  try {
+    const parsed = JSON.parse(await readFile(PUBLISH_CONFIG, 'utf8'))
+    return { github: { token: parsed?.github?.token ?? '' } }
+  } catch {
+    return { github: { token: '' } }
+  }
 }
 
 // ---------- auth endpoints ----------
@@ -371,7 +402,7 @@ function sensitiveProjectFields(project) {
 /**
  * For a contributor writing a project key: reject (returns an error string)
  * when the write would change customCode or smtp vs the stored copy. The
- * contributor UI (content mode) can't touch those fields, so a legitimate
+ * contributor UI (Preview) can't touch those fields, so a legitimate
  * autosave carries them unchanged and passes; only a hand-crafted PUT trips
  * it. Returns null when the write is allowed.
  */
@@ -439,29 +470,7 @@ async function handleStore(req, res, path, query) {
   return fail(res, 404, 'not found')
 }
 
-async function handleGet(res) {
-  try {
-    const data = await readFile(SNAPSHOT)
-    // Public endpoint (the SPA preview fetches it): expose only what a
-    // visitor may see — published pages only (no drafts), no editorial
-    // comments, and never the mail credentials. Mirrors what the static
-    // export renders (enumerateRoutes drops drafts too).
-    const parsed = JSON.parse(data)
-    const publicSnapshot = {
-      ...parsed,
-      pages: Array.isArray(parsed.pages)
-        ? parsed.pages.filter((p) => p.status === 'published')
-        : [],
-      comments: [],
-      settings: parsed.settings ? { ...parsed.settings, smtp: undefined } : parsed.settings,
-    }
-    send(res, 200, JSON.stringify(publicSnapshot))
-  } catch {
-    fail(res, 404, 'nothing published yet')
-  }
-}
-
-async function handlePost(req, res) {
+async function handlePost(req, res, params) {
   // the session is the credential; PUBLISH_TOKEN stays as a CI escape hatch.
   // Publishing is admin/editor only — contributors are content-only.
   const bearerOk = !!TOKEN && timingSafeEqualStr(req.headers.authorization ?? '', `Bearer ${TOKEN}`)
@@ -470,6 +479,9 @@ async function handlePost(req, res) {
     if (!user) return fail(res, 401, 'unauthorized')
     if (user.role === 'contributor') return fail(res, 403, 'forbidden')
   }
+  const method = ['server', 'zip', 'github'].includes(params.get('method'))
+    ? params.get('method')
+    : 'server'
   const raw = await readBody(req)
   if (raw === null) return fail(res, 400, 'snapshot too large')
   let parsed
@@ -479,20 +491,200 @@ async function handlePost(req, res) {
   } catch {
     return fail(res, 400, 'invalid project snapshot')
   }
+
+  // github: fail fast on missing config BEFORE the (expensive) export
+  let github
+  if (method === 'github') {
+    github = {
+      ...(parsed.settings?.publishing?.github ?? {}),
+      token: (await readPublishConfig()).github.token,
+    }
+    if (!github.repo || !github.branch || !github.token) {
+      return fail(res, 400, 'github publishing is not configured (repo/branch/token)')
+    }
+  }
+
   await writeAtomic(SNAPSHOT, raw) // atomic: readers never see a partial write
   // static export: on failure the snapshot stays saved and the previous
-  // exported site stays live (atomic swap inside exportSite)
+  // exported site stays live (atomic swap inside exportSite). Every method
+  // exports once, so the local site at `/` refreshes regardless of method.
   try {
     const stats = await exportSite(parsed, SITE)
+    if (method === 'zip') {
+      const zip = createZip(await readDirFiles(SITE))
+      return send(res, 200, zip, 'application/zip', {
+        'content-disposition': 'attachment; filename="superbird-site.zip"',
+        'x-export-routes': String(stats.routes),
+        'x-export-bytes': String(stats.bytes),
+      })
+    }
+    if (method === 'github') {
+      const { commit } = await pushSiteToGitHub(SITE, github)
+      return send(res, 200, JSON.stringify({ ok: true, ...stats, commit }))
+    }
     send(res, 200, JSON.stringify({ ok: true, ...stats }))
   } catch (err) {
     // full detail to the server log only; the client gets a generic
     // message (never leak fs paths / compiler internals in the response) —
-    // except errors the exporter explicitly marked safe to expose
+    // except errors explicitly marked safe to expose (exporter / github push)
     console.error(err)
     if (err?.expose) return fail(res, 502, err.message)
     fail(res, 500, 'export failed — check the server logs')
   }
+}
+
+// ---------- 🔒 GET/PUT /api/publish-config (server-side GitHub token) ----------
+
+async function handlePublishConfig(req, res) {
+  const user = sessionUser(req)
+  if (!user) return fail(res, 401, 'unauthorized')
+  if (user.role === 'contributor') return fail(res, 403, 'forbidden')
+
+  if (req.method === 'GET') {
+    const cfg = await readPublishConfig()
+    // NEVER return the token in any shape — only whether one is set
+    return send(res, 200, JSON.stringify({ github: { tokenSet: !!cfg.github.token } }))
+  }
+  if (req.method === 'PUT') {
+    const body = await readBody(req)
+    let patch
+    try {
+      patch = JSON.parse(body ?? '')
+    } catch {
+      return fail(res, 400, 'invalid request')
+    }
+    const cfg = await readPublishConfig()
+    if (patch?.github && 'token' in patch.github) {
+      cfg.github.token = String(patch.github.token ?? '').trim() // '' clears
+    }
+    await writeAtomic(PUBLISH_CONFIG, JSON.stringify(cfg))
+    return send(res, 200, JSON.stringify({ ok: true, github: { tokenSet: !!cfg.github.token } }))
+  }
+  return fail(res, 404, 'not found')
+}
+
+// ---------- 🔒 project export / import (full backup package) ----------
+
+// package layout inside the zip: manifest.json, store/<key>.json,
+// media/index.json, media/files/*, media/thumbs/*.webp — see the plan.
+const PACKAGE_FORMAT = 'superbird-package'
+const PACKAGE_VERSION = 1
+
+/** GET /api/project-export — admin-only backup package (.zip). Excludes
+ * users/sessions/invites/publish.json/published.json/site by construction:
+ * none of them live under the store or media dirs we read here. */
+async function handleProjectExport(req, res) {
+  const user = sessionUser(req)
+  if (!user) return fail(res, 401, 'unauthorized')
+  if (user.role !== 'admin') return fail(res, 403, 'forbidden')
+
+  const files = [
+    {
+      path: 'manifest.json',
+      data: Buffer.from(
+        JSON.stringify({
+          format: PACKAGE_FORMAT,
+          version: PACKAGE_VERSION,
+          exportedAt: new Date().toISOString(),
+        }),
+      ),
+    },
+  ]
+  for (const { path, data } of await readDirFiles(STORE_DIR)) {
+    files.push({ path: `store/${path}`, data })
+  }
+  for (const { path, data } of await readDirFiles(MEDIA_DIR)) {
+    files.push({ path: `media/${path}`, data })
+  }
+  return send(res, 200, createZip(files), 'application/zip', {
+    'content-disposition': 'attachment; filename="superbird-project.zip"',
+  })
+}
+
+const IMPORT_STORE_RE = /^store\/[A-Za-z0-9_-]{1,100}\.json$/
+const IMPORT_MEDIA_FILE_RE = /^media\/files\/[a-f0-9]{16}$/
+const IMPORT_MEDIA_THUMB_RE = /^media\/thumbs\/[a-f0-9]{16}\.webp$/
+
+/** POST /api/project-import — admin-only full replace from a package. Strict
+ * allowlist: any unrecognized entry rejects the whole import. */
+async function handleProjectImport(req, res) {
+  const user = sessionUser(req)
+  if (!user) return fail(res, 401, 'unauthorized')
+  if (user.role !== 'admin') return fail(res, 403, 'forbidden')
+
+  const raw = await readBodyRaw(req, IMPORT_CAP)
+  if (raw === null) return fail(res, 413, 'package too large')
+  let entries
+  try {
+    entries = readZip(raw)
+  } catch {
+    return fail(res, 400, 'invalid package (not a readable zip)')
+  }
+
+  let manifestOk = false
+  let hasProject = false
+  for (const { path, data } of entries) {
+    if (path === 'manifest.json') {
+      try {
+        const m = JSON.parse(data.toString('utf8'))
+        if (m.format !== PACKAGE_FORMAT || m.version !== PACKAGE_VERSION) {
+          return fail(res, 400, 'unrecognized package format')
+        }
+        manifestOk = true
+      } catch {
+        return fail(res, 400, 'invalid manifest')
+      }
+    } else if (IMPORT_STORE_RE.test(path)) {
+      let parsed
+      try {
+        parsed = JSON.parse(data.toString('utf8'))
+      } catch {
+        return fail(res, 400, `unreadable store entry: ${path}`)
+      }
+      if (path.startsWith('store/superbird-project__')) {
+        if (Array.isArray(parsed.pages) && parsed.pages.length) hasProject = true
+      }
+    } else if (path === 'media/index.json') {
+      try {
+        JSON.parse(data.toString('utf8'))
+      } catch {
+        return fail(res, 400, 'invalid media index')
+      }
+    } else if (IMPORT_MEDIA_FILE_RE.test(path) || IMPORT_MEDIA_THUMB_RE.test(path)) {
+      // opaque bytes — id shape already validated by the regex
+    } else {
+      return fail(res, 400, `unexpected entry: ${path}`)
+    }
+  }
+  if (!manifestOk) return fail(res, 400, 'package is missing its manifest')
+  if (!hasProject) return fail(res, 400, 'package has no project with pages')
+
+  // stage into a tmp dir, then swap live dirs into place
+  const tmp = join(DATA_DIR, `import.tmp-${Date.now()}`)
+  const tmpStore = join(tmp, 'store')
+  const tmpMedia = join(tmp, 'media')
+  await mkdir(tmpStore, { recursive: true })
+  await mkdir(tmpMedia, { recursive: true })
+  for (const { path, data } of entries) {
+    if (path === 'manifest.json') continue
+    const dest = join(tmp, path) // path already allowlisted, safe to join
+    await mkdir(join(dest, '..'), { recursive: true })
+    await writeFile(dest, data)
+  }
+
+  await swapDir(STORE_DIR, tmpStore)
+  await swapDir(MEDIA_DIR, tmpMedia)
+  await rm(tmp, { recursive: true, force: true })
+  resetMediaIndexCache() // make imported media visible without a restart
+  return send(res, 200, JSON.stringify({ ok: true }))
+}
+
+/** replace `live` with `staged`: move live aside, staged in, drop the old */
+async function swapDir(live, staged) {
+  const old = `${live}.old-${Date.now()}`
+  if (existsSync(live)) await rename(live, old)
+  await rename(staged, live)
+  await rm(old, { recursive: true, force: true })
 }
 
 async function handleStatic(req, res) {
@@ -500,11 +692,14 @@ async function handleStatic(req, res) {
   // content-type is authoritative (extension-mapped) — never sniffed
   const NOSNIFF = { 'x-content-type-options': 'nosniff' }
 
-  // the editor SPA: /admin routes, its built assets, and real dist files
-  const distFile = join(DIST, path)
-  const isDistFile =
-    distFile.startsWith(DIST) && extname(distFile) !== '' && existsSync(distFile)
-  if (path === '/admin' || path.startsWith('/admin/') || path.startsWith('/assets/') || isDistFile) {
+  // the editor SPA lives under /admin/ — strip the prefix and serve dist
+  // (Vite builds with base '/admin/', so bundle URLs arrive as /admin/assets/*
+  // while the files sit at dist/assets/*)
+  if (path === '/admin' || path.startsWith('/admin/')) {
+    const sub = normalize(path.slice('/admin'.length) || '/')
+    const distFile = join(DIST, sub)
+    const isDistFile =
+      distFile.startsWith(DIST) && extname(distFile) !== '' && existsSync(distFile)
     const target = isDistFile ? distFile : join(DIST, 'index.html')
     try {
       const data = await readFile(target)
@@ -514,8 +709,8 @@ async function handleStatic(req, res) {
     }
   }
 
-  // the published static site (exported media lives under /media/,
-  // never /assets/, to avoid colliding with the SPA bundles above)
+  // the published static site — owns everything outside /admin and /api,
+  // including /assets/* (style.css, script.js, media)
   const exact = join(SITE, path)
   const target =
     exact.startsWith(SITE) && extname(exact) !== '' && existsSync(exact)
@@ -543,8 +738,16 @@ createServer(async (req, res) => {
     if (path.startsWith('/api/') && req.method !== 'GET' && !originAllowed(req)) {
       return fail(res, 403, 'cross-origin request rejected')
     }
-    if (path === '/api/published' && req.method === 'GET') return await handleGet(res)
-    if (path === '/api/published' && req.method === 'POST') return await handlePost(req, res)
+    if (path === '/api/published' && req.method === 'POST') {
+      return await handlePost(req, res, url.searchParams)
+    }
+    if (path === '/api/publish-config') return await handlePublishConfig(req, res)
+    if (path === '/api/project-export' && req.method === 'GET') {
+      return await handleProjectExport(req, res)
+    }
+    if (path === '/api/project-import' && req.method === 'POST') {
+      return await handleProjectImport(req, res)
+    }
     if (path.startsWith('/api/auth/')) return await handleAuth(req, res, path)
     if (path.startsWith('/api/invite/')) return await handleInvite(req, res, path)
     if (path === '/api/users' || path.startsWith('/api/users/')) {
@@ -558,7 +761,8 @@ createServer(async (req, res) => {
     }
     if (path.startsWith('/api/')) return fail(res, 404, 'not found')
     // library assets first; unknown /media/ paths fall through to the
-    // exported site (its hashed files live under the same prefix)
+    // static handler (exported media now lives under /assets/media/ —
+    // the fall-through only still serves pre-move exports)
     if (path.startsWith('/media/')) {
       if (await handleMediaFile(req, res, path, url.searchParams)) return
     }

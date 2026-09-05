@@ -17,9 +17,9 @@ function pick(value: string) {
 <template>
   <div class="relative shrink-0">
     <button
+      v-tooltip="model"
       class="size-6 shrink-0 cursor-pointer rounded-md border border-input"
       :style="{ backgroundColor: hex }"
-      :title="model"
       @click="open = !open"
     />
 
@@ -32,9 +32,9 @@ function pick(value: string) {
           <button
             v-for="(swatch, i) in hexes"
             :key="swatch"
+            v-tooltip="`${name}-${TAILWIND_SHADES[i]}`"
             class="size-4 shrink-0 cursor-pointer rounded-sm hover:scale-125"
             :style="{ backgroundColor: swatch }"
-            :title="`${name}-${TAILWIND_SHADES[i]}`"
             @click="pick(`${name}-${TAILWIND_SHADES[i]}`)"
           />
         </div>
@@ -42,13 +42,13 @@ function pick(value: string) {
 
       <div class="mt-2 flex items-center gap-1.5">
         <button
+          v-tooltip="'white'"
           class="size-4 cursor-pointer rounded-sm border border-input bg-white"
-          title="white"
           @click="pick('white')"
         />
         <button
+          v-tooltip="'black'"
           class="size-4 cursor-pointer rounded-sm border border-input bg-black"
-          title="black"
           @click="pick('black')"
         />
         <label class="ml-auto flex cursor-pointer items-center gap-1">

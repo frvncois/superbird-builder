@@ -8,9 +8,25 @@ const props = withDefaults(
     tokens: string[]
     /** auto-add flex/grid prerequisites (off for transition to-states) */
     prerequisites?: boolean
+    /** tokens inherited from a larger breakpoint — shown dimmed. Removable only
+     * when listed in `removableInherited`; otherwise add a conflicting class to
+     * override (which then shows solid) */
+    inherited?: string[]
+    /** inherited tokens that can be removed here — removing scopes the class so
+     * it drops on this breakpoint and smaller ones, larger ones keeping it */
+    removableInherited?: string[]
   }>(),
-  { prerequisites: true },
+  { prerequisites: true, inherited: () => [], removableInherited: () => [] },
 )
+
+function isInherited(token: string): boolean {
+  return props.inherited.includes(token)
+}
+
+// removable = a normal (own) token, or a base-inherited token we can scope away
+function isRemovable(token: string): boolean {
+  return !isInherited(token) || props.removableInherited.includes(token)
+}
 
 const emit = defineEmits<{
   commit: [tokens: string[]]
@@ -130,7 +146,9 @@ function onKeydown(e: KeyboardEvent) {
       active.value = 0
     }
   } else if (e.key === 'Backspace' && !query.value && props.tokens.length) {
-    emit('remove', props.tokens[props.tokens.length - 1]!)
+    // remove the last removable token
+    const last = [...props.tokens].reverse().find((t) => isRemovable(t))
+    if (last) emit('remove', last)
   } else {
     active.value = 0
   }
@@ -153,9 +171,10 @@ function onKeydown(e: KeyboardEvent) {
         />
         <BadgeUI
           v-else
-          removable
+          :removable="isRemovable(token)"
           :variant="isStateClass(token) ? 'state' : 'default'"
           class="cursor-text"
+          :class="isInherited(token) && 'opacity-50'"
           @remove="$emit('remove', token)"
           @dblclick="startEdit(token)"
         >

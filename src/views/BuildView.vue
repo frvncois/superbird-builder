@@ -5,23 +5,16 @@ import CanvasEditor from '@/components/editor/canvas/CanvasEditor.vue'
 import CodeEditor from '@/components/editor/code/CodeEditor.vue'
 import SettingsEditor from '@/components/editor/sidebar/SettingsEditor.vue'
 import ContextMenu from '@/components/editor/canvas/ContextMenu.vue'
-import CreateComponentModal from '@/components/editor/canvas/CreateComponentModal.vue'
-import DocumentationModal from '@/components/docs/DocumentationModal.vue'
-import MediaLibraryModal from '@/components/shared/MediaLibraryModal.vue'
 import InsertDragChip from '@/components/editor/canvas/InsertDragChip.vue'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import { useEditorShortcuts } from '@/composables/useEditorShortcuts'
 import { useEditorBoot } from '@/composables/useEditorBoot'
-import { useDocumentation } from '@/composables/useDocumentation'
-import { useMediaLibrary } from '@/composables/useMediaLibrary'
 
 // editor-zone globals: keymaps live here (NOT in App.vue) so the public
 // site never boots them
 useEditorShortcuts()
 
 const { ready, bootError, reloadPage } = useEditorBoot()
-const { docsOpen, close: closeDocumentation } = useDocumentation()
-const { open: mediaOpen, close: closeMediaLibrary } = useMediaLibrary()
 </script>
 
 <template>
@@ -35,7 +28,7 @@ const { open: mediaOpen, close: closeMediaLibrary } = useMediaLibrary()
 
   <EditorLayout v-else-if="ready">
     <template #header>
-      <AppHeader mode="editor" />
+      <AppHeader mode="build" />
       <InsertDragChip />
     </template>
 
@@ -45,9 +38,6 @@ const { open: mediaOpen, close: closeMediaLibrary } = useMediaLibrary()
 
     <CanvasEditor />
     <ContextMenu />
-    <CreateComponentModal />
-    <DocumentationModal v-if="docsOpen" @close="closeDocumentation" />
-    <MediaLibraryModal v-if="mediaOpen" @close="closeMediaLibrary" />
 
     <template #right>
       <SettingsEditor />

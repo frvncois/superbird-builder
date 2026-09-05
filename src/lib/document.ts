@@ -1,4 +1,4 @@
-import { normalizeSyntax } from './syntax'
+import { isBodyOpenLine, normalizeSyntax } from './syntax'
 
 export interface PageMeta {
   name: string
@@ -13,7 +13,12 @@ export interface PageMeta {
  * body content are editable; an empty body keeps one indented line so
  * there is always somewhere to type.
  */
-export function buildDocument(meta: PageMeta, bodyLines: string[], bodyArg?: string): string {
+export function buildDocument(
+  meta: PageMeta,
+  bodyLines: string[],
+  bodyArg?: string,
+  bodyDecor?: string,
+): string {
   const body = bodyLines.some((l) => l.trim()) ? bodyLines : ['\t']
   return [
     '@setup',
@@ -21,15 +26,28 @@ export function buildDocument(meta: PageMeta, bodyLines: string[], bodyArg?: str
     `\tslug: ${meta.slug}`,
     `\tstatus: ${meta.status}`,
     `\tlocale: ${meta.locale}`,
-    bodyArg ? `:body[${bodyArg}]` : ':body',
+    (bodyArg ? `:body[${bodyArg}]` : ':body') + (bodyDecor ?? ''),
     ...body,
     'body:',
   ].join('\n')
 }
 
-/** the collection bound to the page body, from :body[post] */
+/** the collection bound to the page body, from :body[post] (markers after
+ * the arg are tolerated: ':body[post](+)') */
 export function extractBodyArg(code: string): string | undefined {
-  return code.match(/^:body\[([a-z0-9-]+)\]$/m)?.[1]
+  return code.match(/^:body\[([a-z0-9-]+)\](?:[({].*)?$/m)?.[1]
+}
+
+/** the style/interaction markers on the :body line — possibly mid-typing
+ * ('(', '(+'…) — round-tripped through rebuilds so typing '(' on body (which
+ * opens the Style panel) and the synced '(+)'/'{+}' markers survive the
+ * scaffold enforcement instead of respawning a fresh :body */
+export function extractBodyDecor(code: string): string | undefined {
+  const line = code
+    .split('\n')
+    .map((l) => l.trim())
+    .find(isBodyOpenLine)
+  return line?.match(/^:body(?:\[[a-z0-9-]*\]?)?((?:\(\+?\)?)?(?:\{\+?\}?)?)$/)?.[1] || undefined
 }
 
 /** normalizes a string into a url slug segment */
@@ -43,14 +61,14 @@ export function slugify(value: string): string {
 
 /** rebuilds a document with new @setup values but the same body */
 export function replaceSetup(code: string, meta: PageMeta): string {
-  return buildDocument(meta, extractBodyLines(code), extractBodyArg(code))
+  return buildDocument(meta, extractBodyLines(code), extractBodyArg(code), extractBodyDecor(code))
 }
 
 /** The editable lines between :body and body: */
 export function extractBodyLines(code: string): string[] {
   const lines = code.split('\n')
   const trimmed = lines.map((l) => l.trim())
-  const start = trimmed.findIndex((t) => t === ':body' || t.startsWith(':body['))
+  const start = trimmed.findIndex(isBodyOpenLine)
   const end = trimmed.lastIndexOf('body:')
   if (start !== -1 && end > start) return lines.slice(start + 1, end)
   // wrapper damaged → salvage whatever still looks like body content
@@ -60,8 +78,7 @@ export function extractBodyLines(code: string): string[] {
       t &&
       !t.startsWith('@') &&
       !/^(name|slug|status|locale):/.test(t) &&
-      t !== ':body' &&
-      !t.startsWith(':body[') &&
+      !isBodyOpenLine(t) &&
       t !== 'body:'
     )
   })
@@ -88,7 +105,7 @@ export function parseSetup(value: string): PageMeta {
  */
 export function setSetupLocale(code: string, locale: string): string {
   const lines = code.split('\n')
-  const bodyOpen = lines.findIndex((l) => /^:body(\[|$)/.test(l.trim()))
+  const bodyOpen = lines.findIndex((l) => isBodyOpenLine(l.trim()))
   const end = bodyOpen === -1 ? lines.length : bodyOpen
   for (let i = 1; i < end; i++) {
     if (/^\s*locale:/.test(lines[i]!)) {
@@ -107,5 +124,5 @@ export function enforceDocument(value: string): { code: string; meta: PageMeta }
     .split('\n')
     .map((l) => (l.trim() && !l.startsWith('\t') ? '\t' + l : l))
 
-  return { code: buildDocument(meta, body, extractBodyArg(value)), meta }
+  return { code: buildDocument(meta, body, extractBodyArg(value), extractBodyDecor(value)), meta }
 }

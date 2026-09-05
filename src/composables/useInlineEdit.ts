@@ -3,8 +3,8 @@ import { sanitizeRich } from '@/lib/shared/richtext.js'
 
 /**
  * Inline plaintext editing on a canvas element, shared by the build-mode
- * ElementRenderer (double-click, Esc cancels) and the content-mode
- * ContentRenderer (double-click, Esc saves). While editing, a dedicated span is
+ * ElementRenderer (double-click, Esc cancels) and the Preview-mode
+ * PreviewRenderer (double-click, Esc saves). While editing, a dedicated span is
  * mounted that Vue renders EMPTY — its text is managed only by us — so Vue's
  * fragment anchors for the interpolation and child renderers survive.
  */

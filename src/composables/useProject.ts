@@ -1,8 +1,21 @@
 import { computed, ref } from 'vue'
 import { createProject } from '@/lib/factories'
+import { breakpointVariant, breakpointIdForWidth } from '@/lib/responsive'
 import type { Breakpoint } from '@/types/editor'
 
 const project = ref(createProject('Untitled project'))
+
+// which breakpoint the Style panel is editing — runtime-only (never persisted).
+// null / unknown falls back to the widest breakpoint (the unprefixed base).
+const activeBreakpointId = ref<string | null>(null)
+
+// live viewport width, for gating breakpoint-scoped interactions in the
+// single-frame Preview (the multi-frame canvas keys off each frame instead).
+// One shared listener — never per node.
+const viewportWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1440)
+if (typeof window !== 'undefined') {
+  window.addEventListener('resize', () => (viewportWidth.value = window.innerWidth))
+}
 
 /** the project always keeps at least one breakpoint, and never more than six */
 export const MIN_BREAKPOINTS = 1
@@ -21,6 +34,28 @@ function nameFor(width: number): string {
 export function useProject() {
   // shared across all pages — they map to global CSS media queries
   const breakpoints = computed(() => project.value.breakpoints)
+
+  // the widest breakpoint is the unprefixed base (Desktop-first authoring)
+  const baseBreakpoint = computed<Breakpoint | undefined>(() =>
+    breakpoints.value.reduce<Breakpoint | undefined>((w, b) => (!w || b.width > w.width ? b : w), undefined),
+  )
+  const activeBreakpoint = computed<Breakpoint | undefined>(
+    () => breakpoints.value.find((b) => b.id === activeBreakpointId.value) ?? baseBreakpoint.value,
+  )
+  /** the Tailwind variant prefix for the active breakpoint — '' when it's the base */
+  const activeVariant = computed(() =>
+    !activeBreakpoint.value || activeBreakpoint.value.id === baseBreakpoint.value?.id
+      ? ''
+      : breakpointVariant(activeBreakpoint.value.width),
+  )
+  function setActiveBreakpoint(id: string | null) {
+    activeBreakpointId.value = id
+  }
+
+  // the breakpoint the live viewport currently falls in (Preview gating)
+  const liveBreakpointId = computed(() =>
+    breakpointIdForWidth(breakpoints.value, viewportWidth.value),
+  )
 
   function renameProject(name: string) {
     project.value.name = name
@@ -74,6 +109,12 @@ export function useProject() {
   return {
     project,
     breakpoints,
+    baseBreakpoint,
+    activeBreakpoint,
+    activeBreakpointId,
+    activeVariant,
+    liveBreakpointId,
+    setActiveBreakpoint,
     renameProject,
     canAddBreakpoint,
     addBreakpoint,

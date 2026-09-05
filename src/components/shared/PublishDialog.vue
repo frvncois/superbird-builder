@@ -4,6 +4,9 @@ import { Check, CircleAlert } from 'lucide-vue-next'
 import ModalDialog from '@/components/modal/ModalDialog.vue'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import { usePublish } from '@/composables/usePublish'
+import { useBranches } from '@/composables/useBranches'
+import { useSettings } from '@/composables/useSettings'
+import type { PublishMethod } from '@/types/editor'
 
 // visual minimum so the ring doesn't flash on a fast local POST
 const MIN_DURATION = 800
@@ -13,6 +16,31 @@ const emit = defineEmits<{
 }>()
 
 const { markPublished } = usePublish()
+const { onMain, activeBranch } = useBranches()
+const { settings } = useSettings()
+
+// capture the method once at mount — a mid-dialog settings change must not
+// morph what this run does (same capture-at-mount discipline as needsConfirm)
+const method = ref<PublishMethod>(settings.value.publishing?.method ?? 'server')
+const repo = settings.value.publishing?.github?.repo ?? ''
+
+const PROGRESS_COPY: Record<PublishMethod, string> = {
+  server: 'Exporting and deploying your site…',
+  zip: 'Exporting and packaging your site…',
+  github: 'Exporting and pushing to GitHub…',
+}
+const successCopy = computed(() =>
+  method.value === 'zip'
+    ? 'Site zipped — download started.'
+    : method.value === 'github'
+      ? `Pushed to ${repo || 'GitHub'}`
+      : 'Published!',
+)
+
+// on a draft, publishing still ships Main — pause on a confirm step so the
+// user reads that before anything deploys (captured at mount: a mid-dialog
+// branch flip must not morph the UI)
+const needsConfirm = ref(!onMain.value)
 
 const published = ref(false)
 const error = ref<string | null>(null)
@@ -32,7 +60,7 @@ async function publish() {
   requestAnimationFrame(() => requestAnimationFrame(() => (progress.value = 1)))
   const started = Date.now()
   try {
-    await markPublished()
+    await markPublished(method.value)
     const remaining = MIN_DURATION - (Date.now() - started)
     if (remaining > 0) await new Promise((r) => setTimeout(r, remaining))
     if (!cancelled) published.value = true
@@ -44,7 +72,14 @@ async function publish() {
   }
 }
 
-onMounted(publish)
+function confirmPublish() {
+  needsConfirm.value = false
+  void publish()
+}
+
+onMounted(() => {
+  if (!needsConfirm.value) void publish()
+})
 
 function cancel() {
   cancelled = true
@@ -58,8 +93,20 @@ function viewLive() {
 </script>
 
 <template>
-  <ModalDialog :title="published ? 'Published' : 'Publishing'" size="sm" @close="cancel">
-    <div class="flex flex-col items-center gap-4 py-4">
+  <ModalDialog
+    :title="published ? 'Published' : needsConfirm ? 'Publish' : 'Publishing'"
+    size="sm"
+    @close="cancel"
+  >
+    <div v-if="needsConfirm" class="flex flex-col gap-2 py-2">
+      <p class="text-sm">
+        You're on the draft “{{ activeBranch.name }}” — publishing puts Main's version live.
+      </p>
+      <p class="text-xs text-muted-foreground">
+        Your draft changes are not included until you merge them into Main.
+      </p>
+    </div>
+    <div v-else class="flex flex-col items-center gap-4 py-4">
       <div class="relative flex size-24 items-center justify-center">
         <svg class="size-24 -rotate-90" viewBox="0 0 80 80">
           <circle cx="40" cy="40" :r="R" fill="none" stroke="var(--muted)" stroke-width="4" />
@@ -83,18 +130,27 @@ function viewLive() {
       </div>
 
       <p class="text-sm font-medium">
-        {{ published ? 'Published!' : error ? 'Publish failed' : 'Publishing your site…' }}
+        {{ published ? successCopy : error ? 'Publish failed' : 'Publishing your site…' }}
       </p>
       <p v-if="error" class="text-xs text-danger">{{ error }}</p>
       <p v-else-if="!published" class="text-xs text-muted-foreground">
-        You can still cancel before it goes live.
+        {{ PROGRESS_COPY[method] }}
       </p>
     </div>
 
     <template #actions>
-      <template v-if="published">
-        <ButtonUI variant="outline" size="sm" @click="emit('close')">Close</ButtonUI>
-        <ButtonUI variant="default" size="sm" @click="viewLive">View live</ButtonUI>
+      <template v-if="needsConfirm">
+        <ButtonUI variant="outline" size="sm" @click="cancel">Cancel</ButtonUI>
+        <ButtonUI variant="default" size="sm" @click="confirmPublish">Publish</ButtonUI>
+      </template>
+      <template v-else-if="published">
+        <template v-if="method === 'zip'">
+          <ButtonUI variant="default" size="sm" @click="emit('close')">Close</ButtonUI>
+        </template>
+        <template v-else>
+          <ButtonUI variant="outline" size="sm" @click="emit('close')">Close</ButtonUI>
+          <ButtonUI variant="default" size="sm" @click="viewLive">View live</ButtonUI>
+        </template>
       </template>
       <template v-else-if="error">
         <ButtonUI variant="outline" size="sm" @click="cancel">Close</ButtonUI>

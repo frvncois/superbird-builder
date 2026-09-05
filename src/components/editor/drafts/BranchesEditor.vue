@@ -7,10 +7,9 @@ import { GitBranch, Plus, TriangleAlert } from 'lucide-vue-next'
 import GroupPopover from '@/components/popover/GroupPopover.vue'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import InputUI from '@/components/ui/InputUI.vue'
-import ConfirmModal from '@/components/modal/ConfirmModal.vue'
 import ApplyDraftModal from '@/components/editor/drafts/ApplyDraftModal.vue'
 import { useBranches, MAIN_ID } from '@/composables/useBranches'
-import { useDocumentation } from '@/composables/useDocumentation'
+import { useModal } from '@/composables/useModal'
 import { changeSummaryLabel, hasChanges } from '@/lib/merge'
 import { timeAgoShort } from '@/lib/time'
 import type { BranchMeta, DraftStatus } from '@/composables/useBranches'
@@ -65,27 +64,30 @@ function statusLine(id: string): string {
 
 // --- apply / discard flows ---
 
-const applying = ref<BranchMeta | null>(null)
-const discarding = ref<BranchMeta | null>(null)
+const { openModal, confirm } = useModal()
+
+async function applyDraft(draft: BranchMeta) {
+  await openModal(ApplyDraftModal, { branch: draft })
+  loadStatuses(true)
+}
 
 function discardMessage(draft: BranchMeta): string {
   const status = statuses.get(draft.id)
   const changes =
     status && hasChanges(status.summary) ? ` and its changes (${changeSummaryLabel(status.summary)})` : ''
-  return `This deletes “${draft.name}”${changes}. The live site is not affected.`
+  return `This deletes “${draft.name}”${changes}. Main and the live site are not affected.`
 }
 
-async function confirmDiscard() {
-  if (!discarding.value) return
-  await deleteBranch(discarding.value.id)
-  invalidateDraftStatus(discarding.value.id)
-  statuses.delete(discarding.value.id)
-  discarding.value = null
-}
-
-function closeApply() {
-  applying.value = null
-  loadStatuses(true)
+async function discardDraft(draft: BranchMeta) {
+  const ok = await confirm({
+    title: 'Discard draft',
+    message: discardMessage(draft),
+    confirmLabel: 'Discard',
+  })
+  if (!ok) return
+  await deleteBranch(draft.id)
+  invalidateDraftStatus(draft.id)
+  statuses.delete(draft.id)
 }
 </script>
 
@@ -96,14 +98,14 @@ function closeApply() {
       <GitBranch class="size-3.5 shrink-0" :class="onMain ? 'text-muted-foreground' : 'text-pending'" />
       <div class="min-w-0 flex-1">
         <p class="truncate text-xs font-medium">
-          {{ onMain ? 'You’re on the live site' : `Editing “${activeBranch.name}”` }}
+          {{ onMain ? 'You’re on Main' : `Editing “${activeBranch.name}”` }}
         </p>
         <p class="text-[10px] text-muted-foreground">
-          {{ onMain ? 'Changes here go live when you publish.' : 'Changes stay private until you apply them.' }}
+          {{ onMain ? 'Changes here go live when you publish.' : 'Changes stay in this draft until you merge them into Main.' }}
         </p>
       </div>
       <ButtonUI v-if="!onMain" variant="outline" size="sm" @click="switchBranch(MAIN_ID)">
-        Back to site
+        Back to Main
       </ButtonUI>
     </div>
   </GroupPopover>
@@ -133,7 +135,7 @@ function closeApply() {
         >
           <TriangleAlert class="size-3 shrink-0" />
           {{ statuses.get(draft.id)!.conflictCount }}
-          {{ statuses.get(draft.id)!.conflictCount === 1 ? 'conflict' : 'conflicts' }} with the live site
+          {{ statuses.get(draft.id)!.conflictCount === 1 ? 'conflict' : 'conflicts' }} with Main
         </p>
       </div>
       <div class="flex items-center gap-1.5">
@@ -146,14 +148,14 @@ function closeApply() {
         >
           Open
         </ButtonUI>
-        <ButtonUI variant="default" size="sm" class="flex-1" @click="applying = draft">
+        <ButtonUI variant="default" size="sm" class="flex-1" @click="applyDraft(draft)">
           Merge
         </ButtonUI>
         <ButtonUI
           variant="ghost"
           size="sm"
           class="text-muted-foreground hover:text-danger"
-          @click="discarding = draft"
+          @click="discardDraft(draft)"
         >
           Discard
         </ButtonUI>
@@ -169,17 +171,9 @@ function closeApply() {
       </span>
       <p class="text-xs font-medium">No drafts yet</p>
       <p class="max-w-52 text-[10px] leading-4 text-muted-foreground">
-        Drafts are private copies of the site. Try a redesign or prepare content, then apply it to
-        the live site when it’s ready.
+        Drafts are private copies of the site. Try a redesign or prepare content, then merge it
+        into Main when it’s ready — publishing puts Main live.
       </p>
-      <ButtonUI
-        variant="ghost"
-        size="sm"
-        class="text-muted-foreground"
-        @click="useDocumentation().open('branches')"
-      >
-        Learn more
-      </ButtonUI>
     </div>
   </GroupPopover>
 
@@ -203,13 +197,4 @@ function closeApply() {
     </div>
   </GroupPopover>
 
-  <ApplyDraftModal v-if="applying" :branch="applying" @close="closeApply" />
-  <ConfirmModal
-    v-if="discarding"
-    title="Discard draft"
-    :message="discardMessage(discarding)"
-    confirm-label="Discard"
-    @confirm="confirmDiscard"
-    @close="discarding = null"
-  />
 </template>

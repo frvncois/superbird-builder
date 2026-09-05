@@ -4,6 +4,8 @@ import { usePage } from './usePage'
 import { useCollections } from './useCollections'
 import { useInteraction } from './useInteraction'
 import { useComponents } from './useComponents'
+import { useProject } from './useProject'
+import { FRAME_BREAKPOINT } from '@/components/editor/canvas/frameScope'
 import { entryKey } from '@/components/shared/EntryScope.vue'
 import { refDisplay, resolveBinding, resolveListScope } from '@/lib/shared/fields.js'
 import { isRich, sanitizeRich } from '@/lib/shared/richtext.js'
@@ -31,29 +33,19 @@ export interface LocalizedDisplay {
   untranslated: boolean
 }
 
-/** browser state runtime condition rules test against */
-export interface RuntimeEnv {
-  viewport: number
-  now: number
-  query: (param: string) => string | null
-}
-
 /**
- * The rendering core shared VERBATIM by the editor's ElementRenderer,
- * content mode's ContentRenderer and the published site's PublicRenderer:
- * element/tag resolution, component master mapping, collection/entry-scope
- * resolution, interaction firing, the scroll-into-view observer, and the
- * content/src/rich/link resolution (condition swap → bound field → own →
- * mapped master → element default). Each renderer keeps its own selection
- * chrome, extra classes and event handlers on top.
+ * The rendering core shared VERBATIM by the editor's ElementRenderer and
+ * Preview's PreviewRenderer (the published site is static HTML from
+ * server/export.mjs, which mirrors this logic): element/tag resolution,
+ * component master mapping, collection/entry-scope resolution, interaction
+ * firing, the scroll-into-view observer, and the content/src/rich/link
+ * resolution (condition swap → bound field → own → mapped master → element
+ * default). Each renderer keeps its own selection chrome, extra classes and
+ * event handlers on top.
  */
 export function useRenderNode(
   getNode: () => ElementNode,
   opts?: {
-    /** when set, runtime condition rules (viewport/date/query) evaluate
-     * against it — the published-site preview passes the real browser env;
-     * the editor omits it so those rules read as matching */
-    runtimeEnv?: () => RuntimeEnv
     /** editor only: a value-less field binding renders a {field}
      * placeholder instead of the site's empty string */
     fieldPlaceholders?: boolean
@@ -65,6 +57,13 @@ export function useRenderNode(
     useInteraction()
   const { masterFor } = useComponents()
   const { pages, activePage } = usePage()
+  const { liveBreakpointId } = useProject()
+
+  // the breakpoint this node is rendered for — the frame's id in the multi-frame
+  // canvas, else the live viewport (Preview / published site). Drives which
+  // breakpoint-scoped interactions contribute their classes.
+  const frameBreakpointId = inject(FRAME_BREAKPOINT, null)
+  const renderBreakpointId = computed(() => frameBreakpointId ?? liveBreakpointId.value)
   const { collections, collectionByName, activeCollection, activeEntry, entryPath } = useCollections()
   const { activeLocale, defaultLocale, nodeContent, nodeSrc, entryValue } = useLocale()
   const { assetForSrc } = useMedia()
@@ -139,7 +138,6 @@ export function useRenderNode(
       pagePath: activePage.value.path,
       index: scope?.index,
       count: scope?.count,
-      runtimeEnv: opts?.runtimeEnv?.(),
     }),
   )
 
@@ -232,8 +230,13 @@ export function useRenderNode(
     node.value.type === 'body' && 'flex-1',
     mapping.value ? mapping.value.master.classes : node.value.classes,
     mapping.value
-      ? scopedClassesFor(mapping.value.master.id, mapping.value.root, mapping.value.instanceId)
-      : classesFor(node.value.id),
+      ? scopedClassesFor(
+          mapping.value.master.id,
+          mapping.value.root,
+          mapping.value.instanceId,
+          renderBreakpointId.value,
+        )
+      : classesFor(node.value.id, renderBreakpointId.value),
     // background media makes the host relative (video layer) / applies bg image
     backgroundInfo.value?.hostClass,
   ])

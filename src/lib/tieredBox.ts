@@ -119,7 +119,10 @@ export const spacingScheme: Scheme = {
   steps: SPACING,
   slot: (base, s) => (s === 'all' ? base : `${base}${s}`),
   className: (prefix, step) => buildTailClass(prefix, step),
-  parse: (token, prefix) => parseTail(token, prefix),
+  // margins collapse to `auto`; padding never does, so only recognise the
+  // keyword on m-prefixed slots (`m-auto`, `mx-auto`, `mt-auto`)
+  parse: (token, prefix) =>
+    parseTail(token, prefix, { allowKeywords: prefix.startsWith('m') ? ['auto'] : [] }),
 }
 
 /** border width — base 'border'; slot suffix dash-joined (border-x, border-t).

@@ -1,6 +1,6 @@
 // Condition evaluation shared VERBATIM by the editor preview
-// (useRenderNode), the SPA site preview and the static exporter
-// (server/export.mjs) — plain JS so all sides import the same file.
+// (useRenderNode) and the static exporter (server/export.mjs) —
+// plain JS so both sides import the same file.
 //
 // A ConditionSpec is an AND-combined list of rules plus an effect:
 //   hide — element hidden while every rule matches
@@ -114,10 +114,10 @@ export function staticMatch(spec, ctx) {
  * Evaluate a spec against
  * ctx = { collections, collection, entry, locale, defaultLocale,
  *         pagePath, index, count, api, runtimeEnv? }.
- * Runtime rules evaluate against ctx.runtimeEnv when provided (the SPA
- * preview passes the real browser env) and are otherwise treated as
- * matching (the editor canvas; the static export splits them out via
- * staticMatch instead).
+ * Runtime rules evaluate against ctx.runtimeEnv when provided (the
+ * exported site's script.js passes the real browser env) and are
+ * otherwise treated as matching (the editor canvas; the static export
+ * splits them out via staticMatch instead).
  * Returns { visible, content?, src? } — content/src only set while an
  * active swap overrides them.
  */

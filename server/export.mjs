@@ -23,8 +23,19 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const RUNTIME = join(ROOT, 'server', 'site-runtime.js')
 
 // SiteView.vue wrapper / PublicRenderer body classes (keep in sync)
-const SHELL_CLASSES = 'flex min-h-screen flex-col bg-white font-sans text-black'
-const BODY_EXTRA = 'flex-1'
+// the published <body> IS the page's body node — its classes are user-owned.
+// The old shell defaults live in @layer base instead, so any utility the
+// user puts on body (bg-*, text-*, …) wins by layer order, never by luck.
+const SANS_STACK =
+  'ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji"'
+function baseBodyCss(settings) {
+  const family = settings?.fonts?.family
+  const safe = family && /^[\w\s,'"-]+$/.test(family) ? family : null
+  return (
+    '@layer base{body{display:flex;min-height:100vh;flex-direction:column;' +
+    `background-color:#fff;color:#000;font-family:${safe ?? SANS_STACK};}}\n`
+  )
+}
 const NOTFOUND_CLASSES =
   'flex flex-1 flex-col items-center justify-center gap-2 text-4xl font-semibold text-sm text-neutral-500'
 
@@ -159,14 +170,12 @@ function collectCandidates(project) {
   }
   for (const page of project.pages) walkNodes(page.elements, scanNode)
   for (const component of project.components ?? []) walkNodes([component.root], scanNode)
-  add(SHELL_CLASSES)
-  add(BODY_EXTRA)
   add(NOTFOUND_CLASSES)
   return candidates
 }
 
 async function buildCss(candidates, settings) {
-  const input = '@import "tailwindcss";\n' + themeBlock(settings)
+  const input = '@import "tailwindcss";\n' + baseBodyCss(settings) + themeBlock(settings)
   const compiler = await compile(input, { base: ROOT, onDependency() {} })
   const css = compiler.build([...candidates])
   return optimize(css, { minify: true }).code
@@ -177,7 +186,7 @@ async function buildCss(candidates, settings) {
 
 function classFor(node, ctx) {
   const mapping = ctx.mm.get(node.id)
-  const parts = [node.type === 'body' && BODY_EXTRA, mapping ? mapping.master.classes : node.classes]
+  const parts = [mapping ? mapping.master.classes : node.classes]
   const bindings = mapping
     ? scopedTargets(mapping.root, mapping.master.id)
     : (ctx.plainTargets.get(node.id) ?? [])
@@ -191,7 +200,7 @@ function classFor(node, ctx) {
 /**
  * Final href for a linked node, or null. '@item' resolves to the current
  * entry's page; scheme-allowlisted; internal links get locale-prefixed.
- * Mirrors PublicRenderer/ContentRenderer linkTarget — keep the three in sync.
+ * Mirrors PublicRenderer/PreviewRenderer linkTarget — keep the three in sync.
  */
 function resolveHref(node, ctx) {
   const mapping = ctx.mm.get(node.id)
@@ -228,7 +237,7 @@ function attrsFor(node, ctx, cond, runtime, bg) {
   const attrs = []
   if (node.htmlId) attrs.push(`id="${escapeHtml(node.htmlId)}"`)
 
-  // browser-evaluated condition (viewport/date/query): site.js reads this.
+  // browser-evaluated condition (viewport/date/query): script.js reads this.
   // A 'show' effect starts hidden so nothing flashes before evaluation.
   if (runtime) {
     attrs.push(`data-cond="${escapeHtml(JSON.stringify(runtime))}"`)
@@ -270,15 +279,21 @@ function attrsFor(node, ctx, cond, runtime, bg) {
     const list = triggers.map((i) => {
       const key = mapping ? `${i.id}@${mapping.instanceId}` : i.id
       ctx.fx[key] = ctx.anim.get(i.interactionId)?.toClasses ?? ''
+      if (i.breakpoints) ctx.fxbp[key] = i.breakpoints
       return { t: i.trigger, k: key }
     })
     attrs.push(`data-int="${escapeHtml(JSON.stringify(list))}"`)
   }
-  const targetKeys = mapping
-    ? scopedTargets(mapping.root, mapping.master.id).map((i) => `${i.id}@${mapping.instanceId}`)
-    : (ctx.plainTargets.get(node.id) ?? []).map((i) => i.id)
-  if (targetKeys.length) {
-    for (const key of targetKeys) ctx.fx[key] ??= ''
+  const targets = mapping
+    ? scopedTargets(mapping.root, mapping.master.id)
+    : (ctx.plainTargets.get(node.id) ?? [])
+  if (targets.length) {
+    const targetKeys = targets.map((i) => (mapping ? `${i.id}@${mapping.instanceId}` : i.id))
+    targets.forEach((i, n) => {
+      const key = targetKeys[n]
+      ctx.fx[key] ??= ''
+      if (i.breakpoints) ctx.fxbp[key] = i.breakpoints
+    })
     attrs.push(`data-tgt="${escapeHtml(targetKeys.join(' '))}"`)
   }
 
@@ -290,7 +305,7 @@ function attrsFor(node, ctx, cond, runtime, bg) {
  * Fully static specs resolve here: hidden → drop, swap → baked. A spec
  * whose static rules pass but that also has runtime rules defers to the
  * browser instead: `runtime` describes the data-cond attribute to emit
- * (rules + effect + pre-sanitized swap payload) and site.js evaluates it.
+ * (rules + effect + pre-sanitized swap payload) and script.js evaluates it.
  */
 function conditionFor(node, ctx) {
   const mapping = ctx.mm.get(node.id)
@@ -444,7 +459,7 @@ function scriptTag(js) {
 }
 
 /** the shared head + body-open shell for every exported page */
-function renderShell(project, rewrite, { locale, title, description, path, headScript }) {
+function renderShell(project, rewrite, { locale, title, description, path, headScript, bodyAttrs }) {
   const settings = project.settings ?? {}
   const seo = settings.seo ?? {}
   const domain = settings.domain || ''
@@ -463,7 +478,7 @@ function renderShell(project, rewrite, { locale, title, description, path, headS
   const favicon = rewrite(settings.favicon)
   if (favicon) head += `<link rel="icon" href="${escapeHtml(favicon)}">`
   if (domain && path) head += `<link rel="canonical" href="${escapeHtml(`https://${domain}${path}`)}">`
-  head += `<link rel="stylesheet" href="/site.css">`
+  head += `<link rel="stylesheet" href="/assets/style.css">`
   const fontsUrl = settings.fonts?.googleFontsUrl
   if (fontsUrl?.startsWith('https://fonts.googleapis.com/')) {
     head += `<link rel="stylesheet" href="${escapeHtml(fontsUrl)}">`
@@ -473,10 +488,9 @@ function renderShell(project, rewrite, { locale, title, description, path, headS
   if (headScript) head += headScript // per-page head script
   head += `</head>`
 
-  const fontStyle = settings.fonts?.family
-    ? ` style="font-family:${escapeHtml(settings.fonts.family)}"`
-    : ''
-  return head + `<body class="${SHELL_CLASSES}"${fontStyle}>`
+  // font-family + layout/color defaults come from @layer base (baseBodyCss);
+  // bodyAttrs carries the body NODE's classes/id/interactions/background
+  return head + `<body${bodyAttrs ?? ''}>`
 }
 
 function renderPage(route, project, media) {
@@ -492,19 +506,41 @@ function renderPage(route, project, media) {
     // saved-interaction id → animation, for resolving bindings to timing/classes
     anim: new Map((project.interactions ?? []).map((a) => [a.id, a])),
     fx: {},
+    // interaction key → breakpoint ids it's scoped to (absent = all breakpoints)
+    fxbp: {},
     rewrite: media.rewrite,
     altFor: media.altFor,
     kindFor: media.kindFor,
     // shared by reference across per-scope ctx spreads, unlike plain fields
     flags: { condRuntime: false },
   }
-  const body = page.elements.map((node) => renderNode(node, ctx)).join('')
+  // the body node renders as the document <body> itself: children inline,
+  // classes/id/interactions/background on the real tag (a video background
+  // becomes the first child layer, like any other host)
+  const bodyNode = page.elements.find((n) => n.type === 'body') ?? null
+  const roots = bodyNode ? bodyNode.children : page.elements
+  const body = roots.map((node) => renderNode(node, ctx)).join('')
+  let bodyAttrs = ''
+  let bodyBgLayer = ''
+  if (bodyNode) {
+    const bg = backgroundFor(bodyNode, ctx)
+    bodyAttrs = attrsFor(bodyNode, ctx, { visible: true }, null, bg)
+    if (bg?.kind === 'video') {
+      bodyBgLayer = `<video src="${escapeHtml(bg.url)}" autoplay muted loop playsinline class="${escapeHtml(bg.layerClass)}"></video>`
+    }
+  }
   const hasInteractions = Object.keys(ctx.fx).length > 0
   const needsRuntime = hasInteractions || ctx.flags.condRuntime
-  const fxTag = hasInteractions
-    ? `<script type="application/json" id="int-fx">${JSON.stringify(ctx.fx).replaceAll('</', '<\\/')}</script>`
+  const jsonTag = (id, data) =>
+    `<script type="application/json" id="${id}">${JSON.stringify(data).replaceAll('</', '<\\/')}</script>`
+  const fxTag = hasInteractions ? jsonTag('int-fx', ctx.fx) : ''
+  // breakpoint-scoped interactions need the width→breakpoint map + per-key scope
+  const hasBpScope = Object.keys(ctx.fxbp).length > 0
+  const bpTag = hasBpScope
+    ? jsonTag('int-bp', (project.breakpoints ?? []).map((b) => ({ id: b.id, w: b.width }))) +
+      jsonTag('int-fxbp', ctx.fxbp)
     : ''
-  const tail = needsRuntime ? `${fxTag}<script src="/site.js" defer></script>` : ''
+  const tail = needsRuntime ? `${fxTag}${bpTag}<script src="/assets/script.js" defer></script>` : ''
   const seo = project.settings?.seo ?? {}
   const shell = renderShell(project, media.rewrite, {
     locale,
@@ -512,9 +548,10 @@ function renderPage(route, project, media) {
     description: page.seo?.description ?? seo.description ?? '',
     path: '/' + (outPath ?? '').replace(/index\.html$/, ''),
     headScript: scriptTag(page.customCode?.head),
+    bodyAttrs,
   })
   // per-page body script runs last, before </body> (DOM + runtime ready)
-  return `${shell}${body}${tail}${scriptTag(page.customCode?.body)}</body></html>`
+  return `${shell}${bodyBgLayer}${body}${tail}${scriptTag(page.customCode?.body)}</body></html>`
 }
 
 function renderNotFound(project, rewrite) {
@@ -598,8 +635,8 @@ export async function exportSite(project, outDir) {
     bytes += typeof data === 'string' ? Buffer.byteLength(data) : data.length
   }
 
-  await write('site.css', css)
-  await write('site.js', runtime)
+  await write('assets/style.css', css)
+  await write('assets/script.js', runtime)
   await write('404.html', renderNotFound(project, media.rewrite))
   for (const [rel, buffer] of media.files) await write(rel, buffer)
 

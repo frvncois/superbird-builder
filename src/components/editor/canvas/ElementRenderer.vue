@@ -1,6 +1,9 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, inject } from 'vue'
 import { useElement } from '@/composables/useElement'
+import { useProject } from '@/composables/useProject'
+import { resolveClassesForWidth } from '@/lib/responsive'
+import { FRAME_BREAKPOINT } from '@/components/editor/canvas/frameScope'
 import { useReorderAnimation } from '@/composables/useReorderAnimation'
 import EntryScope from '@/components/shared/EntryScope.vue'
 import { useInteraction } from '@/composables/useInteraction'
@@ -19,7 +22,7 @@ const { pickingFor, pickTarget } = useInteraction()
 const { openMenu } = useContextMenu()
 const { entryValue, setNodeContent, setEntryValue } = useLocale()
 
-// shared rendering core (also used by the public site's PublicRenderer):
+// shared rendering core (also used by Preview's PreviewRenderer):
 // def/mapping, collection + entry-scope resolution, interaction firing,
 // and the scroll-into-view observer (bound via ref="el")
 const {
@@ -63,20 +66,45 @@ const titleAttr = computed(() =>
   conditionHidden.value ? 'Hidden by condition' : untranslated.value ? 'Not translated' : undefined,
 )
 
-const selected = computed(() =>
-  selectedElementIds.value.length
-    ? selectedElementIds.value.includes(props.node.id)
-    : selectedElement.value?.id === props.node.id,
+// which breakpoint frame this element is rendered in (null outside the canvas)
+const frameBreakpointId = inject(FRAME_BREAKPOINT, null)
+const { breakpoints, activeBreakpointId, baseBreakpoint } = useProject()
+
+// each frame renders the classes resolved for its own width, so per-breakpoint
+// overrides (`max-[390px]:bg-black`) actually show in the right frame — the real
+// media query can't, since every frame shares the one window width
+const frameWidth = computed(
+  () => breakpoints.value.find((b) => b.id === frameBreakpointId)?.width ?? null,
+)
+const framedClasses = computed(() => {
+  const joined = baseClasses.value.filter(Boolean).join(' ')
+  return frameWidth.value !== null ? resolveClassesForWidth(joined, frameWidth.value) : joined
+})
+// selection/highlight outlines only render in the frame being edited, so one
+// selection doesn't light up every breakpoint at once. Always true when the
+// element isn't in a multi-frame canvas.
+const inActiveFrame = computed(() => {
+  if (frameBreakpointId === null) return true
+  return frameBreakpointId === (activeBreakpointId.value ?? baseBreakpoint.value?.id ?? null)
+})
+
+const selected = computed(
+  () =>
+    inActiveFrame.value &&
+    (selectedElementIds.value.length
+      ? selectedElementIds.value.includes(props.node.id)
+      : selectedElement.value?.id === props.node.id),
 )
 // a transient preview highlight (e.g. an interaction's Target hover), shown in a
 // distinct colour and only when this node isn't already the live selection
 const highlighted = computed(
-  () => highlightedElement.value?.id === props.node.id && !selected.value,
+  () => inActiveFrame.value && highlightedElement.value?.id === props.node.id && !selected.value,
 )
 
 const classes = computed(() => [
-  // core: body flex-1, master/own classes, interaction classes, bg host
-  baseClasses.value,
+  // core: body flex-1, master/own classes, interaction classes, bg host —
+  // resolved for this frame's breakpoint width
+  framedClasses.value,
   // text-selection guard: only elements actually showing text content
   // are selectable; containers and chrome stay select-none
   !def.value?.void &&

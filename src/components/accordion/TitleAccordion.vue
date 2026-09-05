@@ -18,7 +18,6 @@ const accordion = inject(accordionKey)!
       />
       <slot />
     </span>
-    <!-- trailing controls (e.g. the add-property button) never toggle -->
     <span @click.stop>
       <slot name="action" />
     </span>

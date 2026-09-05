@@ -3,12 +3,14 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { Copy, ClipboardPaste, CopyPlus, Trash2, Palette, Zap, Component, Unlink, Group, type LucideIcon } from 'lucide-vue-next'
 import { isComponentType } from '@/lib/components'
 import { useComponents } from '@/composables/useComponents'
+import { useModal } from '@/composables/useModal'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
+import CreateComponentModal from '@/components/editor/canvas/CreateComponentModal.vue'
 import { useContextMenu } from '@/composables/useContextMenu'
 
-const { namingFor, masterFor, detachComponent } = useComponents()
+const { masterFor, detachComponent } = useComponents()
+const { openModal } = useModal()
 
-/** the component instance the right-clicked node belongs to, if any */
 const componentInstanceId = computed(() =>
   target.value ? (masterFor(target.value.id)?.instanceId ?? null) : null,
 )
@@ -54,7 +56,10 @@ const items = computed<Item[]>(() => [
   {
     label: 'Create component',
     icon: Component,
-    run: () => (namingFor.value = menu.value?.targetId ?? null),
+    run: () => {
+      const targetId = menu.value?.targetId
+      if (targetId) void openModal(CreateComponentModal, { targetId })
+    },
     disabled:
       targetIsBody.value ||
       isComponentType(target.value?.type ?? '') ||
@@ -69,7 +74,6 @@ const items = computed<Item[]>(() => [
   },
 ])
 
-// keep the menu on screen
 const position = computed(() => ({
   left: `${Math.min(menu.value?.x ?? 0, window.innerWidth - 220)}px`,
   top: `${Math.min(menu.value?.y ?? 0, window.innerHeight - items.value.length * 32 - 24)}px`,
@@ -77,9 +81,6 @@ const position = computed(() => ({
 
 const menuEl = ref<HTMLElement>()
 
-// capture phase: fires before element handlers that stopPropagation
-// (canvas selection, pins, zones), so any press outside the menu —
-// left or right button — reliably closes it
 function onWindowPointerdown(e: PointerEvent) {
   if (!menu.value) return
   if (menuEl.value && e.target instanceof Node && menuEl.value.contains(e.target)) return

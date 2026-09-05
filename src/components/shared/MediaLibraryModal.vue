@@ -17,21 +17,28 @@ import {
   X,
 } from 'lucide-vue-next'
 import ModalHost from '@/components/modal/ModalHost.vue'
-import ConfirmModal from '@/components/modal/ConfirmModal.vue'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import InputUI from '@/components/ui/InputUI.vue'
 import MediaGrid from '@/components/editor/media/MediaGrid.vue'
 import MediaDetails from '@/components/editor/media/MediaDetails.vue'
 import { useMedia } from '@/composables/useMedia'
 import { useMediaLibrary } from '@/composables/useMediaLibrary'
+import { useModal } from '@/composables/useModal'
 import { acceptFor, KIND_LABELS } from '@/lib/media'
 import type { MediaAsset, MediaKind } from '@/types/media'
 
-defineEmits<{ close: [] }>()
+const emit = defineEmits<{ close: [] }>()
 
 const { assets, folders, loaded, loadMedia, upload, updateAsset, removeAsset, usage, createFolder, renameFolder, removeFolder } =
   useMedia()
 const { selectAccept, pick } = useMediaLibrary()
+
+/** select mode: resolve the caller's promise, then close through the modal host */
+function pickAndClose(asset: MediaAsset) {
+  pick(asset)
+  emit('close')
+}
+const { confirm } = useModal()
 
 // boot may have failed silently — retry when the modal opens
 const loadError = ref<string | null>(null)
@@ -74,7 +81,7 @@ const selected = computed(() => assets.value.find((a) => a.id === selectedId.val
 const version = ref(0)
 
 function onPick(asset: MediaAsset) {
-  if (selecting.value) pick(asset)
+  if (selecting.value) pickAndClose(asset)
 }
 
 // ----- upload (file input + drag-and-drop share one path) -----
@@ -134,8 +141,6 @@ async function onFolderDrop(e: DragEvent, folderId: string | null) {
 }
 
 // ----- delete (with usage warning) -----
-const confirmingDelete = ref<{ asset: MediaAsset; message: string } | null>(null)
-
 async function requestDelete(asset: MediaAsset) {
   let message = `Delete “${asset.name}”? This cannot be undone.`
   try {
@@ -150,13 +155,7 @@ async function requestDelete(asset: MediaAsset) {
   } catch {
     /* scan failing shouldn't block deletion — fall back to the generic message */
   }
-  confirmingDelete.value = { asset, message }
-}
-
-async function confirmDelete() {
-  const asset = confirmingDelete.value?.asset
-  confirmingDelete.value = null
-  if (!asset) return
+  if (!(await confirm({ title: 'Delete file', message }))) return
   await removeAsset(asset.id)
   if (selectedId.value === asset.id) selectedId.value = null
 }
@@ -165,7 +164,6 @@ async function confirmDelete() {
 const addingFolder = ref(false)
 const folderName = ref('')
 const renamingFolderId = ref<string | null>(null)
-const confirmingFolder = ref<string | null>(null)
 
 async function commitFolder() {
   const name = folderName.value.trim()
@@ -180,10 +178,12 @@ async function commitFolder() {
   }
 }
 
-async function confirmFolderDelete() {
-  const id = confirmingFolder.value
-  confirmingFolder.value = null
-  if (!id) return
+async function requestFolderDelete(id: string) {
+  const ok = await confirm({
+    title: 'Delete folder',
+    message: 'The folder will be removed; its files move to the library root.',
+  })
+  if (!ok) return
   await removeFolder(id)
   if (filter.value === id) filter.value = 'all'
 }
@@ -281,7 +281,7 @@ async function confirmFolderDelete() {
                 <ButtonUI
                   variant="icon" size="xs" :icon="Trash2"
                   class="text-muted-foreground"
-                  @click="confirmingFolder = folder.id"
+                  @click="requestFolderDelete(folder.id)"
                 />
               </span>
             </template>
@@ -349,7 +349,7 @@ async function confirmFolderDelete() {
               v-if="selecting"
               size="sm" :icon="Check"
               class="mx-4 mt-4 justify-center"
-              @click="pick(selected)"
+              @click="pickAndClose(selected)"
             >
               Use this file
             </ButtonUI>
@@ -364,19 +364,4 @@ async function confirmFolderDelete() {
       </div>
     </div>
   </ModalHost>
-
-  <ConfirmModal
-    v-if="confirmingDelete"
-    title="Delete file"
-    :message="confirmingDelete.message"
-    @confirm="confirmDelete"
-    @close="confirmingDelete = null"
-  />
-  <ConfirmModal
-    v-if="confirmingFolder"
-    title="Delete folder"
-    message="The folder will be removed; its files move to the library root."
-    @confirm="confirmFolderDelete"
-    @close="confirmingFolder = null"
-  />
 </template>

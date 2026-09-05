@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref } from 'vue'
 import ModalHost from '@/components/modal/ModalHost.vue'
 import ModalHeader from '@/components/modal/ModalHeader.vue'
 import ModalGroup from '@/components/modal/ModalGroup.vue'
@@ -9,30 +9,17 @@ import InputUI from '@/components/ui/InputUI.vue'
 import RowUI from '@/components/ui/RowUI.vue'
 import { useAuth } from '@/composables/useAuth'
 
-const props = defineProps<{ open: boolean }>()
+// opened via useModal — mounted means open, so seed at setup time
 const emit = defineEmits<{ close: [] }>()
 
 const { name, email, updateAccount } = useAuth()
 
-const nameField = ref('')
-const emailField = ref('')
+const nameField = ref(name.value)
+const emailField = ref(email.value ?? '')
 const password = ref('')
 const currentPassword = ref('')
 const error = ref<string | null>(null)
 const busy = ref(false)
-
-// seed the fields from the current profile each time the modal opens
-watch(
-  () => props.open,
-  (open) => {
-    if (!open) return
-    nameField.value = name.value
-    emailField.value = email.value ?? ''
-    password.value = ''
-    currentPassword.value = ''
-    error.value = null
-  },
-)
 
 async function save() {
   if (busy.value) return
@@ -55,7 +42,7 @@ async function save() {
 </script>
 
 <template>
-  <ModalHost v-if="open" size="sm" @close="emit('close')">
+  <ModalHost size="sm" @close="emit('close')">
     <ModalHeader title="My account" @close="emit('close')" />
     <ModalGroup label="Profile">
       <RowUI label="Name">

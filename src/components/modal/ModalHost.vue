@@ -1,6 +1,4 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted } from 'vue'
-
 type Size = 'sm' | 'default' | 'lg' | 'xl' | 'full'
 
 withDefaults(
@@ -20,16 +18,11 @@ const sizes: Record<Size, string> = {
   lg: 'w-[40rem]',
   // xl is a fixed-size, two-pane dialog that manages its own inner scrolling
   xl: 'w-[840px] h-[560px] max-w-[calc(100vw-2rem)] max-h-[calc(100vh-2rem)]',
-  // full is a near-viewport surface (documentation center) that manages its own inner scrolling
+  // full is a near-viewport surface (media library) that manages its own inner scrolling
   full: 'w-[min(92vw,1200px)] h-[88vh]',
 }
 
-function onKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape') emit('close')
-}
-
-onMounted(() => window.addEventListener('keydown', onKeydown))
-onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
+// Escape is handled centrally by ModalStackHost (top-of-stack only)
 </script>
 
 <template>

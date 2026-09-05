@@ -139,6 +139,9 @@ function buildVocabulary(): string[] {
   }
   const spacing = ['p', 'px', 'py', 'pt', 'pb', 'pl', 'pr', 'm', 'mx', 'my', 'mt', 'mb', 'ml', 'mr', 'gap', 'gap-x', 'gap-y']
   for (const prefix of spacing) for (const stop of SPACING) out.add(`${prefix}-${stop}`)
+  // `auto` is valid CSS only where margins and offsets collapse to it
+  for (const prefix of ['m', 'mx', 'my', 'mt', 'mb', 'ml', 'mr']) out.add(`${prefix}-auto`)
+  for (const prefix of ['inset', 'inset-x', 'inset-y', 'top', 'right', 'bottom', 'left']) out.add(`${prefix}-auto`)
   // border-width classes (bare `border`, `border-2`, `border-x`, `border-t`, …)
   // now that they're driven by SpacingBoxControl, not a slider property
   for (const s of ['all', 'x', 'y', 't', 'r', 'b', 'l'] as Slot[]) {
@@ -200,7 +203,11 @@ export function suggestClasses(query: string, limit = 8): string[] {
     }
   }
   const pool = [...TOKEN_CLASSES, ...VOCABULARY]
-  const starts = pool.filter((c) => c.startsWith(base))
+  // rank: exact match, then prefix matches (shortest = closest) preserving pool
+  // order among equal lengths, then substring matches
+  const starts = pool
+    .filter((c) => c.startsWith(base))
+    .sort((a, b) => (a === base ? -1 : b === base ? 1 : a.length - b.length))
   const contains = base.length > 1 ? pool.filter((c) => !c.startsWith(base) && c.includes(base)) : []
   for (const cls of [...starts, ...contains]) {
     if (results.length >= limit) break
@@ -282,16 +289,27 @@ function splitVariant(cls: string): { variant: string; base: string } {
   return i === -1 ? { variant: '', base: cls } : { variant: cls.slice(0, i + 1), base: cls.slice(i + 1) }
 }
 
+/** true when a variant segment is known — a fixed variant, or an arbitrary
+ *  min/max-width breakpoint variant like `max-[767px]` / `min-[48rem]` */
+function isKnownVariant(v: string): boolean {
+  return VARIANT_SET.has(v) || /^(?:min|max)-\[[0-9.]+(?:px|rem|em)\]$/.test(v)
+}
+
+/** numeric flex shorthand Tailwind v4 accepts on its scale: `flex-2`, `flex-0.5` */
+const FLEX_NUMERIC_RE = /^flex-\d+(?:\.\d+)?$/
+
 /**
  * A class is valid if every variant segment is known and the base is either
- * an arbitrary-value class (`p-[13px]`), in our vocabulary, or a design token.
+ * an arbitrary-value class (`p-[13px]`), a numeric flex (`flex-2`), in our
+ * vocabulary, or a design token.
  */
 export function isValidClass(cls: string): boolean {
   const segments = cls.split(':')
   const base = segments.pop() ?? ''
   if (!base) return false
-  if (segments.some((v) => !VARIANT_SET.has(v))) return false
+  if (segments.some((v) => !isKnownVariant(v))) return false
   if (/-\[.+\]$/.test(base)) return true // arbitrary value
+  if (FLEX_NUMERIC_RE.test(base)) return true // flex-2, flex-0.5, …
   return VOCAB_SET.has(base) || TOKEN_CLASSES.includes(base)
 }
 
@@ -305,14 +323,29 @@ function propForBase(base: string): StyleProperty | undefined {
   return undefined
 }
 
+/**
+ * A stable identity for the CSS property a bare class controls, used to detect
+ * conflicts. Prefers the catalog property; falls back to pattern-based groups
+ * (e.g. every `flex-*` shorthand shares one identity) so a typed `flex-2`
+ * replaces the icon-picked `flex-1`.
+ */
+function propKey(base: string): StyleProperty | string | undefined {
+  // all flex-grow shorthands (flex-1, flex-2, flex-auto, flex-none…) share one
+  // identity — checked before the catalog so the icon-picked flex-1 collides
+  // with a typed flex-2
+  if (FLEX_NUMERIC_RE.test(base) || ['flex-auto', 'flex-initial', 'flex-none', 'flex-1'].includes(base))
+    return 'flex-grow-shorthand'
+  return propForBase(base)
+}
+
 /** an existing token on the same property + variant that `cls` would collide with */
 function conflictingToken(cls: string, tokens: string[]): string | undefined {
   const { variant, base } = splitVariant(cls)
-  const prop = propForBase(base)
-  if (!prop) return undefined
+  const key = propKey(base)
+  if (!key) return undefined
   return tokens.find((t) => {
     const s = splitVariant(t)
-    return s.variant === variant && s.base !== base && propForBase(s.base) === prop
+    return s.variant === variant && s.base !== base && propKey(s.base) === key
   })
 }
 
@@ -328,6 +361,14 @@ function prerequisiteFor(cls: string, tokens: string[]): string | undefined {
   if (r.values.some((v) => tokens.includes(`${variant}${v}`))) return undefined
   const preferred = r.values.includes('flex') ? 'flex' : r.values[0]!
   return `${variant}${preferred}`
+}
+
+/** true when two bare classes control the same CSS property (e.g. `flex-row`
+ * and `flex-col`, or `p-2` and `p-4`) — used to resolve per-breakpoint overrides */
+export function sameProperty(a: string, b: string): boolean {
+  if (a === b) return true
+  const ka = propKey(a)
+  return ka !== undefined && ka === propKey(b)
 }
 
 export type ApplyClassResult = { tokens: string[] } | { error: string }

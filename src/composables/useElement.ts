@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue'
 import { usePage } from './usePage'
-import { hasOpenArgBracket, interactionMarkerOf, reconcile, styleMarkerOf, withInteractionMarker, withStyleMarker } from '@/lib/syntax'
+import { dataMarkerOf, hasOpenArgBracket, interactionMarkerOf, reconcile, styleMarkerOf, withDataMarker, withInteractionMarker, withStyleMarker } from '@/lib/syntax'
 import { isKnownElement } from '@/lib/elements'
 import { isComponentType } from '@/lib/components'
 import { deepClone, findNode, walkNodes } from '@/lib/tree'
@@ -138,7 +138,7 @@ export function useElement() {
     const line = lines[node.line]!
     // close-bracket optional so a write mid arg-edit replaces the unclosed
     // '[' instead of inserting a second bracket (':h1[:' → ':h1[title]:')
-    const pattern = new RegExp(`(:${node.type})(\\[[a-z0-9.-]*\\]?)?`)
+    const pattern = new RegExp(`(:${node.type})(\\[[a-z0-9.+-]*\\]?)?`)
     lines[node.line] = line.replace(pattern, arg ? `$1[${arg}]` : '$1')
     page.code = lines.join('\n')
     node.arg = arg || undefined
@@ -161,11 +161,19 @@ export function useElement() {
     let changed = false
     const visit = (nodes: ElementNode[]) => {
       for (const node of nodes) {
-        if (node.type !== 'body' && node.line !== undefined && lines[node.line] !== undefined) {
+        if (node.line !== undefined && lines[node.line] !== undefined) {
           let line = lines[node.line]!
           // an unclosed '[' is an arg edit in progress — the marker heads
           // can't anchor past it, so a write would land mid-token; skip
           if (!hasOpenArgBracket(line)) {
+            // '[+]' marks own content/media; a real '[arg]' binding owns the
+            // slot (withDataMarker no-ops on it). Body never carries one —
+            // its slot is page-owned (collection template binding).
+            if (node.type !== 'body' && node.arg === undefined) {
+              const data = dataMarkerOf(line)
+              const want = !!node.content || !!node.src
+              if (want !== (data === '[+]')) line = withDataMarker(line, want)
+            }
             const style = styleMarkerOf(line)
             if (style === undefined || style === '(+)') {
               const want = !!node.classes?.trim()

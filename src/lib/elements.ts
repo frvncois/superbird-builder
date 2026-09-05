@@ -7,6 +7,8 @@ export interface ElementDef {
   defaultContent?: string
   /** Void elements cannot have children or text */
   void?: boolean
+  /** the element type ghost-suggested as this block's first child (autocomplete) */
+  suggest?: string
 }
 
 import { ELEMENTS_DATA } from './shared/elements.js'

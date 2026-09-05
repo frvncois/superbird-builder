@@ -15,6 +15,8 @@ const props = withDefaults(
     modelValue: string | null
     allowCustom?: boolean
     allowNegative?: boolean
+    /** keywords the field accepts verbatim (e.g. `auto` for margins) */
+    allowKeywords?: readonly string[]
   }>(),
   { allowCustom: false, allowNegative: false },
 )
@@ -51,7 +53,7 @@ function inc() {
 
 function onCommit(value: string) {
   if (value === '') return emit('update:modelValue', null)
-  const tail = textToTail(value, { allowNegative: props.allowNegative })
+  const tail = textToTail(value, { allowNegative: props.allowNegative, allowKeywords: props.allowKeywords })
   if (tail === false || tail === null) return
   emit('update:modelValue', tail)
 }
@@ -70,6 +72,8 @@ function onCommit(value: string) {
       v-if="allowCustom"
       :model-value="text"
       :allow-negative="allowNegative"
+      :allow-keywords="allowKeywords"
+      :steps="steps"
       class="!h-full !w-auto min-w-0 flex-1 !bg-transparent !text-center"
       @commit="onCommit"
     />

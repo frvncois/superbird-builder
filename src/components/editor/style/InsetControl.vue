@@ -19,11 +19,12 @@ const SIDES = ['top', 'right', 'bottom', 'left'] as const
 type Side = (typeof SIDES)[number]
 
 const STEPS = SPACING
+const KEYWORDS = ['auto'] as const
 
-// the current value tail for a side (e.g. '4', '[4em]', '-4'), or null
+// the current value tail for a side (e.g. '4', '[4em]', '-4', 'auto'), or null
 function tailOf(side: Side): string | null {
   for (const c of props.modelValue) {
-    const tail = parseTail(c, side)
+    const tail = parseTail(c, side, { allowKeywords: KEYWORDS })
     if (tail !== null) return tail
   }
   return null
@@ -31,7 +32,7 @@ function tailOf(side: Side): string | null {
 
 // side tokens include the negative form (-top-4); clear both spellings
 function stripSide(list: string[], side: Side): string[] {
-  return list.filter((c) => parseTail(c, side) === null)
+  return list.filter((c) => parseTail(c, side, { allowKeywords: KEYWORDS }) === null)
 }
 
 // lock on by default when all four already share one value
@@ -62,17 +63,17 @@ function toggleLock() {
 <template>
   <div class="flex flex-col items-center gap-1.5 px-2.5 py-2">
     <div class="w-28">
-      <StepperUI :steps="STEPS" allow-custom allow-negative :model-value="tailOf('top')" @update:model-value="(v) => setSide('top', v)" />
+      <StepperUI :steps="STEPS" allow-custom allow-negative :allow-keywords="KEYWORDS" :model-value="tailOf('top')" @update:model-value="(v) => setSide('top', v)" />
     </div>
 
     <div class="flex items-center gap-1.5">
       <div class="w-24">
-        <StepperUI :steps="STEPS" allow-custom allow-negative :model-value="tailOf('left')" @update:model-value="(v) => setSide('left', v)" />
+        <StepperUI :steps="STEPS" allow-custom allow-negative :allow-keywords="KEYWORDS" :model-value="tailOf('left')" @update:model-value="(v) => setSide('left', v)" />
       </div>
 
       <button
+        v-tooltip="locked ? 'Unlock sides' : 'Lock all sides'"
         type="button"
-        :title="locked ? 'Unlock sides' : 'Lock all sides'"
         class="flex size-7 shrink-0 items-center justify-center rounded-md border transition-colors"
         :class="
           locked
@@ -85,12 +86,12 @@ function toggleLock() {
       </button>
 
       <div class="w-24">
-        <StepperUI :steps="STEPS" allow-custom allow-negative :model-value="tailOf('right')" @update:model-value="(v) => setSide('right', v)" />
+        <StepperUI :steps="STEPS" allow-custom allow-negative :allow-keywords="KEYWORDS" :model-value="tailOf('right')" @update:model-value="(v) => setSide('right', v)" />
       </div>
     </div>
 
     <div class="w-28">
-      <StepperUI :steps="STEPS" allow-custom allow-negative :model-value="tailOf('bottom')" @update:model-value="(v) => setSide('bottom', v)" />
+      <StepperUI :steps="STEPS" allow-custom allow-negative :allow-keywords="KEYWORDS" :model-value="tailOf('bottom')" @update:model-value="(v) => setSide('bottom', v)" />
     </div>
   </div>
 </template>

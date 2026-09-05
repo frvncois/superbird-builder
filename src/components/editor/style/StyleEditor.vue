@@ -17,7 +17,9 @@ import type { StyleProperty, Control, StyleSection, RelevanceContext } from '@/l
 import { useElement } from '@/composables/useElement'
 import { useComponents } from '@/composables/useComponents'
 import { usePage } from '@/composables/usePage'
+import { useProject } from '@/composables/useProject'
 import { useClassField } from '@/composables/useClassField'
+import { breakpointView, applyBreakpointEdit, removeInheritedToken } from '@/lib/responsive'
 import { findParent } from '@/lib/tree'
 import GroupAccordion from '@/components/accordion/GroupAccordion.vue'
 import TitleAccordion from '@/components/accordion/TitleAccordion.vue'
@@ -44,6 +46,26 @@ import { borderWidthScheme } from '@/lib/tieredBox'
 const { selectedElement } = useElement()
 const { masterFor } = useComponents()
 const { activePage } = usePage()
+const { activeBreakpoint, baseBreakpoint, breakpoints } = useProject()
+
+// the width of the breakpoint being edited, or null when it's the base (widest)
+const activeWidth = computed(() => {
+  const a = activeBreakpoint.value
+  if (!a || a.id === baseBreakpoint.value?.id) return null
+  return a.width
+})
+
+// the widest breakpoint's width — the base view resolves the cascade here
+const baseWidth = computed(() => baseBreakpoint.value?.width ?? 0)
+
+// the smallest breakpoint wider than the one being edited — the threshold a
+// removed class is scoped above so it survives on larger breakpoints only
+const nextLargerWidth = computed(() => {
+  const w = activeWidth.value
+  if (w === null) return null
+  const wider = breakpoints.value.map((b) => b.width).filter((x) => x > w)
+  return wider.length ? Math.min(...wider) : null
+})
 
 // inside a component instance, style edits land on the shared master
 const styleTarget = computed(() =>
@@ -52,14 +74,46 @@ const styleTarget = computed(() =>
     : null,
 )
 
-// the element's class string is the single source of truth: the
-// visual controls read their state out of it and write back into it
-const { tokens, setTokens, removeToken } = useClassField({
+// the element's class string is the single source of truth. Controls edit one
+// breakpoint at a time: they see/write the "effective view" for the active
+// breakpoint (base values + this breakpoint's overrides, prefix stripped) and
+// the wrapper folds edits back into the stored string as max-width variants.
+const { tokens: rawTokens, setTokens: setRawTokens } = useClassField({
   get: () => styleTarget.value?.classes ?? '',
   set: (value) => {
     if (styleTarget.value) styleTarget.value.classes = value
   },
 })
+// cascaded view for the active breakpoint (Mobile inherits Tablet, not just base)
+const view = computed(() => breakpointView(rawTokens.value, activeWidth.value, baseWidth.value))
+const tokens = computed(() => view.value.tokens)
+function setTokens(next: string[]) {
+  setRawTokens(applyBreakpointEdit(rawTokens.value, activeWidth.value, next, baseWidth.value))
+}
+function removeToken(cls: string) {
+  // removing an inherited value on a smaller breakpoint scopes it so it drops
+  // here and below while larger breakpoints keep it (base-inherited case only)
+  if (activeWidth.value !== null && inheritedTokens.value.includes(cls)) {
+    const larger = nextLargerWidth.value
+    if (larger !== null) {
+      const next = removeInheritedToken(rawTokens.value, cls, larger)
+      if (next) setRawTokens(next)
+    }
+    return
+  }
+  setTokens(tokens.value.filter((t) => t !== cls))
+}
+
+// on a smaller breakpoint, the tokens inherited from a larger breakpoint (not
+// this breakpoint's own override) — shown dimmed in the class panel
+const inheritedTokens = computed(() => view.value.inherited)
+
+// inherited tokens that come straight from the base (unprefixed) token, so they
+// can be removed (scoped away) here — others (overridden by a larger non-base
+// breakpoint) stay non-removable for now
+const removableInherited = computed(() =>
+  activeWidth.value === null ? [] : inheritedTokens.value.filter((t) => rawTokens.value.includes(t)),
+)
 
 function classFor(prop: StyleProperty): string | undefined {
   return matchClass(prop, tokens.value)
@@ -94,9 +148,13 @@ function remove(prop: StyleProperty) {
 const baseline = ref<string[]>([])
 const backgroundBaseline = ref<string>('')
 watch(
-  () => styleTarget.value?.id,
+  [() => styleTarget.value?.id, activeWidth],
   () => {
-    baseline.value = (styleTarget.value?.classes ?? '').split(/\s+/).filter(Boolean)
+    baseline.value = breakpointView(
+      (styleTarget.value?.classes ?? '').split(/\s+/).filter(Boolean),
+      activeWidth.value,
+      baseWidth.value,
+    ).tokens
     backgroundBaseline.value = styleTarget.value?.background ?? ''
   },
   { immediate: true },
@@ -140,7 +198,11 @@ const isVerticalFlex = computed(() => {
 watch(
   tokens,
   () => {
-    const needsDisplay = allProps.some((p) => p.needsDisplay && matchClass(p, tokens.value))
+    // trigger only on this breakpoint's OWN flex/grid-child classes — an
+    // inherited one (e.g. gap kept from base) must not resurrect a display the
+    // user just removed on this breakpoint
+    const own = tokens.value.filter((t) => !inheritedTokens.value.includes(t))
+    const needsDisplay = allProps.some((p) => p.needsDisplay && matchClass(p, own))
     if (needsDisplay && !matchClass(displayProp, tokens.value)) {
       setTokens(['flex', ...tokens.value])
     }
@@ -360,7 +422,14 @@ watch(pendingFocus, consumeFocus)
   <div class="flex flex-col">
     <div class="flex flex-col gap-1.5 p-3 border-b border-input">
       <p class="text-xs font-medium text-muted-foreground">Classes</p>
-      <ClassInput ref="classInput" :tokens="tokens" @commit="setTokens" @remove="removeToken" />
+      <ClassInput
+        ref="classInput"
+        :tokens="tokens"
+        :inherited="inheritedTokens"
+        :removable-inherited="removableInherited"
+        @commit="setTokens"
+        @remove="removeToken"
+      />
     </div>
 
     <GroupAccordion
@@ -395,7 +464,7 @@ watch(pendingFocus, consumeFocus)
               variant="ghost"
               size="xs"
               :icon="RotateCcw"
-              title="Revert"
+              tooltip="Revert"
               class="aspect-square shrink-0 text-muted-foreground"
               @click="backgroundMedia = backgroundBaseline"
             />
@@ -407,7 +476,7 @@ watch(pendingFocus, consumeFocus)
               variant="ghost"
               size="xs"
               :icon="X"
-              title="Remove background"
+              tooltip="Remove background"
               class="aspect-square text-muted-foreground"
               @click="backgroundMedia = ''"
             />
@@ -522,7 +591,7 @@ watch(pendingFocus, consumeFocus)
               variant="ghost"
               size="xs"
               :icon="RotateCcw"
-              title="Revert"
+              tooltip="Revert"
               class="aspect-square shrink-0 text-muted-foreground"
               @click="revert(prop)"
             />

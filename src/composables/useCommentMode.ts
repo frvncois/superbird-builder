@@ -4,7 +4,7 @@ import { useKeymap } from './useShortcut'
 
 /**
  * The comment-drop tool's keyboard behaviour, shared by both editing surfaces
- * (CanvasEditor, ContentView). Plain `C` toggles the tool on/off; Escape leaves
+ * (CanvasEditor, PreviewView). Plain `C` toggles the tool on/off; Escape leaves
  * it. `C` is bound with no modifier, so ⌘C stays element-copy — and the keymap
  * skips text fields, so typing "c" never arms the tool. Returns `commentMode`
  * for the view to drive its crosshair cursor and click-to-place gating.

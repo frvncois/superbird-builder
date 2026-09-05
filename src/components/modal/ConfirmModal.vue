@@ -2,12 +2,12 @@
 import ModalDialog from '@/components/modal/ModalDialog.vue'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 
-// Reusable destructive-confirm dialog. Parent controls visibility (v-if) and
-// handles `confirm` / `close`.
+// Reusable destructive-confirm dialog, opened via useModal().confirm() —
+// closes with `true` when confirmed, no payload when dismissed.
 withDefaults(defineProps<{ title: string; message: string; confirmLabel?: string }>(), {
   confirmLabel: 'Delete',
 })
-const emit = defineEmits<{ confirm: []; close: [] }>()
+const emit = defineEmits<{ close: [result?: boolean] }>()
 </script>
 
 <template>
@@ -19,7 +19,7 @@ const emit = defineEmits<{ confirm: []; close: [] }>()
         variant="default"
         size="sm"
         class="bg-danger text-white hover:bg-danger"
-        @click="emit('confirm')"
+        @click="emit('close', true)"
       >
         {{ confirmLabel }}
       </ButtonUI>

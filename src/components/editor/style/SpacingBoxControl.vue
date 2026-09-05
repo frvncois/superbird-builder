@@ -23,6 +23,8 @@ const props = defineProps<{
   base: string
   modelValue: string[]
   allowNegative?: boolean
+  /** keywords the side fields accept verbatim (e.g. `auto` for margins) */
+  allowKeywords?: readonly string[]
   /** the class scheme (spacing by default; border-width for the Border section) */
   scheme?: Scheme
   /** classes at selection time — the revert button restores this base to it */
@@ -89,7 +91,7 @@ function revert() {
         variant="ghost"
         size="xs"
         :icon="RotateCcw"
-        title="Revert"
+        tooltip="Revert"
         class="aspect-square shrink-0 text-muted-foreground"
         @click="revert"
       />
@@ -98,17 +100,17 @@ function revert() {
 
     <div class="flex flex-col items-center gap-1.5 py-1">
       <div class="w-28">
-        <StepperUI :steps="STEPS" allow-custom :allow-negative="allowNegative" :model-value="sides.t" @update:model-value="(v) => setSide('t', v)" />
+        <StepperUI :steps="STEPS" allow-custom :allow-negative="allowNegative" :allow-keywords="allowKeywords" :model-value="sides.t" @update:model-value="(v) => setSide('t', v)" />
       </div>
 
       <div class="flex items-center gap-1.5">
         <div class="w-24">
-          <StepperUI :steps="STEPS" allow-custom :allow-negative="allowNegative" :model-value="sides.l" @update:model-value="(v) => setSide('l', v)" />
+          <StepperUI :steps="STEPS" allow-custom :allow-negative="allowNegative" :allow-keywords="allowKeywords" :model-value="sides.l" @update:model-value="(v) => setSide('l', v)" />
         </div>
 
         <button
+          v-tooltip="locked ? 'Unlock sides' : 'Lock all sides'"
           type="button"
-          :title="locked ? 'Unlock sides' : 'Lock all sides'"
           class="flex size-7 shrink-0 items-center justify-center rounded-md border transition-colors"
           :class="
             locked
@@ -121,12 +123,12 @@ function revert() {
         </button>
 
         <div class="w-24">
-          <StepperUI :steps="STEPS" allow-custom :allow-negative="allowNegative" :model-value="sides.r" @update:model-value="(v) => setSide('r', v)" />
+          <StepperUI :steps="STEPS" allow-custom :allow-negative="allowNegative" :allow-keywords="allowKeywords" :model-value="sides.r" @update:model-value="(v) => setSide('r', v)" />
         </div>
       </div>
 
       <div class="w-28">
-        <StepperUI :steps="STEPS" allow-custom :allow-negative="allowNegative" :model-value="sides.b" @update:model-value="(v) => setSide('b', v)" />
+        <StepperUI :steps="STEPS" allow-custom :allow-negative="allowNegative" :allow-keywords="allowKeywords" :model-value="sides.b" @update:model-value="(v) => setSide('b', v)" />
       </div>
     </div>
   </div>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, type Component } from 'vue'
+import type { Side } from '@/lib/floating'
 
 type Variant = 'default' | 'outline' | 'ghost' | 'icon' | 'mono'
 type Size = 'default' | 'lg' | 'sm' | 'xs'
@@ -11,6 +12,9 @@ const props = withDefaults(
     icon?: Component
     iconPosition?: 'before' | 'after'
     disabled?: boolean
+    /** hover label rendered by the app TooltipHost — use this, never the native title attr */
+    tooltip?: string
+    tooltipSide?: Side
   }>(),
   {
     variant: 'default',
@@ -68,7 +72,11 @@ const classes = computed(() => [
 </script>
 
 <template>
-  <button :class="classes" :disabled="disabled">
+  <button
+    v-tooltip="tooltip ? { text: tooltip, side: tooltipSide } : undefined"
+    :class="classes"
+    :disabled="disabled"
+  >
     <component :is="icon" v-if="icon && iconPosition === 'before'" />
     <slot />
     <component :is="icon" v-if="icon && iconPosition === 'after'" />

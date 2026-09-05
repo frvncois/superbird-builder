@@ -90,6 +90,8 @@ export function migrateStoredProject(parsed: Project): Project | null {
     parsed.settings.customCode ??= defaults.customCode
     parsed.settings.fonts ??= defaults.fonts
     parsed.settings.domain ??= ''
+    parsed.settings.publishing ??= defaults.publishing
+    parsed.settings.publishing.github ??= { repo: '', branch: 'main' }
     // locale backfills (list before pages: the migration reads it)
     parsed.defaultLocale ||= 'en'
     parsed.locales ??= [parsed.defaultLocale]

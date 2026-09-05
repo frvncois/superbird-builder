@@ -30,8 +30,8 @@ function pick(cls: string) {
     <button
       v-for="s in STYLES"
       :key="s.cls"
+      v-tooltip="s.label"
       type="button"
-      :title="s.label"
       class="flex h-8 flex-1 items-center justify-center transition-colors"
       :class="
         current === s.cls

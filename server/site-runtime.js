@@ -17,18 +17,50 @@
     var fx = JSON.parse(fxEl.textContent || '{}')
     var fired = new Set()
 
+    // breakpoint-scoped interactions: width→breakpoint map + per-key scope.
+    // Absent when nothing is scoped, so gating is a no-op then.
+    var bpEl = document.getElementById('int-bp')
+    var bps = bpEl ? JSON.parse(bpEl.textContent || '[]') : []
+    bps.sort(function (a, b) { return a.w - b.w })
+    var fxbpEl = document.getElementById('int-fxbp')
+    var fxbp = fxbpEl ? JSON.parse(fxbpEl.textContent || '{}') : {}
+
+    // current breakpoint id for the viewport (mirrors breakpointIdForWidth in
+    // src/lib/responsive.ts): tightest bp still covering this width, else widest
+    var curBp = ''
+    var computeBp = function () {
+      if (!bps.length) return ''
+      var w = window.innerWidth
+      for (var i = 0; i < bps.length; i++) if (w <= bps[i].w) return bps[i].id
+      return bps[bps.length - 1].id
+    }
+    var allowed = function (k) {
+      var set = fxbp[k]
+      return !set || set.indexOf(curBp) !== -1
+    }
+
     var targets = []
     document.querySelectorAll('[data-tgt]').forEach(function (el) {
       targets.push({ el: el, base: el.className, keys: el.getAttribute('data-tgt').split(' ') })
     })
 
     var apply = function () {
+      curBp = computeBp()
       targets.forEach(function (t) {
         var extra = ''
         t.keys.forEach(function (k) {
-          if (fired.has(k) && fx[k]) extra += ' ' + fx[k]
+          if (fired.has(k) && fx[k] && allowed(k)) extra += ' ' + fx[k]
         })
         t.el.className = t.base + extra
+      })
+    }
+
+    // resize can move the viewport across breakpoints — re-gate applied classes
+    if (Object.keys(fxbp).length) {
+      var fxPending = null
+      window.addEventListener('resize', function () {
+        clearTimeout(fxPending)
+        fxPending = setTimeout(apply, 100)
       })
     }
 
