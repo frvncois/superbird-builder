@@ -223,7 +223,7 @@ async function exportPackage() {
   try {
     const res = await fetch('/api/project-export')
     if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? 'Export failed')
-    downloadBlob(await res.blob(), 'superbird-project.zip')
+    downloadBlob(await res.blob(), 'guano-project.zip')
   } catch (e) {
     exportError.value = e instanceof Error ? e.message : 'Export failed'
   } finally {

@@ -34,27 +34,31 @@ export function useEditorBoot() {
         }
       }
       await hydrateStore([
-        'superbird-branches',
-        'superbird-published-baseline',
-        'superbird-published-info',
+        'guano-branches',
+        'guano-published-baseline',
+        'guano-published-info',
       ])
-      const meta = storeGet('superbird-branches')
+      const meta = storeGet('guano-branches')
       const activeId = meta ? ((JSON.parse(meta).activeId as string) ?? 'main') : 'main'
       // Main's key too: publish/the Unpublished dot always read Main, even
       // when the session resumes straight onto a draft (hydrateStore de-dupes)
-      await hydrateStore([`superbird-project:${activeId}`, 'superbird-project:main'])
+      await hydrateStore([`guano-project:${activeId}`, 'guano-project:main'])
       hydratePublishState()
 
       // fresh install: no stored project yet, so init() will persist the
       // in-memory default. Apply the name captured at setup before that
       // first snapshot is taken, then clear the stash so it can't leak.
-      const setupName = localStorage.getItem('superbird-setup-name')
+      // old key read too: a setup finished on the pre-rename build hands
+      // its name to this one exactly once
+      const setupName =
+        localStorage.getItem('guano-setup-name') ?? localStorage.getItem('superbird-setup-name')
       if (setupName) {
-        if (!storeGet(`superbird-project:${activeId}`)) {
+        if (!storeGet(`guano-project:${activeId}`)) {
           useProject().renameProject(setupName)
         }
-        localStorage.removeItem('superbird-setup-name')
       }
+      localStorage.removeItem('guano-setup-name')
+      localStorage.removeItem('superbird-setup-name')
 
       usePersistence().init() // sync, runs against the warm cache
       ready.value = true

@@ -30,7 +30,7 @@ async function submit() {
     await setup(email.value.trim(), password.value)
     // the editor boot applies this to the freshly created project
     // (a hard reload follows, so it can't be handed over in memory)
-    localStorage.setItem('superbird-setup-name', projectName.value.trim())
+    localStorage.setItem('guano-setup-name', projectName.value.trim())
     window.location.assign('/admin')
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Setup failed'

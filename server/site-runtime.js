@@ -1,4 +1,4 @@
-// Superbird static-site runtime (~2.5 KB): interactions + runtime conditions.
+// Guano static-site runtime (~2.5 KB): interactions + runtime conditions.
 //
 // Interactions replay the editor's hover/click/appear by toggling Tailwind
 // classes. Semantics mirror src/composables/useInteraction.ts: a set of

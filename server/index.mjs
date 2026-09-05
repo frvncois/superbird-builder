@@ -1,4 +1,4 @@
-// Superbird server: auth, editor storage, publishing, static site.
+// Guano server: auth, editor storage, publishing, static site.
 // POST /api/auth/setup|login|logout, GET /api/auth/me — session cookie
 // GET/PUT/DELETE /api/store[...]  🔒 the editor's persistence (per key)
 // /api/media[...]                 🔒 media library (see media.mjs)
@@ -60,10 +60,15 @@ import {
 } from './auth.mjs'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
-// SB_DATA_DIR overrides the runtime data location (deploys / isolated e2e);
-// defaults to server/data. Use an ABSOLUTE path — the exporter's write-path
-// backstop rejects a relative one. auth.mjs and media.mjs honor the same var.
-const DATA_DIR = process.env.SB_DATA_DIR || join(ROOT, 'server', 'data')
+// GUANO_DATA_DIR overrides the runtime data location (deploys / isolated
+// e2e); SB_DATA_DIR is the pre-rename fallback (warned at boot). Defaults to
+// server/data. Use an ABSOLUTE path — the exporter's write-path backstop
+// rejects a relative one. auth.mjs and media.mjs honor the same vars.
+if (!process.env.GUANO_DATA_DIR && process.env.SB_DATA_DIR) {
+  console.warn('SB_DATA_DIR is deprecated — use GUANO_DATA_DIR')
+}
+const DATA_DIR =
+  process.env.GUANO_DATA_DIR || process.env.SB_DATA_DIR || join(ROOT, 'server', 'data')
 const SNAPSHOT = join(DATA_DIR, 'published.json')
 const SITE = join(DATA_DIR, 'site')
 const MEDIA_DIR = join(DATA_DIR, 'media')
@@ -362,7 +367,7 @@ const storeFile = (key) => join(STORE_DIR, key.replaceAll(':', '__') + '.json')
  * welcome). Best-effort — '' when there's nothing stored yet. */
 async function currentProjectName() {
   try {
-    const name = JSON.parse(await readFile(storeFile('superbird-project:main'), 'utf8'))?.name
+    const name = JSON.parse(await readFile(storeFile('guano-project:main'), 'utf8'))?.name
     return typeof name === 'string' ? name : ''
   } catch {
     return ''
@@ -427,7 +432,7 @@ async function contributorProjectRejection(key, body) {
   return before === after ? null : 'contributors cannot change custom code or mail settings'
 }
 
-const isProjectKey = (key) => key.startsWith('superbird-project:')
+const isProjectKey = (key) => key.startsWith('guano-project:')
 
 async function handleStore(req, res, path, query) {
   // any authenticated user (incl. contributors editing content) may use the store
@@ -519,7 +524,7 @@ async function handlePost(req, res, params) {
     if (method === 'zip') {
       const zip = createZip(await readDirFiles(SITE))
       return send(res, 200, zip, 'application/zip', {
-        'content-disposition': 'attachment; filename="superbird-site.zip"',
+        'content-disposition': 'attachment; filename="guano-site.zip"',
         'x-export-routes': String(stats.routes),
         'x-export-bytes': String(stats.bytes),
       })
@@ -573,7 +578,10 @@ async function handlePublishConfig(req, res) {
 
 // package layout inside the zip: manifest.json, store/<key>.json,
 // media/index.json, media/files/*, media/thumbs/*.webp
-const PACKAGE_FORMAT = 'superbird-package'
+const PACKAGE_FORMAT = 'guano-package'
+// pre-rename backups stay importable; the post-import store migration
+// normalizes their old key filenames
+const LEGACY_PACKAGE_FORMAT = 'superbird-package'
 const PACKAGE_VERSION = 1
 
 /** GET /api/project-export — admin-only backup package (.zip). Excludes
@@ -603,7 +611,7 @@ async function handleProjectExport(req, res) {
     files.push({ path: `media/${path}`, data })
   }
   return send(res, 200, createZip(files), 'application/zip', {
-    'content-disposition': 'attachment; filename="superbird-project.zip"',
+    'content-disposition': 'attachment; filename="guano-project.zip"',
   })
 }
 
@@ -633,8 +641,14 @@ async function handleProjectImport(req, res) {
     if (path === 'manifest.json') {
       try {
         const m = JSON.parse(data.toString('utf8'))
-        if (m.format !== PACKAGE_FORMAT || m.version !== PACKAGE_VERSION) {
+        if (
+          (m.format !== PACKAGE_FORMAT && m.format !== LEGACY_PACKAGE_FORMAT) ||
+          m.version !== PACKAGE_VERSION
+        ) {
           return fail(res, 400, 'unrecognized package format')
+        }
+        if (m.format === LEGACY_PACKAGE_FORMAT) {
+          console.log('importing a legacy superbird-package backup (deprecated format)')
         }
         manifestOk = true
       } catch {
@@ -647,7 +661,7 @@ async function handleProjectImport(req, res) {
       } catch {
         return fail(res, 400, `unreadable store entry: ${path}`)
       }
-      if (path.startsWith('store/superbird-project__')) {
+      if (path.startsWith('store/guano-project__') || path.startsWith('store/superbird-project__')) {
         if (Array.isArray(parsed.pages) && parsed.pages.length) hasProject = true
       }
     } else if (path === 'media/index.json') {
@@ -681,8 +695,28 @@ async function handleProjectImport(req, res) {
   await swapDir(STORE_DIR, tmpStore)
   await swapDir(MEDIA_DIR, tmpMedia)
   await rm(tmp, { recursive: true, force: true })
+  await migrateStoreDir() // a legacy backup arrives with old key filenames
   resetMediaIndexCache() // make imported media visible without a restart
   return send(res, 200, JSON.stringify({ ok: true }))
+}
+
+/** one-time rename of pre-rename store keys (superbird-* → guano-*) on the
+ * live store dir. Idempotent: an existing new-name file is never clobbered.
+ * Runs at boot and after a project-package import (legacy backups). */
+async function migrateStoreDir() {
+  let files = []
+  try {
+    files = await readdir(STORE_DIR)
+  } catch {
+    return // no store yet
+  }
+  for (const f of files) {
+    if (!f.startsWith('superbird-') || !f.endsWith('.json')) continue
+    const to = 'guano-' + f.slice('superbird-'.length)
+    if (existsSync(join(STORE_DIR, to))) continue
+    await rename(join(STORE_DIR, f), join(STORE_DIR, to))
+    console.log(`store migration: ${f} -> ${to}`)
+  }
 }
 
 /** replace `live` with `staged`: move live aside, staged in, drop the old */
@@ -792,5 +826,6 @@ createServer(async (req, res) => {
   } catch (err) {
     console.warn('could not restrict data dir permissions:', err.message)
   }
-  console.log(`superbird server on http://localhost:${PORT}${TOKEN ? ' (publish token required)' : ''}`)
+  await migrateStoreDir()
+  console.log(`guano server on http://localhost:${PORT}${TOKEN ? ' (publish token required)' : ''}`)
 })

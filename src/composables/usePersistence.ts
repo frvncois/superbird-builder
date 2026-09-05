@@ -26,7 +26,7 @@ const HISTORY_LIMIT = 50
 export const activeBranchId = ref('main')
 
 export function projectStorageKey(branchId: string) {
-  return `superbird-project:${branchId}`
+  return `guano-project:${branchId}`
 }
 
 // 'saved' means server-acked: the store's queue is empty and error-free
@@ -64,7 +64,7 @@ export function usePersistence() {
     try {
       // resume the branch that was active last session
       // (the boot sequence hydrated these keys before init() runs)
-      const meta = storeGet('superbird-branches')
+      const meta = storeGet('guano-branches')
       if (meta) activeBranchId.value = (JSON.parse(meta).activeId as string) || 'main'
 
       const stored = readStoredProject(projectStorageKey(activeBranchId.value))

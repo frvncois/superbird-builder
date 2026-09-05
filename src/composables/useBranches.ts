@@ -21,7 +21,7 @@ export interface DraftStatus {
   conflictCount: number
 }
 
-const META_KEY = 'superbird-branches'
+const META_KEY = 'guano-branches'
 export const MAIN_ID = 'main'
 
 const branches = ref<BranchMeta[]>([{ id: MAIN_ID, name: 'Main', createdAt: 0 }])
@@ -31,7 +31,7 @@ let metaLoaded = false
 const statusCache = ref(new Map<string, DraftStatus>())
 
 function baseStorageKey(branchId: string) {
-  return `superbird-base:${branchId}`
+  return `guano-base:${branchId}`
 }
 
 export function useBranches() {

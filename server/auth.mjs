@@ -20,7 +20,9 @@ import { fileURLToPath } from 'node:url'
 import { writeAtomic } from './util.mjs'
 
 const DATA_DIR =
-  process.env.SB_DATA_DIR || join(fileURLToPath(new URL('..', import.meta.url)), 'server', 'data')
+  process.env.GUANO_DATA_DIR ||
+  process.env.SB_DATA_DIR || // deprecated pre-rename name (index.mjs warns)
+  join(fileURLToPath(new URL('..', import.meta.url)), 'server', 'data')
 const USERS_FILE = join(DATA_DIR, 'users.json')
 const INVITES_FILE = join(DATA_DIR, 'invites.json')
 const SESSIONS_FILE = join(DATA_DIR, 'sessions.json')
@@ -28,7 +30,8 @@ const LEGACY_AUTH_FILE = join(DATA_DIR, 'auth.json') // pre-multi-user single ac
 
 const SESSION_TTL = 30 * 24 * 60 * 60 * 1000 // 30 days
 const INVITE_TTL = 7 * 24 * 60 * 60 * 1000 // 7 days
-const COOKIE = 'sb_session'
+// renamed from sb_session — old cookies are simply invalid (one re-login)
+const COOKIE = 'guano_session'
 
 export const ROLES = ['admin', 'editor', 'contributor']
 

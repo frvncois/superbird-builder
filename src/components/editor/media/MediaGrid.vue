@@ -19,7 +19,7 @@ const { thumbUrl, mediaUrl } = useMedia()
 /** tiles drag onto sidebar folders — the id travels in a custom type so
  *  file-drops (which use the Files type) can't be confused with tile moves */
 function onDragStart(e: DragEvent, asset: MediaAsset) {
-  e.dataTransfer?.setData('application/x-superbird-asset', asset.id)
+  e.dataTransfer?.setData('application/x-guano-asset', asset.id)
 }
 
 const KIND_ICONS: Partial<Record<MediaKind, Component>> = {

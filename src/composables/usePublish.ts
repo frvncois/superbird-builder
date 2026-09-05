@@ -8,7 +8,7 @@ import type { PublishMethod } from '@/types/editor'
 
 /** mirror of the last-published snapshot so the Unpublished dot
  * survives editor reloads (server-stored; hydrated by the boot flow) */
-const BASELINE_KEY = 'superbird-published-baseline'
+const BASELINE_KEY = 'guano-published-baseline'
 
 // snapshot of the project at the last publish; null = never published.
 // (migrations can make an old save differ from its own published
@@ -16,7 +16,7 @@ const BASELINE_KEY = 'superbird-published-baseline'
 const publishedSnapshot = ref<string | null>(null)
 
 /** stats of the last successful publish (Publishing settings tab) */
-const INFO_KEY = 'superbird-published-info'
+const INFO_KEY = 'guano-published-info'
 const publishedInfo = ref<{
   publishedAt: number
   routes: number
@@ -99,7 +99,7 @@ export function usePublish() {
     // also refreshed SITE, so the baseline/info updates below are valid.
     let stats: { routes: number; bytes: number; commit?: string }
     if ((res.headers.get('content-type') ?? '').includes('application/zip')) {
-      downloadBlob(await res.blob(), 'superbird-site.zip')
+      downloadBlob(await res.blob(), 'guano-site.zip')
       stats = {
         routes: Number(res.headers.get('x-export-routes')) || 0,
         bytes: Number(res.headers.get('x-export-bytes')) || 0,

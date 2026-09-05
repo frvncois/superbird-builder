@@ -5,7 +5,11 @@ import { ref } from 'vue'
 // not project data — so it lives in localStorage, not the server store.
 export type Theme = 'dark' | 'light'
 
-const KEY = 'superbird-theme'
+const KEY = 'guano-theme'
+// one-time migration of the pre-rename key so an existing preference survives
+const legacyTheme = localStorage.getItem('superbird-theme')
+if (legacyTheme && !localStorage.getItem(KEY)) localStorage.setItem(KEY, legacyTheme)
+localStorage.removeItem('superbird-theme')
 const stored = localStorage.getItem(KEY)
 const theme = ref<Theme>(stored === 'light' ? 'light' : 'dark')
 

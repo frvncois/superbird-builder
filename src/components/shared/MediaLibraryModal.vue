@@ -132,7 +132,7 @@ function onDrop(e: DragEvent) {
 
 // sidebar folders accept both tile drags (move) and file drags (upload into)
 async function onFolderDrop(e: DragEvent, folderId: string | null) {
-  const assetId = e.dataTransfer?.getData('application/x-superbird-asset')
+  const assetId = e.dataTransfer?.getData('application/x-guano-asset')
   if (assetId) {
     await updateAsset(assetId, { folderId })
     return

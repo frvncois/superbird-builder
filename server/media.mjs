@@ -22,7 +22,7 @@ import { sessionUser } from './auth.mjs'
 import { fail, send, writeAtomic } from './util.mjs'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
-const DATA_DIR = process.env.SB_DATA_DIR || join(ROOT, 'server', 'data')
+const DATA_DIR = process.env.GUANO_DATA_DIR || process.env.SB_DATA_DIR || join(ROOT, 'server', 'data')
 const MEDIA_DIR = join(DATA_DIR, 'media')
 const FILES_DIR = join(MEDIA_DIR, 'files')
 const THUMBS_DIR = join(MEDIA_DIR, 'thumbs')
@@ -307,7 +307,7 @@ async function scanUsage(id) {
   let files = []
   try {
     files = (await readdir(STORE_DIR)).filter(
-      (f) => f.startsWith('superbird-project__') && f.endsWith('.json'),
+      (f) => f.startsWith('guano-project__') && f.endsWith('.json'),
     )
   } catch {
     /* no store yet */
@@ -317,7 +317,7 @@ async function scanUsage(id) {
       const text = await readFile(join(STORE_DIR, file), 'utf8')
       const count = text.split(needle).length - 1
       if (count > 0) {
-        branches.push({ branchId: file.slice('superbird-project__'.length, -'.json'.length), count })
+        branches.push({ branchId: file.slice('guano-project__'.length, -'.json'.length), count })
         total += count
       }
     } catch {

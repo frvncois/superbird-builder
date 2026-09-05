@@ -7,7 +7,7 @@ import { test, expect, request as pwRequest, type APIRequestContext } from '@pla
 
 const ADMIN = { email: 'smoke@example.com', password: 'supersecret1' }
 const CONTRIB = { email: 'contrib@example.com', password: 'contrib-pass-1' }
-const PROJECT_KEY = 'superbird-project:main'
+const PROJECT_KEY = 'guano-project:main'
 
 async function login(ctx: APIRequestContext, creds: { email: string; password: string }) {
   return ctx.post('/api/auth/login', { data: creds })
@@ -68,7 +68,7 @@ test('contributor store permissions: PUT unchanged ok, sensitive PUT and DELETE 
   // --- contributor DELETE of any store key → 403 (S2 fix) ---
   res = await contribCtx.delete(`/api/store/${PROJECT_KEY}`)
   expect(res.status()).toBe(403)
-  res = await contribCtx.delete('/api/store/superbird-branches')
+  res = await contribCtx.delete('/api/store/guano-branches')
   expect(res.status()).toBe(403)
 
   // --- the project blob is still there, and admins can still delete keys ---
