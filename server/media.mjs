@@ -19,10 +19,9 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import sharp from 'sharp'
 import { sessionUser } from './auth.mjs'
-import { fail, send, writeAtomic } from './util.mjs'
+import { DATA_DIR, fail, send, writeAtomic } from './util.mjs'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
-const DATA_DIR = process.env.GUANO_DATA_DIR || process.env.SB_DATA_DIR || join(ROOT, 'server', 'data')
 const MEDIA_DIR = join(DATA_DIR, 'media')
 const FILES_DIR = join(MEDIA_DIR, 'files')
 const THUMBS_DIR = join(MEDIA_DIR, 'thumbs')

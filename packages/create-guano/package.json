@@ -1,0 +1,16 @@
+{
+  "name": "create-guano",
+  "version": "0.1.0",
+  "license": "UNLICENSED",
+  "description": "Scaffold a new Guano site project.",
+  "type": "module",
+  "bin": {
+    "create-guano": "index.js"
+  },
+  "files": [
+    "index.js"
+  ],
+  "engines": {
+    "node": "^22.18.0 || >=24.12.0"
+  }
+}

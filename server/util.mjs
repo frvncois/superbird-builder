@@ -3,7 +3,22 @@
 // hand-rolled.
 import { timingSafeEqual } from 'node:crypto'
 import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises'
-import { dirname, join, relative } from 'node:path'
+import { dirname, join, relative, sep } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+// Runtime data location, single source for index/auth/media/export-media.
+// GUANO_DATA_DIR wins (SB_DATA_DIR is the deprecated pre-rename name —
+// index.mjs warns). An npm-installed package must never write user data
+// inside node_modules (wiped on reinstall), so when this file lives under
+// one the default is <cwd>/data; a repo clone keeps server/data. Absolute
+// either way — the exporter's write-path backstop rejects relative dirs.
+const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url))
+export const DATA_DIR =
+  process.env.GUANO_DATA_DIR ||
+  process.env.SB_DATA_DIR ||
+  (PKG_ROOT.split(sep).includes('node_modules')
+    ? join(process.cwd(), 'data')
+    : join(PKG_ROOT, 'server', 'data'))
 
 export function send(res, status, body, type = 'application/json', headers = {}) {
   res.writeHead(status, { 'content-type': type, ...headers })

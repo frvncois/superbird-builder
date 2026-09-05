@@ -1,0 +1,27 @@
+{
+  "name": "guano",
+  "version": "0.1.0",
+  "license": "UNLICENSED",
+  "description": "Self-hosted visual website builder: DSL editor, live canvas, CMS collections, static publishing.",
+  "type": "module",
+  "bin": {
+    "guano": "bin/guano.js"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "server",
+    "src"
+  ],
+  "scripts": {
+    "prepack": "node scripts/prepack.mjs"
+  },
+  "dependencies": {
+    "@tailwindcss/node": "^4.3.3",
+    "sharp": "^0.35.3",
+    "tailwindcss": "^4.3.3"
+  },
+  "engines": {
+    "node": "^22.18.0 || >=24.12.0"
+  }
+}

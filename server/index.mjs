@@ -24,7 +24,7 @@ import { exportSite } from './export.mjs'
 import { handleMedia, handleMediaFile, originAllowed, resetMediaIndexCache } from './media.mjs'
 import { pushSiteToGitHub } from './github.mjs'
 import { createZip, readZip } from './zip.mjs'
-import { fail, readDirFiles, send, timingSafeEqualStr, writeAtomic } from './util.mjs'
+import { DATA_DIR, fail, readDirFiles, send, timingSafeEqualStr, writeAtomic } from './util.mjs'
 import {
   ROLES,
   acceptInvite,
@@ -60,15 +60,11 @@ import {
 } from './auth.mjs'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
-// GUANO_DATA_DIR overrides the runtime data location (deploys / isolated
-// e2e); SB_DATA_DIR is the pre-rename fallback (warned at boot). Defaults to
-// server/data. Use an ABSOLUTE path — the exporter's write-path backstop
-// rejects a relative one. auth.mjs and media.mjs honor the same vars.
+// data location resolution (env overrides, install-aware default) lives in
+// util.mjs — one home for index/auth/media/export-media
 if (!process.env.GUANO_DATA_DIR && process.env.SB_DATA_DIR) {
   console.warn('SB_DATA_DIR is deprecated — use GUANO_DATA_DIR')
 }
-const DATA_DIR =
-  process.env.GUANO_DATA_DIR || process.env.SB_DATA_DIR || join(ROOT, 'server', 'data')
 const SNAPSHOT = join(DATA_DIR, 'published.json')
 const SITE = join(DATA_DIR, 'site')
 const MEDIA_DIR = join(DATA_DIR, 'media')

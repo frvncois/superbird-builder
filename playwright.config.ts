@@ -8,6 +8,10 @@ import { resolve } from 'node:path'
 const PORT = 4188
 // absolute: the exporter's write-path backstop rejects a relative data dir
 const DATA_DIR = resolve(import.meta.dirname, '.e2e-data')
+// point GUANO_E2E_SERVER at a packaged install's server entry
+// (…/node_modules/guano/server/index.mjs) to run the suite against the
+// packed tarball instead of the repo layout
+const SERVER = process.env.GUANO_E2E_SERVER ?? 'server/index.mjs'
 
 export default defineConfig({
   testDir: './e2e',
@@ -24,7 +28,7 @@ export default defineConfig({
   webServer: {
     // wipe the throwaway data dir, then serve the built SPA + API on an
     // isolated port/data dir
-    command: `node -e "require('fs').rmSync(process.env.GUANO_DATA_DIR,{recursive:true,force:true})" && node server/index.mjs`,
+    command: `node -e "require('fs').rmSync(process.env.GUANO_DATA_DIR,{recursive:true,force:true})" && node ${SERVER}`,
     env: { GUANO_DATA_DIR: DATA_DIR, PORT: String(PORT) },
     port: PORT,
     reuseExistingServer: false,

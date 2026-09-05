@@ -16,13 +16,7 @@
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { writeAtomic } from './util.mjs'
-
-const DATA_DIR =
-  process.env.GUANO_DATA_DIR ||
-  process.env.SB_DATA_DIR || // deprecated pre-rename name (index.mjs warns)
-  join(fileURLToPath(new URL('..', import.meta.url)), 'server', 'data')
+import { DATA_DIR, writeAtomic } from './util.mjs'
 const USERS_FILE = join(DATA_DIR, 'users.json')
 const INVITES_FILE = join(DATA_DIR, 'invites.json')
 const SESSIONS_FILE = join(DATA_DIR, 'sessions.json')

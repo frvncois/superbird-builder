@@ -1,0 +1,5 @@
+# staged by scripts/prepack.mjs from the repo root — never committed
+dist/
+server/
+src/
+*.tgz
