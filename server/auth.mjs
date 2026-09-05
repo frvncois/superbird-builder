@@ -236,10 +236,11 @@ export function parseCookies(req) {
   return out
 }
 
-const cookieSecure =
-  process.env.COOKIE_SECURE === '0'
-    ? false
-    : process.env.COOKIE_SECURE === '1' || process.env.NODE_ENV === 'production'
+// Secure by default: browsers accept Secure cookies on http://localhost, so
+// local dev keeps working untouched, while a deployed instance never ships
+// the session cookie over plain HTTP by accident. A plain-HTTP deploy (LAN
+// IP, no TLS proxy) must opt out explicitly with COOKIE_SECURE=0.
+const cookieSecure = process.env.COOKIE_SECURE !== '0'
 const secure = cookieSecure ? '; Secure' : ''
 
 export const sessionCookieHeader = (token) =>
