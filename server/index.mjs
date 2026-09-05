@@ -691,6 +691,12 @@ async function handleStatic(req, res) {
   const path = normalize(decodeURIComponent(new URL(req.url, 'http://x').pathname))
   // content-type is authoritative (extension-mapped) — never sniffed
   const NOSNIFF = { 'x-content-type-options': 'nosniff' }
+  // SVG is a document format: even a sanitized file must not be able to run
+  // script on this origin when navigated to directly (mirrors /media/:id)
+  const headersFor = (target) =>
+    extname(target) === '.svg'
+      ? { ...NOSNIFF, 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'" }
+      : NOSNIFF
 
   // the editor SPA lives under /admin/ — strip the prefix and serve dist
   // (Vite builds with base '/admin/', so bundle URLs arrive as /admin/assets/*
@@ -703,7 +709,7 @@ async function handleStatic(req, res) {
     const target = isDistFile ? distFile : join(DIST, 'index.html')
     try {
       const data = await readFile(target)
-      return send(res, 200, data, MIME[extname(target)] ?? 'application/octet-stream', NOSNIFF)
+      return send(res, 200, data, MIME[extname(target)] ?? 'application/octet-stream', headersFor(target))
     } catch {
       return send(res, 404, 'Not found — run `npm run build` first.', 'text/plain')
     }
@@ -718,7 +724,7 @@ async function handleStatic(req, res) {
       : join(SITE, path, 'index.html')
   try {
     const data = await readFile(target)
-    send(res, 200, data, MIME[extname(target)] ?? 'application/octet-stream', NOSNIFF)
+    send(res, 200, data, MIME[extname(target)] ?? 'application/octet-stream', headersFor(target))
   } catch {
     try {
       send(res, 404, await readFile(join(SITE, '404.html')), MIME['.html'], NOSNIFF)

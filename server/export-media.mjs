@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { sanitizeSvg } from './media.mjs'
 import { walkNodes } from './util.mjs'
 
 const MIME_EXT = {
@@ -66,7 +67,11 @@ export async function extractMedia(project) {
       return
     }
     const payload = value.slice(match[0].length)
-    const buffer = match[2] ? Buffer.from(payload, 'base64') : Buffer.from(decodeURIComponent(payload))
+    let buffer = match[2] ? Buffer.from(payload, 'base64') : Buffer.from(decodeURIComponent(payload))
+    // data-URL SVGs never went through media intake, so they get the same
+    // script-stripping the upload path applies (media.mjs) — the served CSP
+    // is the second layer, this is the first
+    if (match[1] === 'image/svg+xml') buffer = Buffer.from(sanitizeSvg(buffer.toString('utf8')), 'utf8')
     store(value, buffer, ext)
   }
 
