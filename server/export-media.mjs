@@ -1,7 +1,7 @@
 // Media extraction for the static exporter: interns data-URL media and
 // referenced library assets into hashed files under media/ so the exported
-// site is fully self-contained. Split out of export.mjs (BOUNDARIES.md);
-// the render mirror stays there per CLAUDE.md's keep-in-sync mandate.
+// site is fully self-contained. Split out of export.mjs; the render
+// mirror stays there per CLAUDE.md's keep-in-sync mandate.
 
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'

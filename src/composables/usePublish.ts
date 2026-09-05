@@ -70,7 +70,7 @@ export function usePublish() {
 
   /** publishes Main to the server, whatever branch is active; throws on
    * failure. Only the client enforces Main-only publishing — the server
-   * stores whatever snapshot it's sent (see SECURITY.md). */
+   * stores whatever snapshot it's sent. */
   async function markPublished(method: PublishMethod = 'server'): Promise<void> {
     // settle any pending edit so the committed snapshot is what we publish
     usePersistence().saveNow()

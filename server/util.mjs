@@ -1,6 +1,6 @@
 // Shared server helpers — single home for the response + atomic-write
 // primitives that index.mjs, auth.mjs and media.mjs previously each
-// hand-rolled (AUDIT.md F20/F21).
+// hand-rolled.
 import { timingSafeEqual } from 'node:crypto'
 import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, join, relative } from 'node:path'

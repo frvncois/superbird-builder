@@ -387,7 +387,7 @@ function stableStringify(v) {
 }
 
 // the fields a contributor must never change: custom code (published as raw
-// <script>) and mail credentials (SECURITY.md S1)
+// <script>) and mail credentials
 function sensitiveProjectFields(project) {
   const settings = project?.settings ?? {}
   return {
@@ -572,7 +572,7 @@ async function handlePublishConfig(req, res) {
 // ---------- 🔒 project export / import (full backup package) ----------
 
 // package layout inside the zip: manifest.json, store/<key>.json,
-// media/index.json, media/files/*, media/thumbs/*.webp — see the plan.
+// media/index.json, media/files/*, media/thumbs/*.webp
 const PACKAGE_FORMAT = 'superbird-package'
 const PACKAGE_VERSION = 1
 
