@@ -6,6 +6,12 @@
 const FIT_RE = /^object-/
 const BG_SIZE_RE = /^bg-(auto|cover|contain|\[)/
 
+/** CSS url() with the URL quoted and every breakout character percent-encoded,
+ * so a crafted URL can't close the url() and inject extra declarations into
+ * the host's inline style (equivalent bytes for any URL consumer). */
+const cssUrl = (url) =>
+  `url("${String(url).replace(/[\\"()\s\u0000-\u001f]/g, (c) => '%' + c.charCodeAt(0).toString(16).padStart(2, '0').toUpperCase())}")`
+
 /**
  * @param {'image'|'video'|null|undefined} kind
  * @param {string|undefined} url  already resolved/rewritten media URL
@@ -37,7 +43,7 @@ export function backgroundRender(kind, url, classTokens = []) {
   // default to a sensible cover/center so a raw pick looks right
   const hasSize = classTokens.some((c) => BG_SIZE_RE.test(c))
   const style = hasSize
-    ? `background-image:url(${url})`
-    : `background-image:url(${url});background-size:cover;background-position:center`
+    ? `background-image:${cssUrl(url)}`
+    : `background-image:${cssUrl(url)};background-size:cover;background-position:center`
   return { kind: 'image', url, style, hostClass: '', layerClass: '' }
 }

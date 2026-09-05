@@ -473,10 +473,12 @@ function renderShell(project, rewrite, { locale, title, description, path, headS
   head += `<meta property="og:title" content="${escapeHtml(title)}">`
   if (seo.siteName) head += `<meta property="og:site_name" content="${escapeHtml(seo.siteName)}">`
   if (description) head += `<meta property="og:description" content="${escapeHtml(description)}">`
+  // same scheme allowlist as every other URL sink (FINDINGS S15)
   const ogImage = rewrite(seo.ogImage)
-  if (ogImage) head += `<meta property="og:image" content="${escapeHtml(absolute(ogImage))}">`
+  if (ogImage && SAFE_SRC.test(ogImage))
+    head += `<meta property="og:image" content="${escapeHtml(absolute(ogImage))}">`
   const favicon = rewrite(settings.favicon)
-  if (favicon) head += `<link rel="icon" href="${escapeHtml(favicon)}">`
+  if (favicon && SAFE_SRC.test(favicon)) head += `<link rel="icon" href="${escapeHtml(favicon)}">`
   if (domain && path) head += `<link rel="canonical" href="${escapeHtml(`https://${domain}${path}`)}">`
   head += `<link rel="stylesheet" href="/assets/style.css">`
   const fontsUrl = settings.fonts?.googleFontsUrl
