@@ -464,6 +464,12 @@ async function handleStore(req, res, path, query) {
     return send(res, 200, JSON.stringify({ ok: true }))
   }
   if (req.method === 'DELETE') {
+    // mirror of the PUT guard, stricter: the contributor UI (Preview) never
+    // deletes store keys at all, so any contributor DELETE is anomalous —
+    // deleting the project/branch/baseline blobs is destruction, not editing
+    if (user.role === 'contributor') {
+      return fail(res, 403, 'contributors cannot delete stored data')
+    }
     await rm(storeFile(key), { force: true })
     return send(res, 200, JSON.stringify({ ok: true }))
   }
