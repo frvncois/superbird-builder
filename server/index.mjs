@@ -21,7 +21,14 @@ import { existsSync } from 'node:fs'
 import { extname, join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { exportSite } from './export.mjs'
-import { handleMedia, handleMediaFile, originAllowed, resetMediaIndexCache } from './media.mjs'
+import {
+  handleMedia,
+  handleMediaFile,
+  originAllowed,
+  resetMediaIndexCache,
+  mediaIndexData,
+  mediaUploadFromBuffer,
+} from './media.mjs'
 import { pushSiteToGitHub } from './github.mjs'
 import { handleAgent, handleAgentConfig } from './agent.mjs'
 import { createZip, readZip } from './zip.mjs'
@@ -607,6 +614,12 @@ function agentAdapter(user) {
       const stats = await exportSite(project, SITE)
       return { ok: true, ...stats }
     },
+    mediaIndex: async () => mediaIndexData(),
+    mediaUpload: async ({ name, folderId, mime, bytes }) => {
+      const result = await mediaUploadFromBuffer({ name, folderId, buf: bytes, mime, userId: user.id })
+      if (result.error) throw new Error(result.error)
+      return result
+    },
   }
 }
 
@@ -942,7 +955,8 @@ const server = createServer(async (req, res) => {
       return await handleStore(req, res, path, url.searchParams)
     }
     if (path === '/api/media' || path.startsWith('/api/media/')) {
-      return await handleMedia(req, res, path, url.searchParams)
+      // requestUser (not sessionUser): bearer API tokens reach the library too
+      return await handleMedia(req, res, path, url.searchParams, requestUser(req))
     }
     if (path.startsWith('/api/')) return fail(res, 404, 'not found')
     // library assets first; unknown /media/ paths fall through to the

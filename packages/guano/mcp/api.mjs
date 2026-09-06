@@ -65,4 +65,32 @@ export async function publish(projectSnapshot) {
   return res.json()
 }
 
+/** the media library index: { assets, folders } */
+export async function mediaIndex() {
+  const res = await req('GET', '/api/media')
+  return res.json()
+}
+
+/** upload raw bytes as a new library asset — the server validates mime, size
+ *  caps, content sniffing and quota exactly as for browser uploads */
+export async function mediaUpload({ name, folderId, mime, bytes }) {
+  const params = new URLSearchParams({ name })
+  if (folderId) params.set('folder', folderId)
+  let res
+  try {
+    res = await fetch(`${BASE}/api/media?${params}`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${TOKEN}`, 'content-type': mime },
+      body: bytes,
+    })
+  } catch (e) {
+    throw new ApiError(0, `cannot reach Guano at ${BASE} — is the server running? (${e.message})`)
+  }
+  if (!res.ok) {
+    const detail = await res.json().catch(() => null)
+    throw new ApiError(res.status, detail?.error ?? `upload failed (${res.status})`)
+  }
+  return res.json()
+}
+
 export { ApiError, BASE, TOKEN }

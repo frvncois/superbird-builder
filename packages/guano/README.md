@@ -90,10 +90,14 @@ editor is viewing.
 
 ### Tools
 
-`get_status`, `set_target` · `list_pages`, `get_page`, `set_page_code` ·
-`get_styles`, `set_element_classes` · `list_interactions`, `create_interaction`,
+`get_guide` (the agent handbook — also served as MCP `instructions`) · `get_status`,
+`set_target` · `list_pages`, `get_page`, `set_page_code`, `create_page`, `delete_page`,
+`set_page_seo` · `edit_elements` (batch: classes, text content, media src/background,
+html id) · `get_settings`, `update_settings` (design tokens, SEO defaults, fonts,
+custom head) · `list_interactions`, `create_interaction`,
 `bind_interaction`, `unbind_interaction` · `list_collections`, `get_collection`,
-`create_collection`, `upsert_entry`, `delete_entry` · `list_comments`,
+`create_collection`, `update_collection`, `delete_collection`, `upsert_entry`,
+`delete_entry` · `list_media`, `upload_media` · `list_comments`,
 `reply_to_comment` · `publish`.
 
 Page/element edits are guarded by a version hash from `get_page` — a stale write

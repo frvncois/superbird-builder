@@ -7,9 +7,21 @@
 // `target` (Main or a draft id) is per-toolset closure state — create one
 // toolset per session/request context, never share across users.
 import { createHash, randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+
+// the AI-first handbook (DSL grammar, element registry, style rules, workflow) —
+// served verbatim by get_guide and as the MCP server's initialize instructions.
+// Ships next to this file in the npm package (mcp/ is in package.json files).
+export const GUIDE = (() => {
+  try {
+    return readFileSync(new URL('./GUIDE.md', import.meta.url), 'utf8')
+  } catch {
+    return null
+  }
+})()
 
 export function createToolSet({ api, runtime }) {
-  const { whoami, storeGetRaw, storeGetJson, storePutRaw, publish } = api
+  const { whoami, storeGetRaw, storeGetJson, storePutRaw, publish, mediaIndex, mediaUpload } = api
   const {
     validateDocument,
     parseSyntax,
@@ -27,7 +39,17 @@ export function createToolSet({ api, runtime }) {
     withStyleMarker,
     interactionMarkerOf,
     withInteractionMarker,
+    dataMarkerOf,
+    withDataMarker,
     hasOpenArgBracket,
+    isLeafElement,
+    isRich,
+    sanitizeRich,
+    SAFE_SRC,
+    setStyleTokens,
+    isValidToken,
+    createPage,
+    defaultSettings,
   } = runtime
 
 // ---------- keys ----------
@@ -57,8 +79,17 @@ async function readBranchesMeta() {
 async function loadTargetProject() {
   if (!target) throw new Error('no target set — call set_target first (ask the user: Main or a draft?)')
   const raw = await storeGetRaw(projectKey(target))
-  if (raw === null) throw new Error(`target "${target}" has no stored project`)
-  return { project: JSON.parse(raw), raw }
+  if (raw === null) {
+    throw new Error(
+      `target "${target}" has no stored project — a fresh instance seeds its project only when ` +
+      `an admin opens the editor. Ask the user to open /admin in a browser once, then retry.`,
+    )
+  }
+  const project = JSON.parse(raw)
+  // feed design-token names into the class vocabulary so bg-<token> etc.
+  // validate in edit_elements/create_interaction (mirrors useSettings' watcher)
+  setStyleTokens((project.settings?.tokens ?? []).filter(isValidToken).map((t) => t.name))
+  return { project, raw }
 }
 
 async function saveTargetProject(project) {
@@ -88,10 +119,13 @@ function elementSummary(page) {
     if (n.line === undefined) return
     out.push({
       line: n.line,
+      // the node's stable id — what bind_interaction's targetId refers to
+      id: n.id,
       type: n.type,
       classes: n.classes ?? '',
       interactionCount: n.interactions?.length ?? 0,
       hasOwnContent: !!(n.content || n.src || n.background),
+      ...(n.htmlId ? { htmlId: n.htmlId } : {}),
     })
   })
   return out.sort((a, b) => a.line - b.line)
@@ -131,16 +165,49 @@ function nodeAtLine(page, line) {
 }
 
 /**
- * Keep a node's display-only code markers ((+) styled, {+} interactions) in step
- * with its state — mirrors syncNodeMarkers for one node. The editor's truth-sync
- * does NOT run on load, so an MCP write must maintain them or the code editor
- * shows a stale affordance. Returns true when page.code changed.
+ * Resolve an edit's element by stable `id` (preferred — survives structural
+ * edits) or 0-based `line`. Same component-instance tracking as nodeAtLine.
+ */
+function resolveEditNode(page, edit) {
+  if (edit.id) {
+    let found = null
+    let foundInComponent = false
+    const visit = (nodes, inComponent) => {
+      for (const n of nodes) {
+        if (n.id === edit.id) {
+          found = n
+          foundInComponent = inComponent
+          return true
+        }
+        if (visit(n.children ?? [], inComponent || isComponentType(n.type))) return true
+      }
+      return false
+    }
+    visit(page.elements ?? [], false)
+    if (!found) throw new Error(`no element with id "${edit.id}" (use get_page to see ids)`)
+    return { node: found, inComponent: foundInComponent }
+  }
+  if (edit.line === undefined) throw new Error('each edit needs an `id` or a `line`')
+  return nodeAtLine(page, edit.line)
+}
+
+/**
+ * Keep a node's display-only code markers ([+] own data, (+) styled, {+}
+ * interactions) in step with its state — mirrors syncNodeMarkers for one node.
+ * The editor's truth-sync does NOT run on load, so an MCP write must maintain
+ * them or the code editor shows a stale affordance. Returns true when page.code
+ * changed.
  */
 function syncMarkersForNode(page, node) {
   if (node.line === undefined) return false
   const lines = page.code.split('\n')
   let line = lines[node.line]
   if (line === undefined || hasOpenArgBracket(line)) return false
+  if (node.type !== 'body' && node.arg === undefined) {
+    // a real [name] binding owns the slot — withDataMarker no-ops on it
+    const want = !!(node.content || node.src)
+    if (want !== (dataMarkerOf(line) === '[+]')) line = withDataMarker(line, want)
+  }
   const style = styleMarkerOf(line)
   if (style === undefined || style === '(+)') {
     const want = !!node.classes?.trim()
@@ -155,6 +222,19 @@ function syncMarkersForNode(page, node) {
   lines[node.line] = line
   page.code = lines.join('\n')
   return true
+}
+
+/** write/prune a per-locale content/src override — empty values delete the
+ * key, empty buckets are pruned, so touch-then-clear leaves the node
+ * byte-identical (keeps merge signatures stable, mirrors useLocale) */
+function setLocaleOverride(node, locale, key, value) {
+  node.locales = node.locales ?? {}
+  const bucket = { ...(node.locales[locale] ?? {}) }
+  if (value) bucket[key] = value
+  else delete bucket[key]
+  if (Object.keys(bucket).length) node.locales[locale] = bucket
+  else delete node.locales[locale]
+  if (!Object.keys(node.locales).length) delete node.locales
 }
 
 /** a short human summary of an interaction library entry */
@@ -179,6 +259,19 @@ const entryView = (e) => ({ id: e.id, name: e.name, slug: e.slug, values: e.valu
 
 const tools = [
   {
+    name: 'get_guide',
+    description:
+      'The Guano handbook: the page DSL grammar, the full element registry, how styling/' +
+      'content/interactions attach to elements, the class-validation rules, and the intended ' +
+      'workflow. READ THIS BEFORE YOUR FIRST WRITE — it answers every "how do I express X" ' +
+      'question; nothing needs to be discovered by trial and error.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    handler: async () => {
+      if (!GUIDE) throw new Error('GUIDE.md is missing from this installation')
+      return { guide: GUIDE }
+    },
+  },
+  {
     name: 'get_status',
     description:
       'Project name, the authenticated user, the current target (Main / a draft / none), ' +
@@ -200,6 +293,13 @@ const tools = [
         target: target ?? null,
         targetSet: !!target,
         drafts,
+        ...(mainProject
+          ? {}
+          : {
+              note:
+                'no project exists yet — it is seeded when an admin opens /admin in a browser; ' +
+                'ask the user to do that first, every read/write will fail until then',
+            }),
       }
     },
   },
@@ -222,7 +322,12 @@ const tools = [
       if (args.createDraft) {
         const name = String(args.createDraft).trim() || 'Draft'
         const mainRaw = await storeGetRaw(projectKey(MAIN_ID))
-        if (mainRaw === null) throw new Error('no Main project to branch from')
+        if (mainRaw === null) {
+          throw new Error(
+            'no Main project to branch from — a fresh instance seeds its project only when an ' +
+            'admin opens the editor. Ask the user to open /admin in a browser once, then retry.',
+          )
+        }
         const id = randomUUID()
         // mirror useBranches.createBranch: project + 3-way-merge base both start
         // as a byte-identical copy of Main
@@ -270,8 +375,8 @@ const tools = [
     name: 'get_page',
     description:
       'A page\'s DSL code (with line numbers), a version hash, and a per-element summary ' +
-      '(line → type, classes, interactionCount, hasOwnContent). Pass the version back to ' +
-      'set_page_code so a stale write is rejected. Requires a target.',
+      '(line → type, classes, interactionCount, hasOwnContent). Pass the version to writes ' +
+      '(set_page_code, edit_elements) so a stale write is rejected. Requires a target.',
     inputSchema: {
       type: 'object',
       properties: { pageId: { type: 'string' } },
@@ -356,47 +461,272 @@ const tools = [
     },
   },
   {
-    name: 'get_styles',
+    name: 'create_page',
     description:
-      "An element's current Tailwind class tokens. Address the element by its source " +
-      '`line` (from get_page). Requires a target.',
+      'Add a new page to the target project (empty body, scaffolded like the editor). `slug` ' +
+      'must start with "/" and be unique; defaults to "/<slugified name>". `status` defaults to ' +
+      'published (use "draft" to keep it out of the export). Returns the page id and version ' +
+      'for follow-up writes. Requires a target.',
     inputSchema: {
       type: 'object',
-      properties: { pageId: { type: 'string' }, line: { type: 'integer' } },
-      required: ['pageId', 'line'],
+      properties: {
+        name: { type: 'string' },
+        slug: { type: 'string', description: 'route path, e.g. /about' },
+        status: { type: 'string', enum: ['published', 'draft'] },
+      },
+      required: ['name'],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const { project } = await loadTargetProject()
+      const name = String(args.name ?? '').trim()
+      if (!name) throw new Error('a page name is required')
+      const path = args.slug ? String(args.slug) : `/${slugify(name)}`
+      if (!path.startsWith('/')) throw new Error('slug must start with "/"')
+      if ((project.pages ?? []).some((p) => p.path === path)) {
+        return { saved: false, reason: 'slug-taken', message: `a page with slug "${path}" already exists` }
+      }
+      const page = createPage(name, path, project.defaultLocale || 'en')
+      if (args.status === 'draft') {
+        page.status = 'draft'
+        page.code = replaceSetup(page.code, {
+          name,
+          slug: path,
+          status: 'draft',
+          locale: project.defaultLocale || 'en',
+        })
+        page.elements = parseSyntax(page.code)
+      }
+      project.pages = project.pages ?? []
+      project.pages.push(page)
+      await saveTargetProject(project)
+      return { saved: true, pageId: page.id, slug: path, version: sha256(page.code) }
+    },
+  },
+  {
+    name: 'delete_page',
+    description:
+      'Delete a page. The home page (slug "/") can never be deleted, and a collection template ' +
+      'page belongs to its collection — use delete_collection for those. Requires a target.',
+    inputSchema: {
+      type: 'object',
+      properties: { pageId: { type: 'string' } },
+      required: ['pageId'],
       additionalProperties: false,
     },
     handler: async (args) => {
       const { project } = await loadTargetProject()
       const page = findPage(project, args.pageId)
-      const { node, inComponent } = nodeAtLine(page, args.line)
-      return {
-        line: args.line,
-        type: node.type,
-        classes: (node.classes ?? '').split(/\s+/).filter(Boolean),
-        inComponentInstance: inComponent,
+      const home = (project.pages ?? []).find((p) => p.path === '/') ?? project.pages?.[0]
+      if (page.id === home?.id) {
+        return { saved: false, reason: 'home-page', message: 'the home page can never be deleted' }
       }
+      if (page.collectionId) {
+        return {
+          saved: false,
+          reason: 'collection-template',
+          message: 'this page is a collection template — delete the collection instead (delete_collection)',
+        }
+      }
+      project.pages = project.pages.filter((p) => p.id !== page.id)
+      await saveTargetProject(project)
+      return { saved: true, deleted: page.id }
     },
   },
   {
-    name: 'set_element_classes',
+    name: 'set_page_seo',
     description:
-      "Add and/or remove Tailwind classes on an element (addressed by `line`). Each added " +
-      'class is validated and applied like the Style panel: an invalid class is reported and ' +
-      'skipped, a conflicting token on the same property is replaced, and flex/grid ' +
-      'prerequisites are auto-added. Pass the `version` from get_page (stale structure → ' +
-      "rejected). Elements inside a component instance are refused — their styles live on the " +
-      'component master. Requires a target.',
+      'Per-page SEO overrides: `title` (otherwise the project titleTemplate applies to the page ' +
+      'name) and `description` (otherwise the project default). "" clears an override. This is ' +
+      'the ONLY way to set page metadata — extra @setup keys are dropped. Requires a target.',
     inputSchema: {
       type: 'object',
       properties: {
         pageId: { type: 'string' },
-        line: { type: 'integer' },
-        add: { type: 'array', items: { type: 'string' } },
-        remove: { type: 'array', items: { type: 'string' } },
-        version: { type: 'string' },
+        title: { type: 'string' },
+        description: { type: 'string' },
       },
-      required: ['pageId', 'line', 'version'],
+      required: ['pageId'],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const { project } = await loadTargetProject()
+      const page = findPage(project, args.pageId)
+      const seo = { ...(page.seo ?? {}) }
+      if (args.title !== undefined) {
+        if (args.title) seo.title = args.title
+        else delete seo.title
+      }
+      if (args.description !== undefined) {
+        if (args.description) seo.description = args.description
+        else delete seo.description
+      }
+      if (Object.keys(seo).length) page.seo = seo
+      else delete page.seo
+      await saveTargetProject(project)
+      return { saved: true, pageId: page.id, seo: page.seo ?? null }
+    },
+  },
+  {
+    name: 'get_settings',
+    description:
+      'Project-level settings an agent can work with: site SEO defaults, design tokens ' +
+      '(color classes), fonts, and the custom <head> HTML. Requires a target.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    handler: async () => {
+      const { project } = await loadTargetProject()
+      const s = project.settings ?? defaultSettings()
+      return {
+        seo: s.seo ?? {},
+        domain: s.domain ?? '',
+        tokens: (s.tokens ?? []).map((t) => ({ name: t.name, value: t.value })),
+        fonts: s.fonts ?? { family: '' },
+        customCodeHead: s.customCode?.head ?? '',
+      }
+    },
+  },
+  {
+    name: 'update_settings',
+    description:
+      'Update project settings — any subset of: `tokens` REPLACES the design-token list ' +
+      '([{name, value}] — kebab-case name, hex value; a token "brand" enables bg-brand/' +
+      'text-brand/border-brand everywhere, so PREFER tokens over repeating arbitrary hex ' +
+      'classes); `seo` merges {siteName, titleTemplate ("%s" = page name), description}; ' +
+      '`fonts` merges {family, googleFontsUrl (must be a https://fonts.googleapis.com/… CSS ' +
+      'URL)}; `customCodeHead` replaces the raw HTML injected into every exported <head> — ' +
+      'intended for font @font-face/preload links, keep it minimal. Requires a target.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tokens: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: { name: { type: 'string' }, value: { type: 'string' } },
+            required: ['name', 'value'],
+            additionalProperties: false,
+          },
+        },
+        seo: {
+          type: 'object',
+          properties: {
+            siteName: { type: 'string' },
+            titleTemplate: { type: 'string' },
+            description: { type: 'string' },
+          },
+          additionalProperties: false,
+        },
+        fonts: {
+          type: 'object',
+          properties: { family: { type: 'string' }, googleFontsUrl: { type: 'string' } },
+          additionalProperties: false,
+        },
+        customCodeHead: { type: 'string' },
+      },
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const { project } = await loadTargetProject()
+      project.settings = project.settings ?? defaultSettings()
+      const s = project.settings
+
+      if (args.tokens !== undefined) {
+        const invalid = args.tokens.filter((t) => !isValidToken({ name: t.name, value: t.value }))
+        if (invalid.length) {
+          return {
+            saved: false,
+            reason: 'invalid-tokens',
+            invalid: invalid.map((t) => t.name),
+            message:
+              'token names are kebab-case ([a-z][a-z0-9-]*, not a Tailwind palette name), values are #hex',
+          }
+        }
+        // keep existing ids for same-name tokens so unrelated diffs stay quiet
+        const byName = new Map((s.tokens ?? []).map((t) => [t.name, t.id]))
+        s.tokens = args.tokens.map((t) => ({
+          id: byName.get(t.name) ?? randomUUID(),
+          name: t.name,
+          value: t.value,
+        }))
+        setStyleTokens(s.tokens.map((t) => t.name))
+      }
+      if (args.seo !== undefined) {
+        s.seo = { ...(s.seo ?? {}), ...args.seo }
+      }
+      if (args.fonts !== undefined) {
+        const url = args.fonts.googleFontsUrl
+        if (url && !url.startsWith('https://fonts.googleapis.com/')) {
+          return {
+            saved: false,
+            reason: 'invalid-fonts-url',
+            message: 'googleFontsUrl must start with https://fonts.googleapis.com/ (or be "")',
+          }
+        }
+        s.fonts = { ...(s.fonts ?? { family: '' }), ...args.fonts }
+        if (s.fonts.googleFontsUrl === '') delete s.fonts.googleFontsUrl
+      }
+      if (args.customCodeHead !== undefined) {
+        s.customCode = { ...(s.customCode ?? {}), head: args.customCodeHead }
+      }
+
+      await saveTargetProject(project)
+      return {
+        saved: true,
+        tokens: (s.tokens ?? []).map((t) => ({ name: t.name, value: t.value })),
+        seo: s.seo,
+        fonts: s.fonts,
+        customCodeHead: s.customCode?.head ?? '',
+      }
+    },
+  },
+  {
+    name: 'edit_elements',
+    description:
+      'Batch-edit elements on a page: classes, text content, media src, and html id, for MANY ' +
+      'elements in ONE call (one version check, one save — always prefer this over one call per ' +
+      'element). Address each edit by the element `id` from get_page (PREFERRED — stable and ' +
+      'immune to line-counting mistakes) or its 0-based `line`; optionally pass `expectType` ' +
+      '(e.g. "h1") to make a misaddressed edit fail instead of landing on the wrong element. ' +
+      'Each result echoes the element it touched (line, id, type) — check it. ' +
+      'addClasses/removeClasses work like the Style panel (validated; conflicts replaced; ' +
+      'flex/grid prerequisites auto-added; refused inside component instances). `content` is ' +
+      'the element\'s own text — leaf elements only; inline rich tags b/strong/i/em/u/br/ul/ol/' +
+      'li/a[href] are kept (sanitized), everything else is stripped; "" clears it back to the ' +
+      'placeholder. `src` (image/video only) takes a /media/… path, https URL, or data: URL. ' +
+      '`background` (any element) layers background media behind its content, same URL rules; ' +
+      '"" clears. `htmlId` sets the html id (anchor target); "" clears. A non-default `locale` ' +
+      'writes content/src as per-locale overrides instead. Per-edit failures are reported in the ' +
+      'result and do NOT abort the other edits. Pass the `version` from get_page. Requires a target.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        pageId: { type: 'string' },
+        version: { type: 'string', description: 'the version hash from get_page' },
+        edits: {
+          type: 'array',
+          minItems: 1,
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', description: 'element id from get_page (preferred address)' },
+              line: { type: 'integer', description: '0-based source line (alternative address)' },
+              expectType: { type: 'string', description: 'refuse the edit unless the element is this type' },
+              addClasses: { type: 'array', items: { type: 'string' } },
+              removeClasses: { type: 'array', items: { type: 'string' } },
+              content: { type: 'string' },
+              src: { type: 'string' },
+              background: { type: 'string' },
+              htmlId: { type: 'string' },
+            },
+            additionalProperties: false,
+          },
+        },
+        locale: {
+          type: 'string',
+          description: 'omit for the default locale; a non-default locale localizes content/src',
+        },
+      },
+      required: ['pageId', 'version', 'edits'],
       additionalProperties: false,
     },
     handler: async (args) => {
@@ -406,38 +736,143 @@ const tools = [
       if (args.version !== current) {
         return { saved: false, reason: 'stale-version', currentVersion: current }
       }
-      const { node, inComponent } = nodeAtLine(page, args.line)
-      if (inComponent) {
-        return {
-          saved: false,
-          reason: 'component-instance',
-          message:
-            'this element is inside a component instance — its styles live on the component ' +
-            'master; edit the master block instead',
+      const defaultLocale = project.defaultLocale || 'en'
+      const locale = args.locale || defaultLocale
+      const localized = locale !== defaultLocale
+      if (localized && !(project.locales ?? [defaultLocale]).includes(locale)) {
+        return { saved: false, reason: 'unknown-locale', locales: project.locales ?? [defaultLocale] }
+      }
+
+      let changed = false
+      const results = []
+      for (const edit of args.edits) {
+        const errors = []
+        const applied = []
+        let node, inComponent
+        try {
+          ;({ node, inComponent } = resolveEditNode(page, edit))
+        } catch (e) {
+          results.push({ ...(edit.id ? { id: edit.id } : {}), line: edit.line, errors: [e.message] })
+          continue
         }
+        if (edit.expectType && node.type !== edit.expectType) {
+          results.push({
+            line: node.line,
+            id: node.id,
+            type: node.type,
+            errors: [`expectType mismatch: element here is ':${node.type}', not ':${edit.expectType}' — re-read get_page`],
+          })
+          continue
+        }
+
+        // --- classes (never localized; masters own them inside instances) ---
+        if (edit.addClasses?.length || edit.removeClasses?.length) {
+          if (inComponent) {
+            errors.push(
+              'classes refused: element is inside a component instance — styles live on the master',
+            )
+          } else if (localized) {
+            errors.push('classes are not localizable — omit locale for class edits')
+          } else {
+            // removes run FIRST so remove+add of the same class nets to the add
+            // (a re-apply), not a silent removal
+            const removeSet = new Set(edit.removeClasses ?? [])
+            let tokens = (node.classes ?? '').split(/\s+/).filter(Boolean).filter((t) => !removeSet.has(t))
+            for (const cls of edit.addClasses ?? []) {
+              const result = applyClass(cls, tokens)
+              if (result.error !== undefined) errors.push(`class "${cls}": ${result.error}`)
+              else tokens = result.tokens
+            }
+            node.classes = tokens.join(' ')
+            if (!node.classes) delete node.classes // keep untouched nodes byte-identical
+            applied.push('classes')
+            changed = true
+          }
+        }
+
+        // --- own text content (leaf elements only; rich subset sanitized) ---
+        if (edit.content !== undefined) {
+          if (isComponentType(node.type)) {
+            errors.push('content refused: a component instance token has no own text')
+          } else if (!isLeafElement(node.type)) {
+            errors.push(`content refused: ':${node.type}' is a container — put text on a leaf inside it`)
+          } else {
+            const value = isRich(edit.content) ? sanitizeRich(edit.content) : edit.content
+            if (localized) {
+              setLocaleOverride(node, locale, 'content', value)
+            } else if (value) {
+              node.content = value
+            } else {
+              delete node.content
+            }
+            applied.push('content')
+            changed = true
+          }
+        }
+
+        // --- media src (image/video only; scheme allowlist) ---
+        if (edit.src !== undefined) {
+          if (node.type !== 'image' && node.type !== 'video') {
+            errors.push(`src refused: ':${node.type}' is not an image/video element`)
+          } else if (edit.src && !SAFE_SRC.test(edit.src)) {
+            errors.push('src refused: use a /media/… path, https:// URL, or data:image|video URL')
+          } else {
+            if (localized) {
+              setLocaleOverride(node, locale, 'src', edit.src)
+            } else if (edit.src) {
+              node.src = edit.src
+            } else {
+              delete node.src
+            }
+            applied.push('src')
+            changed = true
+          }
+        }
+
+        // --- background media (any element; layered behind content) ---
+        if (edit.background !== undefined) {
+          if (localized) {
+            errors.push('background is not localizable — omit locale for background edits')
+          } else if (edit.background && !SAFE_SRC.test(edit.background)) {
+            errors.push('background refused: use a /media/… path, https:// URL, or data:image|video URL')
+          } else {
+            if (edit.background) node.background = edit.background
+            else delete node.background
+            applied.push('background')
+            changed = true
+          }
+        }
+
+        // --- html id (anchor target; never localized) ---
+        if (edit.htmlId !== undefined) {
+          if (localized) {
+            errors.push('htmlId is not localizable — omit locale for htmlId edits')
+          } else if (edit.htmlId && !/^[A-Za-z][A-Za-z0-9_-]*$/.test(edit.htmlId)) {
+            errors.push('htmlId refused: must start with a letter and use only letters/digits/-/_')
+          } else {
+            if (edit.htmlId) node.htmlId = edit.htmlId
+            else delete node.htmlId
+            applied.push('htmlId')
+            changed = true
+          }
+        }
+
+        if (syncMarkersForNode(page, node)) changed = true
+        // echo the element's identity so a misaddressed edit is visible
+        results.push({
+          line: node.line,
+          id: node.id,
+          type: node.type,
+          applied,
+          ...(errors.length ? { errors } : {}),
+        })
       }
 
-      let tokens = (node.classes ?? '').split(/\s+/).filter(Boolean)
-      const errors = []
-      for (const cls of args.add ?? []) {
-        const result = applyClass(cls, tokens)
-        if (result.error !== undefined) errors.push({ class: cls, error: result.error })
-        else tokens = result.tokens
-      }
-      const removeSet = new Set(args.remove ?? [])
-      tokens = tokens.filter((t) => !removeSet.has(t))
-
-      node.classes = tokens.join(' ')
-      if (!node.classes) delete node.classes // keep untouched nodes byte-identical
-      syncMarkersForNode(page, node)
-
-      await saveTargetProject(project)
+      if (changed) await saveTargetProject(project)
       return {
-        saved: true,
-        line: args.line,
-        classes: tokens,
-        errors,
+        saved: changed,
         version: sha256(page.code),
+        results,
       }
     },
   },
@@ -771,6 +1206,98 @@ const tools = [
     },
   },
   {
+    name: 'update_collection',
+    description:
+      "Change a collection's schema: `addFields` ([{name, type?, refCollectionId?}] — type is " +
+      'text (default) | image | date | reference | multi-reference; reference types need ' +
+      'refCollectionId; field names are lowercase kebab-case and become the [name] binding ' +
+      'args) and/or `removeFields` (by name — entries keep orphaned values, bindings to the ' +
+      'name break). Requires a target.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        collectionId: { type: 'string' },
+        addFields: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              name: { type: 'string' },
+              type: { type: 'string', enum: ['text', 'image', 'date', 'reference', 'multi-reference'] },
+              refCollectionId: { type: 'string' },
+            },
+            required: ['name'],
+            additionalProperties: false,
+          },
+        },
+        removeFields: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['collectionId'],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const { project } = await loadTargetProject()
+      const c = findCollection(project, args.collectionId)
+      const errors = []
+      for (const f of args.addFields ?? []) {
+        const name = String(f.name ?? '')
+        if (!/^[a-z][a-z0-9-]*$/.test(name)) {
+          errors.push(`field "${name}": names are lowercase kebab-case ([a-z][a-z0-9-]*)`)
+          continue
+        }
+        if ((c.fields ?? []).some((x) => x.name === name)) {
+          errors.push(`field "${name}" already exists`)
+          continue
+        }
+        const type = f.type ?? 'text'
+        if ((type === 'reference' || type === 'multi-reference')) {
+          if (!f.refCollectionId || !(project.collections ?? []).some((x) => x.id === f.refCollectionId)) {
+            errors.push(`field "${name}": ${type} needs a refCollectionId of an existing collection`)
+            continue
+          }
+        }
+        c.fields = c.fields ?? []
+        c.fields.push({
+          id: randomUUID(),
+          name,
+          type,
+          ...(f.refCollectionId ? { refCollectionId: f.refCollectionId } : {}),
+        })
+      }
+      for (const name of args.removeFields ?? []) {
+        const before = c.fields?.length ?? 0
+        c.fields = (c.fields ?? []).filter((f) => f.name !== name)
+        if (c.fields.length === before) errors.push(`no field named "${name}" to remove`)
+      }
+      await saveTargetProject(project)
+      return {
+        saved: true,
+        fields: (c.fields ?? []).map(fieldView),
+        ...(errors.length ? { errors } : {}),
+      }
+    },
+  },
+  {
+    name: 'delete_collection',
+    description:
+      'Delete a collection AND its template page. Its entries are gone; :collection-list[name] ' +
+      'blocks referencing it become validation errors on the next structural edit. Requires a target.',
+    inputSchema: {
+      type: 'object',
+      properties: { collectionId: { type: 'string' } },
+      required: ['collectionId'],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const { project } = await loadTargetProject()
+      const c = findCollection(project, args.collectionId)
+      project.pages = (project.pages ?? []).filter((p) => p.id !== c.templatePageId)
+      project.collections = (project.collections ?? []).filter((x) => x.id !== c.id)
+      await saveTargetProject(project)
+      return { saved: true, deleted: c.name }
+    },
+  },
+  {
     name: 'list_comments',
     description:
       'Comments on the target project (shared across drafts; never merged). Each has id, pageId, ' +
@@ -819,6 +1346,65 @@ const tools = [
       comment.replies.push(reply)
       await saveTargetProject(project)
       return { saved: true, commentId: comment.id, reply }
+    },
+  },
+  {
+    name: 'list_media',
+    description:
+      'The media library: assets (id, name, kind, mime, size, url to use as an element `src`/' +
+      '`background`) and folders. Library-wide, not per-target.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    handler: async () => {
+      if (!mediaIndex) throw new Error('media is not supported by this connection')
+      const { assets, folders } = await mediaIndex()
+      return {
+        assets: (assets ?? []).map((a) => ({
+          id: a.id,
+          name: a.name,
+          kind: a.kind,
+          mime: a.mime,
+          size: a.size,
+          url: `/media/${a.id}`,
+          ...(a.folderId ? { folderId: a.folderId } : {}),
+        })),
+        folders: (folders ?? []).map((f) => ({ id: f.id, name: f.name })),
+      }
+    },
+  },
+  {
+    name: 'upload_media',
+    description:
+      'Upload an asset to the media library from a base64 data URL (data:<mime>;base64,…). ' +
+      'The server enforces the same mime allowlist, size caps and quota as browser uploads ' +
+      '(images/video/audio/pdf/fonts; no html/js). Returns the asset and its /media/… url — ' +
+      'use that as an element `src` or `background`. Library-wide, not per-target.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'display name, e.g. "editor-screenshot.png"' },
+        dataUrl: { type: 'string', description: 'data:<mime>;base64,<payload>' },
+        folderId: { type: 'string' },
+      },
+      required: ['name', 'dataUrl'],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      if (!mediaUpload) throw new Error('media is not supported by this connection')
+      const m = String(args.dataUrl ?? '').match(/^data:([a-z0-9.+/-]+);base64,(.+)$/is)
+      if (!m) throw new Error('dataUrl must be a base64 data URL: data:<mime>;base64,…')
+      const bytes = Buffer.from(m[2], 'base64')
+      if (!bytes.length) throw new Error('dataUrl payload is empty or not valid base64')
+      const asset = await mediaUpload({
+        name: String(args.name ?? '').trim() || 'untitled',
+        folderId: args.folderId,
+        mime: m[1].toLowerCase(),
+        bytes,
+      })
+      return {
+        saved: true,
+        asset: { id: asset.id, name: asset.name, kind: asset.kind, mime: asset.mime, size: asset.size },
+        url: `/media/${asset.id}`,
+      }
     },
   },
   {

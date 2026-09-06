@@ -170,10 +170,22 @@ function buildVocabulary(): string[] {
     'ease-in', 'ease-out', 'ease-in-out',
     'cursor-pointer', 'select-none', 'pointer-events-none',
     'z-0', 'z-10', 'z-20', 'z-50',
-    'grid-cols-1', 'grid-cols-2', 'grid-cols-3', 'grid-cols-4', 'grid-cols-6', 'grid-cols-12', 'col-span-2', 'col-span-3',
+    'grid-cols-1', 'grid-cols-2', 'grid-cols-3', 'grid-cols-4', 'grid-cols-6', 'grid-cols-12',
     'object-cover', 'object-contain', 'aspect-square', 'aspect-video',
+    'antialiased', 'col-span-full', 'col-auto', 'row-span-full',
   ]
   common.forEach((c) => out.add(c))
+  // grid placement — spans and explicit start/end lines
+  for (let n = 1; n <= 12; n++) {
+    out.add(`col-span-${n}`)
+    out.add(`col-start-${n}`)
+    out.add(`col-end-${n}`)
+  }
+  for (let n = 1; n <= 6; n++) {
+    out.add(`row-span-${n}`)
+    out.add(`row-start-${n}`)
+    out.add(`row-end-${n}`)
+  }
   return [...out]
 }
 

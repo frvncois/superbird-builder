@@ -157,7 +157,7 @@ The page structure language (DSL): indentation-based, one element token per line
 Working rules:
 - get_page before any edit; pass its \`version\` to every write. On stale-version, re-read and retry once.
 - Structure (adding/removing/moving elements) = set_page_code with the FULL document. Keep unchanged lines byte-identical — styling and content live on elements matched by line, and gratuitous rewrites lose nothing but churn the diff.
-- Styling = set_element_classes (Tailwind utility classes; validated like the Style panel — invalid classes come back as errors). Element text content is set via the code only when creating new elements; existing text is the user's content — do not rewrite it unless asked.
+- Styling, text content, media src, html ids = edit_elements, BATCHED: one call with an edits[] entry per element, not one call per element. Classes are validated like the Style panel (invalid ones come back as per-edit errors). Existing text is the user's content — do not rewrite it unless asked.
 - Animations = create_interaction + bind_interaction (trigger: hover | click | appear).
 - CMS content = the collection tools. Publishing = publish (only when explicitly asked).
 - If a tool refuses (component-instance, invalid classes, diagnostics), adjust and retry rather than repeating the same call.

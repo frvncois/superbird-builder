@@ -77,6 +77,11 @@ export function usePersistence() {
         restoring = true
         project.value = stored
         restoring = false
+      } else {
+        // fresh instance: persist the default project immediately, instead of
+        // only on the first edit — otherwise the server has no project blob
+        // and every out-of-band reader (the MCP agent surface) fails on Main
+        persist(JSON.stringify(project.value))
       }
     } catch {
       // corrupt storage — start from the in-memory default project

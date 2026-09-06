@@ -18,7 +18,6 @@ import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/p
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import sharp from 'sharp'
-import { sessionUser } from './auth.mjs'
 import { DATA_DIR, fail, send, writeAtomic } from './util.mjs'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
@@ -294,6 +293,68 @@ async function storeFile(id, buf, mime, kind) {
   return { hasThumb: false }
 }
 
+// ---------- programmatic API (in-process agent adapter; no req/res) ----------
+
+/** the library index — same data GET /api/media serves */
+export async function mediaIndexData() {
+  return loadIndex()
+}
+
+/** validate a buffer exactly like intakeUpload, minus the request plumbing;
+ *  returns { error, status } or { buf, mime, kind } */
+async function validateUploadBuffer(buf, mime) {
+  const type = ALLOWED[mime]
+  if (!type) return { error: 'unsupported file type', status: 415 }
+  if (!buf.length || buf.length > SIZE_CAPS[type.kind]) return { error: 'file too large', status: 413 }
+  if (!matchesMime(buf, mime)) return { error: 'file content does not match its type', status: 415 }
+  if (mime === 'image/svg+xml') buf = Buffer.from(sanitizeSvg(buf.toString('utf8')), 'utf8')
+  await loadIndex()
+  if (usedBytes() + buf.length > QUOTA) return { error: 'media library is full', status: 507 }
+  return { buf, mime, kind: type.kind }
+}
+
+/** store a validated buffer as a new asset — the shared tail of both the HTTP
+ *  upload branch and mediaUploadFromBuffer */
+function addAsset({ name, folderId, buf, mime, kind, userId }) {
+  return enqueue(async () => {
+    const id = newId()
+    const extra = await storeFile(id, buf, mime, kind)
+    const asset = {
+      id,
+      name,
+      filename: name,
+      mime,
+      kind,
+      size: buf.length,
+      ...extra,
+      alt: undefined,
+      folderId: folderId && index.folders.some((f) => f.id === folderId) ? folderId : undefined,
+      createdAt: new Date().toISOString(),
+      uploadedBy: userId,
+    }
+    index.assets.push(asset)
+    await writeIndex()
+    return asset
+  })
+}
+
+/** upload from an in-memory buffer (agent adapter path — same validation,
+ *  rate limit and quota as the HTTP route); returns { error, status } or the asset */
+export async function mediaUploadFromBuffer({ name, folderId, buf, mime, userId }) {
+  if (!uploadAllowed(userId)) return { error: 'too many uploads — slow down', status: 429 }
+  const valid = await validateUploadBuffer(buf, (mime ?? '').split(';')[0].trim().toLowerCase())
+  if (valid.error) return valid
+  const asset = await addAsset({
+    name: cleanName(name) || 'untitled',
+    folderId,
+    buf: valid.buf,
+    mime: valid.mime,
+    kind: valid.kind,
+    userId,
+  })
+  return asset
+}
+
 // ---------- usage scan ----------
 
 /** counts "/media/<id>" occurrences in every branch's project blob — covers
@@ -328,8 +389,9 @@ async function scanUsage(id) {
 
 // ---------- 🔒 /api/media ----------
 
-export async function handleMedia(req, res, path, query) {
-  const user = sessionUser(req)
+/** `user` is resolved by the caller (session cookie OR `guano_` bearer token —
+ *  index.mjs passes requestUser) so the MCP server can reach the library too */
+export async function handleMedia(req, res, path, query, user) {
   if (!user) return fail(res, 401, 'unauthorized')
   const mutating = req.method !== 'GET'
   if (mutating && !originAllowed(req)) return fail(res, 403, 'cross-origin request rejected')
@@ -343,28 +405,15 @@ export async function handleMedia(req, res, path, query) {
     if (!uploadAllowed(user.id)) return fail(res, 429, 'too many uploads — slow down')
     const intake = await intakeUpload(req, res)
     if (!intake) return
-    const name = cleanName(query.get('name')) || 'untitled'
-    const folderId = query.get('folder') || undefined
-    return enqueue(async () => {
-      const id = newId()
-      const extra = await storeFile(id, intake.buf, intake.mime, intake.kind)
-      const asset = {
-        id,
-        name,
-        filename: name,
-        mime: intake.mime,
-        kind: intake.kind,
-        size: intake.buf.length,
-        ...extra,
-        alt: undefined,
-        folderId: folderId && index.folders.some((f) => f.id === folderId) ? folderId : undefined,
-        createdAt: new Date().toISOString(),
-        uploadedBy: user.id,
-      }
-      index.assets.push(asset)
-      await writeIndex()
-      return send(res, 200, JSON.stringify(asset))
+    const asset = await addAsset({
+      name: cleanName(query.get('name')) || 'untitled',
+      folderId: query.get('folder') || undefined,
+      buf: intake.buf,
+      mime: intake.mime,
+      kind: intake.kind,
+      userId: user.id,
     })
+    return send(res, 200, JSON.stringify(asset))
   }
 
   // ----- folders -----

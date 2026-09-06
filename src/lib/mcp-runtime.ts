@@ -29,6 +29,8 @@ export {
   withStyleMarker,
   interactionMarkerOf,
   withInteractionMarker,
+  dataMarkerOf,
+  withDataMarker,
   hasOpenArgBracket,
 } from './syntax'
 export type { Diagnostic } from './syntax'
@@ -64,15 +66,32 @@ export type { ElementDef } from './elements'
 export { walkNodes, findNode, findParent, hasAncestorOfType, deepClone } from './tree'
 
 // --- class application + validation (src/lib/styles.ts)
+// setStyleTokens feeds the project's design-token names into the (module-level)
+// class vocabulary so bg-<token>/text-<token>/border-<token> validate — the MCP
+// toolset calls it on every project load, mirroring useSettings' watcher
 export {
   applyClass,
   isValidClass,
   matchClass,
   sameProperty,
   isStateClass,
+  setStyleTokens,
 } from './styles'
 export type { ApplyClassResult, StyleProperty, StyleSection } from './styles'
 export { STYLE_SECTIONS } from './styleCatalog'
+
+// --- rich-text sanitizer + URL allowlists (src/lib/shared/, plain JS) — the
+// content tool stores element text through the SAME sanitizer the editor and
+// the static exporter use, and gates media src on the same scheme allowlist
+export { isRich, sanitizeRich } from './shared/richtext.js'
+export { SAFE_HREF, SAFE_SRC } from './shared/urls.js'
+
+// --- design-token validation (src/lib/shared/tokens.js) + settings defaults
+export { isValidToken, TOKEN_NAME_RE, HEX_RE, RESERVED_TOKEN_NAMES } from './shared/tokens.js'
+export { defaultSettings } from './settings'
+
+// --- page factory (src/lib/factories.ts) — create_page mirrors the editor
+export { createPage } from './factories'
 
 // --- shared element/node types (compile-time only; erased at runtime)
 export type { ElementNode } from '@/types/editor'
