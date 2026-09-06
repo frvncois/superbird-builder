@@ -57,6 +57,7 @@ import {
   userProfile,
   verifyLogin,
   verifyUserPassword,
+  VerifyBusyError,
 } from './auth.mjs'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
@@ -76,6 +77,23 @@ const PORT = Number(process.env.PORT) || 4174
 const TOKEN = process.env.PUBLISH_TOKEN || ''
 const MAX_BODY = 10 * 1024 * 1024 // data-URL images make snapshots heavy
 const IMPORT_CAP = 512 * 1024 * 1024 // project package upload ceiling
+
+// Behind a reverse proxy every socket carries the proxy's address, so rate
+// limiting by socket IP throttles all users as one client and can't tell
+// attackers apart. TRUST_PROXY=1 (only set it when a proxy is actually in
+// front) switches to the LAST X-Forwarded-For hop — the one appended by the
+// nearest proxy; earlier entries are client-controlled and trivially spoofed.
+// Without a proxy the header must stay ignored, or anyone could mint fresh
+// "IPs" per request and bypass the limiter entirely.
+const TRUST_PROXY = process.env.TRUST_PROXY === '1'
+function clientIp(req) {
+  if (TRUST_PROXY) {
+    const xff = req.headers['x-forwarded-for']
+    const last = typeof xff === 'string' ? xff.split(',').pop().trim() : ''
+    if (last) return last
+  }
+  return req.socket.remoteAddress ?? '?'
+}
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -184,8 +202,13 @@ async function handleAuth(req, res, path) {
       if (typeof password !== 'string' || password.length < 8) {
         return fail(res, 400, 'password must be at least 8 characters')
       }
-      if (!verifyUserPassword(user, currentPassword ?? '')) {
-        return fail(res, 403, 'current password is incorrect')
+      try {
+        if (!(await verifyUserPassword(user, currentPassword ?? ''))) {
+          return fail(res, 403, 'current password is incorrect')
+        }
+      } catch (e) {
+        if (e instanceof VerifyBusyError) return fail(res, 429, 'busy — try again shortly')
+        throw e
       }
     }
     // guard against colliding with another user's email
@@ -200,7 +223,7 @@ async function handleAuth(req, res, path) {
   }
   if (path === '/api/auth/login' && req.method === 'POST') {
     if (needsSetup()) return fail(res, 403, 'no account yet')
-    const ip = req.socket.remoteAddress ?? '?'
+    const ip = clientIp(req)
     const body = await readBody(req)
     let email, password
     try {
@@ -211,7 +234,13 @@ async function handleAuth(req, res, path) {
     if (!loginAllowed(ip, email)) {
       return fail(res, 429, 'too many attempts — try again later')
     }
-    const user = verifyLogin(email, password)
+    let user
+    try {
+      user = await verifyLogin(email, password)
+    } catch (e) {
+      if (e instanceof VerifyBusyError) return fail(res, 429, 'busy — try again shortly')
+      throw e
+    }
     if (!user) {
       recordLoginFailure(ip, email)
       return fail(res, 401, 'invalid credentials')
@@ -237,7 +266,7 @@ async function handleAuth(req, res, path) {
 // ---------- invites (public: link lookup + acceptance) ----------
 
 async function handleInvite(req, res, path) {
-  const ip = req.socket.remoteAddress ?? '?'
+  const ip = clientIp(req)
   if (!inviteAllowed(ip)) {
     return fail(res, 429, 'too many attempts — try again later')
   }

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import { CircleAlert } from 'lucide-vue-next'
 import InputUI from '@/components/ui/InputUI.vue'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import MainLogo from '@/assets/MainLogo.vue'
@@ -35,11 +36,17 @@ async function submit() {
     >
       <InputUI v-model="email" placeholder="Email" size="lg" type="email" />
       <InputUI v-model="password" placeholder="Password" size="lg" type="password" />
-      <p v-if="error" class="text-[10px] text-danger">{{ error }}</p>
-      
+
       <ButtonUI class="mt-4" variant="default" :disabled="busy" @click="submit">
         {{ busy ? 'Signing in…' : 'Sign in' }}
       </ButtonUI>
+      <div
+        v-if="error"
+        class="flex items-center justify-center gap-1.5 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger"
+      >
+        <CircleAlert class="size-3.5 shrink-0" />
+        {{ error }}
+      </div>
       <button type="submit" class="hidden"></button>
     </form>
   </div>

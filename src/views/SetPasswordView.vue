@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
+import { CircleAlert } from 'lucide-vue-next'
 import { useRoute } from 'vue-router'
 import InputUI from '@/components/ui/InputUI.vue'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
@@ -95,11 +96,17 @@ async function submit() {
       </div>
       <InputUI v-model="password" placeholder="Choose a password" size="lg" type="password" />
       <InputUI v-model="confirm" placeholder="Confirm password" size="lg" type="password" />
-      <p v-if="error" class="text-[10px] text-danger">{{ error }}</p>
 
       <ButtonUI class="mt-4" variant="default" :disabled="busy" @click="submit">
         {{ busy ? 'Setting up…' : 'Join project' }}
       </ButtonUI>
+      <div
+        v-if="error"
+        class="flex items-center justify-center gap-1.5 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger"
+      >
+        <CircleAlert class="size-3.5 shrink-0" />
+        {{ error }}
+      </div>
       <button type="submit" class="hidden"></button>
     </form>
   </div>

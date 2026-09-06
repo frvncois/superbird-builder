@@ -13,7 +13,8 @@
 //  - Sessions bind to a userId; a deleted user's sessions are destroyed. Role
 //    is read live from the user record, so a role change takes effect at once.
 
-import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
+import { createHash, randomBytes, scrypt, scryptSync, timingSafeEqual } from 'node:crypto'
+import { promisify } from 'node:util'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DATA_DIR, writeAtomic } from './util.mjs'
@@ -91,6 +92,40 @@ function hashPassword(password, salt) {
 const DUMMY_SALT = randomBytes(16).toString('hex')
 const DUMMY_HASH = Buffer.from(hashPassword('x'.repeat(24), DUMMY_SALT), 'hex')
 
+// ---------- password verification (async, concurrency-capped) ----------
+//
+// Attacker-driven paths (login, current-password check) use the async scrypt
+// so a brute-force burst can't freeze the event loop, gated so at most a few
+// hashes run at once and a bounded queue waits behind them. Beyond that the
+// attempt is shed with VerifyBusyError (→ 429) instead of piling up work.
+// Rare trusted-path hashing (account creation, password set) stays sync.
+
+const scryptAsync = promisify(scrypt)
+const VERIFY_CONCURRENCY = 2
+const VERIFY_QUEUE_MAX = 16
+let verifyActive = 0
+const verifyWaiters = []
+
+export class VerifyBusyError extends Error {
+  constructor() {
+    super('too many concurrent attempts')
+  }
+}
+
+async function computeHash(password, salt) {
+  if (verifyActive >= VERIFY_CONCURRENCY) {
+    if (verifyWaiters.length >= VERIFY_QUEUE_MAX) throw new VerifyBusyError()
+    await new Promise((resolve) => verifyWaiters.push(resolve))
+  }
+  verifyActive++
+  try {
+    return await scryptAsync(String(password ?? ''), salt, 64)
+  } finally {
+    verifyActive--
+    verifyWaiters.shift()?.()
+  }
+}
+
 function makeCredentials(password) {
   const salt = randomBytes(16).toString('hex')
   return { salt, hash: hashPassword(password, salt) }
@@ -117,21 +152,23 @@ export async function createFirstAdmin(email, password, name = '') {
   return createUser({ name, email, password, role: 'admin' })
 }
 
-/** constant-time-ish login: returns the user on success, null otherwise */
-export function verifyLogin(email, password) {
+/** constant-time-ish login: returns the user on success, null otherwise.
+ *  Throws VerifyBusyError under verification overload. */
+export async function verifyLogin(email, password) {
   const user = findUserByEmail(email)
   if (!user) {
     // run a scrypt anyway so timing doesn't reveal whether the email exists
-    timingSafeEqual(scryptSync(String(password ?? ''), DUMMY_SALT, 64), DUMMY_HASH)
+    timingSafeEqual(await computeHash(password, DUMMY_SALT), DUMMY_HASH)
     return null
   }
-  const computed = scryptSync(String(password ?? ''), user.salt, 64)
+  const computed = await computeHash(password, user.salt)
   return timingSafeEqual(Buffer.from(user.hash, 'hex'), computed) ? user : null
 }
 
-export function verifyUserPassword(user, password) {
+/** throws VerifyBusyError under verification overload */
+export async function verifyUserPassword(user, password) {
   if (!user) return false
-  const computed = scryptSync(String(password ?? ''), user.salt, 64)
+  const computed = await computeHash(password, user.salt)
   return timingSafeEqual(Buffer.from(user.hash, 'hex'), computed)
 }
 
@@ -366,19 +403,25 @@ export async function acceptInvite(token, password) {
   return { user }
 }
 
-// ---------- rate limiting (per key, in-memory sliding window) ----------
+// ---------- rate limiting (per key, in-memory fixed window) ----------
 
 function limiter(windowMs, max) {
   const hits = new Map() // key → { count, windowStart }
+  const expired = (e) => Date.now() - e.windowStart > windowMs
   return {
     allowed(key) {
       const e = hits.get(key)
-      if (!e || Date.now() - e.windowStart > windowMs) return true
+      if (!e || expired(e)) return true
       return e.count < max
     },
     record(key) {
+      // attacker-supplied keys (emails, spoofable IPs) would grow the map
+      // without bound — sweep expired windows once it gets big
+      if (hits.size >= 512) {
+        for (const [k, e] of hits) if (expired(e)) hits.delete(k)
+      }
       const e = hits.get(key)
-      if (!e || Date.now() - e.windowStart > windowMs) {
+      if (!e || expired(e)) {
         hits.set(key, { count: 1, windowStart: Date.now() })
       } else {
         e.count++
@@ -387,15 +430,28 @@ function limiter(windowMs, max) {
   }
 }
 
-const loginByIp = limiter(15 * 60 * 1000, 10)
-const loginByEmail = limiter(15 * 60 * 1000, 10)
+// The strict budget is per (ip, email) PAIR, so an attacker probing an
+// account exhausts their own allowance, not the victim's (a hard per-email
+// lock let 10 wrong guesses from anywhere freeze a targeted account). The
+// per-IP cap bounds one source spraying many emails; the loose per-email
+// cap is only a backstop against a distributed attack on one account —
+// generous enough that a user's own typos never trip it.
+const loginByPair = limiter(15 * 60 * 1000, 10)
+const loginByIp = limiter(15 * 60 * 1000, 30)
+const loginByEmail = limiter(15 * 60 * 1000, 50)
 const inviteByIp = limiter(15 * 60 * 1000, 30)
 
+const emailKey = (email) => String(email ?? '').toLowerCase()
+const pairKey = (ip, email) => `${ip}|${emailKey(email)}`
+
 export const loginAllowed = (ip, email) =>
-  loginByIp.allowed(ip) && loginByEmail.allowed(String(email ?? '').toLowerCase())
+  loginByPair.allowed(pairKey(ip, email)) &&
+  loginByIp.allowed(ip) &&
+  loginByEmail.allowed(emailKey(email))
 export function recordLoginFailure(ip, email) {
+  loginByPair.record(pairKey(ip, email))
   loginByIp.record(ip)
-  loginByEmail.record(String(email ?? '').toLowerCase())
+  loginByEmail.record(emailKey(email))
 }
 export const inviteAllowed = (ip) => inviteByIp.allowed(ip)
 export const recordInviteAttempt = (ip) => inviteByIp.record(ip)

@@ -103,6 +103,27 @@ textarea {
   user-select: text;
 }
 
+/* browser autofill: WebKit paints its own background/text colors with UA
+   !important rules that plain `background` can't override. The endless
+   background-color transition parks the repaint forever so the input keeps
+   whatever background its classes gave it (works for both the filled and
+   the transparent+border variants, in both themes); text-fill/caret win
+   over the UA's forced text color. */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-text-fill-color: var(--foreground);
+  caret-color: var(--foreground);
+  transition: background-color 9999999s step-end;
+}
+/* kept separate: an unknown pseudo-class invalidates the whole selector
+   list, so :autofill (Firefox) can't share the -webkit rule above */
+input:autofill {
+  -webkit-text-fill-color: var(--foreground);
+  caret-color: var(--foreground);
+  transition: background-color 9999999s step-end;
+}
+
 /* thin muted scrollbar shared across scrollable app chrome (popovers,
    panels). Matches the code editor's thumb; unlike the editor it is not
    focus-gated, since these containers never take focus. */

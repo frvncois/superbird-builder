@@ -2,7 +2,8 @@
 
 Carried over from the launch-readiness audit (`FINDINGS.md`, ids kept) after the
 launch-prep pass fixed the CRITICAL/HIGH security items (S1, S2, S3+S15, S6, S12 —
-see git log). Everything here is real but deliberately deferred: none blocks launch.
+see git log; S9 and S11 fixed later — TRUST_PROXY + per-(ip,email) limiter, see git
+log). Everything here is real but deliberately deferred: none blocks launch.
 
 ## Security (MED)
 
@@ -21,10 +22,6 @@ see git log). Everything here is real but deliberately deferred: none blocks lau
 - **S8 — password change doesn't invalidate other sessions** (`server/auth.mjs`).
   A stolen 30-day session survives a reset. Fix: destroy the user's other sessions
   on password change.
-- **S9 — rate limiting keys on `req.socket.remoteAddress`.** Behind a reverse proxy
-  (the typical deploy) all clients share the proxy's IP, so the brute-force control
-  both mis-fires and stops identifying attackers. Fix: honor a trusted
-  `X-Forwarded-For` behind an opt-in env flag.
 - **S10 — no CSP / X-Frame-Options on either static surface.** Neither the admin
   SPA nor the published site sends `Content-Security-Policy` or `frame-ancestors`
   (only `nosniff`; served `.svg` files do get a CSP now). Both are framable and any
@@ -35,9 +32,6 @@ see git log). Everything here is real but deliberately deferred: none blocks lau
 
 ## Security (LOW)
 
-- **S11 — per-email login lockout is a user-lockout DoS.** 10 failed logins lock a
-  targeted account's email 15 min (`server/auth.mjs`). Fix: soft delays / per-IP
-  emphasis instead of a hard per-email lock.
 - **S13 — GitHub repo/branch regexes allow `.`/`..` segments** (`server/github.mjs`),
   permitting api.github.com path manipulation under the configured token. Fix:
   reject `..` and edge dots.
