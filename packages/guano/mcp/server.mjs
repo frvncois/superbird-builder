@@ -14,7 +14,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 
-import { whoami, storeGetRaw, storeGetJson, storePutRaw, BASE } from './api.mjs'
+import { whoami, storeGetRaw, storeGetJson, storePutRaw, publish, BASE } from './api.mjs'
 
 // the bundled editor runtime (built by `npm run build:mcp-runtime`)
 const RUNTIME_URL = new URL('../runtime/mcp-runtime.mjs', import.meta.url)
@@ -30,8 +30,11 @@ try {
 }
 const {
   validateDocument,
+  parseSyntax,
   parseSetup,
   replaceSetup,
+  buildDocument,
+  slugify,
   reconcile,
   walkNodes,
   findNode,
@@ -180,6 +183,15 @@ const interactionView = (it) => ({
   duration: it.duration,
   easing: it.easing,
 })
+
+function findCollection(project, id) {
+  const c = (project.collections ?? []).find((c) => c.id === id)
+  if (!c) throw new Error(`no collection with id "${id}" (use list_collections)`)
+  return c
+}
+
+const fieldView = (f) => ({ id: f.id, name: f.name, type: f.type, refCollectionId: f.refCollectionId })
+const entryView = (e) => ({ id: e.id, name: e.name, slug: e.slug, values: e.values, locales: e.locales })
 
 // ---------- tools ----------
 
@@ -582,6 +594,262 @@ const tools = [
       syncMarkersForNode(page, node)
       await saveTargetProject(project)
       return { saved: true, line: args.line, version: sha256(page.code) }
+    },
+  },
+  {
+    name: 'list_collections',
+    description:
+      'The target project\'s CMS collections: id, name, field count, entry count, template page ' +
+      'id. Requires a target.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    handler: async () => {
+      const { project } = await loadTargetProject()
+      return {
+        collections: (project.collections ?? []).map((c) => ({
+          id: c.id,
+          name: c.name,
+          fieldCount: c.fields?.length ?? 0,
+          entryCount: c.entries?.length ?? 0,
+          templatePageId: c.templatePageId,
+        })),
+      }
+    },
+  },
+  {
+    name: 'get_collection',
+    description:
+      'One collection in full: its fields (id, name, type) and entries (id, name, slug, values, ' +
+      'locale overrides). Requires a target.',
+    inputSchema: {
+      type: 'object',
+      properties: { collectionId: { type: 'string' } },
+      required: ['collectionId'],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const { project } = await loadTargetProject()
+      const c = findCollection(project, args.collectionId)
+      return {
+        id: c.id,
+        name: c.name,
+        templatePageId: c.templatePageId,
+        fields: (c.fields ?? []).map(fieldView),
+        entries: (c.entries ?? []).map(entryView),
+      }
+    },
+  },
+  {
+    name: 'create_collection',
+    description:
+      'Create a CMS collection and its template page (a real page bound with :body[name], ' +
+      'scaffolded with :h1[title]). `name` is lowercased to a slug. Starts with one text field, ' +
+      '"title". Requires a target.',
+    inputSchema: {
+      type: 'object',
+      properties: { name: { type: 'string' } },
+      required: ['name'],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const { project } = await loadTargetProject()
+      const name = String(args.name ?? '')
+        .toLowerCase()
+        .replace(/[^a-z0-9-]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+      if (!name) throw new Error('a name is required')
+      if ((project.collections ?? []).some((c) => c.name === name)) {
+        throw new Error(`a collection named "${name}" already exists`)
+      }
+      const label = name.charAt(0).toUpperCase() + name.slice(1)
+      const code = buildDocument(
+        { name: label, slug: `/${name}`, status: 'published', locale: project.defaultLocale || 'en' },
+        ['\t:section', '\t\t:h1[title]:', '\tsection:'],
+        name,
+      )
+      const page = {
+        id: randomUUID(),
+        name: `${label} template`,
+        path: `/${name}`,
+        status: 'published',
+        code,
+        elements: parseSyntax(code),
+        collectionId: '',
+      }
+      const collection = {
+        id: randomUUID(),
+        name,
+        fields: [{ id: randomUUID(), name: 'title', type: 'text' }],
+        templatePageId: page.id,
+        entries: [],
+      }
+      page.collectionId = collection.id
+      project.pages = project.pages ?? []
+      project.collections = project.collections ?? []
+      project.pages.push(page)
+      project.collections.push(collection)
+      await saveTargetProject(project)
+      return { saved: true, collection: { id: collection.id, name, templatePageId: page.id, fields: collection.fields.map(fieldView) } }
+    },
+  },
+  {
+    name: 'upsert_entry',
+    description:
+      'Create or update a collection entry. Omit entryId to create; pass it to update. `values` ' +
+      'maps field NAME → value (string; array for multi-reference) — unknown field names are ' +
+      'rejected without saving. For a non-default `locale`, `values` become per-locale overrides ' +
+      '(emptied keys are pruned); name/slug are default-locale only. Requires a target.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        collectionId: { type: 'string' },
+        entryId: { type: 'string' },
+        name: { type: 'string' },
+        slug: { type: 'string' },
+        values: { type: 'object', additionalProperties: true },
+        locale: { type: 'string' },
+      },
+      required: ['collectionId'],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const { project } = await loadTargetProject()
+      const c = findCollection(project, args.collectionId)
+      const fieldByName = new Map((c.fields ?? []).map((f) => [f.name, f]))
+      const values = args.values ?? {}
+      const unknown = Object.keys(values).filter((k) => !fieldByName.has(k))
+      if (unknown.length) return { saved: false, reason: 'unknown-fields', unknownFields: unknown }
+
+      let entry = args.entryId ? (c.entries ?? []).find((e) => e.id === args.entryId) : null
+      if (args.entryId && !entry) throw new Error(`no entry with id "${args.entryId}" in this collection`)
+      const creating = !entry
+      if (creating) {
+        entry = { id: randomUUID(), name: '', slug: '', values: {}, createdAt: Date.now() }
+        c.entries = c.entries ?? []
+        c.entries.push(entry)
+      }
+
+      const isDefaultLocale = !args.locale || args.locale === (project.defaultLocale || 'en')
+      if (isDefaultLocale) {
+        if (typeof args.name === 'string') entry.name = args.name
+        if (typeof args.slug === 'string') {
+          const slug = slugify(args.slug)
+          if ((c.entries ?? []).some((e) => e !== entry && e.slug === slug)) {
+            return { saved: false, reason: 'slug-taken', message: `slug "${slug}" is already used in this collection` }
+          }
+          entry.slug = slug
+        } else if (creating) {
+          // derive a unique slug from the name (mirrors addEntry)
+          let base = slugify(entry.name || `${c.name}-${c.entries.length}`)
+          let slug = base || `${c.name}-${c.entries.length}`
+          let i = 1
+          while ((c.entries ?? []).some((e) => e !== entry && e.slug === slug)) slug = `${base}-${++i}`
+          entry.slug = slug
+        }
+        for (const [k, v] of Object.entries(values)) {
+          const f = fieldByName.get(k)
+          if (f.type === 'multi-reference') entry.values[k] = Array.isArray(v) ? v.map(String) : [String(v)]
+          else entry.values[k] = String(v)
+        }
+      } else {
+        // per-locale overrides (strings only), pruned when emptied
+        const code = args.locale
+        entry.locales = entry.locales ?? {}
+        const bucket = { ...(entry.locales[code] ?? {}) }
+        for (const [k, v] of Object.entries(values)) {
+          const s = String(v)
+          if (s === '') delete bucket[k]
+          else bucket[k] = s
+        }
+        if (Object.keys(bucket).length) entry.locales[code] = bucket
+        else delete entry.locales[code]
+        if (entry.locales && !Object.keys(entry.locales).length) delete entry.locales
+      }
+
+      await saveTargetProject(project)
+      return { saved: true, created: creating, entry: entryView(entry) }
+    },
+  },
+  {
+    name: 'delete_entry',
+    description: 'Remove an entry from a collection. Requires a target.',
+    inputSchema: {
+      type: 'object',
+      properties: { collectionId: { type: 'string' }, entryId: { type: 'string' } },
+      required: ['collectionId', 'entryId'],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const { project } = await loadTargetProject()
+      const c = findCollection(project, args.collectionId)
+      const before = c.entries?.length ?? 0
+      c.entries = (c.entries ?? []).filter((e) => e.id !== args.entryId)
+      if (c.entries.length === before) return { saved: false, reason: 'not-found' }
+      await saveTargetProject(project)
+      return { saved: true }
+    },
+  },
+  {
+    name: 'list_comments',
+    description:
+      'Comments on the target project (shared across drafts; never merged). Each has id, pageId, ' +
+      'author, text, resolved, and replies. Requires a target.',
+    inputSchema: {
+      type: 'object',
+      properties: { includeResolved: { type: 'boolean', description: 'default true' } },
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const { project } = await loadTargetProject()
+      let comments = project.comments ?? []
+      if (args.includeResolved === false) comments = comments.filter((c) => !c.resolved)
+      return {
+        comments: comments.map((c) => ({
+          id: c.id,
+          pageId: c.pageId,
+          author: c.author,
+          text: c.text,
+          resolved: c.resolved,
+          createdAt: c.createdAt,
+          replies: (c.replies ?? []).map((r) => ({ id: r.id, author: r.author, text: r.text, createdAt: r.createdAt })),
+        })),
+      }
+    },
+  },
+  {
+    name: 'reply_to_comment',
+    description:
+      'Add a reply to a comment thread, authored as the authenticated token owner. Requires a target.',
+    inputSchema: {
+      type: 'object',
+      properties: { commentId: { type: 'string' }, text: { type: 'string' } },
+      required: ['commentId', 'text'],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const { project } = await loadTargetProject()
+      const comment = (project.comments ?? []).find((c) => c.id === args.commentId)
+      if (!comment) throw new Error(`no comment with id "${args.commentId}"`)
+      const text = String(args.text ?? '').trim()
+      if (!text) throw new Error('reply text is required')
+      const user = await whoami()
+      const reply = { id: randomUUID(), text, author: user.name || user.email, createdAt: Date.now() }
+      comment.replies = comment.replies ?? []
+      comment.replies.push(reply)
+      await saveTargetProject(project)
+      return { saved: true, commentId: comment.id, reply }
+    },
+  },
+  {
+    name: 'publish',
+    description:
+      'Publish the CURRENT TARGET as the live static site (server export). Editor+ only ' +
+      '(enforced server-side). Returns export stats. Note: this publishes the target you chose — ' +
+      'publishing a draft bypasses the merge-into-Main flow. Requires a target.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    handler: async () => {
+      const { project } = await loadTargetProject()
+      const stats = await publish(project)
+      return { published: true, target, stats }
     },
   },
 ]
