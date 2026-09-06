@@ -102,4 +102,10 @@ The right sidebar (`SettingsEditor` + `usePanel`, one panel open at a time) host
 
 Keyboard shortcuts go through `useShortcut` (`useKeymap` for modifier-aware bindings, guarded against firing inside inputs): `useEditorShortcuts` registers the editor set (the element panels have no shortcuts — Style, Data, and Interactions open by typing `(` / `[` / `{` on an element token in the code; ⌘C/X/V/D, ⌘G wrap-in-div, delete, ⌘Z/⌘⇧Z, ⌘S, ⌘E insert dock); `usePreviewShortcuts` is the minimal Preview set that deliberately skips editable targets so ⌘Z stays native contenteditable undo. ⌘E opens the in-canvas insert dock (`useCommandPalette`).
 
-Note: this repo has **no MCP server code**. A host-configured `mcp__superbird__*` toolset may be exposed at the harness level, but its implementation is not in this repository.
+## MCP server (`packages/guano/mcp/`)
+
+`guano mcp` (a CLI subcommand) exposes a **running** instance to AI agents over MCP (stdio). It talks to the instance through the authed HTTP API — never the data dir — using a per-user API token (`guano_…` bearer; Phase 1). It reuses the editor's own DSL/style logic via a bundled runtime: `src/lib/mcp-runtime.ts` re-exports the needed functions and `vite.mcp.config.ts` (`npm run build:mcp-runtime`) bundles them DOM-free into `packages/guano/runtime/mcp-runtime.mjs` (staged by `prepack`). `styleCatalog.ts` holds icon *names* (not lucide components) so `applyClass` bundles cleanly; `styleCatalogIcons.ts` maps names→components for the UI.
+
+Agent writes go to a process-local **target** (Main or a draft) the human picks via `set_target`; page/element edits carry a `version` hash so a stale write is rejected, and structure edits route through `reconcile` (via `replaceSetup`, **not** `enforceDocument` — the latter re-indents and isn't idempotent on stored code). Node-only state (classes/interactions) is mutated on the node object; the display-only `(+)`/`{+}` code markers are maintained on write because the editor's marker truth-sync doesn't run on load. Plan/status: `PLAN-MCP.md`.
+
+Note: a host-configured `mcp__superbird__*` toolset may also be exposed at the harness level — separate from this in-repo server.

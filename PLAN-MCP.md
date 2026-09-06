@@ -4,6 +4,13 @@ Implementation plan for exposing a Guano instance to AI agents over MCP.
 Written to be executed without prior session context — read CLAUDE.md first;
 this plan defers to it on every architectural invariant.
 
+> **STATUS: shipped.** Phases 0–5 are implemented (see git log `feat(mcp): Phase N`).
+> Server lives in `packages/guano/mcp/`; runtime bundle in `src/lib/mcp-runtime.ts`
+> + `vite.mcp.config.ts`. v1 limits are tracked in `BACKLOG.md` → "MCP (v1 limits)".
+> One deviation from this plan: `set_page_code` uses `replaceSetup`, not
+> `enforceDocument` — the latter re-indents via `normalizeSyntax` and is NOT
+> idempotent on stored code, which would make `reconcile` re-mint every node.
+
 ## Settled decisions (do not re-litigate)
 
 - **Transport/home (v1):** a `guano mcp` CLI subcommand in `packages/guano`
