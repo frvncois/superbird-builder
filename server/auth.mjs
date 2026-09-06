@@ -17,10 +17,11 @@ import { createHash, randomBytes, scrypt, scryptSync, timingSafeEqual } from 'no
 import { promisify } from 'node:util'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { DATA_DIR, writeAtomic } from './util.mjs'
+import { DATA_DIR, timingSafeEqualStr, writeAtomic } from './util.mjs'
 const USERS_FILE = join(DATA_DIR, 'users.json')
 const INVITES_FILE = join(DATA_DIR, 'invites.json')
 const SESSIONS_FILE = join(DATA_DIR, 'sessions.json')
+const API_TOKENS_FILE = join(DATA_DIR, 'api-tokens.json')
 const LEGACY_AUTH_FILE = join(DATA_DIR, 'auth.json') // pre-multi-user single account
 
 const SESSION_TTL = 30 * 24 * 60 * 60 * 1000 // 30 days
@@ -198,6 +199,7 @@ export async function deleteUser(id) {
   if (user.role === 'admin' && adminCount() <= 1) return false // keep one admin
   users = loadUsers().filter((u) => u.id !== id)
   destroyUserSessions(id) // revoke access immediately
+  destroyUserApiTokens(id) // ...and their API tokens
   await persistUsers()
   return true
 }
@@ -403,6 +405,91 @@ export async function acceptInvite(token, password) {
   return { user }
 }
 
+// ---------- API tokens (bearer credential for the MCP server & CI) ----------
+
+// { id, tokenHash, userId, name, createdAt, lastUsedAt }
+// Raw token format `guano_<48 hex>`, shown EXACTLY once at creation. Only the
+// sha256 hash is stored — a leaked api-tokens.json can't be replayed. The
+// owning user's role is read LIVE at auth time (findUserById), so demotion or
+// deletion takes effect on the very next request. Mirrors the invite pattern.
+let apiTokens = readJson(API_TOKENS_FILE) ?? []
+const persistApiTokens = () =>
+  writeAtomic(API_TOKENS_FILE, JSON.stringify(apiTokens)).catch(() => {})
+
+const apiTokenView = (t) => ({
+  id: t.id,
+  name: t.name,
+  createdAt: t.createdAt,
+  lastUsedAt: t.lastUsedAt,
+})
+
+/** a user's tokens, newest first, without hashes */
+export const listApiTokens = (userId) =>
+  apiTokens
+    .filter((t) => t.userId === userId)
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .map(apiTokenView)
+
+export const apiTokenCount = (userId) => apiTokens.filter((t) => t.userId === userId).length
+
+/** create a token for a user; returns { token: raw (shown once), record } */
+export async function createApiToken(userId, name) {
+  const raw = 'guano_' + randomBytes(24).toString('hex') // 48 hex chars
+  const token = {
+    id: randomBytes(12).toString('hex'),
+    tokenHash: sha256(raw), // raw is returned once, never stored
+    userId,
+    name: typeof name === 'string' ? name.slice(0, 100) : '',
+    createdAt: Date.now(),
+    lastUsedAt: null,
+  }
+  apiTokens.push(token)
+  await persistApiTokens()
+  return { token: raw, record: apiTokenView(token) }
+}
+
+/** revoke a token: the owner may revoke their own; an admin may revoke any */
+export async function revokeApiToken(id, requester) {
+  const token = apiTokens.find((t) => t.id === id)
+  if (!token) return false
+  const isOwner = requester?.id === token.userId
+  const isAdmin = requester?.role === 'admin'
+  if (!isOwner && !isAdmin) return false
+  apiTokens = apiTokens.filter((t) => t.id !== id)
+  await persistApiTokens()
+  return true
+}
+
+function destroyUserApiTokens(userId) {
+  const before = apiTokens.length
+  apiTokens = apiTokens.filter((t) => t.userId !== userId)
+  if (apiTokens.length !== before) persistApiTokens()
+}
+
+// throttle lastUsedAt persistence — every authed API call would otherwise fsync
+const LAST_USED_THROTTLE = 60 * 1000
+
+/** resolve a raw bearer token to its live owning user, or null. Updates
+ *  lastUsedAt (throttled). A deleted or role-less owner → null (token dead). */
+export function apiTokenUser(rawToken) {
+  const raw = String(rawToken ?? '')
+  if (!raw.startsWith('guano_')) return null
+  const hash = sha256(raw)
+  // compare every candidate; no early break so a match's position can't be
+  // timed (the set is tiny, so scanning all of it is negligible)
+  let match = null
+  for (const t of apiTokens) if (timingSafeEqualStr(t.tokenHash, hash)) match = t
+  if (!match) return null
+  const user = findUserById(match.userId)
+  if (!hasValidRole(user)) return null // deleted / de-roled → dead token
+  const now = Date.now()
+  if (!match.lastUsedAt || now - match.lastUsedAt > LAST_USED_THROTTLE) {
+    match.lastUsedAt = now
+    persistApiTokens()
+  }
+  return user
+}
+
 // ---------- rate limiting (per key, in-memory fixed window) ----------
 
 function limiter(windowMs, max) {
@@ -440,6 +527,8 @@ const loginByPair = limiter(15 * 60 * 1000, 10)
 const loginByIp = limiter(15 * 60 * 1000, 30)
 const loginByEmail = limiter(15 * 60 * 1000, 50)
 const inviteByIp = limiter(15 * 60 * 1000, 30)
+// bearer-token auth failures per IP — an attacker guessing tokens is shed
+const apiTokenByIp = limiter(15 * 60 * 1000, 30)
 
 const emailKey = (email) => String(email ?? '').toLowerCase()
 const pairKey = (ip, email) => `${ip}|${emailKey(email)}`
@@ -455,3 +544,6 @@ export function recordLoginFailure(ip, email) {
 }
 export const inviteAllowed = (ip) => inviteByIp.allowed(ip)
 export const recordInviteAttempt = (ip) => inviteByIp.record(ip)
+
+export const apiTokenAllowed = (ip) => apiTokenByIp.allowed(ip)
+export const recordApiTokenFailure = (ip) => apiTokenByIp.record(ip)
