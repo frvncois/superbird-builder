@@ -799,7 +799,7 @@ async function handleStatic(req, res) {
   }
 }
 
-createServer(async (req, res) => {
+const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://x')
     const path = url.pathname
@@ -842,7 +842,34 @@ createServer(async (req, res) => {
     console.error(err)
     fail(res, 500, 'internal error')
   }
-}).listen(PORT, async () => {
+})
+
+// When PORT wasn't explicitly chosen, a busy default port walks to the next
+// free one (another guano/dev instance is usually what's squatting on it).
+// An explicit PORT is a contract: fail with one clear line, no stack trace.
+const PORT_EXPLICIT = Boolean(process.env.PORT)
+const PORT_TRIES = PORT_EXPLICIT ? 1 : 10
+let port = PORT
+
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    if (port - PORT + 1 < PORT_TRIES) {
+      port++
+      server.listen(port)
+      return
+    }
+    console.error(
+      PORT_EXPLICIT
+        ? `port ${PORT} is already in use — stop the other process or pick another PORT`
+        : `ports ${PORT}–${port} are all in use — set PORT to a free one`,
+    )
+  } else {
+    console.error(`could not start the server: ${err.message}`)
+  }
+  process.exit(1)
+})
+
+server.listen(port, async () => {
   // owner-only data dir: one chmod at the root protects every secret beneath
   // (users/sessions/invites/publish.json) even for files written pre-upgrade
   try {
@@ -852,5 +879,13 @@ createServer(async (req, res) => {
     console.warn('could not restrict data dir permissions:', err.message)
   }
   await migrateStoreDir()
-  console.log(`guano server on http://localhost:${PORT}${TOKEN ? ' (publish token required)' : ''}`)
+  if (port !== PORT) console.log(`port ${PORT} was busy — using ${port}`)
+  const base = `http://localhost:${port}`
+  console.log(`
+  guano is running${TOKEN ? ' (publish token required)' : ''}
+
+  ➜ editor:  ${base}/admin
+  ➜ site:    ${base}/
+  ➜ data:    ${DATA_DIR}
+${needsSetup() ? `\n  first run — open ${base}/admin to create your admin account\n` : ''}`)
 })
