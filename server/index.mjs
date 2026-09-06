@@ -187,7 +187,9 @@ function requestUser(req) {
 async function handleAuth(req, res, path) {
   if (path === '/api/auth/me' && req.method === 'GET') {
     if (needsSetup()) return send(res, 401, JSON.stringify({ needsSetup: true }))
-    const user = sessionUser(req)
+    // session cookie or a `guano_` API-token bearer — the MCP server calls this
+    // on boot to fail fast on a bad URL/token and to learn who it is
+    const user = requestUser(req)
     if (!user) return send(res, 401, JSON.stringify({ needsSetup: false }))
     return send(res, 200, JSON.stringify(userProfile(user)))
   }
