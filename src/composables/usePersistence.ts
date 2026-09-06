@@ -25,6 +25,11 @@ const HISTORY_LIMIT = 50
  */
 export const activeBranchId = ref('main')
 
+/** While true the deep autosave watcher is a no-op. The AI assistant sets this
+ * around a run: the store is latest-wins, so a debounced autosave of the stale
+ * in-memory project would clobber the agent's server-side writes mid-run. */
+export const autosaveSuspended = ref(false)
+
 export function projectStorageKey(branchId: string) {
   return `guano-project:${branchId}`
 }
@@ -150,7 +155,7 @@ export function usePersistence() {
     watch(
       project,
       () => {
-        if (restoring) return
+        if (restoring || autosaveSuspended.value) return
         typing.value = true
         if (timer) clearTimeout(timer)
         timer = setTimeout(commit, DEBOUNCE_MS)

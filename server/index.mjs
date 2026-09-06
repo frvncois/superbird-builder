@@ -23,6 +23,7 @@ import { fileURLToPath } from 'node:url'
 import { exportSite } from './export.mjs'
 import { handleMedia, handleMediaFile, originAllowed, resetMediaIndexCache } from './media.mjs'
 import { pushSiteToGitHub } from './github.mjs'
+import { handleAgent, handleAgentConfig } from './agent.mjs'
 import { createZip, readZip } from './zip.mjs'
 import { DATA_DIR, fail, readDirFiles, send, timingSafeEqualStr, writeAtomic } from './util.mjs'
 import {
@@ -573,6 +574,42 @@ async function handleStore(req, res, path, query) {
   return fail(res, 404, 'not found')
 }
 
+// ---------- in-server adapter for the AI assistant (server/agent.mjs) ----------
+
+/** The mcp/tools.mjs registry reaches the instance through this adapter when
+ * running IN-PROCESS (the in-editor assistant). The store functions mirror
+ * handleStore's file mapping; publish mirrors handlePost's `server` method.
+ * The caller is already authenticated editor+ before this is used. */
+function agentAdapter(user) {
+  return {
+    base: '',
+    whoami: async () => userProfile(user),
+    storeGetRaw: async (key) => {
+      try {
+        return await readFile(storeFile(key), 'utf8')
+      } catch {
+        return null
+      }
+    },
+    storeGetJson: async (key) => {
+      try {
+        return JSON.parse(await readFile(storeFile(key), 'utf8'))
+      } catch {
+        return null
+      }
+    },
+    storePutRaw: async (key, raw) => {
+      await writeAtomic(storeFile(key), raw)
+    },
+    publish: async (project) => {
+      const raw = JSON.stringify(project)
+      await writeAtomic(SNAPSHOT, raw)
+      const stats = await exportSite(project, SITE)
+      return { ok: true, ...stats }
+    },
+  }
+}
+
 async function handlePost(req, res, params) {
   // the session is the credential; PUBLISH_TOKEN stays as a CI escape hatch.
   // Publishing is admin/editor only — contributors are content-only.
@@ -882,6 +919,11 @@ const server = createServer(async (req, res) => {
       return await handlePost(req, res, url.searchParams)
     }
     if (path === '/api/publish-config') return await handlePublishConfig(req, res)
+    if (path === '/api/agent-config') return await handleAgentConfig(req, res, requestUser(req))
+    if (path === '/api/agent' && req.method === 'POST') {
+      const user = requestUser(req)
+      return await handleAgent(req, res, user, user ? agentAdapter(user) : null)
+    }
     if (path === '/api/project-export' && req.method === 'GET') {
       return await handleProjectExport(req, res)
     }
