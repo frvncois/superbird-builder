@@ -22,8 +22,19 @@ export {
   lexLine,
   isBodyOpenLine,
   elementBlockLines,
+  // display-only code markers ((+) styled, {+} interactions) — the MCP keeps
+  // them in step when it writes node.classes / node.interactions, because the
+  // editor's marker truth-sync does NOT run on load (only on later change)
+  styleMarkerOf,
+  withStyleMarker,
+  interactionMarkerOf,
+  withInteractionMarker,
+  hasOpenArgBracket,
 } from './syntax'
 export type { Diagnostic } from './syntax'
+
+// component-instance detection (styles/interactions live on the master)
+export { isComponentType } from './components'
 
 // --- canonical page document scaffold (src/lib/document.ts)
 export {

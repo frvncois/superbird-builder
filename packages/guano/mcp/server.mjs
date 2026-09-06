@@ -28,7 +28,22 @@ try {
   )
   process.exit(1)
 }
-const { validateDocument, parseSetup, replaceSetup, reconcile, walkNodes } = runtime
+const {
+  validateDocument,
+  parseSetup,
+  replaceSetup,
+  reconcile,
+  walkNodes,
+  findNode,
+  applyClass,
+  isValidClass,
+  isComponentType,
+  styleMarkerOf,
+  withStyleMarker,
+  interactionMarkerOf,
+  withInteractionMarker,
+  hasOpenArgBracket,
+} = runtime
 
 // ---------- keys ----------
 
@@ -102,6 +117,69 @@ const numbered = (code) =>
     .split('\n')
     .map((l, i) => `${i + 1}\t${l}`)
     .join('\n')
+
+/**
+ * Resolve a 0-based source line to its node, tracking whether the node is inside
+ * a component instance (its styles/interactions live on the master, not here).
+ * Returns { node, inComponent } or throws when no node owns the line.
+ */
+function nodeAtLine(page, line) {
+  let found = null
+  let foundInComponent = false
+  const visit = (nodes, inComponent) => {
+    for (const n of nodes) {
+      if (n.line === line) {
+        found = n
+        foundInComponent = inComponent
+        return true
+      }
+      // a component instance's subtree is master-backed; the instance node's own
+      // type is the component name
+      const childInComponent = inComponent || isComponentType(n.type)
+      if (visit(n.children ?? [], childInComponent)) return true
+    }
+    return false
+  }
+  visit(page.elements ?? [], false)
+  if (!found) throw new Error(`no element at line ${line} (use get_page to see line → element)`)
+  return { node: found, inComponent: foundInComponent }
+}
+
+/**
+ * Keep a node's display-only code markers ((+) styled, {+} interactions) in step
+ * with its state — mirrors syncNodeMarkers for one node. The editor's truth-sync
+ * does NOT run on load, so an MCP write must maintain them or the code editor
+ * shows a stale affordance. Returns true when page.code changed.
+ */
+function syncMarkersForNode(page, node) {
+  if (node.line === undefined) return false
+  const lines = page.code.split('\n')
+  let line = lines[node.line]
+  if (line === undefined || hasOpenArgBracket(line)) return false
+  const style = styleMarkerOf(line)
+  if (style === undefined || style === '(+)') {
+    const want = !!node.classes?.trim()
+    if (want !== (style === '(+)')) line = withStyleMarker(line, want)
+  }
+  const inter = interactionMarkerOf(line)
+  if (inter === undefined || inter === '{+}') {
+    const want = !!node.interactions?.length
+    if (want !== (inter === '{+}')) line = withInteractionMarker(line, want)
+  }
+  if (line === lines[node.line]) return false
+  lines[node.line] = line
+  page.code = lines.join('\n')
+  return true
+}
+
+/** a short human summary of an interaction library entry */
+const interactionView = (it) => ({
+  id: it.id,
+  name: it.name,
+  toClasses: it.toClasses,
+  duration: it.duration,
+  easing: it.easing,
+})
 
 // ---------- tools ----------
 
@@ -281,6 +359,229 @@ const tools = [
 
       await saveTargetProject(project)
       return { saved: true, pageId: page.id, version: sha256(page.code) }
+    },
+  },
+  {
+    name: 'get_styles',
+    description:
+      "An element's current Tailwind class tokens. Address the element by its source " +
+      '`line` (from get_page). Requires a target.',
+    inputSchema: {
+      type: 'object',
+      properties: { pageId: { type: 'string' }, line: { type: 'integer' } },
+      required: ['pageId', 'line'],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const { project } = await loadTargetProject()
+      const page = findPage(project, args.pageId)
+      const { node, inComponent } = nodeAtLine(page, args.line)
+      return {
+        line: args.line,
+        type: node.type,
+        classes: (node.classes ?? '').split(/\s+/).filter(Boolean),
+        inComponentInstance: inComponent,
+      }
+    },
+  },
+  {
+    name: 'set_element_classes',
+    description:
+      "Add and/or remove Tailwind classes on an element (addressed by `line`). Each added " +
+      'class is validated and applied like the Style panel: an invalid class is reported and ' +
+      'skipped, a conflicting token on the same property is replaced, and flex/grid ' +
+      'prerequisites are auto-added. Pass the `version` from get_page (stale structure → ' +
+      "rejected). Elements inside a component instance are refused — their styles live on the " +
+      'component master. Requires a target.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        pageId: { type: 'string' },
+        line: { type: 'integer' },
+        add: { type: 'array', items: { type: 'string' } },
+        remove: { type: 'array', items: { type: 'string' } },
+        version: { type: 'string' },
+      },
+      required: ['pageId', 'line', 'version'],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const { project } = await loadTargetProject()
+      const page = findPage(project, args.pageId)
+      const current = sha256(page.code)
+      if (args.version !== current) {
+        return { saved: false, reason: 'stale-version', currentVersion: current }
+      }
+      const { node, inComponent } = nodeAtLine(page, args.line)
+      if (inComponent) {
+        return {
+          saved: false,
+          reason: 'component-instance',
+          message:
+            'this element is inside a component instance — its styles live on the component ' +
+            'master; edit the master block instead',
+        }
+      }
+
+      let tokens = (node.classes ?? '').split(/\s+/).filter(Boolean)
+      const errors = []
+      for (const cls of args.add ?? []) {
+        const result = applyClass(cls, tokens)
+        if (result.error !== undefined) errors.push({ class: cls, error: result.error })
+        else tokens = result.tokens
+      }
+      const removeSet = new Set(args.remove ?? [])
+      tokens = tokens.filter((t) => !removeSet.has(t))
+
+      node.classes = tokens.join(' ')
+      if (!node.classes) delete node.classes // keep untouched nodes byte-identical
+      syncMarkersForNode(page, node)
+
+      await saveTargetProject(project)
+      return {
+        saved: true,
+        line: args.line,
+        classes: tokens,
+        errors,
+        version: sha256(page.code),
+      }
+    },
+  },
+  {
+    name: 'list_interactions',
+    description:
+      'The project interaction library (shared, reusable animations): id, name, toClasses, ' +
+      'duration, easing. Bind one to an element with bind_interaction. Requires a target.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    handler: async () => {
+      const { project } = await loadTargetProject()
+      return { interactions: (project.interactions ?? []).map(interactionView) }
+    },
+  },
+  {
+    name: 'create_interaction',
+    description:
+      'Add a reusable interaction to the project library. `toClasses` are the Tailwind classes ' +
+      'applied to the target while active (validated; invalid ones are rejected without saving). ' +
+      'Returns the new interaction id to pass to bind_interaction. Requires a target.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        toClasses: { type: 'string', description: 'space-separated Tailwind classes' },
+        duration: { type: 'string', description: "e.g. 'duration-300' (default)" },
+        easing: { type: 'string', description: "e.g. 'ease-out' (default)" },
+      },
+      required: ['name', 'toClasses'],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const { project } = await loadTargetProject()
+      const name = String(args.name ?? '').trim()
+      if (!name) throw new Error('a name is required')
+      const badClasses = String(args.toClasses ?? '')
+        .split(/\s+/)
+        .filter(Boolean)
+        .filter((c) => !isValidClass(c))
+      if (badClasses.length) {
+        return { saved: false, reason: 'invalid-code', invalidClasses: badClasses }
+      }
+      const interaction = {
+        id: randomUUID(),
+        name,
+        toClasses: String(args.toClasses ?? '').trim(),
+        duration: String(args.duration ?? '').trim() || 'duration-300',
+        easing: String(args.easing ?? '').trim() || 'ease-out',
+      }
+      project.interactions = project.interactions ?? []
+      project.interactions.push(interaction)
+      await saveTargetProject(project)
+      return { saved: true, interaction: interactionView(interaction) }
+    },
+  },
+  {
+    name: 'bind_interaction',
+    description:
+      'Apply a library interaction to an element (addressed by `line`). trigger is ' +
+      'hover | click | appear; targetId is the node the effect animates (a real element id in ' +
+      'this page, or null = the element itself). Pass the `version` from get_page. Elements ' +
+      'inside a component instance are refused (interactions live on the master). Requires a target.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        pageId: { type: 'string' },
+        line: { type: 'integer' },
+        interactionId: { type: 'string' },
+        trigger: { type: 'string', enum: ['hover', 'click', 'appear'] },
+        targetId: { type: ['string', 'null'] },
+        version: { type: 'string' },
+      },
+      required: ['pageId', 'line', 'interactionId', 'trigger', 'version'],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const { project } = await loadTargetProject()
+      const page = findPage(project, args.pageId)
+      const current = sha256(page.code)
+      if (args.version !== current) {
+        return { saved: false, reason: 'stale-version', currentVersion: current }
+      }
+      if (!(project.interactions ?? []).some((it) => it.id === args.interactionId)) {
+        throw new Error(`no interaction with id "${args.interactionId}" (use list_interactions)`)
+      }
+      const targetId = args.targetId ?? null
+      if (targetId !== null && !findNode(page.elements ?? [], targetId)) {
+        throw new Error(`targetId "${targetId}" is not an element in this page`)
+      }
+      const { node, inComponent } = nodeAtLine(page, args.line)
+      if (inComponent) {
+        return {
+          saved: false,
+          reason: 'component-instance',
+          message: 'interactions on a component instance live on the master — edit the master block',
+        }
+      }
+      const binding = { id: randomUUID(), interactionId: args.interactionId, trigger: args.trigger, targetId }
+      node.interactions = node.interactions ?? []
+      node.interactions.push(binding)
+      syncMarkersForNode(page, node)
+      await saveTargetProject(project)
+      return { saved: true, line: args.line, binding, version: sha256(page.code) }
+    },
+  },
+  {
+    name: 'unbind_interaction',
+    description:
+      'Remove an interaction binding from an element (by `line` + `bindingId`). Pass the ' +
+      '`version` from get_page. Requires a target.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        pageId: { type: 'string' },
+        line: { type: 'integer' },
+        bindingId: { type: 'string' },
+        version: { type: 'string' },
+      },
+      required: ['pageId', 'line', 'bindingId', 'version'],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const { project } = await loadTargetProject()
+      const page = findPage(project, args.pageId)
+      const current = sha256(page.code)
+      if (args.version !== current) {
+        return { saved: false, reason: 'stale-version', currentVersion: current }
+      }
+      const { node } = nodeAtLine(page, args.line)
+      const before = node.interactions?.length ?? 0
+      node.interactions = (node.interactions ?? []).filter((b) => b.id !== args.bindingId)
+      if (node.interactions.length === before) {
+        return { saved: false, reason: 'not-found', message: `no binding "${args.bindingId}" on this element` }
+      }
+      if (!node.interactions.length) delete node.interactions
+      syncMarkersForNode(page, node)
+      await saveTargetProject(project)
+      return { saved: true, line: args.line, version: sha256(page.code) }
     },
   },
 ]
