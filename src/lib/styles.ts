@@ -1,4 +1,3 @@
-import type { Component } from 'vue'
 import { TAILWIND_COLORS, TAILWIND_SHADES, isPaletteColor } from './colors'
 import { SPACING, borderWidthScheme, type Slot } from './tieredBox'
 import { derivePrefix, parseTail, isNamedValueClass, type NamedFormat } from './valueClass'
@@ -19,7 +18,10 @@ export type Control =
       custom?: { prefix: string; format: NamedFormat }
     }
   | { kind: 'input'; prefix: string; placeholder?: string }
-  | { kind: 'icons'; options: { label: string; class: string; icon: Component }[] }
+  // `icon` is a lucide icon *name* (e.g. 'AlignCenter'); the UI resolves it to a
+  // component via STYLE_ICONS (styleCatalogIcons.ts). Kept as a string so the
+  // catalog stays node-safe for the MCP runtime bundle.
+  | { kind: 'icons'; options: { label: string; class: string; icon: string }[] }
 
 type Slider = Extract<Control, { kind: 'slider' }>
 

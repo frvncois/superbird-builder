@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { usePanel } from '@/composables/usePanel'
 import { RotateCcw, X } from 'lucide-vue-next'
 import { STYLE_SECTIONS } from '@/lib/styleCatalog'
+import { STYLE_ICONS } from '@/lib/styleCatalogIcons'
 import {
   matchClass,
   sliderClasses,
@@ -561,7 +562,7 @@ watch(pendingFocus, consumeFocus)
             </template>
             <IconGroupUI
               v-else-if="prop.control.kind === 'icons'"
-              :options="control(prop, 'icons').options.map((o) => ({ label: o.label, value: o.class, icon: o.icon }))"
+              :options="control(prop, 'icons').options.map((o) => ({ label: o.label, value: o.class, icon: STYLE_ICONS[o.icon]! }))"
               :model-value="classFor(prop) ?? undefined"
               @update:model-value="(v) => v && set(prop, v)"
             />
