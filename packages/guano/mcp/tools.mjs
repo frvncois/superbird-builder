@@ -741,6 +741,37 @@ function collectPublishWarnings(project) {
   return warnings
 }
 
+/** for each component MASTER node, how many instances render it vs shadow it
+ * with their own content — so the translation worklist can tell an agent when
+ * translating a master string is redundant (every instance overrides it) and
+ * when an instance element is shadowing shared text. Keyed by master node id. */
+function masterShadowStats(project) {
+  const stats = new Map()
+  for (const page of project.pages ?? []) {
+    const instMap = buildInstanceMap(project, page)
+    for (const [instId, info] of instMap) {
+      const masterId = info.master.id
+      const instNode = findNode(page.elements ?? [], instId)
+      if (!instNode) continue
+      const s = stats.get(masterId) ?? { instances: 0, shadowing: 0 }
+      s.instances++
+      if (instNode.content) s.shadowing++
+      stats.set(masterId, s)
+    }
+  }
+  return stats
+}
+
+/** a base value that reads as data, not prose — a bare number, a boolean-ish
+ * token, or an empty string. Translating these ("yes"→"oui", "1"→"un") breaks
+ * whatever reads them (sort order, featured flags), so the worklist flags them
+ * rather than inviting a translation. Currency etc. carry symbols and don't
+ * match. */
+function looksStructural(value) {
+  const v = String(value).trim()
+  return /^-?\d+(?:\.\d+)?$/.test(v) || /^(?:yes|no|true|false|on|off)$/i.test(v)
+}
+
 const fieldView = (f) => ({ id: f.id, name: f.name, type: f.type, refCollectionId: f.refCollectionId })
 const entryView = (e) => ({ id: e.id, name: e.name, slug: e.slug, values: e.values, locales: e.locales })
 
@@ -1877,17 +1908,31 @@ const tools = [
   {
     name: 'get_translation_worklist',
     description:
-      'Everything translatable in the project for one registered non-default locale, in ONE ' +
-      'read: page elements with own text (kind "element"), shared component-master text (kind ' +
-      '"master" — translating these covers every instance), and collection-entry text fields ' +
-      '(kind "entry"). Each item carries the base text and the existing override (if any), so ' +
-      'the whole localization pass is read worklist → translate → ONE set_translations call — ' +
-      'no per-page re-reads. Requires a target.',
+      'Everything translatable in the project for one registered non-default locale: page ' +
+      'elements with own text (kind "element"), shared component-master text (kind "master"), ' +
+      'and collection-entry text fields (kind "entry"). Each item carries the base text and the ' +
+      'existing override. IMPORTANT — this is large on real sites, so it PAGINATES: pass ' +
+      '`countsOnly: true` first to size the job, then pull with `offset`/`limit` and/or the ' +
+      'filters `kind`, `pageId`, `componentId`, `collectionId`. The header counters (total/' +
+      'translated/missing) are ALWAYS project-wide; `returned`/`matched` describe the current ' +
+      'window. An element item that overrides a component master carries `shadowsMaster` + ' +
+      '`masterId` (its own text wins, so translate it, not the master); a master item every ' +
+      'instance shadows carries `shadowedByAll: true` (translating it is dead work). An entry ' +
+      'item whose base reads as data (a number, "yes"/"no") carries `looksStructural: true` — ' +
+      'do NOT translate those (they drive sorting/flags). Then write with set_translations. ' +
+      'Requires a target.',
     inputSchema: {
       type: 'object',
       properties: {
         locale: { type: 'string', description: 'a registered non-default locale, e.g. "fr"' },
         missingOnly: { type: 'boolean', description: 'return only items without an override yet' },
+        countsOnly: { type: 'boolean', description: 'return the counters only, no items — size the job first' },
+        kind: { type: 'string', enum: ['element', 'master', 'entry'], description: 'restrict to one kind' },
+        pageId: { type: 'string', description: 'element items on this page only' },
+        componentId: { type: 'string', description: 'master items of this component only' },
+        collectionId: { type: 'string', description: 'entry items of this collection only' },
+        offset: { type: 'integer', minimum: 0, description: 'skip the first N items of the filtered set' },
+        limit: { type: 'integer', minimum: 1, description: 'return at most N items (default 200)' },
       },
       required: ['locale'],
       additionalProperties: false,
@@ -1900,36 +1945,43 @@ const tools = [
       if (!(project.locales ?? []).includes(locale)) {
         throw new Error(`"${locale}" is not registered — update_settings {addLocales: ["${locale}"]} first`)
       }
-      const items = []
-      const push = (item, override) => {
-        if (args.missingOnly && override) return
-        items.push({ ...item, ...(override ? { override } : {}) })
-      }
+
+      // build the FULL project-wide item set first (so the counters are stable
+      // regardless of filter/paging), then filter and window
+      const shadow = masterShadowStats(project)
+      const all = []
       for (const page of project.pages ?? []) {
-        const visit = (nodes, inComponent) => {
-          for (const n of nodes) {
-            const inside = inComponent || isComponentType(n.type)
-            // own base text on a leaf, not a field binding — bound values are
-            // translated on the entry, not the node. Inside instances, only
-            // nodes that OVERRIDE the master's text carry their own item.
-            if (isLeafElement(n.type) && n.content && n.arg === undefined) {
-              push(
-                { kind: 'element', pageId: page.id, page: page.name, id: n.id, line: n.line, type: n.type, base: n.content },
-                n.locales?.[locale]?.content,
-              )
-            }
-            visit(n.children ?? [], inside)
-          }
-        }
-        visit(page.elements ?? [], false)
+        const instMap = buildInstanceMap(project, page)
+        walkNodes(page.elements ?? [], (n) => {
+          if (!isLeafElement(n.type) || !n.content || n.arg !== undefined) return
+          const mapped = instMap.get(n.id)?.master
+          all.push({
+            kind: 'element',
+            pageId: page.id,
+            page: page.name,
+            id: n.id,
+            line: n.line,
+            type: n.type,
+            base: n.content,
+            override: n.locales?.[locale]?.content,
+            ...(mapped ? { shadowsMaster: true, masterId: mapped.id } : {}),
+          })
+        })
       }
       for (const comp of project.components ?? []) {
         walkNodes([comp.root], (n) => {
           if (!isLeafElement(n.type) || !n.content || n.arg !== undefined) return
-          push(
-            { kind: 'master', componentId: comp.id, component: comp.name, id: n.id, type: n.type, base: n.content },
-            n.locales?.[locale]?.content,
-          )
+          const s = shadow.get(n.id)
+          all.push({
+            kind: 'master',
+            componentId: comp.id,
+            component: comp.name,
+            id: n.id,
+            type: n.type,
+            base: n.content,
+            override: n.locales?.[locale]?.content,
+            ...(s && s.instances > 0 && s.shadowing === s.instances ? { shadowedByAll: true } : {}),
+          })
         })
       }
       for (const c of project.collections ?? []) {
@@ -1938,15 +1990,47 @@ const tools = [
           for (const field of textFields) {
             const base = entry.values?.[field]
             if (!base) continue
-            push(
-              { kind: 'entry', collectionId: c.id, collection: c.name, entryId: entry.id, entry: entry.name, field, base },
-              entry.locales?.[locale]?.[field],
-            )
+            all.push({
+              kind: 'entry',
+              collectionId: c.id,
+              collection: c.name,
+              entryId: entry.id,
+              entry: entry.name,
+              field,
+              base,
+              override: entry.locales?.[locale]?.[field],
+              ...(looksStructural(base) ? { looksStructural: true } : {}),
+            })
           }
         }
       }
-      const translated = items.filter((i) => i.override).length
-      return { locale, total: items.length, translated, missing: items.length - translated, items }
+
+      // project-wide counters — stable no matter what filter is applied
+      const translated = all.filter((i) => i.override).length
+      const counters = { locale, total: all.length, translated, missing: all.length - translated }
+      if (args.countsOnly) return { ...counters, structural: all.filter((i) => i.looksStructural).length }
+
+      // filter → window
+      let filtered = all
+      if (args.missingOnly) filtered = filtered.filter((i) => !i.override)
+      if (args.kind) filtered = filtered.filter((i) => i.kind === args.kind)
+      if (args.pageId) filtered = filtered.filter((i) => i.pageId === args.pageId)
+      if (args.componentId) filtered = filtered.filter((i) => i.componentId === args.componentId)
+      if (args.collectionId) filtered = filtered.filter((i) => i.collectionId === args.collectionId)
+      const matched = filtered.length
+      const offset = args.offset ?? 0
+      const limit = args.limit ?? 200
+      const window = filtered.slice(offset, offset + limit)
+      // strip undefined `override` so absent-override items stay compact
+      const items = window.map((i) => (i.override ? i : (({ override, ...rest }) => rest)(i)))
+      return {
+        ...counters,
+        matched,
+        returned: items.length,
+        offset,
+        nextOffset: offset + items.length < matched ? offset + items.length : null,
+        items,
+      }
     },
   },
   {
@@ -1956,7 +2040,9 @@ const tools = [
       'entries in ONE call — the write half of get_translation_worklist. Items: {kind: ' +
       '"element", pageId, id, content} | {kind: "master", componentId, id, content} | {kind: ' +
       '"entry", collectionId, entryId, values: {field: text}}. "" deletes an override (falls ' +
-      'back to base); omitted fields keep theirs. Node-only writes — page versions are not ' +
+      'back to base); omitted fields keep theirs. The response reports `written` (items — an ' +
+      'entry counts once) and `fieldsWritten` (individual field values, comparable to the ' +
+      'worklist total for progress tracking). Node-only writes — page versions are not ' +
       'needed and do not change. Requires a target.',
     inputSchema: {
       type: 'object',
@@ -1998,7 +2084,8 @@ const tools = [
           message: `register "${locale}" first: update_settings {addLocales: ["${locale}"]}`,
         }
       }
-      let written = 0
+      let written = 0 // items written (element/master = 1 each, entry = 1)
+      let fieldsWritten = 0 // field values written (entry items carry many)
       const failures = []
       const fail = (item, message) => failures.push({ ...item, message })
       for (const item of args.items) {
@@ -2034,6 +2121,7 @@ const tools = [
           const value = isRich(item.content) ? sanitizeRich(item.content) : item.content
           setLocaleOverride(node, locale, 'content', value)
           written++
+          fieldsWritten++
         } else if (item.kind === 'entry') {
           const c = (project.collections ?? []).find((col) => col.id === item.collectionId)
           if (!c) {
@@ -2057,6 +2145,7 @@ const tools = [
             const s = String(v)
             if (s === '') delete bucket[k]
             else bucket[k] = isRich(s) ? sanitizeRich(s) : s
+            fieldsWritten++
           }
           if (Object.keys(bucket).length) entry.locales[locale] = bucket
           else delete entry.locales[locale]
@@ -2066,10 +2155,11 @@ const tools = [
           fail(item, `unknown kind "${item.kind}"`)
         }
       }
-      if (written) await saveTargetProject(project)
+      if (written || fieldsWritten) await saveTargetProject(project)
       return {
         saved: written > 0,
-        written,
+        written, // items (an entry counts once, however many fields it carried)
+        fieldsWritten, // total field values written — comparable to the worklist total
         failed: failures.length,
         ...(failures.length ? { failures } : {}),
       }

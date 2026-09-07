@@ -358,14 +358,23 @@ multi-line code blocks — leading indentation still collapses).
    locales untouched (use `removeLocales` to unregister; removing a locale with
    translations needs `forcePurge: true` because it hard-deletes them). An unregistered
    locale is rejected by every override write — it could never render.
-2. **Write overrides**: the fast path is `get_translation_worklist {locale}` → translate
-   → `set_translations {locale, items}` — the worklist returns EVERY translatable string
-   (page text, shared component-master text, entry text fields) with its base value and
-   current override in one read, and the write covers all three kinds across all pages in
-   one call, so a whole language is ~2 calls, not a per-page rebuild of the base pass. For
-   one-off touch-ups, `edit_elements` (content/src) and `upsert_entry` (values) also take
-   a `locale`. An empty string deletes an override; OMITTED keys keep theirs. The default
-   locale is always the base content; classes and htmlId are never localized.
+2. **Write overrides**: the fast path is `get_translation_worklist` → translate →
+   `set_translations {locale, items}`. The worklist is LARGE on real sites, so it
+   paginates: call `{locale, countsOnly: true}` first to size the job, then pull with
+   `offset`/`limit` (default 200) and/or the filters `kind`/`pageId`/`componentId`/
+   `collectionId` (e.g. one page at a time). Header counters (total/translated/missing)
+   are always project-wide; `matched`/`returned`/`nextOffset` describe the window. Skip
+   the items it flags: `looksStructural: true` on an entry value (a number, "yes"/"no" —
+   translating it breaks sorting/flags), and translate an element's `shadowsMaster: true`
+   item (its own text wins) rather than the `shadowedByAll: true` master it shadows.
+   `set_translations` covers element/master/entry kinds in one call and returns `written`
+   (items) + `fieldsWritten` (values — compare to the worklist total). For one-off
+   touch-ups, `edit_elements` (content/src) and `upsert_entry` (values) also take a
+   `locale`. An empty string deletes an override; OMITTED keys keep theirs. The default
+   locale is always the base content; classes and htmlId are never localized. Shared
+   chrome is cheapest to translate ONCE on the master via `edit_elements {onMaster: true,
+   locale}` — instances that carry their own text (worklist `shadowsMaster`) need their
+   own translation.
 3. **Publish**: every non-default registered locale gets its own full route tree —
    `/fr`, `/fr/collections`, `/fr/<collection>/<slug>`, … — rendered with `<html
    lang="fr">`, override values where they exist, and base-content fallback where they
