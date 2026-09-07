@@ -306,19 +306,35 @@ const tools = [
   {
     name: 'set_target',
     description:
-      'Choose where writes go: Main or a draft. ASK THE USER whether to work on Main or in a ' +
-      'draft before selecting — writing to Main while a human edits can clobber their work; ' +
-      'drafts are the safe mode. Pass { target: "main" } or { target: "<draftId>" } to select an ' +
-      'existing one, or { createDraft: "<name>" } to snapshot Main into a new draft and select it.',
+      'Choose where writes go: Main or a draft. THE HUMAN DECIDES THIS, NOT YOU — before ' +
+      'calling, ask them one question ("Work on Main directly, or in a draft?") unless their ' +
+      'message already named a target. Suggest Main for a fresh/empty project (a draft is ' +
+      'overkill there); suggest a draft when the site has real content or someone may be ' +
+      'editing (Main writes can clobber their work; drafts are reviewed and merged in the ' +
+      'editor). Pass { target: "main" } or { target: "<draftId>" }, or ' +
+      '{ createDraft: "<name>" } to snapshot Main into a new draft and select it.',
     inputSchema: {
       type: 'object',
       properties: {
         target: { type: 'string', description: '"main" or an existing draft id' },
         createDraft: { type: 'string', description: 'name for a new draft branched from Main' },
+        chosenByUser: {
+          type: 'boolean',
+          description:
+            'REQUIRED true: attests the human explicitly chose this target (in their request ' +
+            'or in answer to your question). If they have not, ask them — do not guess.',
+        },
       },
+      required: ['chosenByUser'],
       additionalProperties: false,
     },
     handler: async (args) => {
+      if (args.chosenByUser !== true) {
+        throw new Error(
+          'the target is the human\'s call — ask them ("Work on Main directly, or in a draft?") ' +
+          'and pass chosenByUser: true once they have answered',
+        )
+      }
       if (args.createDraft) {
         const name = String(args.createDraft).trim() || 'Draft'
         const mainRaw = await storeGetRaw(projectKey(MAIN_ID))

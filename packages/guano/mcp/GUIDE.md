@@ -22,15 +22,19 @@ list, it does not exist yet: **report it as a limitation instead of working arou
    `data/` directory or the raw `/api/store` keys, do not edit them: structural edits are
    *reconciled* so elements keep their identity (styles, content, comments, interaction
    targets survive edits). A raw JSON write bypasses that and corrupts the project.
-5. **Ask before writing to Main.** Writes go to a target you pick once per session with
-   `set_target`: `main` or a draft. Writing to Main can clobber a human's in-progress
-   work; drafts are the safe mode. Ask the user which they want.
+5. **The target is the human's decision — always ask, never assume.** Writes go to a
+   target picked once per session with `set_target`: `main` or a draft. Unless the
+   user's message already names one, ask exactly one question — *"Work on Main directly,
+   or in a draft?"* — and recommend based on context: **Main** for a fresh or empty
+   project (a draft is overkill there), **a draft** when the site has real content or a
+   human may be editing (drafts are reviewed and merged in the editor). Never create a
+   draft the user didn't ask for.
 
 ## Workflow recipe
 
 ```
 get_status                    → who you are, whether a target is set, which drafts exist
-set_target                    → ask the user: main, an existing draft, or createDraft
+set_target                    → ASK the user first: Main or a draft? (their call, not yours)
 update_settings               → design tokens / fonts / SEO defaults FIRST (styling uses them)
 list_pages → get_page         → read before writing; note the `version` hash
 create_page / set_page_code   → write the WHOLE page structure in one call per page
@@ -272,8 +276,9 @@ The project has a shared interaction library (named class-swap animations):
 - Drafts are full project copies. `set_target {createDraft: "name"}` snapshots Main into
   a new draft and selects it. Humans merge drafts back to Main in the editor ("Drafts"
   panel); `publish` exports **your current target** directly as the live static site —
-  so publishing a draft skips that merge review. Prefer: build in a draft, let the human
-  apply and publish, unless they tell you to publish directly.
+  so publishing a draft skips that merge review. Which mode to use is the user's choice
+  (golden rule 5); when they picked a draft, let them apply and publish from the editor
+  unless they tell you to publish directly.
 - The published site is fully static (per-route HTML + one CSS file); unpublished
   (`status: draft`) pages are excluded. You can verify by fetching the site root.
 - `list_comments` / `reply_to_comment` — comments are humans' feedback channel on pages;
