@@ -59,7 +59,7 @@ defineExpose({ focus: () => editor.value?.focus() })
     <div
       ref="editor"
       contenteditable="true"
-      class="min-h-96 w-full rounded-lg border border-accent bg-transparent px-2 py-1.5 text-xs outline-none focus:ring-2 focus:ring-accent/25 [&_a]:underline [&_li]:ml-4 [&_ul]:list-disc [&_ol]:list-decimal"
+      class="min-h-52 w-full rounded-lg border border-accent bg-transparent px-2 py-1.5 text-xs outline-none focus:ring-2 focus:ring-accent/25 [&_a]:underline [&_li]:ml-4 [&_ul]:list-disc [&_ol]:list-decimal"
       :data-placeholder="placeholder"
       @focus="focused = true"
       @blur="((focused = false), emitOut())"

@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { GitBranch, Rocket } from 'lucide-vue-next'
 import EditorLayout from '@/layouts/EditorLayout.vue'
 import AppRail from '@/components/editor/sidebar/AppRail.vue'
 import PagesDrawer from '@/components/editor/sidebar/PagesDrawer.vue'
@@ -9,13 +8,9 @@ import CodeEditor from '@/components/editor/code/CodeEditor.vue'
 import SettingsEditor from '@/components/editor/sidebar/SettingsEditor.vue'
 import ContextMenu from '@/components/editor/canvas/ContextMenu.vue'
 import InsertDragChip from '@/components/editor/canvas/InsertDragChip.vue'
-import PublishDialog from '@/components/shared/PublishDialog.vue'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import { useEditorShortcuts } from '@/composables/useEditorShortcuts'
 import { useEditorBoot } from '@/composables/useEditorBoot'
-import { useBranches } from '@/composables/useBranches'
-import { usePanel } from '@/composables/usePanel'
-import { useModal } from '@/composables/useModal'
 
 // editor-zone globals: keymaps live here (NOT in App.vue) so the public
 // site never boots them
@@ -25,10 +20,6 @@ const { ready, bootError, reloadPage } = useEditorBoot()
 
 // pages drawer overlays the code pane; opened from the left rail
 const pagesDrawerOpen = ref(false)
-
-const { activeBranch, onMain } = useBranches()
-const { openPanel } = usePanel()
-const { openModal } = useModal()
 </script>
 
 <template>
@@ -54,13 +45,6 @@ const { openModal } = useModal()
 
     <div class="relative h-full">
       <CanvasEditor />
-
-      <!-- floating branch + publish, top right of the canvas -->
-      <div class="absolute right-2 top-2 z-30 flex items-center">
-        <ButtonUI variant="default" size="sm" :icon="Rocket" @click="openModal(PublishDialog)">
-          Publish
-        </ButtonUI>
-      </div>
     </div>
     <ContextMenu />
     <InsertDragChip />

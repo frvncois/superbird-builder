@@ -2,10 +2,11 @@
 import { computed, ref, watch, type Component } from 'vue'
 import {
   Palette, Zap, GitBranch, Sun, Moon, Code, Paperclip,
-  MessageCircle, CircleCheck, CircleAlert, CircleX,
+  MessageCircle, CircleCheck, CircleAlert, CircleX, Rocket,
 } from 'lucide-vue-next'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import PanelPopoverBody from '@/components/editor/sidebar/PanelPopoverBody.vue'
+import PublishPopover from '@/components/editor/sidebar/PublishPopover.vue'
 import CommentsEditor from '@/components/shared/CommentsEditor.vue'
 import { useBranches } from '@/composables/useBranches'
 import { usePersistence, SAVE_STATES } from '@/composables/usePersistence'
@@ -62,10 +63,26 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onWindowKeydown))
 const { onMain } = useBranches()
 const { theme, toggleTheme } = useTheme()
 
-// save status as a bare stroke-circle icon (check / ! / ✕); click retries
-const { status, saveNow } = usePersistence()
+// save status as a bare stroke-circle icon (check / ! / ✕); click opens the
+// save/publish popover (status badges + the Publish button live there)
+const { status } = usePersistence()
 const SAVE_ICONS = { saved: CircleCheck, pending: CircleAlert, error: CircleX } as const
 const SAVE_COLORS = { saved: 'text-success', pending: 'text-pending', error: 'text-danger' } as const
+
+const statusBtn = ref<InstanceType<typeof ButtonUI>>()
+function togglePublish() {
+  const anchor = statusBtn.value?.$el as HTMLElement | undefined
+  if (!anchor) return
+  usePopover().togglePopover({
+    id: 'publish-status',
+    component: PublishPopover,
+    anchor,
+    placement: 'left-start',
+    title: 'Publish',
+    icon: Rocket,
+    closeOnOutside: true,
+  })
+}
 
 // comments popover, anchored to its rail button in the app PopoverHost
 const commentsBtn = ref<InstanceType<typeof ButtonUI>>()
@@ -113,7 +130,7 @@ watch(activePanel, (panel, prev) => {
       anchor: railEl.value,
       placement: 'left-start',
       title: () => activePanel.value?.label ?? '',
-      icon: () => headerIcon.value,
+      icon: headerIcon,
       closeOnEscape: false,
       onClose: () => closePanel(),
     })
@@ -126,13 +143,14 @@ watch(activePanel, (panel, prev) => {
 <template>
   <aside ref="railEl" class="relative flex h-full w-12 flex-col items-center gap-1 py-4">
     <ButtonUI
+      ref="statusBtn"
       variant="ghost"
       :icon="SAVE_ICONS[status]"
-      :tooltip="SAVE_STATES[status].label"
+      :tooltip="status === 'error' ? 'Save failed' : SAVE_STATES[status].label"
       tooltip-side="left"
       class="w-7"
       :class="SAVE_COLORS[status]"
-      @click="saveNow"
+      @click="togglePublish"
     />
     <div class="my-1 h-px w-full bg-input" />
 

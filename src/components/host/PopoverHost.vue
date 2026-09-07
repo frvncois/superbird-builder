@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref, toValue, watch } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, toValue, unref, watch } from 'vue'
 import HostPopover from '@/components/popover/HostPopover.vue'
 import { usePopover } from '@/composables/usePopover'
 import { useModal } from '@/composables/useModal'
@@ -92,7 +92,9 @@ onBeforeUnmount(() => {
 
 <template>
   <div v-if="current" ref="panelEl" class="fixed z-50" :style="style">
-    <HostPopover :title="toValue(current.title)" :icon="toValue(current.icon)" @close="closePopover()">
+    <!-- icon resolves via unref, not toValue — a lucide icon is a bare
+         function and toValue would call it (→ "slots of undefined" crash) -->
+    <HostPopover :title="toValue(current.title)" :icon="unref(current.icon)" @close="closePopover()">
       <component :is="current.component" v-bind="current.props" />
     </HostPopover>
   </div>
