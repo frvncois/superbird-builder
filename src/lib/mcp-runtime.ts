@@ -35,8 +35,14 @@ export {
 } from './syntax'
 export type { Diagnostic } from './syntax'
 
-// component-instance detection (styles/interactions live on the master)
-export { isComponentType } from './components'
+// components: instance detection, name normalization, master serialization,
+// and instance-block expansion (styles/interactions live on the master)
+export {
+  isComponentType,
+  normalizeComponentName,
+  serializeNode,
+  expandComponentInstances,
+} from './components'
 
 // --- canonical page document scaffold (src/lib/document.ts)
 export {

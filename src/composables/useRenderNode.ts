@@ -7,9 +7,10 @@ import { useComponents } from './useComponents'
 import { useProject } from './useProject'
 import { FRAME_BREAKPOINT } from '@/components/editor/canvas/frameScope'
 import { entryKey } from '@/components/shared/EntryScope.vue'
-import { refDisplay, resolveBinding, resolveListScope } from '@/lib/shared/fields.js'
+import { refDisplay, resolveBinding, resolveListScope, applyListQuery } from '@/lib/shared/fields.js'
 import { isRich, sanitizeRich } from '@/lib/shared/richtext.js'
 import { backgroundRender, backgroundKindFromUrl } from '@/lib/shared/background.js'
+import { conflictingBaseClasses } from '@/lib/shared/interactionClasses.js'
 import { useMedia, kindOfMime } from './useMedia'
 import { evaluateConditions } from '@/lib/shared/conditions.js'
 import { useLocale } from './useLocale'
@@ -88,7 +89,9 @@ export function useRenderNode(
       : null,
   )
   const listCollection = computed(() => listScope.value?.collection ?? null)
-  const listEntries = computed<CollectionEntry[]>(() => listScope.value?.entries ?? [])
+  const listEntries = computed<CollectionEntry[]>(() =>
+    applyListQuery(listScope.value?.entries ?? [], node.value.listQuery),
+  )
   const itemCollection = computed(() =>
     node.value.type === 'collection-item' && node.value.arg ? collectionByName(node.value.arg) : null,
   )
@@ -145,7 +148,10 @@ export function useRenderNode(
     if (!bg || !SAFE_SRC.test(bg)) return null
     const asset = assetForSrc(bg)
     const mediaKind = asset ? kindOfMime(asset.mime) : null
-    const kind = mediaKind === 'image' || mediaKind === 'video' ? mediaKind : null
+    // library assets resolve kind from their mime; external/data URLs infer it
+    // (without the fallback, an https background silently rendered as nothing)
+    const kind =
+      mediaKind === 'image' || mediaKind === 'video' ? mediaKind : backgroundKindFromUrl(bg)
     const tokens = (styleNode.classes ?? '').split(/\s+/).filter(Boolean)
     return backgroundRender(kind, bg, tokens)
   })
@@ -222,21 +228,34 @@ export function useRenderNode(
 
   // --- classes (shared core; renderers append their own chrome) ---
 
-  const baseClasses = computed(() => [
-    // the body fills its frame/viewport column
-    node.value.type === 'body' && 'flex-1',
-    mapping.value ? mapping.value.master.classes : node.value.classes,
-    mapping.value
+  const baseClasses = computed(() => {
+    const own = (mapping.value ? mapping.value.master.classes : node.value.classes) ?? ''
+    const interactionCls = mapping.value
       ? scopedClassesFor(
           mapping.value.master.id,
           mapping.value.root,
           mapping.value.instanceId,
           renderBreakpointId.value,
         )
-      : classesFor(node.value.id, renderBreakpointId.value),
-    // background media makes the host relative (video layer) / applies bg image
-    backgroundInfo.value?.hostClass,
-  ])
+      : classesFor(node.value.id, renderBreakpointId.value)
+    // parity with the published runtime (int-fxrm): own classes styling the
+    // same property as an active interaction's classes are REMOVED, not
+    // outweighed — the cascade would pick an arbitrary winner (hidden+flex)
+    const removed = interactionCls
+      ? new Set(conflictingBaseClasses(own.split(/\s+/).filter(Boolean), interactionCls))
+      : null
+    const kept = removed
+      ? own.split(/\s+/).filter(Boolean).filter((t) => !removed.has(t)).join(' ')
+      : own
+    return [
+      // the body fills its frame/viewport column
+      node.value.type === 'body' && 'flex-1',
+      kept,
+      interactionCls,
+      // background media makes the host relative (video layer) / applies bg image
+      backgroundInfo.value?.hostClass,
+    ]
+  })
 
   // --- interactions ---
 

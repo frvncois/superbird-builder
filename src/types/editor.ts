@@ -71,6 +71,14 @@ export interface ElementNode {
   arg?: string
   /** collection-item only: the picked entry */
   entryId?: string
+  /** collection-list only: filter → sort → limit applied to the entries it
+   * repeats (node-only state, like classes; see shared/fields.applyListQuery) */
+  listQuery?: {
+    limit?: number
+    sortField?: string
+    sortDir?: 'asc' | 'desc'
+    filter?: { field: string; equals?: string; notEmpty?: boolean }
+  }
   children: ElementNode[]
   /** Source range in the page code (0-based line indexes, open → close) */
   line?: number

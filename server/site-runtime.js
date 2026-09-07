@@ -25,6 +25,12 @@
     var fxbpEl = document.getElementById('int-fxbp')
     var fxbp = fxbpEl ? JSON.parse(fxbpEl.textContent || '{}') : {}
 
+    // key → base classes to REMOVE from the target while that key is fired
+    // (same-property conflicts precomputed at export: hidden+flex etc. —
+    // without this the cascade picks an arbitrary winner and toggles break)
+    var rmEl = document.getElementById('int-fxrm')
+    var fxrm = rmEl ? JSON.parse(rmEl.textContent || '{}') : {}
+
     // current breakpoint id for the viewport (mirrors breakpointIdForWidth in
     // src/lib/responsive.ts): tightest bp still covering this width, else widest
     var curBp = ''
@@ -41,17 +47,35 @@
 
     var targets = []
     document.querySelectorAll('[data-tgt]').forEach(function (el) {
-      targets.push({ el: el, base: el.className, keys: el.getAttribute('data-tgt').split(' ') })
+      targets.push({
+        el: el,
+        base: el.className.split(/\s+/).filter(Boolean),
+        keys: el.getAttribute('data-tgt').split(' '),
+      })
     })
 
     var apply = function () {
       curBp = computeBp()
       targets.forEach(function (t) {
         var extra = ''
+        var rm = null
         t.keys.forEach(function (k) {
-          if (fired.has(k) && fx[k] && allowed(k)) extra += ' ' + fx[k]
+          if (fired.has(k) && fx[k] && allowed(k)) {
+            extra += ' ' + fx[k]
+            if (fxrm[k]) {
+              rm = rm || {}
+              fxrm[k].split(' ').forEach(function (c) {
+                rm[c] = 1
+              })
+            }
+          }
         })
-        t.el.className = t.base + extra
+        var base = rm
+          ? t.base.filter(function (c) {
+              return !rm[c]
+            })
+          : t.base
+        t.el.className = base.join(' ') + extra
       })
     }
 

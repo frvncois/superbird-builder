@@ -60,6 +60,51 @@ export function resolveListScope(collections, scopeCollection, scopeEntry, arg) 
   return { collection: target, entries }
 }
 
+/**
+ * Applies a collection-list node's `listQuery` (node-only state, like
+ * classes): filter → sort → limit.
+ *   { limit?: number,
+ *     sortField?: string,        // a text/date field name, or 'createdAt'
+ *     sortDir?: 'asc'|'desc',    // default asc
+ *     filter?: { field: string, equals?: string, notEmpty?: boolean } }
+ * Field comparison uses base values (locale overrides don't reorder lists),
+ * numeric-aware so '2' < '10' and ISO dates sort naturally. Malformed
+ * queries fail OPEN (input returned unchanged) — a bad query must never
+ * blank a published list.
+ */
+export function applyListQuery(entries, query) {
+  if (!query || typeof query !== 'object' || Array.isArray(query)) return entries
+  let out = entries
+  const f = query.filter
+  if (f && typeof f.field === 'string') {
+    out = out.filter((entry) => {
+      const v = entry.values?.[f.field]
+      const s = typeof v === 'string' ? v : ''
+      if (typeof f.equals === 'string') return s === f.equals
+      if (f.notEmpty) return s !== ''
+      return true
+    })
+  }
+  if (typeof query.sortField === 'string' && query.sortField) {
+    const dir = query.sortDir === 'desc' ? -1 : 1
+    const keyOf = (entry) =>
+      query.sortField === 'createdAt'
+        ? (entry.createdAt ?? 0)
+        : typeof entry.values?.[query.sortField] === 'string'
+          ? entry.values[query.sortField]
+          : ''
+    out = [...out].sort((a, b) => {
+      const ka = keyOf(a)
+      const kb = keyOf(b)
+      if (typeof ka === 'number' && typeof kb === 'number') return (ka - kb) * dir
+      return String(ka).localeCompare(String(kb), undefined, { numeric: true }) * dir
+    })
+  }
+  const limit = Number(query.limit)
+  if (Number.isFinite(limit) && limit > 0) out = out.slice(0, limit)
+  return out
+}
+
 /** display text for a reference-typed field bound directly (no `.field`
  * hop): the referenced entry name(s), comma-joined */
 export function refDisplay(collections, field, entry) {

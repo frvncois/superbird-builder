@@ -51,6 +51,9 @@ export function createToolSet({ api, runtime }) {
     RESERVED_TOKEN_NAMES,
     createPage,
     defaultSettings,
+    normalizeComponentName,
+    serializeNode,
+    expandComponentInstances,
   } = runtime
 
 // ---------- keys ----------
@@ -223,6 +226,81 @@ function syncMarkersForNode(page, node) {
   lines[node.line] = line
   page.code = lines.join('\n')
   return true
+}
+
+/**
+ * Master node an in-component instance node maps to, by structural position
+ * (mirrors export.mjs buildMasterMap / the editor's pairing). Returns null
+ * when the instance's structure has diverged past the master's.
+ */
+function masterNodeFor(project, page, instanceNode) {
+  let found = null
+  walkNodes(page.elements ?? [], (n) => {
+    if (found || !isComponentType(n.type)) return
+    const def = (project.components ?? []).find((c) => c.name === n.type)
+    if (!def) return
+    const pair = (inst, master) => {
+      if (found || inst.type !== master.type) return
+      if (inst.id === instanceNode.id) {
+        found = master
+        return
+      }
+      const len = Math.min(inst.children.length, master.children.length)
+      for (let i = 0; i < len; i++) pair(inst.children[i], master.children[i])
+    }
+    pair(n, def.root)
+  })
+  return found
+}
+
+/** the editor's structure-adoption: keep master nodes (ids/styles/content)
+ * where types line up, mint new ones for new children — recursive, pooled
+ * by type so reorders keep identity (mirrors useComponents.adoptStructure) */
+function adoptStructure(master, edited, selfName) {
+  const pool = [...master.children]
+  master.children = edited.children
+    .filter((child) => child.type !== selfName)
+    .map((child) => {
+      const at = pool.findIndex((m) => m.type === child.type)
+      const node =
+        at !== -1
+          ? pool.splice(at, 1)[0]
+          : { id: randomUUID(), type: child.type, content: child.content ?? '', children: [] }
+      // arg + link are CODE-owned — the edited block is authoritative
+      if (child.arg) node.arg = child.arg
+      else delete node.arg
+      if (child.link) node.link = child.link
+      else delete node.link
+      adoptStructure(node, child, selfName)
+      return node
+    })
+}
+
+/** rewrite one closed instance block from the master's structure, keeping
+ * same-position nodes' identity (mirrors useComponents.rewriteInstanceBlock) */
+function rewriteInstanceBlock(page, node, def) {
+  if (node.line === undefined) return
+  const lines = page.code.split('\n')
+  const start = node.line
+  const end = node.endLine ?? node.line
+  if (end <= start) return
+  const indent = lines[start].match(/^\t*/)[0]
+  const inner = def.root.children.flatMap((c) => serializeNode(c, `${indent}\t`))
+  const oldInnerLength = end - start - 1
+  const rest = [...lines.slice(0, start + 1), ...inner, ...lines.slice(end)]
+  const map = new Map()
+  for (let i = 0; i < rest.length; i++) {
+    if (i <= start) map.set(i, i)
+    else if (i < start + 1 + inner.length) {
+      const innerIndex = i - (start + 1)
+      if (innerIndex < oldInnerLength) map.set(i, start + 1 + innerIndex)
+    } else {
+      map.set(i, i - inner.length + oldInnerLength)
+    }
+  }
+  const before = page.code
+  page.code = rest.join('\n')
+  page.elements = reconcile(before, page.code, page.elements, map)
 }
 
 /** write/prune a per-locale content/src override — empty values delete the
@@ -401,6 +479,11 @@ const tools = [
       properties: {
         pageId: { type: 'string' },
         summaryOnly: { type: 'boolean', description: 'omit code/numberedCode from the response' },
+        elementIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'return only these elements in the summary (big pages: fetch just what you need)',
+        },
       },
       required: ['pageId'],
       additionalProperties: false,
@@ -408,6 +491,11 @@ const tools = [
     handler: async (args) => {
       const { project } = await loadTargetProject()
       const page = findPage(project, args.pageId)
+      let elements = elementSummary(page)
+      if (args.elementIds?.length) {
+        const wanted = new Set(args.elementIds)
+        elements = elements.filter((e) => wanted.has(e.id))
+      }
       return {
         target,
         pageId: page.id,
@@ -416,7 +504,7 @@ const tools = [
         status: page.status,
         version: sha256(page.code),
         ...(args.summaryOnly ? {} : { code: page.code, numberedCode: numbered(page.code) }),
-        elements: elementSummary(page),
+        elements,
       }
     },
   },
@@ -459,13 +547,19 @@ const tools = [
         return { saved: false, reason: 'invalid-code', diagnostics }
       }
 
-      // 2. protect the @setup + :body scaffold and pin the stored locale line to
+      // 2. expand freshly written component references (`:Card:` or an empty
+      //    `:Card`/`Card:` pair) into their full editable block, exactly like
+      //    the editor — instances carry the structure; a bare token would
+      //    render empty
+      const expanded = expandComponentInstances(args.code, project.components ?? [])
+
+      // 3. protect the @setup + :body scaffold and pin the stored locale line to
       //    the default (like the editor), but keep the body lines VERBATIM —
       //    re-normalizing indentation would diverge from the stored code and
       //    defeat reconcile's line diff. Then re-derive the element tree from the
       //    OLD code → new code so node identity + node-only state survive.
-      const meta = parseSetup(args.code)
-      const rebuilt = replaceSetup(args.code, {
+      const meta = parseSetup(expanded)
+      const rebuilt = replaceSetup(expanded, {
         name: meta.name,
         slug: meta.slug,
         status: meta.status,
@@ -586,6 +680,183 @@ const tools = [
       else delete page.seo
       await saveTargetProject(project)
       return { saved: true, pageId: page.id, seo: page.seo ?? null }
+    },
+  },
+  {
+    name: 'list_components',
+    description:
+      'The project\'s shared components: id, name (the :Name: token), structure (DSL block), ' +
+      'and how many instances exist across pages. Requires a target.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    handler: async () => {
+      const { project } = await loadTargetProject()
+      return {
+        components: (project.components ?? []).map((def) => {
+          let instances = 0
+          for (const p of project.pages ?? []) {
+            walkNodes(p.elements ?? [], (n) => {
+              if (n.type === def.name) instances++
+            })
+          }
+          return {
+            id: def.id,
+            name: def.name,
+            instances,
+            structure: [`:${def.name}`, ...def.root.children.flatMap((c) => serializeNode(c, '\t')), `${def.name}:`].join('\n'),
+          }
+        }),
+      }
+    },
+  },
+  {
+    name: 'create_component',
+    description:
+      'Turn an existing element (and its subtree) into a shared component: the subtree becomes ' +
+      'the master, the original block is wrapped as :Name … Name: (an instance). Reuse it on ' +
+      'other pages by writing :Name: in their code (set_page_code expands it). Styles and ' +
+      'interactions on inner elements are SHARED across instances (edit any instance — the ' +
+      'edit lands on the master); text content stays per-instance. Requires a target.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        pageId: { type: 'string' },
+        id: { type: 'string', description: 'element id (from get_page) whose subtree becomes the component' },
+        name: { type: 'string', description: 'component name — normalized to CapitalCase' },
+        version: { type: 'string' },
+      },
+      required: ['pageId', 'id', 'name', 'version'],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const { project } = await loadTargetProject()
+      const page = findPage(project, args.pageId)
+      const current = sha256(page.code)
+      if (args.version !== current) {
+        return { saved: false, reason: 'stale-version', currentVersion: current }
+      }
+      const { node: source, inComponent } = resolveEditNode(page, { id: args.id })
+      if (source.line === undefined || source.type === 'body') {
+        return { saved: false, reason: 'invalid-source', message: 'pick a real element, not the body' }
+      }
+      if (isComponentType(source.type) || inComponent) {
+        return { saved: false, reason: 'invalid-source', message: 'element is already (part of) a component' }
+      }
+      const name = normalizeComponentName(args.name, (project.components ?? []).map((c) => c.name))
+      // master: a deep clone with fresh ids in the master id space
+      const cloned = JSON.parse(JSON.stringify(source))
+      walkNodes([cloned], (n) => {
+        n.id = randomUUID()
+        delete n.line
+        delete n.endLine
+      })
+      const root = { id: randomUUID(), type: name, content: '', children: [cloned] }
+      project.components = project.components ?? []
+      project.components.push({ id: randomUUID(), name, root })
+
+      // wrap the source block: open line, inner one level deeper, close line
+      // (exact line map — mirrors the editor's createComponent)
+      const lines = page.code.split('\n')
+      const start = source.line
+      const end = source.endLine ?? source.line
+      const indent = lines[start].match(/^\t*/)[0]
+      const rest = [
+        ...lines.slice(0, start),
+        `${indent}:${name}`,
+        ...lines.slice(start, end + 1).map((l) => `\t${l}`),
+        `${indent}${name}:`,
+        ...lines.slice(end + 1),
+      ]
+      const map = new Map()
+      for (let i = 0; i < rest.length; i++) {
+        if (i < start) map.set(i, i)
+        else if (i >= start + 1 && i <= end + 1) map.set(i, i - 1)
+        else if (i > end + 2) map.set(i, i - 2)
+      }
+      const before = page.code
+      page.code = rest.join('\n')
+      page.elements = reconcile(before, page.code, page.elements, map)
+      await saveTargetProject(project)
+      const def = project.components[project.components.length - 1]
+      return {
+        saved: true,
+        componentId: def.id,
+        name,
+        usage: `write ':${name}:' in any page's code to add an instance`,
+        version: sha256(page.code),
+      }
+    },
+  },
+  {
+    name: 'update_component',
+    description:
+      "Replace a component's STRUCTURE by passing its full DSL block (`:Name … Name:`). Master " +
+      'nodes are re-adopted by type (styles/interactions/content survive where the shape ' +
+      'matches; new elements start clean) and every instance block on every page is rewritten ' +
+      'to match. Use edit_elements on any instance to style shared elements. Requires a target.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        componentId: { type: 'string' },
+        code: { type: 'string', description: 'the full block: :Name\\n\\t… \\nName:' },
+      },
+      required: ['componentId', 'code'],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const { project } = await loadTargetProject()
+      const def = (project.components ?? []).find((c) => c.id === args.componentId)
+      if (!def) throw new Error(`no component with id "${args.componentId}" (use list_components)`)
+      const blockLines = String(args.code ?? '').split('\n').filter((l) => l.trim())
+      if (blockLines[0]?.trim() !== `:${def.name}` || blockLines[blockLines.length - 1]?.trim() !== `${def.name}:`) {
+        return {
+          saved: false,
+          reason: 'invalid-block',
+          message: `the code must open with ':${def.name}' and close with '${def.name}:'`,
+        }
+      }
+      // validate the inner structure through the normal document validator
+      const doc = [
+        '@setup', '\tname: x', '\tslug: /x', '\tstatus: draft', '\tlocale: en',
+        ':body', ...blockLines.map((l) => (l.startsWith('\t') ? l : `\t${l}`)), 'body:',
+      ].join('\n')
+      const { collectionNames, listFieldNames } = knownNames(project)
+      const diagnostics = validateDocument(doc, [def.name], collectionNames, listFieldNames)
+      if (diagnostics.length) return { saved: false, reason: 'invalid-code', diagnostics }
+      const parsed = parseSyntax(blockLines.join('\n'))
+      const editedRoot = parsed.find((n) => n.type === def.name)
+      if (!editedRoot) return { saved: false, reason: 'invalid-block', message: 'could not parse the block' }
+      let nested = false
+      walkNodes(editedRoot.children, (n) => {
+        if (isComponentType(n.type)) nested = true
+      })
+      if (nested) {
+        return { saved: false, reason: 'invalid-block', message: 'components cannot contain other components' }
+      }
+
+      // adopt the new shape into the master (identity kept where types match),
+      // then rewrite every closed instance block to the new structure
+      adoptStructure(def.root, editedRoot, def.name)
+      let updatedInstances = 0
+      for (const p of project.pages ?? []) {
+        const instances = []
+        walkNodes(p.elements ?? [], (n) => {
+          if (n.type === def.name) instances.push(n)
+        })
+        for (const inst of instances) {
+          const codeLines = p.code.split('\n')
+          const closed =
+            inst.line !== undefined &&
+            inst.endLine !== undefined &&
+            inst.endLine > inst.line &&
+            codeLines[inst.endLine]?.trim() === `${def.name}:`
+          if (closed) {
+            rewriteInstanceBlock(p, inst, def)
+            updatedInstances++
+          }
+        }
+      }
+      await saveTargetProject(project)
+      return { saved: true, componentId: def.id, updatedInstances }
     },
   },
   {
@@ -739,6 +1010,32 @@ const tools = [
               src: { type: 'string' },
               background: { type: 'string' },
               htmlId: { type: 'string' },
+              arg: {
+                type: 'string',
+                description:
+                  'the token\'s […] slot: a field binding (or collection name on collection-list/item); "" clears the binding',
+              },
+              listQuery: {
+                type: ['object', 'null'],
+                description:
+                  'collection-list only: filter → sort → limit for the entries it repeats; null or {} clears',
+                properties: {
+                  limit: { type: 'integer', minimum: 1 },
+                  sortField: { type: 'string', description: 'a field name, or "createdAt"' },
+                  sortDir: { type: 'string', enum: ['asc', 'desc'] },
+                  filter: {
+                    type: 'object',
+                    properties: {
+                      field: { type: 'string' },
+                      equals: { type: 'string' },
+                      notEmpty: { type: 'boolean' },
+                    },
+                    required: ['field'],
+                    additionalProperties: false,
+                  },
+                },
+                additionalProperties: false,
+              },
               bindInteractions: {
                 type: 'array',
                 description: 'library interactions to bind — batch these here, not one bind_interaction call each',
@@ -810,28 +1107,28 @@ const tools = [
           continue
         }
 
-        // --- classes (never localized; masters own them inside instances) ---
+        // --- classes (never localized; masters own them inside instances —
+        //     in-component edits REDIRECT to the mapped master, editor-style) ---
         if (edit.addClasses?.length || edit.removeClasses?.length) {
-          if (inComponent) {
-            errors.push(
-              'classes refused: element is inside a component instance — styles live on the master',
-            )
-          } else if (localized) {
+          const styleTarget = inComponent ? masterNodeFor(project, page, node) : node
+          if (localized) {
             errors.push('classes are not localizable — omit locale for class edits')
+          } else if (!styleTarget) {
+            errors.push('classes refused: this instance node has no master counterpart (structure diverged)')
           } else {
             // removes run FIRST so remove+add of the same class nets to the add
             // (a re-apply), not a silent removal
             const removeSet = new Set(edit.removeClasses ?? [])
-            let tokens = (node.classes ?? '').split(/\s+/).filter(Boolean).filter((t) => !removeSet.has(t))
+            let tokens = (styleTarget.classes ?? '').split(/\s+/).filter(Boolean).filter((t) => !removeSet.has(t))
             for (const cls of edit.addClasses ?? []) {
               if (tokens.includes(cls)) continue // idempotent re-apply — not an error
               const result = applyClass(cls, tokens)
               if (result.error !== undefined) errors.push(`class "${cls}": ${result.error}`)
               else tokens = result.tokens
             }
-            node.classes = tokens.join(' ')
-            if (!node.classes) delete node.classes // keep untouched nodes byte-identical
-            applied.push('classes')
+            styleTarget.classes = tokens.join(' ')
+            if (!styleTarget.classes) delete styleTarget.classes // keep untouched nodes byte-identical
+            applied.push(inComponent ? 'classes (on component master — all instances)' : 'classes')
             changed = true
           }
         }
@@ -889,22 +1186,89 @@ const tools = [
           }
         }
 
-        // --- interaction bindings (batched; live on the node like classes) ---
+        // --- arg (the token's […] slot — CODE-owned, so patch the line and
+        //     reconcile with a same-line identity map; no line count change) ---
+        if (edit.arg !== undefined) {
+          const value = String(edit.arg)
+          if (node.line === undefined || node.type === 'body') {
+            errors.push('arg refused: this element\'s arg is not editable')
+          } else if (value && !/^[a-z0-9.+-]+$/.test(value)) {
+            errors.push('arg refused: lowercase field path ([a-z0-9.-], one dot max for a reference hop)')
+          } else if (
+            (node.type === 'collection-list' || node.type === 'collection-item') &&
+            (() => {
+              const { collectionNames, listFieldNames } = knownNames(project)
+              return !value || !(collectionNames.includes(value) ||
+                (node.type === 'collection-list' && listFieldNames.includes(value)))
+            })()
+          ) {
+            errors.push(`arg refused: ':${node.type}' needs a real collection name`)
+          } else {
+            const lines = page.code.split('\n')
+            const head = lines[node.line]?.match(/^(\s*:[a-zA-Z][a-zA-Z0-9-]*)(\[[a-z0-9.+-]*\])?/)
+            if (!head) {
+              errors.push('arg refused: could not locate the element token on its line')
+            } else {
+              const rest = lines[node.line].slice(head[1].length + (head[2]?.length ?? 0))
+              lines[node.line] = head[1] + (value ? `[${value}]` : '') + rest
+              const newCode = lines.join('\n')
+              const identity = new Map(lines.map((_, i) => [i, i]))
+              page.elements = reconcile(page.code, newCode, page.elements, identity)
+              page.code = newCode
+              node.arg = value || undefined
+              applied.push('arg')
+              changed = true
+            }
+          }
+        }
+
+        // --- listQuery (collection-list only; filter → sort → limit) ---
+        if (edit.listQuery !== undefined) {
+          if (node.type !== 'collection-list') {
+            errors.push(`listQuery refused: ':${node.type}' is not a collection-list`)
+          } else {
+            const q = edit.listQuery
+            const empty = q === null || (typeof q === 'object' && !Object.keys(q).length)
+            if (empty) {
+              delete node.listQuery
+              applied.push('listQuery')
+              changed = true
+            } else {
+              // soft-validate field names against the collection the list names
+              const col = (project.collections ?? []).find((c) => c.name === node.arg)
+              const fieldOk = (name) =>
+                name === 'createdAt' || !col || (col.fields ?? []).some((f) => f.name === name)
+              const bad = []
+              if (q.sortField && !fieldOk(q.sortField)) bad.push(`sortField "${q.sortField}"`)
+              if (q.filter?.field && !fieldOk(q.filter.field)) bad.push(`filter.field "${q.filter.field}"`)
+              if (bad.length) {
+                errors.push(`listQuery refused: ${bad.join(', ')} not in collection "${node.arg}"`)
+              } else {
+                node.listQuery = q
+                applied.push('listQuery')
+                changed = true
+              }
+            }
+          }
+        }
+
+        // --- interaction bindings (batched; masters own them inside instances) ---
         if (edit.bindInteractions?.length || edit.unbindInteractionIds?.length) {
-          if (inComponent) {
-            errors.push('interactions refused: element is inside a component instance — they live on the master')
-          } else if (localized) {
+          const bindTargetNode = inComponent ? masterNodeFor(project, page, node) : node
+          if (localized) {
             errors.push('interactions are not localizable — omit locale for binding edits')
+          } else if (!bindTargetNode) {
+            errors.push('interactions refused: this instance node has no master counterpart (structure diverged)')
           } else {
             for (const bindingId of edit.unbindInteractionIds ?? []) {
-              const before = node.interactions?.length ?? 0
-              node.interactions = (node.interactions ?? []).filter((b) => b.id !== bindingId)
-              if (node.interactions.length === before) errors.push(`no binding "${bindingId}" on this element`)
+              const before = bindTargetNode.interactions?.length ?? 0
+              bindTargetNode.interactions = (bindTargetNode.interactions ?? []).filter((b) => b.id !== bindingId)
+              if (bindTargetNode.interactions.length === before) errors.push(`no binding "${bindingId}" on this element`)
               else {
                 applied.push('unbind')
                 changed = true
               }
-              if (!node.interactions.length) delete node.interactions
+              if (!bindTargetNode.interactions.length) delete bindTargetNode.interactions
             }
             for (const bind of edit.bindInteractions ?? []) {
               if (!(project.interactions ?? []).some((it) => it.id === bind.interactionId)) {
@@ -913,18 +1277,18 @@ const tools = [
               }
               const rawTarget = bind.targetId
               const bindTarget = rawTarget === 'null' || rawTarget === '' ? null : (rawTarget ?? null)
-              if (bindTarget !== null && !findNode(page.elements ?? [], bindTarget)) {
+              if (bindTarget !== null && !inComponent && !findNode(page.elements ?? [], bindTarget)) {
                 errors.push(`bind targetId "${bindTarget}" is not an element in this page`)
                 continue
               }
-              node.interactions = node.interactions ?? []
-              node.interactions.push({
+              bindTargetNode.interactions = bindTargetNode.interactions ?? []
+              bindTargetNode.interactions.push({
                 id: randomUUID(),
                 interactionId: bind.interactionId,
                 trigger: bind.trigger,
                 targetId: bindTarget,
               })
-              applied.push('bind')
+              applied.push(inComponent ? 'bind (on component master — all instances)' : 'bind')
               changed = true
             }
           }
@@ -944,7 +1308,8 @@ const tools = [
           }
         }
 
-        if (syncMarkersForNode(page, node)) changed = true
+        // marker truth-sync skips component-instance subtrees, like the editor
+        if (!inComponent && syncMarkersForNode(page, node)) changed = true
         // echo the element's identity so a misaddressed edit is visible
         results.push({
           line: node.line,

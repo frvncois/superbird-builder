@@ -12,10 +12,11 @@ import { compile, optimize } from '@tailwindcss/node'
 // re-exports this same module) — one source of truth, no drift.
 import { ELEMENTS_DATA as ELEMENTS } from '../src/lib/shared/elements.js'
 import { themeBlock, applyTitleTemplate } from '../src/lib/shared/tokens.js'
-import { resolveBinding, resolveListScope, refDisplay } from '../src/lib/shared/fields.js'
+import { resolveBinding, resolveListScope, refDisplay, applyListQuery } from '../src/lib/shared/fields.js'
 import { evaluateConditions, staticMatch } from '../src/lib/shared/conditions.js'
 import { isRich, sanitizeRich } from '../src/lib/shared/richtext.js'
 import { backgroundRender, backgroundKindFromUrl } from '../src/lib/shared/background.js'
+import { conflictingBaseClasses } from '../src/lib/shared/interactionClasses.js'
 import { SAFE_HREF, SAFE_SRC } from '../src/lib/shared/urls.js'
 import { slugify, entrySlug } from '../src/lib/shared/slug.js'
 import { walkNodes } from './util.mjs'
@@ -275,10 +276,17 @@ function attrsFor(node, ctx, cond, runtime, bg) {
     : (ctx.plainTargets.get(node.id) ?? [])
   if (targets.length) {
     const targetKeys = targets.map((i) => (mapping ? `${i.id}@${mapping.instanceId}` : i.id))
+    const baseTokens = classes.split(/\s+/).filter(Boolean)
     targets.forEach((i, n) => {
       const key = targetKeys[n]
+      const to = ctx.anim.get(i.interactionId)?.toClasses ?? ''
       ctx.fx[key] ??= ''
       if (i.breakpoints) ctx.fxbp[key] = i.breakpoints
+      // base classes styling the same property as the fired classes are
+      // REMOVED while fired (int-fxrm) — the cascade would otherwise pick an
+      // arbitrary winner (hidden beats flex, so menu toggles never opened)
+      const rm = conflictingBaseClasses(baseTokens, to)
+      if (rm.length) ctx.fxrm[key] = rm.join(' ')
     })
     attrs.push(`data-tgt="${escapeHtml(targetKeys.join(' '))}"`)
   }
@@ -346,12 +354,14 @@ function renderNode(node, ctx) {
       ctx.scope?.entry ?? null,
       node.arg,
     )
+    // filter → sort → limit from the node's listQuery (node-only state)
+    const listEntries = list ? applyListQuery(list.entries, node.listQuery) : []
     const inner = list
-      ? list.entries
+      ? listEntries
           .map((entry, index) => {
             const inner2 = {
               ...ctx,
-              scope: { collection: list.collection, entry, index, count: list.entries.length },
+              scope: { collection: list.collection, entry, index, count: listEntries.length },
             }
             return node.children.map((child) => renderNode(child, inner2)).join('')
           })
@@ -497,6 +507,8 @@ function renderPage(route, project, media) {
     fx: {},
     // interaction key → breakpoint ids it's scoped to (absent = all breakpoints)
     fxbp: {},
+    // interaction key → base classes removed from its target while fired
+    fxrm: {},
     rewrite: media.rewrite,
     altFor: media.altFor,
     kindFor: media.kindFor,
@@ -523,13 +535,14 @@ function renderPage(route, project, media) {
   const jsonTag = (id, data) =>
     `<script type="application/json" id="${id}">${JSON.stringify(data).replaceAll('</', '<\\/')}</script>`
   const fxTag = hasInteractions ? jsonTag('int-fx', ctx.fx) : ''
+  const rmTag = Object.keys(ctx.fxrm).length ? jsonTag('int-fxrm', ctx.fxrm) : ''
   // breakpoint-scoped interactions need the width→breakpoint map + per-key scope
   const hasBpScope = Object.keys(ctx.fxbp).length > 0
   const bpTag = hasBpScope
     ? jsonTag('int-bp', (project.breakpoints ?? []).map((b) => ({ id: b.id, w: b.width }))) +
       jsonTag('int-fxbp', ctx.fxbp)
     : ''
-  const tail = needsRuntime ? `${fxTag}${bpTag}<script src="/assets/script.js" defer></script>` : ''
+  const tail = needsRuntime ? `${fxTag}${rmTag}${bpTag}<script src="/assets/script.js" defer></script>` : ''
   const seo = project.settings?.seo ?? {}
   const shell = renderShell(project, media.rewrite, {
     locale,

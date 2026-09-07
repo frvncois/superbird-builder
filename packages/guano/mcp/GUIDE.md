@@ -158,6 +158,11 @@ A token may carry a link suffix, glued directly to it:
 This is the **only** per-element value that lives in the code itself. Use it — links do
 not need a separate tool.
 
+**It works on containers too** — `:div@/pricing` … `div:` exports the whole block
+wrapped in `<a class="contents">`, so an entire card becomes one clickable region
+(put the `@target` on the card wrapper, not just the title). Inside a
+`:collection-list`, `:div@item` makes each repeated card link to its entry's page.
+
 ### Components and collections in code
 
 - `:Card:` / `:Card` … `Card:` — **capitalized** tokens are component instances. The
@@ -244,8 +249,12 @@ Element text/media attaches to the node, not the code. Write it with `edit_eleme
   CSS background, video → a video layer). Same URL rules as `src`; `""` clears.
 - **`htmlId`** — the html `id` attribute; this is how anchor targets work
   (`htmlId: "install"` ↔ `:link:@#install`).
-- Batch them: classes, content, src, background, and htmlId can all ride in the same
-  `edits[]` entry, and one call covers the whole page.
+- **`arg`** — rebind or clear the token's `[…]` field binding without rewriting the
+  page code (`arg: "title"` / `arg: ""`); on `:collection-list`/`item` it must name a
+  real collection.
+- Batch them: classes, content, src, background, htmlId, arg, listQuery, and
+  interaction bindings can all ride in the same `edits[]` entry — one call covers the
+  whole page.
 
 **Media library**: `list_media` gives every asset's `/media/<id>` url; `upload_media`
 adds one from a base64 data URL (images/video/audio/pdf/fonts — the server validates
@@ -261,6 +270,13 @@ identity; only `values` bind. An element with a `[field]` binding shows the boun
 in entry scope — its own `content` is ignored there. `delete_collection` removes the
 collection and its template page.
 
+**Lists can limit/filter/sort**: set `listQuery` on a `:collection-list` element via
+`edit_elements` — `{limit: 3, sortField: "published", sortDir: "desc", filter:
+{field: "featured", equals: "yes"}}` (or `filter: {field, notEmpty: true}`;
+`sortField: "createdAt"` sorts by entry creation). Filter → sort → limit; base field
+values compare numeric-aware, so ISO dates sort naturally. `null` clears. This is how
+you build "latest 3" and "featured" blocks.
+
 Collection tips: **name collections singular** (`post`, `feature`) — the template page
 claims the `/<name>` route and entries render at `/<name>/<slug>`, so the plural stays
 free for your index page. A binding and a link target combine on one token —
@@ -274,6 +290,36 @@ multi-line code blocks — leading indentation still collapses).
 `upsert_entry` (values) to write per-locale overrides; an empty string deletes the
 override, and the default locale is always the base content. Classes and htmlId are
 never localized.
+
+## Components
+
+Shared blocks (header, footer, cards) so a nav change is ONE edit, not one per page:
+
+- `create_component {pageId, id, name}` — an existing element's subtree becomes the
+  master; the original block is wrapped as `:Name … Name:` (an instance).
+- Write `:Name:` in any page's code — `set_page_code` expands it into the full block.
+- **Styles/interactions on inner elements are shared**: `edit_elements` on any
+  instance's elements lands on the master (the result says so) and affects every
+  instance. **Text content stays per-instance** — set it on each page's instance.
+- `update_component {componentId, code}` — replace the structure with a full
+  `:Name … Name:` block; every instance block on every page is rewritten to match
+  (same-type nodes keep their identity and styles).
+- `list_components` — names, structure, instance counts.
+- Components cannot nest other components.
+
+## Interactions — toggles and mobile nav
+
+A `click` trigger **toggles** (fire/unfire), and base classes that style the same
+property as the interaction's classes are **removed while fired** — so `hidden` →
+`flex` works. The hamburger recipe:
+
+```
+:button:  (the hamburger — content "Menu")     bind: {trigger: click, targetId: <menu id>}
+:div      (the menu)   classes: hidden flex-col …
+```
+
+with a library interaction whose `toClasses` is `flex` (plus any panel styling).
+Clicking shows the menu, clicking again hides it.
 
 ## Project settings
 
@@ -319,15 +365,12 @@ The project has a shared interaction library (named class-swap animations):
 
 ## Current tool gaps (report, don't hack)
 
-Known missing capabilities, so state them as limits instead of improvising: no tool yet
-to create or edit **components** (instances of existing ones work; styles inside
-instances live on the master, which only a human can edit), **breakpoints**, the
-project **favicon**, domain/smtp/publishing config, per-page `<script>` injection,
-media folder management or asset rename/delete (list + upload only), renaming a
-collection, creating new comment threads (you can only reply), **per-entry SEO** (a
-template's seo applies verbatim to every entry page — no field interpolation), or
-truly empty leaf elements. `:collection-list` has **no limit/filter/sort** — it always
-renders every entry, so design lists that tolerate the full set. `date` fields render
-their raw ISO value (no formatting — use a text field for display dates). `link` is a
-leaf, so a whole card can't be one clickable region — link the title. The `@link` code
-suffix is the supported way to set links.
+Known missing capabilities, so state them as limits instead of improvising: no tool
+yet for **breakpoints**, the project **favicon**, domain/smtp/publishing config,
+per-page `<script>` injection, media folder management or asset rename/delete (list +
+upload only), renaming a collection, creating new comment threads (you can only
+reply), **per-entry SEO** (a template's seo applies verbatim to every entry page — no
+field interpolation), **functional forms** (visual-only: no action, text-only inputs,
+empty selects), or truly empty leaf elements. `date` fields render their raw ISO
+value (no formatting — use a text field for display dates). The `@link` code suffix
+is the supported way to set links.

@@ -95,6 +95,12 @@ export function useComponents() {
                   : undefined,
                 children: [],
               }
+        // arg + link are CODE-owned — the edited instance's code is
+        // authoritative for them (serializeNode round-trips both)
+        if (child.arg) node.arg = child.arg
+        else delete node.arg
+        if (child.link) node.link = child.link
+        else delete node.link
         adoptStructure(node, child, selfName)
         return node
       })
