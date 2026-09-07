@@ -12,17 +12,10 @@ import { isRich, sanitizeRich } from '@/lib/shared/richtext.js'
 import { backgroundRender, backgroundKindFromUrl } from '@/lib/shared/background.js'
 import { conflictingBaseClasses } from '@/lib/shared/interactionClasses.js'
 import { useMedia, kindOfMime } from './useMedia'
-import { evaluateConditions } from '@/lib/shared/conditions.js'
+import { sanitizeAttributes } from '@/lib/shared/attributes.js'
 import { useLocale } from './useLocale'
 import { SAFE_SRC } from '@/lib/shared/urls.js'
 import type { CollectionEntry, ElementNode } from '@/types/editor'
-
-export interface ConditionResult {
-  visible: boolean
-  /** set while an active 'swap' effect overrides content/media */
-  content?: string
-  src?: string
-}
 
 /** a resolved content/src value; `untranslated` marks a default-locale
  * fallback rendered under a non-default locale (the editor dims these) */
@@ -37,7 +30,7 @@ export interface LocalizedDisplay {
  * server/export.mjs, which mirrors this logic): element/tag resolution,
  * component master mapping, collection/entry-scope resolution, interaction
  * firing, the scroll-into-view observer, and the content/src/rich/link
- * resolution (condition swap → bound field → own → mapped master → element
+ * resolution (bound field → own → mapped master → element
  * default). Each renderer keeps its own selection chrome, extra classes and
  * event handlers on top.
  */
@@ -124,21 +117,9 @@ export function useRenderNode(
   const boundField = computed(() => binding.value?.field ?? null)
   const boundEntry = computed(() => binding.value?.entry ?? null)
 
-  // --- conditions ---
-
-  // inside a component instance the master's conditions apply (like
-  // style/interactions); rules evaluate against the surrounding scope
-  const condition = computed<ConditionResult>(() =>
-    evaluateConditions((mapping.value ? mapping.value.master.conditions : node.value.conditions) ?? null, {
-      collections: collections.value,
-      collection: scope?.collection ?? activeCollection.value,
-      entry: scope ? scope.entry : activeEntry.value,
-      locale: activeLocale.value,
-      defaultLocale: defaultLocale.value,
-      pagePath: activePage.value.path,
-      index: scope?.index,
-      count: scope?.count,
-    }),
+  // --- custom attributes (allowlisted; master-aware like style/classes) ---
+  const customAttrs = computed(() =>
+    sanitizeAttributes((mapping.value ? mapping.value.master : node.value).attributes ?? {}),
   )
 
   // --- background media (image → CSS bg, video → layer); master-aware like style ---
@@ -159,10 +140,6 @@ export function useRenderNode(
   // --- content / src / rich / alt (shared precedence) ---
 
   const contentInfo = computed<LocalizedDisplay>(() => {
-    // an active condition swap wins over every other content source
-    if (condition.value.content != null && condition.value.content !== '') {
-      return { value: condition.value.content, untranslated: false }
-    }
     if (boundField.value) {
       // a reference field bound directly (no `.field` hop) reads as the
       // referenced entry name(s)
@@ -191,7 +168,6 @@ export function useRenderNode(
   )
 
   const srcInfo = computed<LocalizedDisplay>(() => {
-    if (condition.value.src) return { value: condition.value.src, untranslated: false }
     if (boundField.value?.type === 'image') {
       const info = boundEntry.value ? entryValue(boundEntry.value, boundField.value.name) : null
       if (info?.value) return { value: info.value, untranslated: !info.translated }
@@ -204,9 +180,12 @@ export function useRenderNode(
     return v && SAFE_SRC.test(v) ? v : undefined
   })
 
-  // images carry the library asset's default alt (no per-node alt field yet)
+  // images carry alt: the author's attributes.alt wins over the library
+  // asset's default (mirrors the static exporter)
   const altAttr = computed(() =>
-    def.value?.tag === 'img' ? (assetForSrc(srcAttr.value)?.alt ?? '') : undefined,
+    def.value?.tag === 'img'
+      ? (customAttrs.value.alt ?? assetForSrc(srcAttr.value)?.alt ?? '')
+      : undefined,
   )
 
   // --- links ---
@@ -330,7 +309,7 @@ export function useRenderNode(
     boundCollection,
     boundField,
     boundEntry,
-    condition,
+    customAttrs,
     backgroundInfo,
     contentInfo,
     displayContent,

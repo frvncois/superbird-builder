@@ -56,7 +56,8 @@ returned `elements` list — never count lines by hand (closer lines like `secti
 manual counting drift, and a misaddressed edit lands on the wrong element). Prefer the
 element **`id`** as the edit address (stable across structural edits); `line` values are
 **0-based** (`numberedCode` is 1-based, for humans). Add `expectType` to edits when
-using lines, and check the `type` echoed in each result.
+using lines — with it a misaddressed edit fails loudly and shows up in `failures`
+(pass `verbose: true` if you want every edit's line/id/type echoed back).
 
 ## The DSL
 
@@ -81,7 +82,9 @@ body:
 ```
 
 The **only** `@setup` keys are `name`, `slug`, `status` (`published` | `draft`), and
-`locale`. Any other key (e.g. `title:`, `description:`) is silently dropped — page SEO
+`locale` — and `locale` is metadata pinned to the project default; writing another code
+there does NOT localize the page (see Localization for how translations render). Any
+other key (e.g. `title:`, `description:`) is silently dropped — page SEO
 goes through `set_page_seo` instead, and site-wide defaults (siteName, titleTemplate,
 description) through `update_settings`. Pages are created with `create_page` and removed
 with `delete_page` (the home page and collection template pages are protected).
@@ -142,6 +145,7 @@ scope (a collection template page whose body is `:body[postname]`, or inside a
 `:collection-list[name]` block). One-hop reference bindings use a dot:
 `:h1[author.name]:`. Outside an entry scope an `[arg]` binds nothing.
 Do **not** use `[…]` to fake attributes — `[href=...]`, `[src=...]` are invalid syntax.
+Real custom attributes go on the element via `edit_elements` `attributes` (below), not the code.
 
 ### `@target` — links, in code
 
@@ -190,8 +194,14 @@ adds, so remove+add of the same class is a re-apply, not a removal. It behaves l
 editor's Style panel:
 
 - **Conflicts auto-resolve**: adding `p-8` when `p-4` is present replaces it.
-- **Prerequisites auto-add**: adding `grid-cols-3` auto-adds `grid`; `flex-row` adds `flex`.
-- **Invalid classes are skipped and reported** in `errors`; the rest still apply.
+- **Prerequisites auto-add**: adding `grid-cols-3` auto-adds `grid`; `flex-row` adds
+  `flex` — but ONLY when the element has no display class of its own yet. Any explicit
+  display utility at any variant (`hidden`, `md:flex`, `block`, …) disables the
+  injection, so the responsive `hidden md:flex items-center` pattern stays exactly what
+  you wrote.
+- **Invalid classes are skipped and reported**; the rest still apply. The response is
+  terse on success (`{saved, version, edited, failed}`) — failing edits are echoed in
+  full under `failures`, and `verbose: true` echoes every per-edit result.
 
 The validator accepts:
 
@@ -200,7 +210,8 @@ The validator accepts:
 - The full Tailwind color palette for `bg-` / `text-` / `border-` (`bg-slate-100` …).
 - Spacing steps `0 1 2 3 4 5 6 8 10 12 14 16 20 24`; negative offsets/margins on the
   same scale (`-bottom-6`, `-mt-4`). Width/height (`w-` `h-` `size-`) run a wider scale
-  up to 96 (`h-56`, `h-80` pass). Whitespace control is available
+  up to 96 (`h-56`, `h-80` pass), and `translate-x-`/`translate-y-` run that same wider
+  scale in BOTH signs (`-translate-x-24`, `translate-y-1/2`, `-translate-x-full`). Whitespace control is available
   (`whitespace-pre-wrap`, `whitespace-nowrap`, `break-words`, …).
 - **Any arbitrary VALUE**: `p-[13px]`, `text-[2.2rem]`, `bg-[#fffff9]`,
   `text-[clamp(2.75rem,7vw,5.25rem)]`. When a scale class is rejected, an arbitrary
@@ -249,10 +260,17 @@ Element text/media attaches to the node, not the code. Write it with `edit_eleme
   CSS background, video → a video layer). Same URL rules as `src`; `""` clears.
 - **`htmlId`** — the html `id` attribute; this is how anchor targets work
   (`htmlId: "install"` ↔ `:link:@#install`).
+- **`attributes`** — custom HTML attributes as a `{name: value}` object (replaces the
+  whole set; `{}` or `null` clears). Allowlisted: `data-*`, `aria-*`, `target`, `rel`,
+  `download`, `title`, `role`, `type`, `name`, `value`, `placeholder`, `alt`, `loading`,
+  `tabindex`, `lang`, `dir`, `hidden`, `disabled`, `open`, `for`. `id`/`class`/`style`/
+  `src`/`href` and `on*` handlers are refused (those are owned by htmlId/classes/src/link).
+  On images, `attributes.alt` is the accessible alt text and wins over the media
+  library's default.
 - **`arg`** — rebind or clear the token's `[…]` field binding without rewriting the
   page code (`arg: "title"` / `arg: ""`); on `:collection-list`/`item` it must name a
   real collection.
-- Batch them: classes, content, src, background, htmlId, arg, listQuery, and
+- Batch them: classes, content, src, background, htmlId, attributes, arg, listQuery, and
   interaction bindings can all ride in the same `edits[]` entry — one call covers the
   whole page.
 
@@ -270,12 +288,13 @@ identity; only `values` bind. An element with a `[field]` binding shows the boun
 in entry scope — its own `content` is ignored there. `delete_collection` removes the
 collection and its template page.
 
-**Lists can limit/filter/sort**: set `listQuery` on a `:collection-list` element via
+**Lists can pick/limit/filter/sort**: set `listQuery` on a `:collection-list` element via
 `edit_elements` — `{limit: 3, sortField: "published", sortDir: "desc", filter:
 {field: "featured", equals: "yes"}}` (or `filter: {field, notEmpty: true}`;
-`sortField: "createdAt"` sorts by entry creation). Filter → sort → limit; base field
-values compare numeric-aware, so ISO dates sort naturally. `null` clears. This is how
-you build "latest 3" and "featured" blocks.
+`sortField: "createdAt"` sorts by entry creation, `sortField: "name"` by entry name).
+`pick: ["<entryId>", …]` hand-picks which entries appear (omit for all). Order applied:
+pick → filter → sort → limit; base field values compare numeric-aware, so ISO dates sort
+naturally. `null` clears. This is how you build "latest 3", "featured", and curated blocks.
 
 Collection tips: **name collections singular** (`post`, `feature`) — the template page
 claims the `/<name>` route and entries render at `/<name>/<slug>`, so the plural stays
@@ -286,10 +305,23 @@ all entries while rendering one). Bound field values pass through the same rich-
 sanitizer, so `<br>` inside a field renders as a real line break (the workaround for
 multi-line code blocks — leading indentation still collapses).
 
-**Localization**: pass a non-default `locale` to `edit_elements` (content/src) or
-`upsert_entry` (values) to write per-locale overrides; an empty string deletes the
-override, and the default locale is always the base content. Classes and htmlId are
-never localized.
+**Localization** is project-level, and rendering it takes three steps in this order:
+
+1. **Register the locale**: `update_settings {locales: ["en", "fr"]}` (the list replaces;
+   the default locale is always kept). An unregistered locale is rejected by
+   `edit_elements` and `upsert_entry` — overrides for it could never render.
+2. **Write overrides**: pass the non-default `locale` to `edit_elements` (content/src)
+   or `upsert_entry` (values). An empty string deletes that override; keys you OMIT
+   keep their existing override (safe to fix one field alone). The default locale is
+   always the base content; classes and htmlId are never localized.
+3. **Publish**: every non-default registered locale gets its own full route tree —
+   `/fr`, `/fr/collections`, `/fr/<collection>/<slug>`, … — rendered with `<html
+   lang="fr">`, override values where they exist, and base-content fallback where they
+   don't. Internal links are locale-prefixed automatically, so ONE set of pages serves
+   every locale: do NOT build parallel per-language pages, collections, or components.
+
+The `locale:` line in a page's `@setup` block is metadata pinned to the default locale —
+it does not select what renders and cannot make a single page French.
 
 ## Components
 
@@ -300,7 +332,10 @@ Shared blocks (header, footer, cards) so a nav change is ONE edit, not one per p
 - Write `:Name:` in any page's code — `set_page_code` expands it into the full block.
 - **Styles/interactions on inner elements are shared**: `edit_elements` on any
   instance's elements lands on the master (the result says so) and affects every
-  instance. **Text content stays per-instance** — set it on each page's instance.
+  instance. **Text content falls back to the master's** — a fresh instance renders the
+  master's text as-is, so do NOT re-send identical nav/footer strings on every page.
+  Set `content` on an instance element only where that page needs DIFFERENT text
+  (the override is per-instance; `""` clears it back to the master's).
 - `update_component {componentId, code}` — replace the structure with a full
   `:Name … Name:` block; every instance block on every page is rewritten to match
   (same-type nodes keep their identity and styles).
@@ -337,6 +372,9 @@ master, so every page's header toggles independently).
 - **`customCodeHead`** — raw HTML injected into every exported `<head>`. Reserved for
   font loading (`@font-face`, preload links) — do not use it to inject scripts, styling
   hacks, or content; if something seems to need that, report it as a limitation instead.
+- **`locales`** — the registered locale list (see Localization). The array you pass
+  REPLACES the list; the `defaultLocale` is always kept, and removing a locale
+  hard-deletes every override written for it.
 
 ## Interactions
 

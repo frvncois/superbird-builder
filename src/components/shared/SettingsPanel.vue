@@ -140,75 +140,6 @@ async function onRevokeToken(id: string, label: string) {
   if (ok) await revokeTokenApi(id).catch((e) => (apiTokenError.value = e instanceof Error ? e.message : 'Failed'))
 }
 
-// --- AI assistant (server-managed Anthropic key; write-only, never echoed) ---
-
-const aiKeyField = ref('')
-const aiKeySet = ref(false)
-const aiKeyFromEnv = ref(false)
-const aiModel = ref('')
-const aiBusy = ref(false)
-const aiError = ref<string | null>(null)
-const aiSaved = ref(false)
-
-async function loadAgentConfig() {
-  try {
-    const res = await fetch('/api/agent-config')
-    if (!res.ok) return
-    const cfg = await res.json()
-    aiKeySet.value = !!cfg.anthropic?.keySet
-    aiKeyFromEnv.value = !!cfg.anthropic?.keyFromEnv
-    aiModel.value = cfg.model ?? ''
-  } catch {
-    // panel still renders; save reports its own errors
-  }
-}
-
-onMounted(() => {
-  if (canBuild.value) loadAgentConfig()
-})
-
-async function saveAgentConfig() {
-  if (aiBusy.value) return
-  aiBusy.value = true
-  aiError.value = null
-  try {
-    const patch: Record<string, unknown> = { model: aiModel.value.trim() }
-    // only send the key when the admin typed one — an empty field means "keep"
-    if (aiKeyField.value.trim()) patch.anthropic = { key: aiKeyField.value.trim() }
-    const res = await fetch('/api/agent-config', {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(patch),
-    })
-    const detail = await res.json().catch(() => null)
-    if (!res.ok) throw new Error(detail?.error ?? `request failed (${res.status})`)
-    aiKeySet.value = !!detail.anthropic?.keySet
-    aiModel.value = detail.model ?? aiModel.value
-    aiKeyField.value = ''
-    aiSaved.value = true
-    setTimeout(() => (aiSaved.value = false), 1600)
-  } catch (e) {
-    aiError.value = e instanceof Error ? e.message : 'Could not save'
-  } finally {
-    aiBusy.value = false
-  }
-}
-
-async function clearAgentKey() {
-  const ok = await confirm({
-    title: 'Remove API key',
-    message: 'The in-editor assistant will stop working until a new key is added.',
-    confirmLabel: 'Remove',
-  })
-  if (!ok) return
-  await fetch('/api/agent-config', {
-    method: 'PUT',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ anthropic: { key: '' } }),
-  }).catch(() => {})
-  await loadAgentConfig()
-}
-
 // --- general ---
 
 const projectName = computed({
@@ -741,42 +672,6 @@ async function onImportFile(e: Event) {
                 </li>
               </ul>
               <p v-else class="text-[10px] text-muted-foreground">No tokens yet.</p>
-            </SettingsGroup>
-
-            <SettingsGroup
-              title="AI assistant"
-              description="The in-editor assistant (Build → Assistant) runs on the Anthropic API. The key is stored server-side, is never shown again, and its usage is billed to that Anthropic account."
-            >
-              <RowUI label="API key">
-                <InputUI
-                  v-model="aiKeyField"
-                  type="password"
-                  :placeholder="aiKeySet ? '••••••••  (set — paste to replace)' : 'sk-ant-…'"
-                  :disabled="aiKeyFromEnv"
-                />
-              </RowUI>
-              <RowUI label="Model">
-                <InputUI v-model="aiModel" placeholder="claude-opus-4-8" :disabled="aiKeyFromEnv" />
-              </RowUI>
-              <p v-if="aiKeyFromEnv" class="text-[10px] text-muted-foreground">
-                Managed by the server (GUANO_ANTHROPIC_KEY) — remove the env var to configure here.
-              </p>
-              <div v-else class="flex items-center justify-between gap-2">
-                <ButtonUI
-                  v-if="aiKeySet"
-                  variant="ghost"
-                  size="xs"
-                  class="!text-danger"
-                  @click="clearAgentKey"
-                >
-                  Remove key
-                </ButtonUI>
-                <span v-else />
-                <ButtonUI variant="outline" size="sm" :disabled="aiBusy" @click="saveAgentConfig">
-                  {{ aiBusy ? 'Saving…' : aiSaved ? 'Saved' : 'Save' }}
-                </ButtonUI>
-              </div>
-              <p v-if="aiError" class="text-[10px] text-danger">{{ aiError }}</p>
             </SettingsGroup>
           </TabPanelUI>
 

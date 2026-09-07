@@ -148,6 +148,18 @@ function buildVocabulary(): string[] {
   // width/height sizing runs far past the spacing scale (h-56 hero bands …)
   const SIZE_STOPS = ['0', '1', '2', '3', '4', '5', '6', '8', '10', '12', '14', '16', '20', '24', '28', '32', '36', '40', '44', '48', '52', '56', '60', '64', '72', '80', '96']
   for (const prefix of ['w', 'h', 'size']) for (const stop of SIZE_STOPS) out.add(`${prefix}-${stop}`)
+  // signed translate utilities across the full size scale — the slider catalog
+  // only covers ±1…8, which made `-translate-x-24` a surprise rejection
+  for (const prefix of ['translate-x', 'translate-y']) {
+    for (const stop of SIZE_STOPS) {
+      out.add(`${prefix}-${stop}`)
+      if (stop !== '0') out.add(`-${prefix}-${stop}`)
+    }
+    for (const frac of ['full', '1/2']) {
+      out.add(`${prefix}-${frac}`)
+      out.add(`-${prefix}-${frac}`)
+    }
+  }
   // negative offsets and margins (-bottom-6, -mt-4 …) — signed transform
   // utilities already validate via the slider catalog; these did not
   for (const prefix of ['top', 'right', 'bottom', 'left', 'inset', 'inset-x', 'inset-y', 'm', 'mx', 'my', 'mt', 'mb', 'ml', 'mr']) {
@@ -392,10 +404,12 @@ function prerequisiteFor(cls: string, tokens: string[]): string | undefined {
   const { variant, base } = splitVariant(cls)
   const r = propForBase(base)?.relevance
   if (!r || r.when !== 'display') return undefined
-  // an unprefixed display class applies at every breakpoint/state, so bare
-  // `grid` already satisfies `md:grid-cols-2` — don't prepend a redundant
-  // `md:grid`
-  if (r.values.some((v) => tokens.includes(`${variant}${v}`) || tokens.includes(v))) return undefined
+  // any explicit display class — at ANY variant — means the author controls
+  // display: bare `grid` satisfies `md:grid-cols-2`, `md:flex` satisfies
+  // `items-center`, and `hidden` + `md:flex` is a deliberate responsive
+  // pattern an auto-added base `flex` would silently fight
+  const setsDisplay = (t: string) => propForBase(splitVariant(t).base)?.id === 'display'
+  if (tokens.some(setsDisplay)) return undefined
   const preferred = r.values.includes('flex') ? 'flex' : r.values[0]!
   return `${variant}${preferred}`
 }

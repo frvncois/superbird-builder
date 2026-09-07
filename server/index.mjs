@@ -30,7 +30,6 @@ import {
   mediaUploadFromBuffer,
 } from './media.mjs'
 import { pushSiteToGitHub } from './github.mjs'
-import { handleAgent, handleAgentConfig } from './agent.mjs'
 import { createZip, readZip } from './zip.mjs'
 import { DATA_DIR, fail, readDirFiles, send, timingSafeEqualStr, writeAtomic } from './util.mjs'
 import {
@@ -567,9 +566,9 @@ const isProjectKey = (key) => key.startsWith('guano-project:')
 
 // ---------- live change feed (SSE) ----------
 // Editors subscribe to GET /api/events; every store write is broadcast with
-// its source ('agent' = a guano_ bearer token or the in-editor assistant,
-// 'human' = a session cookie). The editor uses this to live-apply MCP agent
-// edits and hard-lock the UI while an agent session is active.
+// its source ('agent' = a guano_ bearer token, 'human' = a session cookie).
+// The editor uses this to live-apply MCP agent edits and hard-lock the UI
+// while an agent session is active.
 const eventClients = new Set()
 
 function broadcastStoreEvent(key, source) {
@@ -645,48 +644,6 @@ async function handleStore(req, res, path, query) {
   return fail(res, 404, 'not found')
 }
 
-// ---------- in-server adapter for the AI assistant (server/agent.mjs) ----------
-
-/** The mcp/tools.mjs registry reaches the instance through this adapter when
- * running IN-PROCESS (the in-editor assistant). The store functions mirror
- * handleStore's file mapping; publish mirrors handlePost's `server` method.
- * The caller is already authenticated editor+ before this is used. */
-function agentAdapter(user) {
-  return {
-    base: '',
-    whoami: async () => userProfile(user),
-    storeGetRaw: async (key) => {
-      try {
-        return await readFile(storeFile(key), 'utf8')
-      } catch {
-        return null
-      }
-    },
-    storeGetJson: async (key) => {
-      try {
-        return JSON.parse(await readFile(storeFile(key), 'utf8'))
-      } catch {
-        return null
-      }
-    },
-    storePutRaw: async (key, raw) => {
-      await writeAtomic(storeFile(key), raw)
-      broadcastStoreEvent(key, 'agent')
-    },
-    publish: async (project) => {
-      const raw = JSON.stringify(project)
-      await writeAtomic(SNAPSHOT, raw)
-      const stats = await exportSite(project, SITE)
-      return { ok: true, ...stats }
-    },
-    mediaIndex: async () => mediaIndexData(),
-    mediaUpload: async ({ name, folderId, mime, bytes }) => {
-      const result = await mediaUploadFromBuffer({ name, folderId, buf: bytes, mime, userId: user.id })
-      if (result.error) throw new Error(result.error)
-      return result
-    },
-  }
-}
 
 async function handlePost(req, res, params) {
   // the session is the credential; PUBLISH_TOKEN stays as a CI escape hatch.
@@ -997,11 +954,6 @@ const server = createServer(async (req, res) => {
       return await handlePost(req, res, url.searchParams)
     }
     if (path === '/api/publish-config') return await handlePublishConfig(req, res)
-    if (path === '/api/agent-config') return await handleAgentConfig(req, res, requestUser(req))
-    if (path === '/api/agent' && req.method === 'POST') {
-      const user = requestUser(req)
-      return await handleAgent(req, res, user, user ? agentAdapter(user) : null)
-    }
     if (path === '/api/project-export' && req.method === 'GET') {
       return await handleProjectExport(req, res)
     }

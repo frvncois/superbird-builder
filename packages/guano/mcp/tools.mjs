@@ -46,6 +46,7 @@ export function createToolSet({ api, runtime }) {
     isRich,
     sanitizeRich,
     SAFE_SRC,
+    sanitizeAttributes,
     setStyleTokens,
     isValidToken,
     RESERVED_TOKEN_NAMES,
@@ -126,10 +127,14 @@ function elementSummary(page) {
       // the node's stable id — what bind_interaction's targetId refers to
       id: n.id,
       type: n.type,
-      classes: n.classes ?? '',
-      interactionCount: n.interactions?.length ?? 0,
-      hasOwnContent: !!(n.content || n.src || n.background),
+      // empty/zero/false fields are OMITTED — a bare {line, id, type} means
+      // unstyled, no interactions, no own content (keeps big pages readable)
+      ...(n.classes ? { classes: n.classes } : {}),
+      ...(n.interactions?.length ? { interactionCount: n.interactions.length } : {}),
+      ...(n.content || n.src || n.background ? { hasOwnContent: true } : {}),
       ...(n.htmlId ? { htmlId: n.htmlId } : {}),
+      ...(n.attributes && Object.keys(n.attributes).length ? { attributes: n.attributes } : {}),
+      ...(n.listQuery ? { listQuery: n.listQuery } : {}),
     })
   })
   return out.sort((a, b) => a.line - b.line)
@@ -361,6 +366,29 @@ function setLocaleOverride(node, locale, key, value) {
   if (!Object.keys(node.locales).length) delete node.locales
 }
 
+/** locale codes accepted by the editor (mirrors useLocale.LOCALE_RE) */
+const LOCALE_RE = /^[a-z]{2,3}(-[a-z0-9]{2,8})*$/
+
+/** hard-delete every translation override for a locale across the project —
+ * page elements, component masters, collection entries (mirrors
+ * useLocale.deleteLocale, so removing a locale via MCP leaves no orphans) */
+function purgeLocaleOverrides(project, code) {
+  const purge = (node) => {
+    if (!node.locales?.[code]) return
+    delete node.locales[code]
+    if (!Object.keys(node.locales).length) delete node.locales
+  }
+  for (const page of project.pages ?? []) walkNodes(page.elements ?? [], purge)
+  for (const comp of project.components ?? []) walkNodes([comp.root], purge)
+  for (const collection of project.collections ?? []) {
+    for (const entry of collection.entries ?? []) {
+      if (!entry.locales?.[code]) continue
+      delete entry.locales[code]
+      if (!Object.keys(entry.locales).length) delete entry.locales
+    }
+  }
+}
+
 /** a short human summary of an interaction library entry */
 const interactionView = (it) => ({
   id: it.id,
@@ -515,7 +543,8 @@ const tools = [
     name: 'get_page',
     description:
       'A page\'s DSL code (with line numbers), a version hash, and a per-element summary ' +
-      '(line, id → type, classes, interactionCount, hasOwnContent). Pass the version to writes ' +
+      '(line, id → type, plus classes/interactionCount/hasOwnContent only when set — an ' +
+      'omitted field means empty/0/false). Pass the version to writes ' +
       '(set_page_code, edit_elements) so a stale write is rejected. Pass summaryOnly: true to ' +
       'skip the code fields — enough for harvesting ids/versions after a write you authored, ' +
       'and much smaller on big pages. Requires a target.',
@@ -617,7 +646,16 @@ const tools = [
       page.status = meta.status
 
       await saveTargetProject(project)
-      return { saved: true, pageId: page.id, version: sha256(page.code) }
+      const notes = []
+      if (meta.locale && meta.locale !== (project.defaultLocale || 'en')) {
+        notes.push(
+          `the @setup \`locale: ${meta.locale}\` line was pinned back to the default — it is ` +
+            'page metadata, NOT how localization works. Register locales via update_settings ' +
+            '{locales: [...]}, write overrides via edit_elements/upsert_entry with `locale`; ' +
+            'the export then renders /<code>/… routes automatically',
+        )
+      }
+      return { saved: true, pageId: page.id, version: sha256(page.code), ...(notes.length ? { notes } : {}) }
     },
   },
   {
@@ -908,17 +946,22 @@ const tools = [
     name: 'get_settings',
     description:
       'Project-level settings an agent can work with: site SEO defaults, design tokens ' +
-      '(color classes), fonts, and the custom <head> HTML. Requires a target.',
+      '(color classes), fonts, the custom <head> HTML, and the registered locales ' +
+      '(defaultLocale holds the base content; every OTHER registered locale gets its own ' +
+      '/<code>/… route tree in the export). Requires a target.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     handler: async () => {
       const { project } = await loadTargetProject()
       const s = project.settings ?? defaultSettings()
+      const defaultLocale = project.defaultLocale || 'en'
       return {
         seo: s.seo ?? {},
         domain: s.domain ?? '',
         tokens: (s.tokens ?? []).map((t) => ({ name: t.name, value: t.value })),
         fonts: s.fonts ?? { family: '' },
         customCodeHead: s.customCode?.head ?? '',
+        defaultLocale,
+        locales: project.locales ?? [defaultLocale],
       }
     },
   },
@@ -931,7 +974,12 @@ const tools = [
       'classes); `seo` merges {siteName, titleTemplate ("%s" = page name), description}; ' +
       '`fonts` merges {family, googleFontsUrl (must be a https://fonts.googleapis.com/… CSS ' +
       'URL)}; `customCodeHead` replaces the raw HTML injected into every exported <head> — ' +
-      'intended for font @font-face/preload links, keep it minimal. Requires a target.',
+      'intended for font @font-face/preload links, keep it minimal; `locales` REPLACES ' +
+      'the registered locale list (the defaultLocale is always kept). Register a locale ' +
+      'BEFORE writing per-locale overrides — the export renders every non-default locale ' +
+      "as its own /<code>/… route tree using those overrides (a page's @setup `locale:` " +
+      'line does NOT do this). Removing a locale hard-deletes all its overrides. ' +
+      'Requires a target.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -959,6 +1007,13 @@ const tools = [
           additionalProperties: false,
         },
         customCodeHead: { type: 'string' },
+        locales: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'full registered-locale list, e.g. ["en", "fr"] — lowercase BCP-47-ish codes; ' +
+            'the defaultLocale is always kept; removed locales lose all their overrides',
+        },
       },
       additionalProperties: false,
     },
@@ -966,6 +1021,25 @@ const tools = [
       const { project } = await loadTargetProject()
       project.settings = project.settings ?? defaultSettings()
       const s = project.settings
+      const defaultLocale = project.defaultLocale || 'en'
+
+      if (args.locales !== undefined) {
+        const codes = args.locales.map((l) => String(l).trim().toLowerCase())
+        const invalid = codes.filter((c) => !LOCALE_RE.test(c))
+        if (invalid.length) {
+          return {
+            saved: false,
+            reason: 'invalid-locales',
+            invalid,
+            message: 'locale codes look like "fr", "pt-br" — lowercase letters, dash-separated',
+          }
+        }
+        const next = [...new Set([defaultLocale, ...codes])]
+        for (const code of project.locales ?? []) {
+          if (!next.includes(code)) purgeLocaleOverrides(project, code)
+        }
+        project.locales = next
+      }
 
       if (args.tokens !== undefined) {
         const invalid = args.tokens.filter((t) => !isValidToken({ name: t.name, value: t.value }))
@@ -1014,6 +1088,8 @@ const tools = [
         seo: s.seo,
         fonts: s.fonts,
         customCodeHead: s.customCode?.head ?? '',
+        defaultLocale,
+        locales: project.locales ?? [defaultLocale],
       }
     },
   },
@@ -1025,7 +1101,8 @@ const tools = [
       'call (one version check, one save — always prefer this over one call per element). Address each edit by the element `id` from get_page (PREFERRED — stable and ' +
       'immune to line-counting mistakes) or its 0-based `line`; optionally pass `expectType` ' +
       '(e.g. "h1") to make a misaddressed edit fail instead of landing on the wrong element. ' +
-      'Each result echoes the element it touched (line, id, type) — check it. ' +
+      'The response is terse on success ({saved, version, edited, failed}); edits with errors ' +
+      'are echoed in full under `failures`, and `verbose: true` echoes every edit result. ' +
       'addClasses/removeClasses work like the Style panel (validated; conflicts replaced; ' +
       'flex/grid prerequisites auto-added; refused inside component instances). `content` is ' +
       'the element\'s own text — leaf elements only; inline rich tags b/strong/i/em/u/br/ul/ol/' +
@@ -1055,6 +1132,15 @@ const tools = [
               src: { type: 'string' },
               background: { type: 'string' },
               htmlId: { type: 'string' },
+              attributes: {
+                type: ['object', 'null'],
+                description:
+                  'custom HTML attributes (allowlisted: data-*, aria-*, target, rel, download, ' +
+                  'title, role, type, name, value, placeholder, alt, loading, tabindex, lang, dir, ' +
+                  'hidden, disabled, open, for). Replaces the whole set; {} or null clears. ' +
+                  'id/class/style/src/href and on* handlers are refused.',
+                additionalProperties: { type: 'string' },
+              },
               arg: {
                 type: 'string',
                 description:
@@ -1063,10 +1149,10 @@ const tools = [
               listQuery: {
                 type: ['object', 'null'],
                 description:
-                  'collection-list only: filter → sort → limit for the entries it repeats; null or {} clears',
+                  'collection-list only: pick → filter → sort → limit for the entries it repeats; null or {} clears',
                 properties: {
                   limit: { type: 'integer', minimum: 1 },
-                  sortField: { type: 'string', description: 'a field name, or "createdAt"' },
+                  sortField: { type: 'string', description: 'a field name, "name", or "createdAt"' },
                   sortDir: { type: 'string', enum: ['asc', 'desc'] },
                   filter: {
                     type: 'object',
@@ -1077,6 +1163,11 @@ const tools = [
                     },
                     required: ['field'],
                     additionalProperties: false,
+                  },
+                  pick: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: 'hand-picked entry ids to include; omit for all entries',
                   },
                 },
                 additionalProperties: false,
@@ -1103,6 +1194,10 @@ const tools = [
         locale: {
           type: 'string',
           description: 'omit for the default locale; a non-default locale localizes content/src',
+        },
+        verbose: {
+          type: 'boolean',
+          description: 'echo a per-edit result (line, id, type, applied) for every edit, not just failures',
         },
       },
       required: ['pageId', 'edits'],
@@ -1284,8 +1379,13 @@ const tools = [
               const fieldOk = (name) =>
                 name === 'createdAt' || !col || (col.fields ?? []).some((f) => f.name === name)
               const bad = []
-              if (q.sortField && !fieldOk(q.sortField)) bad.push(`sortField "${q.sortField}"`)
+              if (q.sortField && q.sortField !== 'name' && !fieldOk(q.sortField)) bad.push(`sortField "${q.sortField}"`)
               if (q.filter?.field && !fieldOk(q.filter.field)) bad.push(`filter.field "${q.filter.field}"`)
+              if (Array.isArray(q.pick) && col) {
+                const ids = new Set((col.entries ?? []).map((e) => e.id))
+                const missing = q.pick.filter((id) => !ids.has(id))
+                if (missing.length) bad.push(`pick ids ${missing.join(', ')} not in "${node.arg}"`)
+              }
               if (bad.length) {
                 errors.push(`listQuery refused: ${bad.join(', ')} not in collection "${node.arg}"`)
               } else {
@@ -1352,6 +1452,22 @@ const tools = [
           }
         }
 
+        // --- custom attributes (allowlisted; replaces the whole set) ---
+        if (edit.attributes !== undefined) {
+          if (localized) {
+            errors.push('attributes are not localizable — omit locale for attribute edits')
+          } else {
+            const incoming = edit.attributes && typeof edit.attributes === 'object' ? edit.attributes : {}
+            const clean = sanitizeAttributes(incoming)
+            const refused = Object.keys(incoming).filter((n) => !(n.toLowerCase() in clean))
+            if (refused.length) errors.push(`attributes ignored (not allowed): ${refused.join(', ')}`)
+            if (Object.keys(clean).length) node.attributes = clean
+            else delete node.attributes
+            applied.push('attributes')
+            changed = true
+          }
+        }
+
         // marker truth-sync skips component-instance subtrees, like the editor
         if (!inComponent && syncMarkersForNode(page, node)) changed = true
         // echo the element's identity so a misaddressed edit is visible
@@ -1365,10 +1481,16 @@ const tools = [
       }
 
       if (changed) await saveTargetProject(project)
+      // terse by default: a 140-edit call used to echo ~14 KB of what the
+      // agent just sent — failures keep their full echo so they stay debuggable
+      const failures = results.filter((r) => r.errors?.length)
       return {
         saved: changed,
         version: sha256(page.code),
-        results,
+        edited: results.length - failures.length,
+        failed: failures.length,
+        ...(failures.length ? { failures } : {}),
+        ...(args.verbose ? { results } : {}),
       }
     },
   },
@@ -1602,7 +1724,9 @@ const tools = [
       )
       const page = {
         id: randomUUID(),
-        name: `${label} template`,
+        // matches the @setup `name:` in the scaffold — the two used to diverge
+        // ("Product template" vs "Product") until the first code rewrite
+        name: label,
         path: `/${name}`,
         status: 'published',
         code,
@@ -1640,8 +1764,11 @@ const tools = [
     description:
       'Create or update a collection entry. Omit entryId to create; pass it to update. `values` ' +
       'maps field NAME → value (string; array for multi-reference) — unknown field names are ' +
-      'rejected without saving. For a non-default `locale`, `values` become per-locale overrides ' +
-      '(emptied keys are pruned); name/slug are default-locale only. Requires a target.',
+      'rejected without saving. For a non-default `locale` (must be registered — see ' +
+      'update_settings), `values` become per-locale overrides: sent keys with "" are pruned, ' +
+      'OMITTED keys keep their existing override (safe to fix one field alone); name/slug are ' +
+      'default-locale only. Returns a terse {id, name, slug} acknowledgement — pass ' +
+      '`verbose: true` to echo the full entry back. Requires a target.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1651,6 +1778,7 @@ const tools = [
         slug: { type: 'string' },
         values: { type: 'object', additionalProperties: true },
         locale: { type: 'string' },
+        verbose: { type: 'boolean', description: 'echo the full entry (all values + locale overrides)' },
       },
       required: ['collectionId'],
       additionalProperties: false,
@@ -1662,6 +1790,17 @@ const tools = [
       const values = args.values ?? {}
       const unknown = Object.keys(values).filter((k) => !fieldByName.has(k))
       if (unknown.length) return { saved: false, reason: 'unknown-fields', unknownFields: unknown }
+      const projectDefault = project.defaultLocale || 'en'
+      if (args.locale && args.locale !== projectDefault && !(project.locales ?? []).includes(args.locale)) {
+        // an unregistered locale would store overrides nothing ever renders —
+        // fail loudly instead of accepting a write-only translation
+        return {
+          saved: false,
+          reason: 'unknown-locale',
+          locales: project.locales ?? [projectDefault],
+          message: `register "${args.locale}" first: update_settings {locales: [...]} — otherwise these overrides would never render`,
+        }
+      }
 
       let entry = args.entryId ? (c.entries ?? []).find((e) => e.id === args.entryId) : null
       if (args.entryId && !entry) throw new Error(`no entry with id "${args.entryId}" in this collection`)
@@ -1710,7 +1849,13 @@ const tools = [
       }
 
       await saveTargetProject(project)
-      return { saved: true, created: creating, entry: entryView(entry) }
+      return {
+        saved: true,
+        created: creating,
+        entry: args.verbose
+          ? entryView(entry)
+          : { id: entry.id, name: entry.name, slug: entry.slug },
+      }
     },
   },
   {

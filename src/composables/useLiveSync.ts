@@ -5,14 +5,13 @@ import {
   autosaveSuspended,
   projectStorageKey,
 } from './usePersistence'
-import { useAgent } from './useAgent'
 import { rehydrateStore } from '@/lib/store'
 import { readStoredProject } from '@/lib/storage'
 
 /**
  * Live agent sync: subscribes to the server's change feed (GET /api/events,
- * SSE) and reacts to writes made by an AI agent (the MCP server, or the
- * in-editor assistant driven from ANOTHER browser) on the active branch:
+ * SSE) and reacts to writes made by an AI agent (the MCP server) on the
+ * active branch:
  *
  *  - live-applies each save so the canvas shows the agent's work in real time
  *    (via replaceFromRemote — never persisted back: an echo write could race
@@ -25,9 +24,6 @@ import { readStoredProject } from '@/lib/storage'
  * releases after QUIET_MS without one. The human can take over early —
  * autosave resumes and the agent's next stale write gets rejected instead
  * (the version-hash check covers that direction).
- *
- * The in-editor assistant run in THIS tab is excluded (useAgent.busy): its
- * chat pane must stay interactive, and useAgent already owns lock+refresh.
  */
 
 const QUIET_MS = 10_000
@@ -47,7 +43,6 @@ let weSuspendedAutosave = false
 
 export function useLiveSync() {
   const { replaceFromRemote } = usePersistence()
-  const { busy: localAgentBusy } = useAgent()
 
   async function applyRemote(key: string) {
     try {
@@ -93,8 +88,6 @@ export function useLiveSync() {
         return
       }
       if (event.type !== 'store-write' || event.source !== 'agent') return
-      // this tab's own assistant run stays interactive — useAgent handles it
-      if (localAgentBusy.value) return
       if (event.key !== projectStorageKey(activeBranchId.value)) return
       onAgentWrite(event.key)
     }

@@ -92,6 +92,10 @@ export { STYLE_SECTIONS } from './styleCatalog'
 export { isRich, sanitizeRich } from './shared/richtext.js'
 export { SAFE_HREF, SAFE_SRC } from './shared/urls.js'
 
+// --- custom attribute allowlist (src/lib/shared/attributes.js) — the MCP
+// sanitizes attributes with the SAME allowlist the editor and exporter use
+export { sanitizeAttributes, isAllowedAttribute } from './shared/attributes.js'
+
 // --- design-token validation (src/lib/shared/tokens.js) + settings defaults
 export { isValidToken, TOKEN_NAME_RE, HEX_RE, RESERVED_TOKEN_NAMES } from './shared/tokens.js'
 export { defaultSettings } from './settings'

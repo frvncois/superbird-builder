@@ -23,9 +23,28 @@ export function breakpointMinVariant(width: number): string {
   return `min-[${width}px]:`
 }
 
-/** a token carrying a min/max arbitrary-width breakpoint variant */
+/** Tailwind's default named screens (min-width thresholds, in px). Authored
+ * directly in the DSL as `md:flex` (min-width) or `max-md:hidden` (max-width). */
+const NAMED_SCREENS: Record<string, number> = {
+  sm: 640,
+  md: 768,
+  lg: 1024,
+  xl: 1280,
+  '2xl': 1536,
+}
+// widest names first so `2xl` is tried before `xl` in the alternation
+const NAMED_ALT = Object.keys(NAMED_SCREENS)
+  .sort((a, b) => b.length - a.length)
+  .join('|')
+/** matches a leading named-screen variant: `md:` (min) or `max-md:` (max) */
+const NAMED_TOKEN_RE = new RegExp(`^(max-)?(${NAMED_ALT}):(.+)$`)
+
+/** a token carrying a min/max arbitrary-width variant, or a named Tailwind
+ * screen variant (`md:`, `max-md:`) */
 export function isBreakpointToken(token: string): boolean {
-  return /^(?:min|max)-\[[0-9.]+(?:px|rem|em)\]:/.test(token)
+  if (/^(?:min|max)-\[[0-9.]+(?:px|rem|em)\]:/.test(token)) return true
+  const m = token.match(NAMED_TOKEN_RE)
+  return m !== null && m[2]! in NAMED_SCREENS
 }
 
 /**
@@ -52,8 +71,17 @@ function parseBreakpointToken(
   token: string,
 ): { px: number; bound: 'min' | 'max'; bare: string } | null {
   const m = token.match(/^(min|max)-\[([0-9.]+)(px|rem|em)\]:(.+)$/)
-  if (!m) return null
-  return { bound: m[1] as 'min' | 'max', px: parseFloat(m[2]!) * UNIT_PX[m[3]!]!, bare: m[4]! }
+  if (m) return { bound: m[1] as 'min' | 'max', px: parseFloat(m[2]!) * UNIT_PX[m[3]!]!, bare: m[4]! }
+  // named Tailwind screens: `md:` is min-width; `max-md:` is max-width (applies
+  // just below the threshold, so use an epsilon under it for the cascade test)
+  const n = token.match(NAMED_TOKEN_RE)
+  if (n && n[2]! in NAMED_SCREENS) {
+    const threshold = NAMED_SCREENS[n[2]!]!
+    return n[1]
+      ? { bound: 'max', px: threshold - 0.02, bare: n[3]! }
+      : { bound: 'min', px: threshold, bare: n[3]! }
+  }
+  return null
 }
 
 /** split a token into its variant prefix (incl. trailing ':') and base class */

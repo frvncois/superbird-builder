@@ -4,7 +4,7 @@
 
 /* Dark is the default theme */
 :root {
-  --background: oklch(0.145 0 0);
+  --background: oklch(14.479% 0.00002 271.152);
   --foreground: oklch(0.985 0 0);
   --input: oklch(24.776% 0.00003 271.152);
   --muted: oklch(0.269 0 0);

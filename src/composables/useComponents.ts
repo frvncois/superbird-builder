@@ -90,8 +90,8 @@ export function useComponents() {
                 type: child.type,
                 content: child.content,
                 locales: child.locales ? JSON.parse(JSON.stringify(child.locales)) : undefined,
-                conditions: child.conditions
-                  ? JSON.parse(JSON.stringify(child.conditions))
+                attributes: child.attributes
+                  ? JSON.parse(JSON.stringify(child.attributes))
                   : undefined,
                 children: [],
               }
@@ -295,11 +295,7 @@ export function useComponents() {
           targetId: i.targetId ? (masterToInstance.get(i.targetId) ?? i.targetId) : null,
         }))
       }
-      if (master.conditions) {
-        const spec = JSON.parse(JSON.stringify(master.conditions))
-        for (const rule of spec.rules) rule.id = crypto.randomUUID()
-        node.conditions = spec
-      }
+      if (master.attributes) node.attributes = JSON.parse(JSON.stringify(master.attributes))
     }
 
     // the wrapper becomes a real element; its children are already plain

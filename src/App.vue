@@ -8,8 +8,8 @@ import TooltipHost from '@/components/host/TooltipHost.vue'
 
 <template>
   <RouterView />
+  <AgentLockHost />
   <PopoverHost />
   <ModalStackHost />
   <TooltipHost />
-  <AgentLockHost />
 </template>

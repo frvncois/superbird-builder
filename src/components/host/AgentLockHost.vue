@@ -30,15 +30,15 @@ onBeforeUnmount(() => window.removeEventListener('keydown', swallowKeys, true))
 <template>
   <div
     v-if="agentLocked"
-    class="fixed inset-0 z-100 bg-background/20"
+    class="fixed inset-0 z-100 bg-background/20 backdrop-blur-xs"
     @wheel.prevent
     @touchmove.prevent
     @contextmenu.prevent
   >
     <div
-      class="absolute bottom-8 left-1/2 flex -translate-x-1/2 items-center gap-4 rounded-xl border border-input bg-background px-5 py-3 shadow-xl"
+      class="absolute bottom-8 left-1/2 flex -translate-x-1/2 items-center gap-4 rounded-3xl bg-background p-4 shadow-xl"
     >
-      <span class="relative flex size-2.5">
+      <span class="relative flex size-2.5 ml-2">
         <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-pending opacity-75" />
         <span class="relative inline-flex size-2.5 rounded-full bg-pending" />
       </span>

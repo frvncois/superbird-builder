@@ -12,7 +12,7 @@ import MediaPickerControl from '@/components/editor/content/MediaPickerControl.v
 import RichTextInput from '@/components/editor/content/RichTextInput.vue'
 import { ELEMENTS, typeOptionsFor } from '@/lib/elements'
 import { hasAncestorOfType } from '@/lib/tree'
-import ConditionRows from '@/components/editor/interactions/ConditionRows.vue'
+import { sanitizeAttributes, isAllowedAttribute } from '@/lib/shared/attributes.js'
 import { useElement } from '@/composables/useElement'
 import { usePage } from '@/composables/usePage'
 import { useCollections } from '@/composables/useCollections'
@@ -176,6 +176,141 @@ const listSource = computed({
 })
 
 const def = computed(() => (selectedElement.value ? ELEMENTS[selectedElement.value.type] : null))
+
+// --- custom attributes (allowlisted; node-only state like classes) ---
+
+const canAttrs = computed(
+  () => !!selectedElement.value && selectedElement.value.line !== undefined && !isBody.value,
+)
+
+// editable buffer: rows may hold half-typed/invalid names; only the valid,
+// allowlisted subset is written back to the node (sanitizeAttributes)
+const attrRows = ref<{ name: string; value: string }[]>([])
+let syncingAttrs = false
+
+watch(
+  () => selectedElement.value?.id,
+  () => {
+    syncingAttrs = true
+    const attrs = selectedElement.value?.attributes ?? {}
+    attrRows.value = Object.entries(attrs).map(([name, value]) => ({ name, value: String(value) }))
+    nextTick(() => (syncingAttrs = false))
+  },
+  { immediate: true },
+)
+
+watch(
+  attrRows,
+  (rows) => {
+    if (syncingAttrs || !selectedElement.value) return
+    const clean = sanitizeAttributes(Object.fromEntries(rows.map((r) => [r.name, r.value])))
+    if (Object.keys(clean).length) selectedElement.value.attributes = clean
+    else delete selectedElement.value.attributes
+  },
+  { deep: true },
+)
+
+function addAttr() {
+  attrRows.value.push({ name: '', value: '' })
+}
+function removeAttr(i: number) {
+  attrRows.value.splice(i, 1)
+}
+/** a typed name that isn't blank but isn't allowed (blocked/malformed) */
+function attrInvalid(name: string): boolean {
+  return name.trim() !== '' && !isAllowedAttribute(name)
+}
+
+// --- collection-list query: order / limit / filter / hand-picked entries ---
+
+/** the collection this list repeats (null when the source is a multi-ref field) */
+const sourceCollection = computed(() =>
+  isCollectionList.value ? (collectionByName(listSource.value) ?? null) : null,
+)
+const listFields = computed(() => sourceCollection.value?.fields ?? [])
+
+const lq = computed(() => selectedElement.value?.listQuery ?? {})
+
+/** merge a partial into listQuery, pruning empties (empty object → removed) */
+function patchListQuery(partial: Record<string, unknown>) {
+  const el = selectedElement.value
+  if (!el) return
+  const next: Record<string, unknown> = { ...(el.listQuery ?? {}), ...partial }
+  for (const k of Object.keys(next)) {
+    const v = next[k]
+    if (v === '' || v == null || (Array.isArray(v) && v.length === 0)) delete next[k]
+  }
+  if (next.filter && !(next.filter as { field?: string }).field) delete next.filter
+  if (Object.keys(next).length) el.listQuery = next as typeof el.listQuery
+  else delete el.listQuery
+}
+
+const orderOptions = computed(() => [
+  { label: 'Default', value: '' },
+  { label: 'Entry name', value: 'name' },
+  { label: 'Created', value: 'createdAt' },
+  ...listFields.value.map((f) => ({ label: f.name, value: f.name })),
+])
+const dirOptions = [
+  { label: 'Ascending', value: 'asc' },
+  { label: 'Descending', value: 'desc' },
+]
+
+const limitText = computed(() => (lq.value.limit ? String(lq.value.limit) : ''))
+function setLimit(raw: string) {
+  const n = parseInt(raw, 10)
+  patchListQuery({ limit: Number.isFinite(n) && n > 0 ? n : undefined })
+}
+
+// filter: a field + mode ('is' a value / 'not empty')
+const filterFieldOptions = computed(() => [
+  { label: 'None', value: '' },
+  ...listFields.value.map((f) => ({ label: f.name, value: f.name })),
+])
+const filterMode = computed(() => (lq.value.filter?.notEmpty ? 'notEmpty' : 'equals'))
+const filterModeOptions = [
+  { label: 'is', value: 'equals' },
+  { label: 'is not empty', value: 'notEmpty' },
+]
+function setFilterField(field: string) {
+  if (!field) return patchListQuery({ filter: undefined })
+  patchListQuery({ filter: { field, ...(filterMode.value === 'notEmpty' ? { notEmpty: true } : { equals: lq.value.filter?.equals ?? '' }) } })
+}
+function setFilterMode(mode: string) {
+  const field = lq.value.filter?.field
+  if (!field) return
+  patchListQuery({ filter: mode === 'notEmpty' ? { field, notEmpty: true } : { field, equals: lq.value.filter?.equals ?? '' } })
+}
+function setFilterValue(value: string) {
+  const field = lq.value.filter?.field
+  if (!field) return
+  patchListQuery({ filter: { field, equals: value } })
+}
+
+// hand-picked entries: absent pick = all included; [] = none. Setting the
+// full set clears pick (back to "all") so the default stays byte-identical.
+function isPicked(id: string): boolean {
+  return !lq.value.pick || lq.value.pick.includes(id)
+}
+function setPick(ids: string[]) {
+  const el = selectedElement.value
+  if (!el) return
+  const all = sourceCollection.value?.entries.map((e) => e.id) ?? []
+  if (ids.length === all.length) {
+    // every entry included → drop pick entirely
+    if (el.listQuery) {
+      const { pick: _drop, ...rest } = el.listQuery
+      el.listQuery = Object.keys(rest).length ? rest : undefined
+    }
+    return
+  }
+  el.listQuery = { ...(el.listQuery ?? {}), pick: ids }
+}
+function togglePick(id: string) {
+  const all = sourceCollection.value?.entries.map((e) => e.id) ?? []
+  const cur = lq.value.pick ?? all
+  setPick(cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id])
+}
 
 // --- collection-item entry pick ---
 
@@ -427,9 +562,90 @@ const src = computed({
       <p class="text-[10px] text-muted-foreground">
         A collection repeats all entries; a multi-reference field repeats the entries it points to.
       </p>
+      <RowUI label="Order by">
+        <SelectUI
+          :options="orderOptions"
+          :model-value="lq.sortField ?? ''"
+          @update:model-value="(v) => patchListQuery({ sortField: v ?? '' })"
+        />
+      </RowUI>
+      <RowUI v-if="lq.sortField" label="Direction">
+        <SelectUI
+          :options="dirOptions"
+          :model-value="lq.sortDir ?? 'asc'"
+          @update:model-value="(v) => patchListQuery({ sortDir: v })"
+        />
+      </RowUI>
+      <RowUI label="Limit">
+        <InputUI :model-value="limitText" type="number" placeholder="All" @update:model-value="setLimit" />
+      </RowUI>
+      <RowUI label="Filter">
+        <SelectUI
+          :options="filterFieldOptions"
+          :model-value="lq.filter?.field ?? ''"
+          @update:model-value="(v) => setFilterField(v ?? '')"
+        />
+      </RowUI>
+      <template v-if="lq.filter?.field">
+        <RowUI label="Where">
+          <SelectUI
+            :options="filterModeOptions"
+            :model-value="filterMode"
+            @update:model-value="(v) => v && setFilterMode(v)"
+          />
+        </RowUI>
+        <RowUI v-if="filterMode === 'equals'" label="Value">
+          <InputUI
+            :model-value="lq.filter?.equals ?? ''"
+            class="font-mono"
+            @update:model-value="setFilterValue"
+          />
+        </RowUI>
+      </template>
     </GroupPopover>
 
-    <ConditionRows v-if="!isBody" />
+    <GroupPopover v-if="isCollectionList && sourceCollection" label="Entries">
+      <p v-if="!sourceCollection.entries.length" class="text-[10px] text-muted-foreground">
+        No entries in this collection yet.
+      </p>
+      <label
+        v-for="entry in sourceCollection.entries"
+        :key="entry.id"
+        class="flex cursor-pointer items-center gap-2 text-xs"
+      >
+        <input
+          type="checkbox"
+          :checked="isPicked(entry.id)"
+          class="accent-current"
+          @change="togglePick(entry.id)"
+        />
+        {{ entry.name }}
+      </label>
+      <p class="text-[10px] text-muted-foreground">Uncheck an entry to hide it from this list.</p>
+    </GroupPopover>
+
+    <GroupPopover v-if="canAttrs" label="Attributes">
+      <div v-for="(row, i) in attrRows" :key="i" class="flex flex-col gap-1">
+        <div class="flex items-center gap-1">
+          <InputUI v-model="row.name" placeholder="name" class="font-mono" />
+          <InputUI v-model="row.value" placeholder="value" class="font-mono" />
+          <ButtonUI
+            variant="icon"
+            size="sm"
+            :icon="X"
+            tooltip="Remove attribute"
+            class="w-6 shrink-0 text-muted-foreground"
+            @click="removeAttr(i)"
+          />
+        </div>
+        <p v-if="attrInvalid(row.name)" class="text-[10px] text-danger">
+          “{{ row.name }}” isn’t allowed — use data-*, aria-*, or names like target, rel, title.
+        </p>
+      </div>
+      <ButtonUI variant="outline" size="sm" :icon="Plus" class="w-full" @click="addAttr">
+        Add attribute
+      </ButtonUI>
+    </GroupPopover>
 
     <GroupPopover v-if="isCollectionItem" label="Entry">
       <SelectUI

@@ -75,6 +75,12 @@ export function resolveListScope(collections, scopeCollection, scopeEntry, arg) 
 export function applyListQuery(entries, query) {
   if (!query || typeof query !== 'object' || Array.isArray(query)) return entries
   let out = entries
+  // hand-picked entries (absent = all); membership only — order stays with
+  // the source/sort so pick and sort compose predictably
+  if (Array.isArray(query.pick)) {
+    const picked = new Set(query.pick)
+    out = out.filter((entry) => picked.has(entry.id))
+  }
   const f = query.filter
   if (f && typeof f.field === 'string') {
     out = out.filter((entry) => {
@@ -90,9 +96,11 @@ export function applyListQuery(entries, query) {
     const keyOf = (entry) =>
       query.sortField === 'createdAt'
         ? (entry.createdAt ?? 0)
-        : typeof entry.values?.[query.sortField] === 'string'
-          ? entry.values[query.sortField]
-          : ''
+        : query.sortField === 'name'
+          ? (entry.name ?? '')
+          : typeof entry.values?.[query.sortField] === 'string'
+            ? entry.values[query.sortField]
+            : ''
     out = [...out].sort((a, b) => {
       const ka = keyOf(a)
       const kb = keyOf(b)

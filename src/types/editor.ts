@@ -24,26 +24,6 @@ export interface InteractionBinding {
   breakpoints?: string[]
 }
 
-/** one AND-combined row of an element's condition — see lib/shared/conditions.js */
-export interface ConditionRule {
-  id: string
-  /** field: entry field path ('featured', 'author.name') · context: locale|page|index|first|last
-   *  runtime: viewport|date|query.<param> (browser-evaluated) */
-  source: 'field' | 'context' | 'runtime'
-  path: string
-  op: 'eq' | 'neq' | 'contains' | 'empty' | 'notEmpty' | 'gt' | 'lt'
-  value: string
-}
-
-/** an element's conditional behavior: when every rule matches, the effect
- * applies — hide/show the element, or swap its content/media */
-export interface ConditionSpec {
-  rules: ConditionRule[]
-  effect: 'hide' | 'show' | 'swap'
-  swapContent?: string
-  swapSrc?: string
-}
-
 export interface ElementNode {
   id: string
   type: string
@@ -53,8 +33,9 @@ export interface ElementNode {
   classes?: string
   /** saved interactions applied to this element (their effect may target another node) */
   interactions?: InteractionBinding[]
-  /** conditional visibility / content swap (node-only state, like classes) */
-  conditions?: ConditionSpec
+  /** custom HTML attributes (allowlisted; node-only state, like classes).
+   * see lib/shared/attributes.sanitizeAttributes */
+  attributes?: Record<string, string>
   /** html id attribute, set in the Data panel */
   htmlId?: string
   /** media source (data URL or remote) for image/video elements */
@@ -78,6 +59,8 @@ export interface ElementNode {
     sortField?: string
     sortDir?: 'asc' | 'desc'
     filter?: { field: string; equals?: string; notEmpty?: boolean }
+    /** hand-picked entry ids to include; absent = all entries */
+    pick?: string[]
   }
   children: ElementNode[]
   /** Source range in the page code (0-based line indexes, open → close) */
