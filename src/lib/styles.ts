@@ -361,6 +361,24 @@ const DISPLAY_CLASSES = new Set([
 const NON_COLOR_BG_RE =
   /^bg-(?:auto$|cover$|contain$|center$|top|bottom|left|right|repeat|no-repeat|fixed$|local$|scroll$|clip-|origin-|gradient-|linear-|radial-|conic-|none$|blend-|size-|position-)/
 
+/** font-family utilities — the keyword forms AND an arbitrary family
+ * (`font-[Instrument_Serif]`, letters in the value). One conflict group so
+ * `font-mono` and `font-[JetBrains_Mono]` replace each other instead of
+ * coexisting (both set font-family; the last emitted would otherwise win at
+ * random, leaving the arbitrary face silently inert) */
+const FONT_FAMILY_RE = /^font-(?:sans|serif|mono)$/
+const FONT_ARBITRARY_FAMILY_RE = /^font-\[[^\]]*[A-Za-z][^\]]*\]$/
+
+/** Tailwind v4 spacing/size utilities take ANY numeric step (the scale is
+ * `calc(var(--spacing) * n)`, so `h-11`, `h-13`, `p-7` are all valid) plus a
+ * few keywords — the old enumerated scale rejected the in-between steps
+ * (`h-11` failed while `h-10`/`h-12` passed). Signed for the offset/margin/
+ * translate families. */
+const SPACING_PREFIX =
+  '(?:p[xytblr]?|m[xytblr]?|gap(?:-[xy])?|space-[xy]|w|h|size|min-w|min-h|max-w|max-h|' +
+  'top|right|bottom|left|inset(?:-[xy])?|translate-[xy]|scroll-m[xytblr]?|scroll-p[xytblr]?)'
+const SPACING_NUMERIC_RE = new RegExp(`^-?${SPACING_PREFIX}-\\d+(?:\\.\\d+)?$`)
+
 /**
  * A class is valid if every variant segment is known and the base is either
  * an arbitrary-value class (`p-[13px]`), a numeric flex (`flex-2`), in our
@@ -373,6 +391,7 @@ export function isValidClass(cls: string): boolean {
   if (segments.some((v) => !isKnownVariant(v))) return false
   if (/-\[.+\]$/.test(base)) return true // arbitrary value
   if (FLEX_NUMERIC_RE.test(base)) return true // flex-2, flex-0.5, …
+  if (SPACING_NUMERIC_RE.test(base)) return true // h-11, p-7, -mt-13, gap-9 … (v4 dynamic scale)
   return VOCAB_SET.has(base) || TOKEN_CLASSES.includes(base)
 }
 
@@ -402,6 +421,7 @@ function propKey(base: string): StyleProperty | string | undefined {
   // list (inline-flex, bg-[#…]) still conflict with the ones it does
   if (DISPLAY_CLASSES.has(base)) return 'display'
   if (base.startsWith('bg-') && !NON_COLOR_BG_RE.test(base)) return 'background-color'
+  if (FONT_FAMILY_RE.test(base) || FONT_ARBITRARY_FAMILY_RE.test(base)) return 'font-family'
   return propForBase(base)
 }
 

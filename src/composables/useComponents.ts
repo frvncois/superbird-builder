@@ -3,7 +3,12 @@ import { useProject } from './useProject'
 import { usePage } from './usePage'
 import { useElement } from './useElement'
 import { reconcile } from '@/lib/syntax'
-import { normalizeComponentName, isComponentType, serializeNode } from '@/lib/components'
+import {
+  normalizeComponentName,
+  isComponentType,
+  serializeNode,
+  adoptStructure,
+} from '@/lib/components'
 import { findNode, walkNodes } from '@/lib/tree'
 import type { ComponentDef, ElementNode, Page } from '@/types/editor'
 
@@ -73,38 +78,9 @@ export function useComponents() {
       : node.type
   }
 
-  /** reshape master children to match an edited instance, keeping the
-   * styled master node wherever a same-type child survives; a component
-   * can never contain itself (infinite loop) */
-  function adoptStructure(master: ElementNode, edited: ElementNode, selfName: string) {
-    const pool = [...master.children]
-    master.children = edited.children
-      .filter((child) => child.type !== selfName)
-      .map((child) => {
-        const at = pool.findIndex((m) => m.type === child.type)
-        const node: ElementNode =
-          at !== -1
-            ? pool.splice(at, 1)[0]!
-            : {
-                id: crypto.randomUUID(),
-                type: child.type,
-                content: child.content,
-                locales: child.locales ? JSON.parse(JSON.stringify(child.locales)) : undefined,
-                attributes: child.attributes
-                  ? JSON.parse(JSON.stringify(child.attributes))
-                  : undefined,
-                children: [],
-              }
-        // arg + link are CODE-owned — the edited instance's code is
-        // authoritative for them (serializeNode round-trips both)
-        if (child.arg) node.arg = child.arg
-        else delete node.arg
-        if (child.link) node.link = child.link
-        else delete node.link
-        adoptStructure(node, child, selfName)
-        return node
-      })
-  }
+  // adoptStructure (signature-LCS identity carry) is shared with the MCP
+  // server — imported from @/lib/components so both surfaces reshape masters
+  // identically.
 
   /** regenerate a stale instance's inner code lines from the master */
   function rewriteInstanceBlock(page: Page, node: ElementNode, def: ComponentDef) {

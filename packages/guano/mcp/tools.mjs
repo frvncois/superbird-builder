@@ -25,6 +25,7 @@ export function createToolSet({ api, runtime }) {
   const {
     validateDocument,
     parseSyntax,
+    normalizeSyntax,
     parseSetup,
     replaceSetup,
     buildDocument,
@@ -55,6 +56,7 @@ export function createToolSet({ api, runtime }) {
     normalizeComponentName,
     serializeNode,
     expandComponentInstances,
+    adoptStructure,
   } = runtime
 
 // ---------- keys ----------
@@ -122,13 +124,23 @@ function knownNames(project) {
  * (or fall back to) the shared master, so an instance node with no own state
  * still shows what it will render with — without this, a freshly expanded
  * instance looked wiped even when the master was fully styled. */
-function elementSummary(project, page) {
+function elementSummary(project, page, opts = {}) {
   const instMap = buildInstanceMap(project, page)
   const out = []
   walkNodes(page.elements ?? [], (n) => {
     if (n.line === undefined) return
     const master = instMap.get(n.id)?.master
     const masterInteractions = master && master !== n ? (master.interactions?.length ?? 0) : 0
+    // with includeContent: the element's OWN text (or the master's, for an
+    // instance element that inherits it) so an agent can READ existing copy
+    // without scraping the published HTML. Rich markup is kept verbatim.
+    let contentField = {}
+    if (opts.includeContent) {
+      const own = n.content
+      const inherited = master && master !== n && !own ? master.content : undefined
+      if (own) contentField = { content: own }
+      else if (inherited) contentField = { masterContent: inherited }
+    }
     out.push({
       line: n.line,
       // the node's stable id — what bind_interaction's targetId refers to
@@ -142,6 +154,7 @@ function elementSummary(project, page) {
       ...(masterInteractions ? { masterInteractionCount: masterInteractions } : {}),
       ...(n.content || n.src || n.background ? { hasOwnContent: true } : {}),
       ...(master && master !== n && !n.content && master.content ? { inheritsMasterContent: true } : {}),
+      ...contentField,
       ...(n.htmlId ? { htmlId: n.htmlId } : {}),
       ...(n.attributes && Object.keys(n.attributes).length ? { attributes: n.attributes } : {}),
       ...(n.listQuery ? { listQuery: n.listQuery } : {}),
@@ -313,28 +326,9 @@ function resolveBindTarget(project, page, ownerNode, inComponent, rawTarget) {
   return { targetId: targetInfo.master.id }
 }
 
-/** the editor's structure-adoption: keep master nodes (ids/styles/content)
- * where types line up, mint new ones for new children — recursive, pooled
- * by type so reorders keep identity (mirrors useComponents.adoptStructure) */
-function adoptStructure(master, edited, selfName) {
-  const pool = [...master.children]
-  master.children = edited.children
-    .filter((child) => child.type !== selfName)
-    .map((child) => {
-      const at = pool.findIndex((m) => m.type === child.type)
-      const node =
-        at !== -1
-          ? pool.splice(at, 1)[0]
-          : { id: randomUUID(), type: child.type, content: child.content ?? '', children: [] }
-      // arg + link are CODE-owned — the edited block is authoritative
-      if (child.arg) node.arg = child.arg
-      else delete node.arg
-      if (child.link) node.link = child.link
-      else delete node.link
-      adoptStructure(node, child, selfName)
-      return node
-    })
-}
+// adoptStructure is the shared signature-LCS identity carry from the editor
+// runtime (bundled from @/lib/components) — no local reimplementation, so the
+// MCP and the editor reshape masters identically.
 
 /** rewrite one closed instance block from the master's structure, keeping
  * same-position nodes' identity (mirrors useComponents.rewriteInstanceBlock) */
@@ -714,6 +708,39 @@ function findCollection(project, id) {
   return c
 }
 
+/** publish-time hazards the export would otherwise ship silently. The main
+ * one: a collection whose template page is draft — its entry routes are not
+ * exported, so a :collection-list card or an `@item` link to it 404s live. */
+function collectPublishWarnings(project) {
+  const warnings = []
+  for (const c of project.collections ?? []) {
+    const template = (project.pages ?? []).find((p) => p.id === c.templatePageId)
+    if (!template || template.status === 'published') continue
+    // is the collection actually rendered anywhere published?
+    let referenced = false
+    for (const page of project.pages ?? []) {
+      if (page.status !== 'published') continue
+      walkNodes(page.elements ?? [], (n) => {
+        if ((n.type === 'collection-list' || n.type === 'collection-item') && n.arg === c.name) referenced = true
+      })
+    }
+    const entries = (c.entries ?? []).length
+    if (referenced || entries) {
+      warnings.push({
+        kind: 'draft-collection-template',
+        collection: c.name,
+        templatePageId: c.templatePageId,
+        entries,
+        message:
+          `collection "${c.name}" has a DRAFT template page, so its ${entries} entry route(s) ` +
+          "are not exported — every card/@item link to it will 404. Publish the template " +
+          '(set its status to published) to emit /' + c.name + '/<slug> routes.',
+      })
+    }
+  }
+  return warnings
+}
+
 const fieldView = (f) => ({ id: f.id, name: f.name, type: f.type, refCollectionId: f.refCollectionId })
 const entryView = (e) => ({ id: e.id, name: e.name, slug: e.slug, values: e.values, locales: e.locales })
 
@@ -852,24 +879,31 @@ const tools = [
   {
     name: 'get_page',
     description:
-      'A page\'s DSL code (with line numbers), a version hash, and a per-element summary ' +
+      'A page\'s DSL `code`, a version hash, and a per-element summary ' +
       '(line, id → type, plus classes/interactionCount/hasOwnContent only when set — an ' +
       'omitted field means empty/0/false; inside component instances, masterClasses/' +
       'masterInteractionCount/inheritsMasterContent show the shared state the element ' +
-      'renders with). Pass the version to writes ' +
-      '(set_page_code, edit_elements) so a stale write is rejected. Pass summaryOnly: true to ' +
-      'skip the code fields — enough for harvesting ids/versions after a write you authored, ' +
-      'and much smaller on big pages. Requires a target.',
+      'renders with). Pass `includeContent: true` to also get each element\'s TEXT ' +
+      '(`content`, or `masterContent` for an instance element that inherits it) — the way ' +
+      'to READ existing copy without scraping the site. Pass the version to writes ' +
+      '(set_page_code, edit_elements) so a stale write is rejected. Big pages: `summaryOnly: ' +
+      'true` drops the code; `numberedCode: true` adds a 1-based line-numbered code (off by ' +
+      'default — it nearly doubles the payload); `elementIds`, `codeRange`, or `offset`/`limit` ' +
+      'return just the slice you need. Requires a target.',
     inputSchema: {
       type: 'object',
       properties: {
         pageId: { type: 'string' },
-        summaryOnly: { type: 'boolean', description: 'omit code/numberedCode from the response' },
+        summaryOnly: { type: 'boolean', description: 'omit the code fields entirely' },
+        includeContent: { type: 'boolean', description: 'include each element\'s text (content/masterContent)' },
+        numberedCode: { type: 'boolean', description: 'also return a 1-based line-numbered copy of the code (heavy)' },
         elementIds: {
           type: 'array',
           items: { type: 'string' },
           description: 'return only these elements in the summary (big pages: fetch just what you need)',
         },
+        offset: { type: 'integer', minimum: 0, description: 'element-summary pagination: skip the first N elements' },
+        limit: { type: 'integer', minimum: 1, description: 'element-summary pagination: return at most N elements' },
         codeRange: {
           type: 'array',
           items: { type: 'integer', minimum: 0 },
@@ -887,13 +921,17 @@ const tools = [
     handler: async (args) => {
       const { project } = await loadTargetProject()
       const page = findPage(project, args.pageId)
-      let elements = elementSummary(project, page)
+      let elements = elementSummary(project, page, { includeContent: args.includeContent })
+      const totalElements = elements.length
       if (args.elementIds?.length) {
         const wanted = new Set(args.elementIds)
         elements = elements.filter((e) => wanted.has(e.id))
       }
       const lines = page.code.split('\n')
-      let codeFields = args.summaryOnly ? {} : { code: page.code, numberedCode: numbered(page.code) }
+      // code by default; numberedCode only on request (it ~doubles the payload)
+      let codeFields = args.summaryOnly
+        ? {}
+        : { code: page.code, ...(args.numberedCode ? { numberedCode: numbered(page.code) } : {}) }
       if (args.codeRange) {
         const [lo, hi] = args.codeRange
         const slice = lines
@@ -902,6 +940,17 @@ const tools = [
           .join('\n')
         codeFields = { numberedCode: slice, codeRange: [lo, Math.min(hi, lines.length - 1)] }
         elements = elements.filter((e) => e.line >= lo && e.line <= hi)
+      }
+      // element pagination — for a page whose summary alone overflows a response
+      let pageInfo = {}
+      if (args.offset !== undefined || args.limit !== undefined) {
+        const start = args.offset ?? 0
+        const end = args.limit !== undefined ? start + args.limit : elements.length
+        const window = elements.slice(start, end)
+        pageInfo = {
+          elementWindow: { offset: start, returned: window.length, total: totalElements },
+        }
+        elements = window
       }
       return {
         target,
@@ -912,6 +961,7 @@ const tools = [
         totalLines: lines.length,
         version: sha256(page.code),
         ...codeFields,
+        ...pageInfo,
         elements,
       }
     },
@@ -1255,9 +1305,13 @@ const tools = [
     name: 'update_component',
     description:
       "Replace a component's STRUCTURE by passing its full DSL block (`:Name … Name:`). Master " +
-      'nodes are re-adopted by type (styles/interactions/content survive where the shape ' +
-      'matches; new elements start clean) and every instance block on every page is rewritten ' +
-      'to match. Use edit_elements on any instance to style shared elements. Requires a target.',
+      'nodes keep their identity (styles/interactions/content) wherever the code lines up — ' +
+      'matched by signature (type + arg + link + children), so removing or reordering a child ' +
+      'no longer re-seats survivors onto the wrong node. The response reports `adopted`/' +
+      '`created` and any `orphaned` master nodes (id, type, whether they had classes/' +
+      'interactions) so a dropped binding is never silent. Every instance block on every page ' +
+      'is rewritten to match. Use edit_elements on any instance to style shared elements. ' +
+      'Requires a target.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1279,10 +1333,14 @@ const tools = [
           message: `the code must open with ':${def.name}' and close with '${def.name}:'`,
         }
       }
-      // validate the inner structure through the normal document validator
+      // validate the inner structure through the normal document validator.
+      // normalizeSyntax re-indents the block from its TOKEN structure (depth
+      // starts at 1, i.e. one level inside :body) so the indentation-
+      // consistency check never trips on however the agent spaced the block —
+      // the parser is indentation-insensitive, so validation must be too.
       const doc = [
         '@setup', '\tname: x', '\tslug: /x', '\tstatus: draft', '\tlocale: en',
-        ':body', ...blockLines.map((l) => (l.startsWith('\t') ? l : `\t${l}`)), 'body:',
+        ':body', normalizeSyntax(blockLines.join('\n')), 'body:',
       ].join('\n')
       const { collectionNames, listFieldNames } = knownNames(project)
       const diagnostics = validateDocument(doc, [def.name], collectionNames, listFieldNames)
@@ -1298,9 +1356,11 @@ const tools = [
         return { saved: false, reason: 'invalid-block', message: 'components cannot contain other components' }
       }
 
-      // adopt the new shape into the master (identity kept where types match),
-      // then rewrite every closed instance block to the new structure
-      adoptStructure(def.root, editedRoot, def.name)
+      // adopt the new shape into the master (identity carried by code
+      // signature + LCS), then rewrite every closed instance block. The
+      // adopt result surfaces any master node that lost its place — so
+      // dropped classes/interaction bindings are never a silent success.
+      const adopt = adoptStructure(def.root, editedRoot, def.name)
       let updatedInstances = 0
       for (const p of project.pages ?? []) {
         const instances = []
@@ -1321,7 +1381,27 @@ const tools = [
         }
       }
       await saveTargetProject(project)
-      return { saved: true, componentId: def.id, updatedInstances }
+      const notes = []
+      if (adopt.orphaned.length) {
+        const styled = adopt.orphaned.filter((o) => o.hadClasses || o.hadInteractions)
+        if (styled.length) {
+          notes.push(
+            `${styled.length} master element(s) lost their place in the new structure and their ` +
+              'classes/interaction bindings no longer render — if that was not intended, the ' +
+              'edited block dropped or reordered nodes past what their code signature (type/arg/' +
+              'link/children) could match. Re-check the block.',
+          )
+        }
+      }
+      return {
+        saved: true,
+        componentId: def.id,
+        updatedInstances,
+        adopted: adopt.adopted,
+        created: adopt.created,
+        ...(adopt.orphaned.length ? { orphaned: adopt.orphaned } : {}),
+        ...(notes.length ? { notes } : {}),
+      }
     },
   },
   {
@@ -1387,8 +1467,10 @@ const tools = [
       '([{name, value}] — kebab-case name, hex value; a token "brand" enables bg-brand/' +
       'text-brand/border-brand everywhere, so PREFER tokens over repeating arbitrary hex ' +
       'classes); `seo` merges {siteName, titleTemplate ("%s" = page name), description}; ' +
-      '`fonts` merges {family, googleFontsUrl (must be a https://fonts.googleapis.com/… CSS ' +
-      'URL)}; `customCodeHead` replaces the raw HTML injected into every exported <head> — ' +
+      '`fonts` merges {family (base font), monoFamily (what `font-mono` resolves to), ' +
+      'serifFamily (what `font-serif` resolves to), googleFontsUrl (must be a ' +
+      'https://fonts.googleapis.com/… CSS URL — load any custom family here)}; ' +
+      '`customCodeHead` replaces the raw HTML injected into every exported <head> — ' +
       'intended for font @font-face/preload links, keep it minimal; `addLocales` registers ' +
       'locales additively (the way to add a language) and `removeLocales` unregisters — ' +
       'removal is refused while the locale holds translations unless forcePurge: true. ' +
@@ -1433,7 +1515,18 @@ const tools = [
         },
         fonts: {
           type: 'object',
-          properties: { family: { type: 'string' }, googleFontsUrl: { type: 'string' } },
+          properties: {
+            family: { type: 'string', description: 'the base font-family (what plain body text uses)' },
+            monoFamily: {
+              type: 'string',
+              description: 'what `font-mono` resolves to (e.g. "JetBrains Mono"); "" reverts to the default mono stack. Load the webfont via googleFontsUrl.',
+            },
+            serifFamily: {
+              type: 'string',
+              description: 'what `font-serif` resolves to; "" reverts to the default serif stack',
+            },
+            googleFontsUrl: { type: 'string' },
+          },
           additionalProperties: false,
         },
         customCodeHead: { type: 'string' },
@@ -1550,6 +1643,10 @@ const tools = [
         }
         s.fonts = { ...(s.fonts ?? { family: '' }), ...args.fonts }
         if (s.fonts.googleFontsUrl === '') delete s.fonts.googleFontsUrl
+        // "" clears a custom family back to the default stack (prune so the
+        // blob stays byte-identical to a never-set state)
+        if (s.fonts.monoFamily === '') delete s.fonts.monoFamily
+        if (s.fonts.serifFamily === '') delete s.fonts.serifFamily
       }
       if (args.customCodeHead !== undefined) {
         s.customCode = { ...(s.customCode ?? {}), head: args.customCodeHead }
@@ -2616,13 +2713,16 @@ const tools = [
     name: 'publish',
     description:
       'Publish the CURRENT TARGET as the live static site (server export). Editor+ only ' +
-      '(enforced server-side). Returns export stats. Note: this publishes the target you chose — ' +
-      'publishing a draft bypasses the merge-into-Main flow. Requires a target.',
+      '(enforced server-side). Returns export stats, plus `warnings` for issues that publish ' +
+      'silently (a collection whose template page is draft — its entry routes are NOT exported, ' +
+      'so every :collection-list card / @item link to it 404s live). Note: this publishes the ' +
+      'target you chose — publishing a draft bypasses the merge-into-Main flow. Requires a target.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     handler: async () => {
       const { project } = await loadTargetProject()
+      const warnings = collectPublishWarnings(project)
       const stats = await publish(project)
-      return { published: true, target, stats }
+      return { published: true, target, stats, ...(warnings.length ? { warnings } : {}) }
     },
   },
 ]

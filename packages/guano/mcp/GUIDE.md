@@ -49,8 +49,10 @@ publish                       → export the target as the live static site
 Build the **complete structure first, in one `set_page_code` call**, then style and fill
 **many elements per `edit_elements` call** — a whole page is typically 2–4 writes total,
 never one call per element. Every write returns a `version`; pass the latest one to the
-next write on that page. The version hashes the page **code**, so a node-only edit
-(classes/content) may legitimately return the SAME version — that is not a lost write.
+next write on that page. The version hashes the page **code**, so a pure node-only edit
+(editing classes, or content that already existed) returns the SAME version — not a lost
+write. Setting or clearing content/media the FIRST time toggles a `[+]` code marker on the
+line, which IS code, so the version legitimately advances — pass the returned version on.
 A `stale-version` rejection means someone else edited — re-run `get_page` and retry.
 Writes to **different pages** parallelize freely; writes to the same page are sequential.
 To touch several pages at once (shared chrome, a sweeping restyle), pass `edit_elements`
@@ -65,9 +67,16 @@ element). Prefer the
 element **`id`** as the edit address (stable across structural edits); `line` values are
 **0-based** (`numberedCode` is 1-based, for humans). Add `expectType` to edits when
 using lines — with it a misaddressed edit fails loudly and shows up in `failures`
-(pass `verbose: true` if you want every edit's line/id/type echoed back). On a page too
-large to read in one response, use `summaryOnly: true` for ids and `codeRange:
-[startLine, endLine]` (0-based, inclusive) to read a slice of the code.
+(pass `verbose: true` if you want every edit's line/id/type echoed back).
+
+**Reading a page:** `get_page` returns `code` + the element summary. To READ existing copy
+(before rewriting a header, say), pass `includeContent: true` — each element then carries
+its `content` (or `masterContent`, for a component instance element that inherits the
+master's text). On a page too big for one response: `summaryOnly: true` drops the code;
+`numberedCode: true` adds a line-numbered copy (OFF by default — it nearly doubles the
+payload); `codeRange: [start, end]` (0-based, inclusive) reads a code slice; `elementIds`
+or `offset`/`limit` return just the elements you need. Never scrape the published HTML —
+the export lags the project until the next publish.
 
 ## The DSL
 
@@ -227,7 +236,9 @@ editor's Style panel:
 - **Conflicts auto-resolve**: adding `p-8` when `p-4` is present replaces it. All
   display utilities are one conflict group (`hidden` vs `flex` vs `inline-flex` …),
   and background-COLOR classes conflict across forms — `bg-paper`, `bg-red-500`, and
-  `bg-[#f5f3edee]` replace each other.
+  `bg-[#f5f3edee]` replace each other. Font-family is one group too: `font-mono`,
+  `font-serif`, and `font-[Instrument_Serif]` replace each other (so a keyword and an
+  arbitrary family never coexist with one silently winning).
 - **Prerequisites auto-add**: adding `grid-cols-3` auto-adds `grid`; `flex-row` adds
   `flex` — but ONLY when the element has no display class of its own yet. Any explicit
   display utility at any variant (`hidden`, `md:flex`, `block`, …) disables the
@@ -242,12 +253,12 @@ The validator accepts:
 - Classes from the editor's style catalog (layout, spacing, typography, borders,
   effects — the visual controls' vocabulary).
 - The full Tailwind color palette for `bg-` / `text-` / `border-` (`bg-slate-100` …).
-- Spacing steps `0 1 2 3 4 5 6 8 10 12 14 16 20 24`; negative offsets/margins on the
-  same scale (`-bottom-6`, `-mt-4`). Width/height (`w-` `h-` `size-`) run a wider scale
-  up to 96 (`h-56`, `h-80` pass), and `translate-x-`/`translate-y-` run that same wider
-  scale in BOTH signs (`-translate-x-24`, `translate-y-1/2`, `-translate-x-full`).
-  Effects include `blur-*` and `backdrop-blur-*` (none/sm/md/lg/xl). Whitespace control is available
-  (`whitespace-pre-wrap`, `whitespace-nowrap`, `break-words`, …).
+- Spacing/size utilities take ANY numeric step (Tailwind v4's scale is dynamic):
+  `p-`/`m-`/`gap-`/`w-`/`h-`/`size-`/`min-`/`max-`/`inset-`/`top-…` with any integer or
+  decimal (`h-11`, `p-7`, `gap-9`, `h-[unusual]` not needed for `h-13`), negative for
+  offsets/margins/translate (`-mt-4`, `-translate-x-24`). `translate-x/y` also take
+  `1/2`, `full`. Effects include `blur-*` and `backdrop-blur-*` (none/sm/md/lg/xl).
+  Whitespace control is available (`whitespace-pre-wrap`, `whitespace-nowrap`, …).
 - **Any arbitrary VALUE**: `p-[13px]`, `text-[2.2rem]`, `bg-[#fffff9]`,
   `text-[clamp(2.75rem,7vw,5.25rem)]`. When a scale class is rejected, an arbitrary
   value is the escape hatch. Arbitrary **PROPERTIES** (`[white-space:pre-wrap]`) are
@@ -395,8 +406,12 @@ Shared blocks (header, footer, cards) so a nav change is ONE edit, not one per p
 - `delete_component {componentId}` removes an unused component; it is refused (with
   the list of pages) while instances exist.
 - `update_component {componentId, code}` — replace the structure with a full
-  `:Name … Name:` block; every instance block on every page is rewritten to match
-  (same-type nodes keep their identity and styles).
+  `:Name … Name:` block; every instance is rewritten to match. Master nodes keep their
+  identity (classes/content/interactions) wherever the code still lines up — matched by
+  signature (type + arg + link + children), so removing or reordering a child no longer
+  re-seats survivors onto the wrong node. The response reports `adopted`/`created` and
+  any `orphaned` master nodes (with whether they had classes/interactions) — check it,
+  a listed orphan means that styling/binding no longer renders anywhere.
 - `list_components` — names, structure, instance counts.
 - Components cannot nest other components.
 
@@ -425,8 +440,12 @@ master, so every page's header toggles independently).
   list, so read first when editing incrementally.
 - **`seo`** — site defaults: `siteName`, `titleTemplate` (`%s` = page name),
   `description`. Per-page overrides: `set_page_seo`.
-- **`fonts`** — `family` (the base font-family) and `googleFontsUrl` (a
-  `https://fonts.googleapis.com/…` CSS URL, emitted as a stylesheet link in exports).
+- **`fonts`** — `family` (the base font-family), `monoFamily` / `serifFamily` (what
+  `font-mono` / `font-serif` resolve to — set these to run a designed mono/serif face;
+  `""` reverts to the default stack), and `googleFontsUrl` (a
+  `https://fonts.googleapis.com/…` CSS URL, emitted as a stylesheet link in exports —
+  load any custom family here). To ship a mono accent: set `monoFamily` AND load that
+  family via `googleFontsUrl`, then apply `font-mono`.
 - **`customCodeHead`** — raw HTML injected into every exported `<head>`. Reserved for
   font loading (`@font-face`, preload links) — do not use it to inject scripts, styling
   hacks, or content; if something seems to need that, report it as a limitation instead.
@@ -458,7 +477,12 @@ The project has a shared interaction library (named class-swap animations):
   (golden rule 5); when they picked a draft, let them apply and publish from the editor
   unless they tell you to publish directly.
 - The published site is fully static (per-route HTML + one CSS file); unpublished
-  (`status: draft`) pages are excluded. You can verify by fetching the site root.
+  (`status: draft`) pages are excluded. The live site reflects the LAST publish, not the
+  current project — so fetching it shows stale copy until you republish (never read
+  existing content from it; use `get_page {includeContent: true}`). `publish` returns
+  `warnings` for things it ships silently — most importantly a **draft collection
+  template**: its entry routes aren't exported, so `:collection-list` cards and `@item`
+  links to it 404. Publish the template (`status: published`) to emit those routes.
 - `list_comments` / `reply_to_comment` — comments are humans' feedback channel on pages;
   read them to find change requests, reply to report what you did.
 

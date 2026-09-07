@@ -42,7 +42,9 @@ export {
   normalizeComponentName,
   serializeNode,
   expandComponentInstances,
+  adoptStructure,
 } from './components'
+export type { AdoptResult, OrphanedNode } from './components'
 
 // --- canonical page document scaffold (src/lib/document.ts)
 export {
