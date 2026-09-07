@@ -16,6 +16,7 @@ const ALLOWED = {
   i: {},
   em: {},
   u: {},
+  mark: {},
   br: { void: true },
   ul: {},
   ol: {},
@@ -28,7 +29,7 @@ const escapeAttr = (s) => s.replaceAll('&', '&amp;').replaceAll('"', '&quot;').r
 
 /** true when a string uses any of the allowed rich tags */
 export function isRich(value) {
-  return typeof value === 'string' && /<\/?(b|strong|i|em|u|a|ul|ol|li|br)[\s>/]/i.test(value)
+  return typeof value === 'string' && /<\/?(b|strong|i|em|u|mark|a|ul|ol|li|br)[\s>/]/i.test(value)
 }
 
 /** sanitize a rich-text fragment to the allowed subset (idempotent) */

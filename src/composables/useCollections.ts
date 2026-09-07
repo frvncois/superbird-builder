@@ -48,7 +48,9 @@ export function useCollections() {
     )
     const page: Page = {
       id: crypto.randomUUID(),
-      name: `${label} template`,
+      // matches the scaffold's @setup `name:` — the first code edit re-derives
+      // page.name from @setup, so a differing initial name silently flipped
+      name: label,
       path: `/${name}`,
       status: 'published',
       code,

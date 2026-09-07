@@ -12,10 +12,11 @@ import { compile, optimize } from '@tailwindcss/node'
 // re-exports this same module) — one source of truth, no drift.
 import { ELEMENTS_DATA as ELEMENTS } from '../src/lib/shared/elements.js'
 import { themeBlock, applyTitleTemplate } from '../src/lib/shared/tokens.js'
-import { resolveBinding, resolveListScope, refDisplay } from '../src/lib/shared/fields.js'
-import { evaluateConditions, staticMatch } from '../src/lib/shared/conditions.js'
+import { resolveBinding, resolveListScope, refDisplay, applyListQuery } from '../src/lib/shared/fields.js'
+import { sanitizeAttributes } from '../src/lib/shared/attributes.js'
 import { isRich, sanitizeRich } from '../src/lib/shared/richtext.js'
-import { backgroundRender } from '../src/lib/shared/background.js'
+import { backgroundRender, backgroundKindFromUrl } from '../src/lib/shared/background.js'
+import { conflictingBaseClasses } from '../src/lib/shared/interactionClasses.js'
 import { SAFE_HREF, SAFE_SRC } from '../src/lib/shared/urls.js'
 import { slugify, entrySlug } from '../src/lib/shared/slug.js'
 import { walkNodes } from './util.mjs'
@@ -196,6 +197,15 @@ function resolveHref(node, ctx) {
       ? `/${ctx.scope.collection.name}/${entrySlug(ctx.scope.entry)}`
       : null
   }
+  // '@locale:xx' — THIS page in another locale (the language-switcher target).
+  // A plain '/…' link can't express it: internal links are auto-prefixed with
+  // the CURRENT locale, so from /fr every path leads back to /fr/….
+  if (raw?.startsWith('locale:')) {
+    const code = raw.slice('locale:'.length)
+    if (!ctx.project.locales.includes(code)) return null
+    const path = ctx.routePath ?? '/'
+    return code === ctx.defaultLocale ? path : `/${code}${path === '/' ? '' : path}`
+  }
   if (!raw || !SAFE_HREF.test(raw)) return null
   let href = raw
   if (raw.startsWith('/')) {
@@ -217,29 +227,22 @@ function linkWrap(html, node, ctx) {
   return href ? `<a href="${escapeHtml(href)}" class="contents">${html}</a>` : html
 }
 
-function attrsFor(node, ctx, cond, runtime, bg) {
+function attrsFor(node, ctx, bg) {
   const mapping = ctx.mm.get(node.id)
   const def = ELEMENTS[node.type]
   const attrs = []
   if (node.htmlId) attrs.push(`id="${escapeHtml(node.htmlId)}"`)
 
-  // browser-evaluated condition (viewport/date/query): script.js reads this.
-  // A 'show' effect starts hidden so nothing flashes before evaluation.
-  if (runtime) {
-    attrs.push(`data-cond="${escapeHtml(JSON.stringify(runtime))}"`)
-    if (runtime.e === 'show') attrs.push('hidden')
-  }
-
   const classes = [classFor(node, ctx), bg?.hostClass].filter(Boolean).join(' ')
   if (classes) attrs.push(`class="${escapeHtml(classes)}"`)
   if (bg?.style) attrs.push(`style="${escapeHtml(bg.style)}"`)
 
-  // src: condition swap first, then bound image field (possibly through a
-  // reference hop), else the node's own (locale-aware)
+  // src: bound image field (possibly through a reference hop), else the
+  // node's own (locale-aware)
   const binding = ctx.scope
     ? resolveBinding(ctx.project.collections, ctx.scope.collection, ctx.scope.entry, node.arg)
     : null
-  let src = cond?.src || undefined
+  let src = undefined
   if (!src && binding?.field.type === 'image' && binding.entry) {
     src = entryValue(binding.entry, binding.field.name, ctx.locale, ctx.defaultLocale)
   }
@@ -247,8 +250,14 @@ function attrsFor(node, ctx, cond, runtime, bg) {
   const rawSrc = src // pre-rewrite value — library alt lookup keys on it
   src = ctx.rewrite(src)
   if (src && SAFE_SRC.test(src)) attrs.push(`src="${escapeHtml(src)}"`)
-  // images always carry alt: the library asset's default, or '' (decorative)
-  if (def?.tag === 'img') attrs.push(`alt="${escapeHtml(ctx.altFor?.(rawSrc) ?? '')}"`)
+  // custom attributes are master-aware like classes; sanitized once, used for
+  // both the alt precedence below and the pass-through loop at the end
+  const custom = sanitizeAttributes((mapping ? mapping.master : node).attributes)
+  // images always carry alt: the author's attributes.alt, else the library
+  // asset's default, else '' (decorative)
+  if (def?.tag === 'img') {
+    attrs.push(`alt="${escapeHtml(custom.alt ?? ctx.altFor?.(rawSrc) ?? '')}"`)
+  }
 
   // href: link elements only, scheme-allowlisted, locale-prefixed internals.
   // href on <a> elements; non-anchor linked elements are wrapped instead
@@ -275,67 +284,47 @@ function attrsFor(node, ctx, cond, runtime, bg) {
     : (ctx.plainTargets.get(node.id) ?? [])
   if (targets.length) {
     const targetKeys = targets.map((i) => (mapping ? `${i.id}@${mapping.instanceId}` : i.id))
+    const baseTokens = classes.split(/\s+/).filter(Boolean)
     targets.forEach((i, n) => {
       const key = targetKeys[n]
+      const to = ctx.anim.get(i.interactionId)?.toClasses ?? ''
       ctx.fx[key] ??= ''
       if (i.breakpoints) ctx.fxbp[key] = i.breakpoints
+      // base classes styling the same property as the fired classes are
+      // REMOVED while fired (int-fxrm) — the cascade would otherwise pick an
+      // arbitrary winner (hidden beats flex, so menu toggles never opened)
+      const rm = conflictingBaseClasses(baseTokens, to)
+      if (rm.length) ctx.fxrm[key] = rm.join(' ')
     })
     attrs.push(`data-tgt="${escapeHtml(targetKeys.join(' '))}"`)
   }
 
-  return attrs.length ? ' ' + attrs.join(' ') : ''
-}
+  // custom attributes (allowlisted) — never override an attribute the
+  // renderer already manages (alt was consumed above, where the author's
+  // value takes precedence over the library default)
+  const managed = new Set(['id', 'class', 'style', 'src', 'alt', 'href'])
+  for (const [name, value] of Object.entries(custom)) {
+    if (managed.has(name)) continue
+    attrs.push(`${name}="${escapeHtml(value)}"`)
+  }
 
-/**
- * Condition evaluation for a node (mirrors useRenderNode.condition).
- * Fully static specs resolve here: hidden → drop, swap → baked. A spec
- * whose static rules pass but that also has runtime rules defers to the
- * browser instead: `runtime` describes the data-cond attribute to emit
- * (rules + effect + pre-sanitized swap payload) and script.js evaluates it.
- */
-function conditionFor(node, ctx) {
-  const mapping = ctx.mm.get(node.id)
-  const spec = (mapping ? mapping.master.conditions : node.conditions) ?? null
-  if (!spec?.rules?.length) return { cond: { visible: true }, runtime: null }
-  const condCtx = {
-    collections: ctx.project.collections ?? [],
-    collection: ctx.scope?.collection ?? null,
-    entry: ctx.scope?.entry ?? null,
-    locale: ctx.locale,
-    defaultLocale: ctx.defaultLocale,
-    pagePath: ctx.pagePath,
-    index: ctx.scope?.index,
-    count: ctx.scope?.count,
-  }
-  const { matched, runtime } = staticMatch(spec, condCtx)
-  if (!runtime.length) return { cond: evaluateConditions(spec, condCtx), runtime: null }
-  if (!matched) {
-    // static rules already fail — the spec can never fully match
-    if (spec.effect === 'show') return { cond: { visible: false }, runtime: null }
-    return { cond: { visible: true }, runtime: null } // hide/swap render plainly
-  }
-  const attr = { e: spec.effect, r: runtime.map((r) => ({ p: r.path, o: r.op, v: r.value })) }
-  if (spec.effect === 'swap') {
-    if (spec.swapContent) {
-      attr.h = isRich(spec.swapContent)
-      attr.c = attr.h ? sanitizeRich(spec.swapContent) : spec.swapContent
-    }
-    if (spec.swapSrc) {
-      const s = ctx.rewrite(spec.swapSrc)
-      if (s && SAFE_SRC.test(s)) attr.s = s
-    }
-  }
-  return { cond: { visible: true }, runtime: attr }
+  return attrs.length ? ' ' + attrs.join(' ') : ''
 }
 
 function renderNode(node, ctx) {
   const def = ELEMENTS[node.type]
   const tag = def?.tag ?? 'div'
 
-  // condition-hidden elements are dropped from the static output entirely
-  const { cond, runtime } = conditionFor(node, ctx)
-  if (!cond.visible) return ''
-  if (runtime) ctx.flags.condRuntime = true
+  // a component instance's :Name wrapper is a logical grouping, not a visual
+  // box — with no styling/background/interactions of its own it emits NO
+  // element (its children render inline), so `header → component` stays a
+  // bare <header>, not <div><header>. A styled/interactive wrapper stays real.
+  if (/^[A-Z]/.test(node.type)) {
+    const master = ctx.mm.get(node.id)?.master ?? node
+    const bare =
+      !master.classes?.trim() && !master.background && !(master.interactions?.length)
+    if (bare) return node.children.map((child) => renderNode(child, ctx)).join('')
+  }
 
   if (node.type === 'collection-list') {
     // the arg names a collection (all entries) or a multi-reference field
@@ -346,18 +335,20 @@ function renderNode(node, ctx) {
       ctx.scope?.entry ?? null,
       node.arg,
     )
+    // filter → sort → limit from the node's listQuery (node-only state)
+    const listEntries = list ? applyListQuery(list.entries, node.listQuery) : []
     const inner = list
-      ? list.entries
+      ? listEntries
           .map((entry, index) => {
             const inner2 = {
               ...ctx,
-              scope: { collection: list.collection, entry, index, count: list.entries.length },
+              scope: { collection: list.collection, entry, index, count: listEntries.length },
             }
             return node.children.map((child) => renderNode(child, inner2)).join('')
           })
           .join('')
       : ''
-    return linkWrap(`<${tag}${attrsFor(node, ctx, cond, runtime)}>${inner}</${tag}>`, node, ctx)
+    return linkWrap(`<${tag}${attrsFor(node, ctx)}>${inner}</${tag}>`, node, ctx)
   }
 
   if (node.type === 'collection-item') {
@@ -379,10 +370,10 @@ function renderNode(node, ctx) {
         inner = body.children.map((child) => renderNode(child, inner2)).join('')
       }
     }
-    return linkWrap(`<${tag}${attrsFor(node, ctx, cond, runtime)}>${inner}</${tag}>`, node, ctx)
+    return linkWrap(`<${tag}${attrsFor(node, ctx)}>${inner}</${tag}>`, node, ctx)
   }
 
-  if (def?.void) return linkWrap(`<${tag}${attrsFor(node, ctx, cond, runtime)}>`, node, ctx)
+  if (def?.void) return linkWrap(`<${tag}${attrsFor(node, ctx)}>`, node, ctx)
 
   // background media: image → CSS bg on the host, video → a layer behind content
   const bg = backgroundFor(node, ctx)
@@ -401,10 +392,7 @@ function renderNode(node, ctx) {
       ? resolveBinding(ctx.project.collections, ctx.scope.collection, ctx.scope.entry, node.arg)
       : null
     let text
-    if (cond.content != null && cond.content !== '') {
-      // an active condition swap wins over every other content source
-      text = cond.content
-    } else if (binding) {
+    if (binding) {
       const { field, entry } = binding
       // bound fields with no entry/value render empty on the public site;
       // a directly-bound reference reads as the referenced entry name(s)
@@ -423,7 +411,7 @@ function renderNode(node, ctx) {
     // rich text emits its sanitized subset; anything else is fully escaped
     inner = isRich(text) ? sanitizeRich(text) : escapeHtml(text)
   }
-  return linkWrap(`<${tag}${attrsFor(node, ctx, cond, runtime, bg)}>${bgLayer}${inner}</${tag}>`, node, ctx)
+  return linkWrap(`<${tag}${attrsFor(node, ctx, bg)}>${bgLayer}${inner}</${tag}>`, node, ctx)
 }
 
 /** background-media descriptor for a node (mirrors useRenderNode.backgroundInfo) */
@@ -434,7 +422,8 @@ function backgroundFor(node, ctx) {
   if (!ref) return null
   const url = ctx.rewrite(ref)
   if (!SAFE_SRC.test(url)) return null
-  const kind = ctx.kindFor(ref)
+  // library assets resolve kind from their mime; external/data URLs infer it
+  const kind = ctx.kindFor(ref) ?? backgroundKindFromUrl(url)
   const tokens = (styleNode.classes ?? '').split(/\s+/).filter(Boolean)
   return backgroundRender(kind, url, tokens)
 }
@@ -489,6 +478,9 @@ function renderPage(route, project, media) {
     defaultLocale: project.defaultLocale,
     scope,
     pagePath: page.path,
+    // the locale-less path of THIS route (entry routes live at the collection
+    // path, not the template page's) — what '@locale:xx' re-prefixes
+    routePath: scope?.entry ? `/${scope.collection.name}/${entrySlug(scope.entry)}` : page.path,
     mm: buildMasterMap(page.elements, project.components),
     plainTargets: buildPlainTargets(page, project),
     // saved-interaction id → animation, for resolving bindings to timing/classes
@@ -496,11 +488,11 @@ function renderPage(route, project, media) {
     fx: {},
     // interaction key → breakpoint ids it's scoped to (absent = all breakpoints)
     fxbp: {},
+    // interaction key → base classes removed from its target while fired
+    fxrm: {},
     rewrite: media.rewrite,
     altFor: media.altFor,
     kindFor: media.kindFor,
-    // shared by reference across per-scope ctx spreads, unlike plain fields
-    flags: { condRuntime: false },
   }
   // the body node renders as the document <body> itself: children inline,
   // classes/id/interactions/background on the real tag (a video background
@@ -512,28 +504,34 @@ function renderPage(route, project, media) {
   let bodyBgLayer = ''
   if (bodyNode) {
     const bg = backgroundFor(bodyNode, ctx)
-    bodyAttrs = attrsFor(bodyNode, ctx, { visible: true }, null, bg)
+    bodyAttrs = attrsFor(bodyNode, ctx, bg)
     if (bg?.kind === 'video') {
       bodyBgLayer = `<video src="${escapeHtml(bg.url)}" autoplay muted loop playsinline class="${escapeHtml(bg.layerClass)}"></video>`
     }
   }
   const hasInteractions = Object.keys(ctx.fx).length > 0
-  const needsRuntime = hasInteractions || ctx.flags.condRuntime
+  const needsRuntime = hasInteractions
   const jsonTag = (id, data) =>
     `<script type="application/json" id="${id}">${JSON.stringify(data).replaceAll('</', '<\\/')}</script>`
   const fxTag = hasInteractions ? jsonTag('int-fx', ctx.fx) : ''
+  const rmTag = Object.keys(ctx.fxrm).length ? jsonTag('int-fxrm', ctx.fxrm) : ''
   // breakpoint-scoped interactions need the width→breakpoint map + per-key scope
   const hasBpScope = Object.keys(ctx.fxbp).length > 0
   const bpTag = hasBpScope
     ? jsonTag('int-bp', (project.breakpoints ?? []).map((b) => ({ id: b.id, w: b.width }))) +
       jsonTag('int-fxbp', ctx.fxbp)
     : ''
-  const tail = needsRuntime ? `${fxTag}${bpTag}<script src="/assets/script.js" defer></script>` : ''
-  const seo = project.settings?.seo ?? {}
+  const tail = needsRuntime ? `${fxTag}${rmTag}${bpTag}<script src="/assets/script.js" defer></script>` : ''
+  // per-locale seo overrides (page + project) apply on non-default routes,
+  // falling back field-by-field to the base values
+  const localized = locale !== project.defaultLocale
+  const baseSeo = project.settings?.seo ?? {}
+  const seo = localized ? { ...baseSeo, ...(baseSeo.locales?.[locale] ?? {}) } : baseSeo
+  const pageSeo = localized ? { ...(page.seo ?? {}), ...(page.seo?.locales?.[locale] ?? {}) } : (page.seo ?? {})
   const shell = renderShell(project, media.rewrite, {
     locale,
-    title: page.seo?.title ?? applyTitleTemplate(seo.titleTemplate, page.name),
-    description: page.seo?.description ?? seo.description ?? '',
+    title: pageSeo.title ?? applyTitleTemplate(seo.titleTemplate, page.name),
+    description: pageSeo.description ?? seo.description ?? '',
     path: '/' + (outPath ?? '').replace(/index\.html$/, ''),
     headScript: scriptTag(page.customCode?.head),
     bodyAttrs,

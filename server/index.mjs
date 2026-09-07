@@ -21,14 +21,26 @@ import { existsSync } from 'node:fs'
 import { extname, join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { exportSite } from './export.mjs'
-import { handleMedia, handleMediaFile, originAllowed, resetMediaIndexCache } from './media.mjs'
+import {
+  handleMedia,
+  handleMediaFile,
+  originAllowed,
+  resetMediaIndexCache,
+  mediaIndexData,
+  mediaUploadFromBuffer,
+} from './media.mjs'
 import { pushSiteToGitHub } from './github.mjs'
 import { createZip, readZip } from './zip.mjs'
 import { DATA_DIR, fail, readDirFiles, send, timingSafeEqualStr, writeAtomic } from './util.mjs'
 import {
   ROLES,
   acceptInvite,
+  apiTokenAllowed,
+  apiTokenCount,
+  apiTokenUser,
+  bootstrapConnectToken,
   clearCookieHeader,
+  createApiToken,
   createFirstAdmin,
   createInvite,
   createSession,
@@ -39,6 +51,9 @@ import {
   hasValidRole,
   inviteAllowed,
   inviteView,
+  listApiTokens,
+  recordApiTokenFailure,
+  revokeApiToken,
   listInvites,
   listInvitesPublic,
   listMembers,
@@ -158,10 +173,31 @@ async function readPublishConfig() {
 
 const isEmail = (v) => typeof v === 'string' && /.+@.+\..+/.test(v)
 
+/**
+ * The user for a request: session cookie first, then a `guano_` API-token
+ * bearer (the MCP server's credential), rate-limited per IP on failure.
+ * Returns null when neither authenticates. The token resolves to its owner
+ * with a LIVE role, so every existing role gate keeps working unchanged.
+ * PUBLISH_TOKEN (CI, no `guano_` prefix) is handled separately in handlePost.
+ */
+function requestUser(req) {
+  const session = sessionUser(req)
+  if (session) return session
+  const auth = req.headers.authorization ?? ''
+  if (!auth.startsWith('Bearer guano_')) return null
+  const ip = clientIp(req)
+  if (!apiTokenAllowed(ip)) return null
+  const user = apiTokenUser(auth.slice('Bearer '.length))
+  if (!user) recordApiTokenFailure(ip)
+  return user
+}
+
 async function handleAuth(req, res, path) {
   if (path === '/api/auth/me' && req.method === 'GET') {
     if (needsSetup()) return send(res, 401, JSON.stringify({ needsSetup: true }))
-    const user = sessionUser(req)
+    // session cookie or a `guano_` API-token bearer — the MCP server calls this
+    // on boot to fail fast on a bad URL/token and to learn who it is
+    const user = requestUser(req)
     if (!user) return send(res, 401, JSON.stringify({ needsSetup: false }))
     return send(res, 200, JSON.stringify(userProfile(user)))
   }
@@ -184,6 +220,37 @@ async function handleAuth(req, res, path) {
     return send(res, 200, JSON.stringify(userProfile(user)), 'application/json', {
       'set-cookie': sessionCookieHeader(createSession(user.id)),
     })
+  }
+  if (path === '/api/auth/connect' && req.method === 'POST') {
+    // local-trust bootstrap for `guano connect`: the CLI writes a random nonce
+    // into DATA_DIR and sends it here — being able to write the data dir IS
+    // ownership of the instance, so no session/token is needed. Loopback only,
+    // single-use nonce (deleted on every attempt, match or not).
+    const ip = req.socket.remoteAddress
+    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(ip)) {
+      return fail(res, 403, 'connect bootstrap is local-only')
+    }
+    const body = await readBody(req)
+    let nonce, name
+    try {
+      ;({ nonce, name } = JSON.parse(body ?? ''))
+    } catch {
+      return fail(res, 400, 'invalid request')
+    }
+    const nonceFile = join(DATA_DIR, '.connect-nonce')
+    let stored = null
+    try {
+      stored = await readFile(nonceFile, 'utf8')
+    } catch {
+      /* no nonce written */
+    }
+    await rm(nonceFile, { force: true })
+    if (typeof nonce !== 'string' || nonce.length < 32 || !stored || !timingSafeEqualStr(stored, nonce)) {
+      return fail(res, 403, 'nonce mismatch — run `guano connect` from the instance machine')
+    }
+    const minted = await bootstrapConnectToken(typeof name === 'string' ? name : '')
+    if (!minted) return fail(res, 403, 'no admin account yet — open /admin and complete setup first')
+    return send(res, 200, JSON.stringify(minted))
   }
   if (path === '/api/auth/update' && req.method === 'POST') {
     const user = sessionUser(req)
@@ -381,6 +448,44 @@ async function handleUsers(req, res, path) {
   return fail(res, 404, 'not found')
 }
 
+// ---------- API tokens (per-user bearer credentials for the MCP server) ----------
+
+const API_TOKEN_LIMIT = 25 // per user — bounds api-tokens.json growth
+
+async function handleTokens(req, res, path) {
+  const user = requestUser(req)
+  if (!user) return fail(res, 401, 'unauthorized')
+  // admin + editor only — contributors are content-only and can't build
+  if (user.role === 'contributor') return fail(res, 403, 'forbidden')
+
+  if (path === '/api/tokens' && req.method === 'GET') {
+    return send(res, 200, JSON.stringify({ tokens: listApiTokens(user.id) }))
+  }
+  if (path === '/api/tokens' && req.method === 'POST') {
+    const body = await readBody(req)
+    let name
+    try {
+      ;({ name } = JSON.parse(body ?? ''))
+    } catch {
+      return fail(res, 400, 'invalid request')
+    }
+    if (typeof name !== 'string' || !name.trim()) return fail(res, 400, 'a name is required')
+    if (apiTokenCount(user.id) >= API_TOKEN_LIMIT) {
+      return fail(res, 400, 'token limit reached — revoke one first')
+    }
+    // the raw token is returned exactly once here; only its hash is stored
+    const { token, record } = await createApiToken(user.id, name.trim())
+    return send(res, 200, JSON.stringify({ ...record, token }))
+  }
+  const id = path.slice('/api/tokens/'.length)
+  if (id && req.method === 'DELETE') {
+    // owner revokes their own; an admin may revoke anyone's (enforced in auth)
+    const ok = await revokeApiToken(id, user)
+    return send(res, ok ? 200 : 404, JSON.stringify(ok ? { ok: true } : { error: 'not found' }))
+  }
+  return fail(res, 404, 'not found')
+}
+
 // ---------- authed key-value store (the editor's persistence) ----------
 
 const STORE_DIR = join(DATA_DIR, 'store')
@@ -459,9 +564,40 @@ async function contributorProjectRejection(key, body) {
 
 const isProjectKey = (key) => key.startsWith('guano-project:')
 
+// ---------- live change feed (SSE) ----------
+// Editors subscribe to GET /api/events; every store write is broadcast with
+// its source ('agent' = a guano_ bearer token, 'human' = a session cookie).
+// The editor uses this to live-apply MCP agent edits and hard-lock the UI
+// while an agent session is active.
+const eventClients = new Set()
+
+function broadcastStoreEvent(key, source) {
+  if (!eventClients.size) return
+  const payload = `data: ${JSON.stringify({ type: 'store-write', key, source, ts: Date.now() })}\n\n`
+  for (const client of eventClients) client.write(payload)
+}
+
+function handleEvents(req, res) {
+  const user = requestUser(req)
+  if (!user) return fail(res, 401, 'unauthorized')
+  res.writeHead(200, {
+    'content-type': 'text/event-stream',
+    'cache-control': 'no-cache',
+    connection: 'keep-alive',
+  })
+  res.write(':connected\n\n')
+  eventClients.add(res)
+  const heartbeat = setInterval(() => res.write(':hb\n\n'), 25_000)
+  req.on('close', () => {
+    clearInterval(heartbeat)
+    eventClients.delete(res)
+  })
+}
+
 async function handleStore(req, res, path, query) {
-  // any authenticated user (incl. contributors editing content) may use the store
-  const user = sessionUser(req)
+  // any authenticated user (incl. contributors editing content) may use the
+  // store — via session cookie OR a `guano_` API-token bearer (the MCP server)
+  const user = requestUser(req)
   if (!user) return fail(res, 401, 'unauthorized')
 
   if (path === '/api/store' && req.method === 'GET') {
@@ -491,6 +627,8 @@ async function handleStore(req, res, path, query) {
       if (rejection) return fail(res, 403, rejection)
     }
     await writeAtomic(storeFile(key), body)
+    const viaToken = (req.headers.authorization ?? '').startsWith('Bearer guano_')
+    broadcastStoreEvent(key, viaToken ? 'agent' : 'human')
     return send(res, 200, JSON.stringify({ ok: true }))
   }
   if (req.method === 'DELETE') {
@@ -506,12 +644,15 @@ async function handleStore(req, res, path, query) {
   return fail(res, 404, 'not found')
 }
 
+
 async function handlePost(req, res, params) {
   // the session is the credential; PUBLISH_TOKEN stays as a CI escape hatch.
   // Publishing is admin/editor only — contributors are content-only.
   const bearerOk = !!TOKEN && timingSafeEqualStr(req.headers.authorization ?? '', `Bearer ${TOKEN}`)
   if (!bearerOk) {
-    const user = sessionUser(req)
+    // session cookie or a `guano_` API-token bearer (editor+); the PUBLISH_TOKEN
+    // CI escape hatch above bypasses this entirely
+    const user = requestUser(req)
     if (!user) return fail(res, 401, 'unauthorized')
     if (user.role === 'contributor') return fail(res, 403, 'forbidden')
   }
@@ -824,11 +965,18 @@ const server = createServer(async (req, res) => {
     if (path === '/api/users' || path.startsWith('/api/users/')) {
       return await handleUsers(req, res, path)
     }
+    if (path === '/api/tokens' || path.startsWith('/api/tokens/')) {
+      return await handleTokens(req, res, path)
+    }
+    if (path === '/api/events' && req.method === 'GET') {
+      return handleEvents(req, res)
+    }
     if (path === '/api/store' || path.startsWith('/api/store/')) {
       return await handleStore(req, res, path, url.searchParams)
     }
     if (path === '/api/media' || path.startsWith('/api/media/')) {
-      return await handleMedia(req, res, path, url.searchParams)
+      // requestUser (not sessionUser): bearer API tokens reach the library too
+      return await handleMedia(req, res, path, url.searchParams, requestUser(req))
     }
     if (path.startsWith('/api/')) return fail(res, 404, 'not found')
     // library assets first; unknown /media/ paths fall through to the

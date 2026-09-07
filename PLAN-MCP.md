@@ -4,6 +4,33 @@ Implementation plan for exposing a Guano instance to AI agents over MCP.
 Written to be executed without prior session context — read CLAUDE.md first;
 this plan defers to it on every architectural invariant.
 
+> **STATUS: shipped.** Phases 0–5 are implemented (see git log `feat(mcp): Phase N`).
+> Server lives in `packages/guano/mcp/`; runtime bundle in `src/lib/mcp-runtime.ts`
+> + `vite.mcp.config.ts`. v1 limits are tracked in `BACKLOG.md` → "MCP (v1 limits)".
+> One deviation from this plan: `set_page_code` uses `replaceSetup`, not
+> `enforceDocument` — the latter re-indents via `normalizeSyntax` and is NOT
+> idempotent on stored code, which would make `reconcile` re-mint every node.
+>
+> **Phase 6 (post-dogfood, 2026-09):** driven by a real agent session that burned
+> 2.8M tokens reverse-engineering the DSL and styling one element per call.
+> Added `get_guide` + `GUIDE.md` (the AI-first handbook, also served as MCP
+> `instructions` at initialize) and replaced `get_styles`/`set_element_classes`
+> with the batch `edit_elements` (classes + own `content` via the shared
+> rich-text sanitizer + `src` gated on `SAFE_SRC` + `htmlId` + per-locale
+> overrides, many elements per call, one version check). `get_page` now exposes
+> node `id`s (for `bind_interaction.targetId`) and `htmlId`. The `[+]` data
+> marker joined the (+)/{+} marker sync.
+>
+> **Phase 7 (gap-closing, same session):** `create_page`/`delete_page` (home +
+> collection templates protected), `set_page_seo`, `get_settings`/`update_settings`
+> (design tokens — synced into the class vocabulary via `setStyleTokens` on every
+> project load so `bg-<token>` validates — plus seo/fonts/customCodeHead),
+> `update_collection` (add/remove fields) + `delete_collection`,
+> `list_media`/`upload_media` (server: `/api/media` now takes `requestUser` so
+> bearer tokens reach it; `media.mjs` grew programmatic `mediaIndexData`/
+> `mediaUploadFromBuffer` for the in-server agent adapter), `background` in
+> `edit_elements`, and `<mark>` in the shared rich-text subset.
+
 ## Settled decisions (do not re-litigate)
 
 - **Transport/home (v1):** a `guano mcp` CLI subcommand in `packages/guano`

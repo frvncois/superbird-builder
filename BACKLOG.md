@@ -50,10 +50,11 @@ log). Everything here is real but deliberately deferred: none blocks launch.
   drag/keyboard reorder + ghost animation (self-contained after 1, talks to
   useElement's explicit-map reconcile); (3) the status mini-dropdown + validation
   display into a small child component. Each step type-checks and ships separately.
-- **D4 — six exported symbols are single-file** (drop the `export` keyword):
-  `linkFromToken`, `lexLine`, `suggestNextLine` (`src/lib/syntax.ts`), `LocalePack`
-  (`src/lib/merge.ts`), `isValidClass` (`src/lib/styles.ts`), `KIND_MIMES`
-  (`src/lib/media.ts`). Verified single-file 2026-09-05; re-grep before applying.
+- **D4 — some exported symbols are single-file** (drop the `export` keyword):
+  `linkFromToken`, `suggestNextLine` (`src/lib/syntax.ts`), `LocalePack`
+  (`src/lib/merge.ts`), `KIND_MIMES` (`src/lib/media.ts`). Re-grep before applying.
+  (`lexLine` and `isValidClass` were on this list but are now re-exported by
+  `src/lib/mcp-runtime.ts` for the MCP server — no longer single-file.)
 - **Foldering nits:** `components/site/ContentRenderer.vue` and `CommentLayer.vue`
   are admin-only but live in `site/` (pure move + ~4 import updates);
   `lib/roles.ts` type-imports `Role` from a composable — move the type to
@@ -66,3 +67,26 @@ log). Everything here is real but deliberately deferred: none blocks launch.
 - **C8 — `scripts/generate-demo.ts` needs `npx tsx` but `tsx` isn't a
   devDependency** and there's no npm script; output path is cwd-relative. Fix: add
   `tsx` to devDependencies and a `gen:demo` script.
+
+## MCP (v1 limits)
+
+The `guano mcp` server (`packages/guano/mcp/`, see `PLAN-MCP.md`) shipped Phases
+0–5. Known, deliberately-deferred limits:
+
+- **M1 — no in-server HTTP transport.** v1 is a stdio CLI (`guano mcp`) that
+  talks to a running instance over the HTTP API. A streamable-HTTP `/mcp`
+  endpoint on the node server is out of scope (would let remote agents connect
+  without a local process).
+- **M2 — no optimistic locking on the store.** Writes are latest-wins. Page and
+  element tools take a `version` hash (sha256 of the page code) that guards
+  line-based edits against a stale read, but collection/comment/interaction
+  writes are id-keyed and unguarded — a concurrent human edit to the same item
+  can still be clobbered. Drafts are the mitigation (the human picks the target).
+- **M3 — no zip/github publish over MCP.** `publish` only runs the `server`
+  export method; zip/github stay editor-only.
+- **M4 — comments are read/written on the target blob.** They're shared across
+  drafts and never merged, so a reply added to a draft isn't visible on Main
+  until the human is on that target. No `create_comment` tool (reply only).
+- **M5 — component masters aren't editable over MCP.** `set_element_classes` /
+  `bind_interaction` refuse component-instance subtrees with an honest error;
+  editing the shared master is not yet exposed.

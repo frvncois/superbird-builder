@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import { ref } from 'vue'
 import EditorLayout from '@/layouts/EditorLayout.vue'
-import AppHeader from '@/components/shared/AppHeader.vue'
+import AppRail from '@/components/editor/sidebar/AppRail.vue'
+import PagesDrawer from '@/components/editor/sidebar/PagesDrawer.vue'
 import CanvasEditor from '@/components/editor/canvas/CanvasEditor.vue'
 import CodeEditor from '@/components/editor/code/CodeEditor.vue'
 import SettingsEditor from '@/components/editor/sidebar/SettingsEditor.vue'
@@ -15,6 +17,9 @@ import { useEditorBoot } from '@/composables/useEditorBoot'
 useEditorShortcuts()
 
 const { ready, bootError, reloadPage } = useEditorBoot()
+
+// pages drawer overlays the code pane; opened from the left rail
+const pagesDrawerOpen = ref(false)
 </script>
 
 <template>
@@ -27,17 +32,22 @@ const { ready, bootError, reloadPage } = useEditorBoot()
   </div>
 
   <EditorLayout v-else-if="ready">
-    <template #header>
-      <AppHeader mode="build" />
-      <InsertDragChip />
+    <template #rail>
+      <AppRail :drawer-open="pagesDrawerOpen" @toggle-drawer="pagesDrawerOpen = !pagesDrawerOpen" />
     </template>
 
     <template #left>
-      <CodeEditor />
+      <PagesDrawer v-if="pagesDrawerOpen" @close="pagesDrawerOpen = false" />
+      <div class="h-full">
+        <CodeEditor />
+      </div>
     </template>
 
-    <CanvasEditor />
+    <div class="relative h-full">
+      <CanvasEditor />
+    </div>
     <ContextMenu />
+    <InsertDragChip />
 
     <template #right>
       <SettingsEditor />

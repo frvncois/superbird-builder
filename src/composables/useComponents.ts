@@ -90,11 +90,17 @@ export function useComponents() {
                 type: child.type,
                 content: child.content,
                 locales: child.locales ? JSON.parse(JSON.stringify(child.locales)) : undefined,
-                conditions: child.conditions
-                  ? JSON.parse(JSON.stringify(child.conditions))
+                attributes: child.attributes
+                  ? JSON.parse(JSON.stringify(child.attributes))
                   : undefined,
                 children: [],
               }
+        // arg + link are CODE-owned — the edited instance's code is
+        // authoritative for them (serializeNode round-trips both)
+        if (child.arg) node.arg = child.arg
+        else delete node.arg
+        if (child.link) node.link = child.link
+        else delete node.link
         adoptStructure(node, child, selfName)
         return node
       })
@@ -289,11 +295,7 @@ export function useComponents() {
           targetId: i.targetId ? (masterToInstance.get(i.targetId) ?? i.targetId) : null,
         }))
       }
-      if (master.conditions) {
-        const spec = JSON.parse(JSON.stringify(master.conditions))
-        for (const rule of spec.rules) rule.id = crypto.randomUUID()
-        node.conditions = spec
-      }
+      if (master.attributes) node.attributes = JSON.parse(JSON.stringify(master.attributes))
     }
 
     // the wrapper becomes a real element; its children are already plain

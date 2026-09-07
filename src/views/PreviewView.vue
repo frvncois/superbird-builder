@@ -88,6 +88,7 @@ const fontStyle = computed(() => ({
 
     <main
       ref="mainEl"
+      data-site-scope
       class="overflow-auto bg-white font-sans text-black select-text"
       :class="commentMode && 'cursor-crosshair'"
       :style="fontStyle"

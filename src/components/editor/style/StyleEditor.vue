@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { usePanel } from '@/composables/usePanel'
 import { RotateCcw, X } from 'lucide-vue-next'
 import { STYLE_SECTIONS } from '@/lib/styleCatalog'
+import { STYLE_ICONS } from '@/lib/styleCatalogIcons'
 import {
   matchClass,
   sliderClasses,
@@ -19,6 +20,7 @@ import { useComponents } from '@/composables/useComponents'
 import { usePage } from '@/composables/usePage'
 import { useProject } from '@/composables/useProject'
 import { useClassField } from '@/composables/useClassField'
+import { useSettings } from '@/composables/useSettings'
 import { breakpointView, applyBreakpointEdit, removeInheritedToken } from '@/lib/responsive'
 import { findParent } from '@/lib/tree'
 import GroupAccordion from '@/components/accordion/GroupAccordion.vue'
@@ -29,6 +31,7 @@ import InputUI from '@/components/ui/InputUI.vue'
 import RowUI from '@/components/ui/RowUI.vue'
 import ClassInput from '@/components/editor/style/ClassInput.vue'
 import ValueFieldUI from '@/components/ui/ValueFieldUI.vue'
+import ColorFieldUI from '@/components/editor/style/ColorFieldUI.vue'
 import MediaPickerControl from '@/components/editor/content/MediaPickerControl.vue'
 import SpacingBoxControl from '@/components/editor/style/SpacingBoxControl.vue'
 import BorderStyleControl from '@/components/editor/style/BorderStyleControl.vue'
@@ -381,6 +384,10 @@ function colorText(prop: StyleProperty): string {
   return value.match(/^\[(#[0-9a-fA-F]+)\]$/)?.[1] ?? value
 }
 
+// project design tokens offered as color suggestions (name + hex)
+const { validTokens } = useSettings()
+const colorTokens = computed(() => validTokens.value.map((t) => ({ name: t.name, value: t.value })))
+
 const COLOR_KEYWORDS = ['white', 'black', 'transparent', 'current', 'inherit']
 function isColorValue(text: string): boolean {
   const t = text.trim()
@@ -561,16 +568,16 @@ watch(pendingFocus, consumeFocus)
             </template>
             <IconGroupUI
               v-else-if="prop.control.kind === 'icons'"
-              :options="control(prop, 'icons').options.map((o) => ({ label: o.label, value: o.class, icon: o.icon }))"
+              :options="control(prop, 'icons').options.map((o) => ({ label: o.label, value: o.class, icon: STYLE_ICONS[o.icon]! }))"
               :model-value="classFor(prop) ?? undefined"
               @update:model-value="(v) => v && set(prop, v)"
             />
             <template v-else-if="prop.control.kind === 'color'">
-              <ValueFieldUI
+              <ColorFieldUI
                 :model-value="colorText(prop)"
+                :tokens="colorTokens"
                 :validate="isColorValue"
                 placeholder="—"
-                class="!w-auto min-w-0 flex-1 !text-left"
                 @commit="(t) => applyColorText(prop, t)"
               />
               <ColorPickerUI

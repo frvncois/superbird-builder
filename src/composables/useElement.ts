@@ -4,7 +4,7 @@ import { dataMarkerOf, hasOpenArgBracket, interactionMarkerOf, reconcile, styleM
 import { isKnownElement } from '@/lib/elements'
 import { isComponentType } from '@/lib/components'
 import { deepClone, findNode, walkNodes } from '@/lib/tree'
-import type { ConditionSpec, ElementNode, InteractionBinding } from '@/types/editor'
+import type { ElementNode, InteractionBinding } from '@/types/editor'
 
 /** per-node settings captured alongside a copied code block, DFS order */
 interface NodeProps {
@@ -17,7 +17,7 @@ interface NodeProps {
   link?: string
   locales?: ElementNode['locales']
   interactions?: InteractionBinding[]
-  conditions?: ConditionSpec
+  attributes?: Record<string, string>
 }
 
 /** a copied element: its dedented code lines + every node's settings */
@@ -37,7 +37,7 @@ function captureProps(n: ElementNode): NodeProps {
     link: n.link,
     locales: n.locales ? deepClone(n.locales) : undefined,
     interactions: n.interactions ? deepClone(n.interactions) : undefined,
-    conditions: n.conditions ? deepClone(n.conditions) : undefined,
+    attributes: n.attributes ? deepClone(n.attributes) : undefined,
   }
 }
 
@@ -319,11 +319,7 @@ export function useElement() {
             targetId: x.targetId ? (idMap.get(x.targetId) ?? x.targetId) : null,
           }))
         }
-        if (p.conditions) {
-          const spec = deepClone(p.conditions) as ConditionSpec
-          for (const rule of spec.rules) rule.id = crypto.randomUUID()
-          n.conditions = spec
-        }
+        if (p.attributes) n.attributes = deepClone(p.attributes)
       })
       selectionAnchorId.value = firstRootId ?? lastRootId
       selectedElementId.value = lastRootId ?? firstRootId

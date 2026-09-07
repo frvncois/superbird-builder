@@ -115,6 +115,15 @@ export async function hydrateStore(keys: string[]): Promise<void> {
   }
 }
 
+/** force-refetches keys even when already hydrated — for when a server-side
+ * writer (the AI assistant) changed them behind the cache. The in-flight
+ * write guard in hydrateStore still applies, so pending local writes are
+ * never clobbered. */
+export async function rehydrateStore(keys: string[]): Promise<void> {
+  for (const k of keys) hydratedKeys.delete(k)
+  await hydrateStore(keys)
+}
+
 /** resolves once every queued write has been flushed (best effort) */
 export async function flushStore(): Promise<void> {
   while ([...queues.values()].some((q) => q.inflight || q.next)) {

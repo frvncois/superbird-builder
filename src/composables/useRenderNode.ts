@@ -7,21 +7,15 @@ import { useComponents } from './useComponents'
 import { useProject } from './useProject'
 import { FRAME_BREAKPOINT } from '@/components/editor/canvas/frameScope'
 import { entryKey } from '@/components/shared/EntryScope.vue'
-import { refDisplay, resolveBinding, resolveListScope } from '@/lib/shared/fields.js'
+import { refDisplay, resolveBinding, resolveListScope, applyListQuery } from '@/lib/shared/fields.js'
 import { isRich, sanitizeRich } from '@/lib/shared/richtext.js'
-import { backgroundRender } from '@/lib/shared/background.js'
+import { backgroundRender, backgroundKindFromUrl } from '@/lib/shared/background.js'
+import { conflictingBaseClasses } from '@/lib/shared/interactionClasses.js'
 import { useMedia, kindOfMime } from './useMedia'
-import { evaluateConditions } from '@/lib/shared/conditions.js'
+import { sanitizeAttributes } from '@/lib/shared/attributes.js'
 import { useLocale } from './useLocale'
 import { SAFE_SRC } from '@/lib/shared/urls.js'
 import type { CollectionEntry, ElementNode } from '@/types/editor'
-
-export interface ConditionResult {
-  visible: boolean
-  /** set while an active 'swap' effect overrides content/media */
-  content?: string
-  src?: string
-}
 
 /** a resolved content/src value; `untranslated` marks a default-locale
  * fallback rendered under a non-default locale (the editor dims these) */
@@ -36,7 +30,7 @@ export interface LocalizedDisplay {
  * server/export.mjs, which mirrors this logic): element/tag resolution,
  * component master mapping, collection/entry-scope resolution, interaction
  * firing, the scroll-into-view observer, and the content/src/rich/link
- * resolution (condition swap → bound field → own → mapped master → element
+ * resolution (bound field → own → mapped master → element
  * default). Each renderer keeps its own selection chrome, extra classes and
  * event handlers on top.
  */
@@ -88,7 +82,9 @@ export function useRenderNode(
       : null,
   )
   const listCollection = computed(() => listScope.value?.collection ?? null)
-  const listEntries = computed<CollectionEntry[]>(() => listScope.value?.entries ?? [])
+  const listEntries = computed<CollectionEntry[]>(() =>
+    applyListQuery(listScope.value?.entries ?? [], node.value.listQuery),
+  )
   const itemCollection = computed(() =>
     node.value.type === 'collection-item' && node.value.arg ? collectionByName(node.value.arg) : null,
   )
@@ -121,21 +117,9 @@ export function useRenderNode(
   const boundField = computed(() => binding.value?.field ?? null)
   const boundEntry = computed(() => binding.value?.entry ?? null)
 
-  // --- conditions ---
-
-  // inside a component instance the master's conditions apply (like
-  // style/interactions); rules evaluate against the surrounding scope
-  const condition = computed<ConditionResult>(() =>
-    evaluateConditions((mapping.value ? mapping.value.master.conditions : node.value.conditions) ?? null, {
-      collections: collections.value,
-      collection: scope?.collection ?? activeCollection.value,
-      entry: scope ? scope.entry : activeEntry.value,
-      locale: activeLocale.value,
-      defaultLocale: defaultLocale.value,
-      pagePath: activePage.value.path,
-      index: scope?.index,
-      count: scope?.count,
-    }),
+  // --- custom attributes (allowlisted; master-aware like style/classes) ---
+  const customAttrs = computed(() =>
+    sanitizeAttributes((mapping.value ? mapping.value.master : node.value).attributes ?? {}),
   )
 
   // --- background media (image → CSS bg, video → layer); master-aware like style ---
@@ -145,7 +129,10 @@ export function useRenderNode(
     if (!bg || !SAFE_SRC.test(bg)) return null
     const asset = assetForSrc(bg)
     const mediaKind = asset ? kindOfMime(asset.mime) : null
-    const kind = mediaKind === 'image' || mediaKind === 'video' ? mediaKind : null
+    // library assets resolve kind from their mime; external/data URLs infer it
+    // (without the fallback, an https background silently rendered as nothing)
+    const kind =
+      mediaKind === 'image' || mediaKind === 'video' ? mediaKind : backgroundKindFromUrl(bg)
     const tokens = (styleNode.classes ?? '').split(/\s+/).filter(Boolean)
     return backgroundRender(kind, bg, tokens)
   })
@@ -153,10 +140,6 @@ export function useRenderNode(
   // --- content / src / rich / alt (shared precedence) ---
 
   const contentInfo = computed<LocalizedDisplay>(() => {
-    // an active condition swap wins over every other content source
-    if (condition.value.content != null && condition.value.content !== '') {
-      return { value: condition.value.content, untranslated: false }
-    }
     if (boundField.value) {
       // a reference field bound directly (no `.field` hop) reads as the
       // referenced entry name(s)
@@ -185,7 +168,6 @@ export function useRenderNode(
   )
 
   const srcInfo = computed<LocalizedDisplay>(() => {
-    if (condition.value.src) return { value: condition.value.src, untranslated: false }
     if (boundField.value?.type === 'image') {
       const info = boundEntry.value ? entryValue(boundEntry.value, boundField.value.name) : null
       if (info?.value) return { value: info.value, untranslated: !info.translated }
@@ -198,9 +180,12 @@ export function useRenderNode(
     return v && SAFE_SRC.test(v) ? v : undefined
   })
 
-  // images carry the library asset's default alt (no per-node alt field yet)
+  // images carry alt: the author's attributes.alt wins over the library
+  // asset's default (mirrors the static exporter)
   const altAttr = computed(() =>
-    def.value?.tag === 'img' ? (assetForSrc(srcAttr.value)?.alt ?? '') : undefined,
+    def.value?.tag === 'img'
+      ? (customAttrs.value.alt ?? assetForSrc(srcAttr.value)?.alt ?? '')
+      : undefined,
   )
 
   // --- links ---
@@ -222,21 +207,44 @@ export function useRenderNode(
 
   // --- classes (shared core; renderers append their own chrome) ---
 
-  const baseClasses = computed(() => [
-    // the body fills its frame/viewport column
-    node.value.type === 'body' && 'flex-1',
-    mapping.value ? mapping.value.master.classes : node.value.classes,
-    mapping.value
+  const baseClasses = computed(() => {
+    const own = (mapping.value ? mapping.value.master.classes : node.value.classes) ?? ''
+    const interactionCls = mapping.value
       ? scopedClassesFor(
           mapping.value.master.id,
           mapping.value.root,
           mapping.value.instanceId,
           renderBreakpointId.value,
         )
-      : classesFor(node.value.id, renderBreakpointId.value),
-    // background media makes the host relative (video layer) / applies bg image
-    backgroundInfo.value?.hostClass,
-  ])
+      : classesFor(node.value.id, renderBreakpointId.value)
+    // parity with the published runtime (int-fxrm): own classes styling the
+    // same property as an active interaction's classes are REMOVED, not
+    // outweighed — the cascade would pick an arbitrary winner (hidden+flex)
+    const removed = interactionCls
+      ? new Set(conflictingBaseClasses(own.split(/\s+/).filter(Boolean), interactionCls))
+      : null
+    const kept = removed
+      ? own.split(/\s+/).filter(Boolean).filter((t) => !removed.has(t)).join(' ')
+      : own
+    // a bare component :Name wrapper is a logical grouping — render it
+    // layout-transparent (display:contents) so it adds no box, matching the
+    // static export which emits no wrapper element at all. A styled/interactive
+    // wrapper stays a real box.
+    const bareComponentRoot =
+      /^[A-Z]/.test(node.value.type) &&
+      !own.trim() &&
+      !interactionCls &&
+      !backgroundInfo.value
+    return [
+      // the body fills its frame/viewport column
+      node.value.type === 'body' && 'flex-1',
+      bareComponentRoot && 'contents',
+      kept,
+      interactionCls,
+      // background media makes the host relative (video layer) / applies bg image
+      backgroundInfo.value?.hostClass,
+    ]
+  })
 
   // --- interactions ---
 
@@ -301,7 +309,7 @@ export function useRenderNode(
     boundCollection,
     boundField,
     boundEntry,
-    condition,
+    customAttrs,
     backgroundInfo,
     contentInfo,
     displayContent,

@@ -11,7 +11,6 @@ import { useContextMenu } from '@/composables/useContextMenu'
 import { useLocale } from '@/composables/useLocale'
 import { useRenderNode } from '@/composables/useRenderNode'
 import { useInlineEdit } from '@/composables/useInlineEdit'
-import { useConditions } from '@/composables/useConditions'
 import type { ElementNode } from '@/types/editor'
 
 const props = defineProps<{ node: ElementNode }>()
@@ -36,7 +35,7 @@ const {
   selfNested,
   boundField,
   boundEntry,
-  condition,
+  customAttrs,
   backgroundInfo,
   contentInfo,
   displayContent,
@@ -50,21 +49,12 @@ const {
   el,
 } = useRenderNode(() => props.node, { fieldPlaceholders: true })
 
-const { previewConditions } = useConditions()
-
-// hidden-by-condition elements stay on the canvas dimmed (still editable);
-// the Data panel's preview toggle fully hides them like the published site
-const conditionHidden = computed(() => !condition.value.visible)
-const suppressed = computed(() => conditionHidden.value && previewConditions.value)
-
 const untranslated = computed(
   () =>
     (!props.node.children.length && contentInfo.value.untranslated) || srcInfo.value.untranslated,
 )
 
-const titleAttr = computed(() =>
-  conditionHidden.value ? 'Hidden by condition' : untranslated.value ? 'Not translated' : undefined,
-)
+const titleAttr = computed(() => (untranslated.value ? 'Not translated' : undefined))
 
 // which breakpoint frame this element is rendered in (null outside the canvas)
 const frameBreakpointId = inject(FRAME_BREAKPOINT, null)
@@ -113,8 +103,6 @@ const classes = computed(() => [
     'select-text',
   // untranslated fallback content renders dimmed under a non-default locale
   untranslated.value && 'opacity-60',
-  // hidden-by-condition elements dim harder but stay editable
-  conditionHidden.value && 'opacity-30',
   // while inline-editing, the accent editing ring (bound in the template)
   // replaces the selection/highlight outlines instead of fighting them
   selected.value && !editing.value && 'outline outline-2 -outline-offset-2 outline-sky-500',
@@ -225,12 +213,12 @@ const handlers = {
 </script>
 
 <template>
-  <template v-if="!suppressed">
   <!-- repeats its children (the inline item template) once per entry -->
   <component
     :is="def?.tag ?? 'div'"
     v-if="node.type === 'collection-list'"
     ref="el"
+    v-bind="customAttrs"
     :id="node.htmlId || undefined"
     :data-node-id="node.id"
     :class="classes"
@@ -269,6 +257,7 @@ const handlers = {
     :is="def?.tag ?? 'div'"
     v-else-if="node.type === 'collection-item'"
     ref="el"
+    v-bind="customAttrs"
     :id="node.htmlId || undefined"
     :data-node-id="node.id"
     :class="classes"
@@ -289,6 +278,7 @@ const handlers = {
     :is="def?.tag ?? 'div'"
     v-else-if="def?.void"
     ref="el"
+    v-bind="customAttrs"
     :id="node.htmlId || undefined"
     :data-node-id="node.id"
     :title="titleAttr"
@@ -302,6 +292,7 @@ const handlers = {
     :is="def?.tag ?? 'div'"
     v-else
     ref="el"
+    v-bind="customAttrs"
     :id="node.htmlId || undefined"
     :data-node-id="node.id"
     :title="titleAttr"
@@ -338,5 +329,4 @@ const handlers = {
     ></span>
     <ElementRenderer v-for="child in node.children" :key="child.id" :node="child" />
   </component>
-  </template>
 </template>

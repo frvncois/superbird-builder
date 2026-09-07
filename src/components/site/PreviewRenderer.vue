@@ -46,16 +46,12 @@ const { openMenu, editRequest, consumeEditRequest } = usePreviewEditing()
 const {
   def,
   listCollection, listEntries, itemCollection, itemEntry, itemTemplateChildren, selfNested,
-  boundField, boundEntry, condition, backgroundInfo,
+  boundField, boundEntry, customAttrs, backgroundInfo,
   displayContent, richContent, srcAttr, altAttr, linkRaw, baseClasses,
   hoverHandlers, fireClickInteractions, el,
 } = useRenderNode(() => props.node)
 
-const classes = computed(() => [
-  baseClasses.value,
-  // hidden-by-condition elements stay editable here, just dimmed
-  !condition.value.visible && 'opacity-30',
-])
+const classes = computed(() => [baseClasses.value])
 
 const isMedia = computed(() => props.node.type === 'image' || props.node.type === 'video')
 
@@ -193,6 +189,7 @@ const handlers = {
     :is="def?.tag ?? 'div'"
     v-if="node.type === 'collection-list'"
     ref="el"
+    v-bind="customAttrs"
     :id="node.htmlId || undefined"
     :data-node-id="node.id"
     :class="classes"
@@ -220,6 +217,7 @@ const handlers = {
     :is="def?.tag ?? 'div'"
     v-else-if="node.type === 'collection-item'"
     ref="el"
+    v-bind="customAttrs"
     :id="node.htmlId || undefined"
     :data-node-id="node.id"
     :class="classes"
@@ -236,6 +234,7 @@ const handlers = {
     :is="def?.tag ?? 'div'"
     v-else-if="def?.void"
     ref="el"
+    v-bind="customAttrs"
     :id="node.htmlId || undefined"
     :data-node-id="node.id"
     :src="srcAttr"
@@ -247,6 +246,7 @@ const handlers = {
     :is="def?.tag ?? 'div'"
     v-else
     ref="el"
+    v-bind="customAttrs"
     :id="node.htmlId || undefined"
     :data-node-id="node.id"
     :src="srcAttr"

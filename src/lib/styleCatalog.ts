@@ -2,7 +2,6 @@
 // Pure data (plus the terse builders that keep it readable) — the class
 // logic (relevance checks, suggestions, validation, applyClass) lives in
 // ./styles.ts, which consumes STYLE_SECTIONS from here.
-import type { Component } from 'vue'
 import { SPACING } from './tieredBox'
 import type { NamedFormat } from './valueClass'
 import type { Control, Relevance, StyleSection } from './styles'
@@ -22,57 +21,6 @@ const whenTransition: Relevance = { when: 'transition' }
 const whenMedia: Relevance = { when: 'mediaElement' }
 const whenMediaOrBg: Relevance = { when: 'mediaOrBackground' }
 
-import {
-  AlignCenter,
-  AlignCenterHorizontal,
-  AlignCenterVertical,
-  AlignEndHorizontal,
-  AlignEndVertical,
-  AlignHorizontalDistributeCenter,
-  AlignHorizontalSpaceAround,
-  AlignHorizontalSpaceBetween,
-  AlignJustify,
-  AlignLeft,
-  AlignRight,
-  AlignStartHorizontal,
-  AlignStartVertical,
-  AlignVerticalDistributeCenter,
-  AlignVerticalSpaceAround,
-  AlignVerticalSpaceBetween,
-  ArrowDown,
-  ArrowLeft,
-  ArrowRight,
-  ArrowUp,
-  Ban,
-  Baseline,
-  CaseLower,
-  CaseSensitive,
-  CaseUpper,
-  ChevronsLeftRight,
-  Dot,
-  Expand,
-  Eye,
-  EyeOff,
-  Grid3x3,
-  List,
-  ListOrdered,
-  Maximize2,
-  Minimize2,
-  Minus,
-  MoveVertical,
-  MousePointer2,
-  Rabbit,
-  Scroll,
-  Shrink,
-  Spline,
-  Square,
-  StretchHorizontal,
-  StretchVertical,
-  Strikethrough,
-  Turtle,
-  Underline,
-  WrapText,
-} from 'lucide-vue-next'
 
 const OPACITY = ['0', '10', '20', '30', '40', '50', '60', '70', '80', '90', '100']
 
@@ -102,7 +50,7 @@ const signed = (prefix: string, mags: string[]): Control => {
 const col = (prefix: string): Control => ({ kind: 'color', prefix })
 const inp = (prefix: string, placeholder?: string): Control => ({ kind: 'input', prefix, placeholder })
 // icon-button group; each option carries its lucide icon
-const ico = (opts: [string, string, Component][]): Control => ({
+const ico = (opts: [string, string, string][]): Control => ({
   kind: 'icons',
   options: opts.map(([label, cls, icon]) => ({ label, class: cls, icon })),
 })
@@ -116,11 +64,11 @@ export const STYLE_SECTIONS: StyleSection[] = [
         id: 'display',
         label: 'Display',
         control: ico([
-          ['Block', 'block', Square],
-          ['Inline', 'inline', Baseline],
-          ['Flex', 'flex', StretchHorizontal],
-          ['Grid', 'grid', Grid3x3],
-          ['None', 'hidden', Ban],
+          ['Block', 'block', 'Square'],
+          ['Inline', 'inline', 'Baseline'],
+          ['Flex', 'flex', 'StretchHorizontal'],
+          ['Grid', 'grid', 'Grid3x3'],
+          ['None', 'hidden', 'Ban'],
         ]),
       },
       {
@@ -129,10 +77,10 @@ export const STYLE_SECTIONS: StyleSection[] = [
         needsDisplay: true,
         relevance: inFlex,
         control: ico([
-          ['Row', 'flex-row', ArrowRight],
-          ['Column', 'flex-col', ArrowDown],
-          ['Row reverse', 'flex-row-reverse', ArrowLeft],
-          ['Col reverse', 'flex-col-reverse', ArrowUp],
+          ['Row', 'flex-row', 'ArrowRight'],
+          ['Column', 'flex-col', 'ArrowDown'],
+          ['Row reverse', 'flex-row-reverse', 'ArrowLeft'],
+          ['Col reverse', 'flex-col-reverse', 'ArrowUp'],
         ]),
       },
       {
@@ -141,11 +89,11 @@ export const STYLE_SECTIONS: StyleSection[] = [
         needsDisplay: true,
         relevance: inFlexGrid,
         control: ico([
-          ['Start', 'items-start', AlignStartHorizontal],
-          ['Center', 'items-center', AlignCenterHorizontal],
-          ['End', 'items-end', AlignEndHorizontal],
-          ['Stretch', 'items-stretch', StretchVertical],
-          ['Baseline', 'items-baseline', Baseline],
+          ['Start', 'items-start', 'AlignStartHorizontal'],
+          ['Center', 'items-center', 'AlignCenterHorizontal'],
+          ['End', 'items-end', 'AlignEndHorizontal'],
+          ['Stretch', 'items-stretch', 'StretchVertical'],
+          ['Baseline', 'items-baseline', 'Baseline'],
         ]),
       },
       {
@@ -154,12 +102,12 @@ export const STYLE_SECTIONS: StyleSection[] = [
         needsDisplay: true,
         relevance: inFlexGrid,
         control: ico([
-          ['Start', 'justify-start', AlignStartVertical],
-          ['Center', 'justify-center', AlignCenterVertical],
-          ['End', 'justify-end', AlignEndVertical],
-          ['Between', 'justify-between', AlignHorizontalSpaceBetween],
-          ['Around', 'justify-around', AlignHorizontalSpaceAround],
-          ['Evenly', 'justify-evenly', AlignHorizontalDistributeCenter],
+          ['Start', 'justify-start', 'AlignStartVertical'],
+          ['Center', 'justify-center', 'AlignCenterVertical'],
+          ['End', 'justify-end', 'AlignEndVertical'],
+          ['Between', 'justify-between', 'AlignHorizontalSpaceBetween'],
+          ['Around', 'justify-around', 'AlignHorizontalSpaceAround'],
+          ['Evenly', 'justify-evenly', 'AlignHorizontalDistributeCenter'],
         ]),
       },
       {
@@ -168,12 +116,12 @@ export const STYLE_SECTIONS: StyleSection[] = [
         needsDisplay: true,
         relevance: inFlexGrid,
         control: ico([
-          ['Start', 'content-start', AlignStartHorizontal],
-          ['Center', 'content-center', AlignCenterHorizontal],
-          ['End', 'content-end', AlignEndHorizontal],
-          ['Between', 'content-between', AlignVerticalSpaceBetween],
-          ['Around', 'content-around', AlignVerticalSpaceAround],
-          ['Evenly', 'content-evenly', AlignVerticalDistributeCenter],
+          ['Start', 'content-start', 'AlignStartHorizontal'],
+          ['Center', 'content-center', 'AlignCenterHorizontal'],
+          ['End', 'content-end', 'AlignEndHorizontal'],
+          ['Between', 'content-between', 'AlignVerticalSpaceBetween'],
+          ['Around', 'content-around', 'AlignVerticalSpaceAround'],
+          ['Evenly', 'content-evenly', 'AlignVerticalDistributeCenter'],
         ]),
       },
       // Rendered by GapControl (tiered All | X·Y), not the generic row; the
@@ -184,23 +132,23 @@ export const STYLE_SECTIONS: StyleSection[] = [
         label: 'Flex',
         relevance: childOfFlex,
         control: ico([
-          ['1', 'flex-1', ChevronsLeftRight],
-          ['Auto', 'flex-auto', Expand],
-          ['Initial', 'flex-initial', Minimize2],
-          ['None', 'flex-none', Ban],
+          ['1', 'flex-1', 'ChevronsLeftRight'],
+          ['Auto', 'flex-auto', 'Expand'],
+          ['Initial', 'flex-initial', 'Minimize2'],
+          ['None', 'flex-none', 'Ban'],
         ]),
       },
       {
         id: 'grow',
         label: 'Grow',
         relevance: childOfFlex,
-        control: ico([['Grow', 'grow', Maximize2], ['No grow', 'grow-0', Ban]]),
+        control: ico([['Grow', 'grow', 'Maximize2'], ['No grow', 'grow-0', 'Ban']]),
       },
       {
         id: 'shrink',
         label: 'Shrink',
         relevance: childOfFlex,
-        control: ico([['Shrink', 'shrink', Shrink], ['No shrink', 'shrink-0', Ban]]),
+        control: ico([['Shrink', 'shrink', 'Shrink'], ['No shrink', 'shrink-0', 'Ban']]),
       },
       { id: 'order', label: 'Order', relevance: childOfFlexGrid, control: inp('order', '1, first, last…'), default: 'order-1' },
       {
@@ -256,11 +204,11 @@ export const STYLE_SECTIONS: StyleSection[] = [
         label: 'Self align',
         relevance: childOfFlexGrid,
         control: ico([
-          ['Auto', 'self-auto', Dot],
-          ['Start', 'self-start', AlignStartHorizontal],
-          ['Center', 'self-center', AlignCenterHorizontal],
-          ['End', 'self-end', AlignEndHorizontal],
-          ['Stretch', 'self-stretch', StretchVertical],
+          ['Auto', 'self-auto', 'Dot'],
+          ['Start', 'self-start', 'AlignStartHorizontal'],
+          ['Center', 'self-center', 'AlignCenterHorizontal'],
+          ['End', 'self-end', 'AlignEndHorizontal'],
+          ['Stretch', 'self-stretch', 'StretchVertical'],
         ]),
       },
       {
@@ -268,11 +216,11 @@ export const STYLE_SECTIONS: StyleSection[] = [
         label: 'Justify self',
         relevance: childOfGrid,
         control: ico([
-          ['Auto', 'justify-self-auto', Dot],
-          ['Start', 'justify-self-start', AlignStartVertical],
-          ['Center', 'justify-self-center', AlignCenterVertical],
-          ['End', 'justify-self-end', AlignEndVertical],
-          ['Stretch', 'justify-self-stretch', StretchHorizontal],
+          ['Auto', 'justify-self-auto', 'Dot'],
+          ['Start', 'justify-self-start', 'AlignStartVertical'],
+          ['Center', 'justify-self-center', 'AlignCenterVertical'],
+          ['End', 'justify-self-end', 'AlignEndVertical'],
+          ['Stretch', 'justify-self-stretch', 'StretchHorizontal'],
         ]),
       },
     ],
@@ -318,10 +266,10 @@ export const STYLE_SECTIONS: StyleSection[] = [
         id: 'overflow',
         label: 'Overflow',
         control: ico([
-          ['Visible', 'overflow-visible', Eye],
-          ['Hidden', 'overflow-hidden', EyeOff],
-          ['Scroll', 'overflow-scroll', Scroll],
-          ['Auto', 'overflow-auto', MoveVertical],
+          ['Visible', 'overflow-visible', 'Eye'],
+          ['Hidden', 'overflow-hidden', 'EyeOff'],
+          ['Scroll', 'overflow-scroll', 'Scroll'],
+          ['Auto', 'overflow-auto', 'MoveVertical'],
         ]),
       },
     ],
@@ -390,10 +338,10 @@ export const STYLE_SECTIONS: StyleSection[] = [
         id: 'text-align',
         label: 'Align',
         control: ico([
-          ['Left', 'text-left', AlignLeft],
-          ['Center', 'text-center', AlignCenter],
-          ['Right', 'text-right', AlignRight],
-          ['Justify', 'text-justify', AlignJustify],
+          ['Left', 'text-left', 'AlignLeft'],
+          ['Center', 'text-center', 'AlignCenter'],
+          ['Right', 'text-right', 'AlignRight'],
+          ['Justify', 'text-justify', 'AlignJustify'],
         ]),
       },
       {
@@ -430,39 +378,39 @@ export const STYLE_SECTIONS: StyleSection[] = [
         id: 'text-transform',
         label: 'Transform',
         control: ico([
-          ['Uppercase', 'uppercase', CaseUpper],
-          ['Lowercase', 'lowercase', CaseLower],
-          ['Capitalize', 'capitalize', CaseSensitive],
-          ['Normal', 'normal-case', Ban],
+          ['Uppercase', 'uppercase', 'CaseUpper'],
+          ['Lowercase', 'lowercase', 'CaseLower'],
+          ['Capitalize', 'capitalize', 'CaseSensitive'],
+          ['Normal', 'normal-case', 'Ban'],
         ]),
       },
       {
         id: 'text-decoration',
         label: 'Decoration',
         control: ico([
-          ['Underline', 'underline', Underline],
-          ['Overline', 'overline', Minus],
-          ['Line through', 'line-through', Strikethrough],
-          ['None', 'no-underline', Ban],
+          ['Underline', 'underline', 'Underline'],
+          ['Overline', 'overline', 'Minus'],
+          ['Line through', 'line-through', 'Strikethrough'],
+          ['None', 'no-underline', 'Ban'],
         ]),
       },
       {
         id: 'word-break',
         label: 'Word break',
         control: ico([
-          ['Normal', 'break-normal', AlignJustify],
-          ['Words', 'break-words', WrapText],
-          ['All', 'break-all', ChevronsLeftRight],
-          ['Keep', 'break-keep', Ban],
+          ['Normal', 'break-normal', 'AlignJustify'],
+          ['Words', 'break-words', 'WrapText'],
+          ['All', 'break-all', 'ChevronsLeftRight'],
+          ['Keep', 'break-keep', 'Ban'],
         ]),
       },
       {
         id: 'list-style',
         label: 'List',
         control: ico([
-          ['None', 'list-none', Ban],
-          ['Disc', 'list-disc', List],
-          ['Decimal', 'list-decimal', ListOrdered],
+          ['None', 'list-none', 'Ban'],
+          ['Disc', 'list-disc', 'List'],
+          ['Decimal', 'list-decimal', 'ListOrdered'],
         ]),
       },
     ],
@@ -617,10 +565,10 @@ export const STYLE_SECTIONS: StyleSection[] = [
         label: 'Easing',
         relevance: whenTransition,
         control: ico([
-          ['Linear', 'ease-linear', Minus],
-          ['In', 'ease-in', Turtle],
-          ['Out', 'ease-out', Rabbit],
-          ['In out', 'ease-in-out', Spline],
+          ['Linear', 'ease-linear', 'Minus'],
+          ['In', 'ease-in', 'Turtle'],
+          ['Out', 'ease-out', 'Rabbit'],
+          ['In out', 'ease-in-out', 'Spline'],
         ]),
       },
       {
@@ -676,8 +624,8 @@ export const STYLE_SECTIONS: StyleSection[] = [
         id: 'pointer-events',
         label: 'Pointer events',
         control: ico([
-          ['None', 'pointer-events-none', Ban],
-          ['Auto', 'pointer-events-auto', MousePointer2],
+          ['None', 'pointer-events-none', 'Ban'],
+          ['Auto', 'pointer-events-auto', 'MousePointer2'],
         ]),
       },
     ],

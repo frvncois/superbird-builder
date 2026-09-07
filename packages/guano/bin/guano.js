@@ -19,10 +19,19 @@ Usage:
   guano start            start the server for production
   guano build [--out d]  export the published project as a static site
                          (default ./dist-site)
+  guano connect          set up Claude Desktop automatically: mints an API
+                         token and writes the MCP config (quit Claude first;
+                         --print emits the snippet for other MCP clients)
+  guano mcp              run the MCP server (stdio) for AI agents
   guano --version
 
 The admin editor is served at /admin, your published site at /.
 Data lives in $GUANO_DATA_DIR (default ./data). Docs: see the README.
+
+guano mcp connects to a RUNNING instance over HTTP — set GUANO_URL
+(default http://localhost:4174) and GUANO_TOKEN. \`guano connect\` sets
+both up for you; manual tokens live in the editor under My account →
+API tokens.
 `
 
 async function version() {
@@ -62,6 +71,21 @@ switch (cmd) {
   case 'build':
     await buildSite()
     break
+  case 'mcp': {
+    const { main } = await import(pathToFileURL(join(ROOT, 'mcp', 'server.mjs')).href)
+    await main()
+    break
+  }
+  case 'connect': {
+    const { main } = await import(pathToFileURL(join(ROOT, 'mcp', 'connect.mjs')).href)
+    try {
+      await main(rest)
+    } catch (e) {
+      console.error(`✗ ${e.message}`)
+      process.exit(1)
+    }
+    break
+  }
   case '--version':
   case '-v':
     await version()

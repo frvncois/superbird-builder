@@ -1,4 +1,4 @@
-import { computed, markRaw, ref, type Component, type MaybeRefOrGetter } from 'vue'
+import { computed, markRaw, ref, type Component, type MaybeRefOrGetter, type Ref } from 'vue'
 import type { Placement } from '@/lib/floating'
 
 export interface PopoverOptions {
@@ -11,7 +11,11 @@ export interface PopoverOptions {
   anchor: HTMLElement
   placement: Placement
   title: MaybeRefOrGetter<string>
-  icon?: MaybeRefOrGetter<Component | undefined>
+  /** a component or a Ref to one — NEVER a getter function: lucide icons ARE
+   *  bare functions, so the host resolves with unref (which leaves functions
+   *  alone) rather than toValue (which would CALL the icon and crash). Pass a
+   *  computed ref when the icon must change while the popover is open. */
+  icon?: Component | Ref<Component | undefined>
   /** close when clicking outside the popover/anchor (default false — the
    *  sidebar panels must survive canvas clicks) */
   closeOnOutside?: boolean

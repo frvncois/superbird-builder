@@ -1,4 +1,3 @@
-import type { Component } from 'vue'
 import { TAILWIND_COLORS, TAILWIND_SHADES, isPaletteColor } from './colors'
 import { SPACING, borderWidthScheme, type Slot } from './tieredBox'
 import { derivePrefix, parseTail, isNamedValueClass, type NamedFormat } from './valueClass'
@@ -19,7 +18,10 @@ export type Control =
       custom?: { prefix: string; format: NamedFormat }
     }
   | { kind: 'input'; prefix: string; placeholder?: string }
-  | { kind: 'icons'; options: { label: string; class: string; icon: Component }[] }
+  // `icon` is a lucide icon *name* (e.g. 'AlignCenter'); the UI resolves it to a
+  // component via STYLE_ICONS (styleCatalogIcons.ts). Kept as a string so the
+  // catalog stays node-safe for the MCP runtime bundle.
+  | { kind: 'icons'; options: { label: string; class: string; icon: string }[] }
 
 type Slider = Extract<Control, { kind: 'slider' }>
 
@@ -138,7 +140,31 @@ function buildVocabulary(): string[] {
     }
   }
   const spacing = ['p', 'px', 'py', 'pt', 'pb', 'pl', 'pr', 'm', 'mx', 'my', 'mt', 'mb', 'ml', 'mr', 'gap', 'gap-x', 'gap-y']
-  for (const prefix of spacing) for (const stop of SPACING) out.add(`${prefix}-${stop}`)
+  // the validator accepts the in-between steps too ('5', '14') — the visual
+  // stepper keeps the coarse SPACING scale, but rejecting px-5 as a typed
+  // class was pure friction
+  const SPACING_VALID = [...SPACING, '5', '14', '28', '32']
+  for (const prefix of spacing) for (const stop of SPACING_VALID) out.add(`${prefix}-${stop}`)
+  // width/height sizing runs far past the spacing scale (h-56 hero bands …)
+  const SIZE_STOPS = ['0', '1', '2', '3', '4', '5', '6', '8', '10', '12', '14', '16', '20', '24', '28', '32', '36', '40', '44', '48', '52', '56', '60', '64', '72', '80', '96']
+  for (const prefix of ['w', 'h', 'size']) for (const stop of SIZE_STOPS) out.add(`${prefix}-${stop}`)
+  // signed translate utilities across the full size scale — the slider catalog
+  // only covers ±1…8, which made `-translate-x-24` a surprise rejection
+  for (const prefix of ['translate-x', 'translate-y']) {
+    for (const stop of SIZE_STOPS) {
+      out.add(`${prefix}-${stop}`)
+      if (stop !== '0') out.add(`-${prefix}-${stop}`)
+    }
+    for (const frac of ['full', '1/2']) {
+      out.add(`${prefix}-${frac}`)
+      out.add(`-${prefix}-${frac}`)
+    }
+  }
+  // negative offsets and margins (-bottom-6, -mt-4 …) — signed transform
+  // utilities already validate via the slider catalog; these did not
+  for (const prefix of ['top', 'right', 'bottom', 'left', 'inset', 'inset-x', 'inset-y', 'm', 'mx', 'my', 'mt', 'mb', 'ml', 'mr']) {
+    for (const stop of SPACING) if (stop !== '0') out.add(`-${prefix}-${stop}`)
+  }
   // `auto` is valid CSS only where margins and offsets collapse to it
   for (const prefix of ['m', 'mx', 'my', 'mt', 'mb', 'ml', 'mr']) out.add(`${prefix}-auto`)
   for (const prefix of ['inset', 'inset-x', 'inset-y', 'top', 'right', 'bottom', 'left']) out.add(`${prefix}-auto`)
@@ -168,10 +194,32 @@ function buildVocabulary(): string[] {
     'ease-in', 'ease-out', 'ease-in-out',
     'cursor-pointer', 'select-none', 'pointer-events-none',
     'z-0', 'z-10', 'z-20', 'z-50',
-    'grid-cols-1', 'grid-cols-2', 'grid-cols-3', 'grid-cols-4', 'grid-cols-6', 'grid-cols-12', 'col-span-2', 'col-span-3',
+    'grid-cols-1', 'grid-cols-2', 'grid-cols-3', 'grid-cols-4', 'grid-cols-6', 'grid-cols-12',
     'object-cover', 'object-contain', 'aspect-square', 'aspect-video',
+    'antialiased', 'col-span-full', 'col-auto', 'row-span-full',
+    'inline', 'inline-block', 'inline-flex', 'inline-grid', 'outline-none',
+    'whitespace-normal', 'whitespace-nowrap', 'whitespace-pre', 'whitespace-pre-line',
+    'whitespace-pre-wrap', 'break-words', 'break-all',
+    // `group` marks a hover scope — without it every documented group-hover:
+    // variant was dead on arrival
+    'group', 'h-px', 'w-px', 'inset-0', 'inset-x-0', 'inset-y-0',
+    'grayscale', 'grayscale-0', 'blur-sm', 'blur-md', 'blur-none',
+    'backdrop-blur-none', 'backdrop-blur-sm', 'backdrop-blur', 'backdrop-blur-md',
+    'backdrop-blur-lg', 'backdrop-blur-xl',
+    'underline-offset-1', 'underline-offset-2', 'underline-offset-4', 'underline-offset-8',
   ]
   common.forEach((c) => out.add(c))
+  // grid placement — spans and explicit start/end lines
+  for (let n = 1; n <= 12; n++) {
+    out.add(`col-span-${n}`)
+    out.add(`col-start-${n}`)
+    out.add(`col-end-${n}`)
+  }
+  for (let n = 1; n <= 6; n++) {
+    out.add(`row-span-${n}`)
+    out.add(`row-start-${n}`)
+    out.add(`row-end-${n}`)
+  }
   return [...out]
 }
 
@@ -298,6 +346,21 @@ function isKnownVariant(v: string): boolean {
 /** numeric flex shorthand Tailwind v4 accepts on its scale: `flex-2`, `flex-0.5` */
 const FLEX_NUMERIC_RE = /^flex-\d+(?:\.\d+)?$/
 
+/** every display utility — one conflict group, whether or not the visual
+ * catalog lists it (it omits the inline-* forms), so `inline-flex` replaces
+ * `flex` instead of coexisting with it and losing to stylesheet order */
+const DISPLAY_CLASSES = new Set([
+  'block', 'inline-block', 'inline', 'flex', 'inline-flex', 'grid', 'inline-grid',
+  'hidden', 'contents', 'flow-root',
+])
+
+/** bg-* utilities that are NOT background-color (size/position/repeat/…) —
+ * everything else groups as one color property so `bg-paper` replaces
+ * `bg-[#f5f3edee]` and vice versa (arbitrary values are outside the catalog,
+ * so without this they never conflicted with anything) */
+const NON_COLOR_BG_RE =
+  /^bg-(?:auto$|cover$|contain$|center$|top|bottom|left|right|repeat|no-repeat|fixed$|local$|scroll$|clip-|origin-|gradient-|linear-|radial-|conic-|none$|blend-|size-|position-)/
+
 /**
  * A class is valid if every variant segment is known and the base is either
  * an arbitrary-value class (`p-[13px]`), a numeric flex (`flex-2`), in our
@@ -335,6 +398,10 @@ function propKey(base: string): StyleProperty | string | undefined {
   // with a typed flex-2
   if (FLEX_NUMERIC_RE.test(base) || ['flex-auto', 'flex-initial', 'flex-none', 'flex-1'].includes(base))
     return 'flex-grow-shorthand'
+  // pattern groups run before the catalog so classes the catalog doesn't
+  // list (inline-flex, bg-[#…]) still conflict with the ones it does
+  if (DISPLAY_CLASSES.has(base)) return 'display'
+  if (base.startsWith('bg-') && !NON_COLOR_BG_RE.test(base)) return 'background-color'
   return propForBase(base)
 }
 
@@ -358,7 +425,11 @@ function prerequisiteFor(cls: string, tokens: string[]): string | undefined {
   const { variant, base } = splitVariant(cls)
   const r = propForBase(base)?.relevance
   if (!r || r.when !== 'display') return undefined
-  if (r.values.some((v) => tokens.includes(`${variant}${v}`))) return undefined
+  // any explicit display class — at ANY variant — means the author controls
+  // display: bare `grid` satisfies `md:grid-cols-2`, `md:flex` satisfies
+  // `items-center`, and `hidden` + `md:flex` is a deliberate responsive
+  // pattern an auto-added base `flex` would silently fight
+  if (tokens.some((t) => DISPLAY_CLASSES.has(splitVariant(t).base))) return undefined
   const preferred = r.values.includes('flex') ? 'flex' : r.values[0]!
   return `${variant}${preferred}`
 }

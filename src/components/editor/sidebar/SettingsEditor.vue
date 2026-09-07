@@ -1,9 +1,15 @@
 <script setup lang="ts">
 import { computed, ref, watch, type Component } from 'vue'
-import { Palette, Zap, GitBranch, Sun, Moon, Code, Database } from 'lucide-vue-next'
+import {
+  Palette, Zap, GitBranch, Sun, Moon, Code, Paperclip,
+  MessageCircle, CircleCheck, CircleAlert, CircleX, Rocket,
+} from 'lucide-vue-next'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import PanelPopoverBody from '@/components/editor/sidebar/PanelPopoverBody.vue'
+import PublishPopover from '@/components/editor/sidebar/PublishPopover.vue'
+import CommentsEditor from '@/components/shared/CommentsEditor.vue'
 import { useBranches } from '@/composables/useBranches'
+import { usePersistence, SAVE_STATES } from '@/composables/usePersistence'
 import { useElement } from '@/composables/useElement'
 import { elementIcon } from '@/lib/elementIcons'
 import { usePanel } from '@/composables/usePanel'
@@ -22,7 +28,7 @@ interface Panel {
 }
 
 const panels: Panel[] = [
-  { id: 'data', label: 'Data', icon: Database },
+  { id: 'data', label: 'Data', icon: Paperclip },
   { id: 'style', label: 'Style', icon: Palette },
   { id: 'interactions', label: 'Interactions', icon: Zap },
   { id: 'custom-code', label: 'Custom code', icon: Code, divider: true },
@@ -57,6 +63,43 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onWindowKeydown))
 const { onMain } = useBranches()
 const { theme, toggleTheme } = useTheme()
 
+// save status as a bare stroke-circle icon (check / ! / ✕); click opens the
+// save/publish popover (status badges + the Publish button live there)
+const { status } = usePersistence()
+const SAVE_ICONS = { saved: CircleCheck, pending: CircleAlert, error: CircleX } as const
+const SAVE_COLORS = { saved: 'text-success', pending: 'text-pending', error: 'text-danger' } as const
+
+const statusBtn = ref<InstanceType<typeof ButtonUI>>()
+function togglePublish() {
+  const anchor = statusBtn.value?.$el as HTMLElement | undefined
+  if (!anchor) return
+  usePopover().togglePopover({
+    id: 'publish-status',
+    component: PublishPopover,
+    anchor,
+    placement: 'left-start',
+    title: 'Publish',
+    icon: Rocket,
+    closeOnOutside: true,
+  })
+}
+
+// comments popover, anchored to its rail button in the app PopoverHost
+const commentsBtn = ref<InstanceType<typeof ButtonUI>>()
+function toggleComments() {
+  const anchor = commentsBtn.value?.$el as HTMLElement | undefined
+  if (!anchor) return
+  usePopover().togglePopover({
+    id: 'comments',
+    component: CommentsEditor,
+    anchor,
+    placement: 'left-start',
+    title: 'Comments',
+    icon: MessageCircle,
+    closeOnOutside: true,
+  })
+}
+
 // element-editing panels show the selected element's icon in the header
 const ELEMENT_PANELS = ['data', 'style', 'interactions']
 
@@ -87,7 +130,7 @@ watch(activePanel, (panel, prev) => {
       anchor: railEl.value,
       placement: 'left-start',
       title: () => activePanel.value?.label ?? '',
-      icon: () => headerIcon.value,
+      icon: headerIcon,
       closeOnEscape: false,
       onClose: () => closePanel(),
     })
@@ -98,9 +141,21 @@ watch(activePanel, (panel, prev) => {
 </script>
 
 <template>
-  <aside ref="railEl" class="relative flex h-full w-10 flex-col items-center gap-1 py-2">
+  <aside ref="railEl" class="relative flex h-full w-12 flex-col items-center gap-1 py-4">
+    <ButtonUI
+      ref="statusBtn"
+      variant="ghost"
+      :icon="SAVE_ICONS[status]"
+      :tooltip="status === 'error' ? 'Save failed' : SAVE_STATES[status].label"
+      tooltip-side="left"
+      class="w-7"
+      :class="SAVE_COLORS[status]"
+      @click="togglePublish"
+    />
+    <div class="my-1 h-px w-full bg-input" />
+
     <template v-for="panel in panels" :key="panel.id">
-      <div v-if="panel.divider" class="my-1 h-px w-5 bg-input" />
+      <div v-if="panel.divider" class="my-1 h-px w-full bg-input" />
       <ButtonUI
         variant="ghost"
         :icon="panel.icon"
@@ -117,8 +172,17 @@ watch(activePanel, (panel, prev) => {
         "
         @click="onTabClick(panel.id)"
       />
+      
     </template>
-
+    <ButtonUI
+      ref="commentsBtn"
+      variant="ghost"
+      :icon="MessageCircle"
+      tooltip="Comments"
+      tooltip-side="left"
+      class="w-7 text-muted-foreground"
+      @click="toggleComments"
+    />
     <ButtonUI
       variant="ghost"
       :icon="theme === 'light' ? Sun : Moon"
@@ -127,5 +191,6 @@ watch(activePanel, (panel, prev) => {
       class="mt-auto w-7 text-muted-foreground"
       @click="toggleTheme"
     />
+    
   </aside>
 </template>

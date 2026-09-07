@@ -20,11 +20,17 @@ export function normalizeComponentName(raw: string, taken: string[]): string {
   return `${name}${n}`
 }
 
-/** serializes a master node back into syntax lines at the given indent */
+/** serializes a master node back into syntax lines at the given indent —
+ * including its code-owned decorations: the [arg] binding and the @link
+ * suffix (dropping them would strip bindings/links from every instance on
+ * each structure rewrite) */
 export function serializeNode(node: ElementNode, indent: string): string[] {
-  if (!node.children.length) return [`${indent}:${node.type}:`]
+  const arg = node.arg ? `[${node.arg}]` : ''
+  // node.link stores '@item' for the current-entry sentinel, verbatim otherwise
+  const link = node.link ? `@${node.link === '@item' ? 'item' : node.link}` : ''
+  if (!node.children.length) return [`${indent}:${node.type}${arg}:${link}`]
   return [
-    `${indent}:${node.type}`,
+    `${indent}:${node.type}${arg}${link}`,
     ...node.children.flatMap((child) => serializeNode(child, `${indent}\t`)),
     `${indent}${node.type}:`,
   ]

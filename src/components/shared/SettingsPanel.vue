@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { LogOut, Palette, Plus, Rocket, Settings2, Trash2, Users } from 'lucide-vue-next'
+import { Check, Copy, KeyRound, LogOut, Palette, Plus, Rocket, Settings2, Trash2, Users } from 'lucide-vue-next'
 import ModalHost from '@/components/modal/ModalHost.vue'
 import TabsUI from '@/components/tabs/TabsUI.vue'
 import TabUI from '@/components/tabs/TabUI.vue'
@@ -22,6 +22,7 @@ import { usePublish } from '@/composables/usePublish'
 import { useBranches } from '@/composables/useBranches'
 import { useAuth } from '@/composables/useAuth'
 import { useModal } from '@/composables/useModal'
+import { useApiTokens } from '@/composables/useApiTokens'
 import UsersSettings from '@/components/shared/UsersSettings.vue'
 import { FONT_STACKS, tokenNameError } from '@/lib/settings'
 import { timeAgo } from '@/lib/time'
@@ -68,6 +69,11 @@ const NAV = computed(() => {
       label: 'Publish',
       items: [{ id: 'publish', label: 'Publish', icon: Rocket }],
     })
+  if (canBuild.value)
+    groups.push({
+      label: 'Access',
+      items: [{ id: 'tokens', label: 'API tokens', icon: KeyRound }],
+    })
   if (isAdmin.value)
     groups.push({
       label: 'Admin',
@@ -80,6 +86,59 @@ const NAV = computed(() => {
 watch(NAV, (nav) => {
   if (!nav.some((g) => g.items.some((i) => i.id === active.value))) active.value = 'general'
 })
+
+// --- API tokens (admin/editor only; the server 403s contributors) ---
+
+const { tokens, load: loadTokens, create: createToken, revoke: revokeTokenApi } = useApiTokens()
+
+const apiTokenName = ref('')
+const apiTokenBusy = ref(false)
+const apiTokenError = ref<string | null>(null)
+// the raw token, shown exactly once right after creation, then unrecoverable
+const freshApiToken = ref<string | null>(null)
+const freshApiName = ref('')
+const apiTokenCopied = ref(false)
+
+onMounted(() => {
+  if (canBuild.value) loadTokens().catch(() => {})
+})
+
+async function onCreateToken() {
+  if (apiTokenBusy.value) return
+  apiTokenError.value = null
+  const label = apiTokenName.value.trim()
+  if (!label) {
+    apiTokenError.value = 'Give the token a name first'
+    return
+  }
+  apiTokenBusy.value = true
+  try {
+    freshApiToken.value = await createToken(label)
+    freshApiName.value = label
+    apiTokenName.value = ''
+    apiTokenCopied.value = false
+  } catch (e) {
+    apiTokenError.value = e instanceof Error ? e.message : 'Could not create the token'
+  } finally {
+    apiTokenBusy.value = false
+  }
+}
+
+async function copyToken() {
+  if (!freshApiToken.value) return
+  await navigator.clipboard.writeText(freshApiToken.value).catch(() => {})
+  apiTokenCopied.value = true
+  setTimeout(() => (apiTokenCopied.value = false), 1600)
+}
+
+async function onRevokeToken(id: string, label: string) {
+  const ok = await confirm({
+    title: 'Revoke token',
+    message: `Any MCP server or script using “${label}” will stop working immediately.`,
+    confirmLabel: 'Revoke',
+  })
+  if (ok) await revokeTokenApi(id).catch((e) => (apiTokenError.value = e instanceof Error ? e.message : 'Failed'))
+}
 
 // --- general ---
 
@@ -541,6 +600,78 @@ async function onImportFile(e: Event) {
                 {{ importing ? 'Importing…' : 'Choose package…' }}
               </ButtonUI>
               <p v-if="importError" class="text-[10px] text-danger">{{ importError }}</p>
+            </SettingsGroup>
+          </TabPanelUI>
+
+          <TabPanelUI v-if="canBuild" class="gap-4" id="tokens">
+            <SettingsGroup
+              title="API tokens"
+              description="Bearer credentials for the Guano MCP server and scripts. Each carries your role — treat it like a password."
+            >
+              <!-- show-once: the freshly created raw token -->
+              <div
+                v-if="freshApiToken"
+                class="flex flex-col gap-2 rounded-xl border border-accent/40 bg-accent/10 p-3"
+              >
+                <p class="flex items-center gap-1.5 text-[11px] font-medium">
+                  <Check class="size-3.5 text-success" /> Token “{{ freshApiName }}” created
+                </p>
+                <code
+                  class="block rounded-lg bg-background px-2 py-1.5 font-mono text-[10px] break-all select-all"
+                >
+                  {{ freshApiToken }}
+                </code>
+                <div class="flex items-center justify-between gap-2">
+                  <span class="text-[10px] text-muted-foreground">Copy it now — it won't be shown again.</span>
+                  <ButtonUI size="xs" :icon="apiTokenCopied ? Check : Copy" @click="copyToken">
+                    {{ apiTokenCopied ? 'Copied' : 'Copy' }}
+                  </ButtonUI>
+                </div>
+                <ButtonUI variant="ghost" size="xs" class="self-end" @click="freshApiToken = null">
+                  Done
+                </ButtonUI>
+              </div>
+
+              <!-- create row -->
+              <div v-else class="flex items-end gap-1.5">
+                <div class="flex-1">
+                  <InputUI
+                    v-model="apiTokenName"
+                    placeholder="Token name (e.g. mcp-laptop)"
+                    @keydown.enter="onCreateToken"
+                  />
+                </div>
+                <ButtonUI variant="outline" size="sm" :disabled="apiTokenBusy" @click="onCreateToken">
+                  {{ apiTokenBusy ? 'Creating…' : 'Create' }}
+                </ButtonUI>
+              </div>
+
+              <p v-if="apiTokenError" class="text-[10px] text-danger">{{ apiTokenError }}</p>
+
+              <!-- existing tokens -->
+              <ul v-if="tokens.length" class="flex flex-col divide-y divide-input">
+                <li
+                  v-for="t in tokens"
+                  :key="t.id"
+                  class="flex items-center justify-between gap-2 py-1.5"
+                >
+                  <div class="min-w-0">
+                    <p class="truncate text-xs font-medium">{{ t.name }}</p>
+                    <p class="text-[10px] text-muted-foreground">
+                      Created {{ timeAgo(t.createdAt) }} ·
+                      {{ t.lastUsedAt ? `last used ${timeAgo(t.lastUsedAt)}` : 'never used' }}
+                    </p>
+                  </div>
+                  <ButtonUI
+                    variant="icon"
+                    size="sm"
+                    :icon="Trash2"
+                    tooltip="Revoke token"
+                    @click="onRevokeToken(t.id, t.name)"
+                  />
+                </li>
+              </ul>
+              <p v-else class="text-[10px] text-muted-foreground">No tokens yet.</p>
             </SettingsGroup>
           </TabPanelUI>
 

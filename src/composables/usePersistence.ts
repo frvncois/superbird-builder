@@ -25,6 +25,11 @@ const HISTORY_LIMIT = 50
  */
 export const activeBranchId = ref('main')
 
+/** While true the deep autosave watcher is a no-op. The AI assistant sets this
+ * around a run: the store is latest-wins, so a debounced autosave of the stale
+ * in-memory project would clobber the agent's server-side writes mid-run. */
+export const autosaveSuspended = ref(false)
+
 export function projectStorageKey(branchId: string) {
   return `guano-project:${branchId}`
 }
@@ -72,6 +77,11 @@ export function usePersistence() {
         restoring = true
         project.value = stored
         restoring = false
+      } else {
+        // fresh instance: persist the default project immediately, instead of
+        // only on the first edit — otherwise the server has no project blob
+        // and every out-of-band reader (the MCP agent surface) fails on Main
+        persist(JSON.stringify(project.value))
       }
     } catch {
       // corrupt storage — start from the in-memory default project
@@ -97,6 +107,25 @@ export function usePersistence() {
     history.value = [snapshot]
     pointer.value = 0
     persist(snapshot)
+  }
+
+  /**
+   * Like resetTo but WITHOUT the write-back — for applying a state that is
+   * already on the server (live agent sync). Persisting here would race a
+   * concurrent agent write: our echo of the fetched blob could land after a
+   * newer agent save and revert it (the store is latest-wins).
+   */
+  function replaceFromRemote(next: Project) {
+    if (timer) {
+      clearTimeout(timer)
+      timer = null
+    }
+    restoring = true
+    project.value = next
+    restoring = false
+    history.value = [JSON.stringify(next)]
+    pointer.value = 0
+    typing.value = false
   }
 
   /** snapshot the settled state into history and storage */
@@ -150,7 +179,7 @@ export function usePersistence() {
     watch(
       project,
       () => {
-        if (restoring) return
+        if (restoring || autosaveSuspended.value) return
         typing.value = true
         if (timer) clearTimeout(timer)
         timer = setTimeout(commit, DEBOUNCE_MS)
@@ -159,5 +188,5 @@ export function usePersistence() {
     )
   }
 
-  return { status, canUndo, canRedo, init, saveNow, undo, redo, resetTo }
+  return { status, canUndo, canRedo, init, saveNow, undo, redo, resetTo, replaceFromRemote }
 }

@@ -341,81 +341,16 @@ function flashHighlightEase() {
   highlightEaseTimer = setTimeout(() => (highlightEase.value = false), SLIDE_MS + 60)
 }
 
-// --- Shift-hold "lift": while Shift is held in the (focused) editor, the
-// selected element scales up a hair as a "picked up" affordance. Engages only
-// after a short hold so quick Shift taps for capital letters don't blip it. ---
-
-const shiftLifted = ref(false)
-let shiftTimer: ReturnType<typeof setTimeout> | null = null
-function clearLift() {
-  if (shiftTimer) {
-    clearTimeout(shiftTimer)
-    shiftTimer = null
-  }
-  shiftLifted.value = false
-}
-function onShiftKeydown(e: KeyboardEvent) {
-  if (e.key !== 'Shift' || e.repeat || shiftTimer || shiftLifted.value) return
-  if (document.activeElement !== input.value || reducedMotion()) return
-  const sel = selectedElement.value
-  if (!sel || sel.type === 'body' || sel.line === undefined) return // nothing liftable
-  shiftTimer = setTimeout(() => {
-    shiftLifted.value = true
-    shiftTimer = null
-  }, 120)
-}
-function onShiftKeyup(e: KeyboardEvent) {
-  if (e.key === 'Shift') clearLift()
-}
-
-// keeps the moved element lifted through its whole slide even if Shift is
-// released mid-flight — otherwise the real rows snap to scale 1 while the ghost
-// (cloned at 1.06) is still sliding, so the hand-off jumps
-const liftedSlide = ref(false)
-let liftedSlideTimer: ReturnType<typeof setTimeout> | null = null
-
-/** the selected element is a real (non-body) element that is currently lifted */
-const lifted = computed(() => {
-  const sel = selectedElement.value
-  if (!sel || sel.type === 'body' || sel.line === undefined) return false
-  // an open Style/Data/Interactions panel keeps the edited element lifted;
-  // single-selection only (a multi-selection can't be edited in a panel)
-  const panelLift =
-    !isMultiSelect.value && ['style', 'data', 'interactions'].includes(activePanelId.value ?? '')
-  return shiftLifted.value || liftedSlide.value || panelLift
-})
-
-/** row `i` (display index) is within the lifted element's range */
-function isLifted(i: number): boolean {
-  return lifted.value && i >= highlight.value.start && i <= highlight.value.end
-}
-
-/** per-row transform (lift) + opacity (hidden while a ghost slides into it) */
+/** per-row opacity (hidden while a ghost slides into it) */
 function rowStyle(i: number) {
   const hidden = slidingRange.value && i >= slidingRange.value.start && i <= slidingRange.value.end
   return {
-    // scale from the left edge: the row div is full-width but its text is
-    // left-aligned, so a center origin would drift the code left on X while
-    // lifting/settling. Anchoring left keeps the indent fixed — pure size lift.
-    transform: isLifted(i) ? 'scale(1.06)' : undefined,
-    transformOrigin: 'left center',
-    transition: 'transform 150ms ease-out',
     opacity: hidden ? '0' : undefined,
   }
 }
 
-onMounted(() => {
-  window.addEventListener('keydown', onShiftKeydown)
-  window.addEventListener('keyup', onShiftKeyup)
-  window.addEventListener('blur', clearLift)
-})
 onBeforeUnmount(() => {
-  window.removeEventListener('keydown', onShiftKeydown)
-  window.removeEventListener('keyup', onShiftKeyup)
-  window.removeEventListener('blur', clearLift)
-  if (shiftTimer) clearTimeout(shiftTimer)
   if (slidingClearTimer) clearTimeout(slidingClearTimer)
-  if (liftedSlideTimer) clearTimeout(liftedSlideTimer)
 })
 
 /** Clone the moved block's on-screen rows into a floating ghost pinned at its
@@ -464,9 +399,6 @@ function animateReorder(node: ElementNode, run: () => void) {
   // reveal any still-hidden prior destination so the new ghost clones visible rows
   if (slidingClearTimer) clearTimeout(slidingClearTimer)
   slidingRange.value = null
-  // was the element lifted when the move began? if so it stays lifted for the
-  // whole slide so it settles smoothly instead of snapping at the hand-off
-  const wasLifted = lifted.value
   const captured = captureBlockGhost(node)
   // arm the highlight transition BEFORE the reorder updates its position, so
   // the class is present when `top`/`height` change (else it jumps)
@@ -492,13 +424,6 @@ function animateReorder(node: ElementNode, run: () => void) {
     // hide the settled rows so the block isn't seen in two places during the slide
     const endRaw = foldInfo.value.realToDisplay[node.endLine ?? node.line] ?? -1
     slidingRange.value = { start: startD, end: endRaw >= startD ? endRaw : startD }
-    // hold the lift for the whole slide, then release it (a Shift-release
-    // mid-slide settles smoothly via the 150ms transform transition)
-    if (wasLifted) {
-      if (liftedSlideTimer) clearTimeout(liftedSlideTimer)
-      liftedSlide.value = true
-      liftedSlideTimer = setTimeout(() => (liftedSlide.value = false), SLIDE_MS)
-    }
     activeGhostCancel = slideGhost(
       captured.ghost,
       `translate(${to.left - captured.from.left}px, ${to.top - captured.from.top}px)`,
@@ -522,9 +447,8 @@ const cursor = ref(0)
 const beforeCursor = computed(() => code.value.slice(0, cursor.value))
 const cursorLine = computed(() => beforeCursor.value.split('\n').length - 1)
 
-// --- custom caret: rendered inside the text overlay so it inherits a lifted
-// row's scale (the native caret lives in the un-scaled textarea and drifts when
-// the focused block scales up). The textarea's own caret is made transparent. ---
+// --- custom caret: rendered inside the text overlay so it stays glued to the
+// glyphs (the native caret is made transparent). ---
 const editorFocused = ref(false)
 const selectionActive = ref(false)
 /** the caret's line text up to the caret column — an invisible copy of it
@@ -533,9 +457,6 @@ const caretPrefix = computed(() => beforeCursor.value.slice(beforeCursor.value.l
 const caretVisible = computed(() => editorFocused.value && !selectionActive.value)
 const caretRowStyle = computed(() => ({
   marginTop: `${cursorLine.value * LINE_HEIGHT}px`,
-  transform: isLifted(cursorLine.value) ? 'scale(1.06)' : undefined,
-  transformOrigin: 'left center',
-  transition: 'transform 150ms ease-out',
 }))
 
 /** In the setup block the caret may only sit in the editable value area */
@@ -1789,11 +1710,9 @@ function onInput() {
           :style="{
             top: `${PAD_Y + highlight.start * LINE_HEIGHT - scroll.top}px`,
             height: `${(highlight.end - highlight.start + 1) * LINE_HEIGHT}px`,
-            transform: lifted ? 'scale(1.06)' : undefined,
-            transformOrigin: 'left center',
             transition: highlightEase
-              ? `top ${SLIDE_MS}ms ease-out, height ${SLIDE_MS}ms ease-out, transform 150ms ease-out`
-              : 'transform 150ms ease-out',
+              ? `top ${SLIDE_MS}ms ease-out, height ${SLIDE_MS}ms ease-out`
+              : undefined,
           }"
         ></div>
         <!-- preview highlight: an interaction's Target, hovered from the panel -->
@@ -1835,9 +1754,8 @@ function onInput() {
         </div>
       </div>
 
-      <!-- custom caret: mirrors the line prefix (so the bar lands at the exact
-           column) inside a row that scales with a lifted block, keeping the
-           caret glued to the glyphs the native caret would drift from -->
+      <!-- custom caret: mirrors the line prefix so the bar lands at the exact
+           column, keeping the caret glued to the glyphs -->
       <div v-if="caretVisible" class="pointer-events-none absolute inset-0 overflow-hidden px-2">
         <div :style="{ transform: `translate(${-scroll.left}px, ${-scroll.top}px)` }">
           <div class="h-5 whitespace-pre" :style="caretRowStyle">
