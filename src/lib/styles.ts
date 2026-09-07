@@ -204,6 +204,8 @@ function buildVocabulary(): string[] {
     // variant was dead on arrival
     'group', 'h-px', 'w-px', 'inset-0', 'inset-x-0', 'inset-y-0',
     'grayscale', 'grayscale-0', 'blur-sm', 'blur-md', 'blur-none',
+    'backdrop-blur-none', 'backdrop-blur-sm', 'backdrop-blur', 'backdrop-blur-md',
+    'backdrop-blur-lg', 'backdrop-blur-xl',
     'underline-offset-1', 'underline-offset-2', 'underline-offset-4', 'underline-offset-8',
   ]
   common.forEach((c) => out.add(c))
@@ -344,6 +346,21 @@ function isKnownVariant(v: string): boolean {
 /** numeric flex shorthand Tailwind v4 accepts on its scale: `flex-2`, `flex-0.5` */
 const FLEX_NUMERIC_RE = /^flex-\d+(?:\.\d+)?$/
 
+/** every display utility — one conflict group, whether or not the visual
+ * catalog lists it (it omits the inline-* forms), so `inline-flex` replaces
+ * `flex` instead of coexisting with it and losing to stylesheet order */
+const DISPLAY_CLASSES = new Set([
+  'block', 'inline-block', 'inline', 'flex', 'inline-flex', 'grid', 'inline-grid',
+  'hidden', 'contents', 'flow-root',
+])
+
+/** bg-* utilities that are NOT background-color (size/position/repeat/…) —
+ * everything else groups as one color property so `bg-paper` replaces
+ * `bg-[#f5f3edee]` and vice versa (arbitrary values are outside the catalog,
+ * so without this they never conflicted with anything) */
+const NON_COLOR_BG_RE =
+  /^bg-(?:auto$|cover$|contain$|center$|top|bottom|left|right|repeat|no-repeat|fixed$|local$|scroll$|clip-|origin-|gradient-|linear-|radial-|conic-|none$|blend-|size-|position-)/
+
 /**
  * A class is valid if every variant segment is known and the base is either
  * an arbitrary-value class (`p-[13px]`), a numeric flex (`flex-2`), in our
@@ -381,6 +398,10 @@ function propKey(base: string): StyleProperty | string | undefined {
   // with a typed flex-2
   if (FLEX_NUMERIC_RE.test(base) || ['flex-auto', 'flex-initial', 'flex-none', 'flex-1'].includes(base))
     return 'flex-grow-shorthand'
+  // pattern groups run before the catalog so classes the catalog doesn't
+  // list (inline-flex, bg-[#…]) still conflict with the ones it does
+  if (DISPLAY_CLASSES.has(base)) return 'display'
+  if (base.startsWith('bg-') && !NON_COLOR_BG_RE.test(base)) return 'background-color'
   return propForBase(base)
 }
 
@@ -408,8 +429,7 @@ function prerequisiteFor(cls: string, tokens: string[]): string | undefined {
   // display: bare `grid` satisfies `md:grid-cols-2`, `md:flex` satisfies
   // `items-center`, and `hidden` + `md:flex` is a deliberate responsive
   // pattern an auto-added base `flex` would silently fight
-  const setsDisplay = (t: string) => propForBase(splitVariant(t).base)?.id === 'display'
-  if (tokens.some(setsDisplay)) return undefined
+  if (tokens.some((t) => DISPLAY_CLASSES.has(splitVariant(t).base))) return undefined
   const preferred = r.values.includes('flex') ? 'flex' : r.values[0]!
   return `${variant}${preferred}`
 }

@@ -57,7 +57,9 @@ manual counting drift, and a misaddressed edit lands on the wrong element). Pref
 element **`id`** as the edit address (stable across structural edits); `line` values are
 **0-based** (`numberedCode` is 1-based, for humans). Add `expectType` to edits when
 using lines — with it a misaddressed edit fails loudly and shows up in `failures`
-(pass `verbose: true` if you want every edit's line/id/type echoed back).
+(pass `verbose: true` if you want every edit's line/id/type echoed back). On a page too
+large to read in one response, use `summaryOnly: true` for ids and `codeRange:
+[startLine, endLine]` (0-based, inclusive) to read a slice of the code.
 
 ## The DSL
 
@@ -94,7 +96,12 @@ with `delete_page` (the home page and collection template pages are protected).
 - A **leaf** carries text or is void. It is *always* written self-closed: `:h1:`
   `:paragraph:` `:image:`. A leaf never wraps children.
 - A **container** *always* opens as `:section` and closes with an un-prefixed
-  `section:` on its own line, children indented one tab deeper.
+  `section:` on its own line, children indented one tab deeper. **This includes EMPTY
+  containers**: a decorative dot/spacer is `:div` with its `div:` on the very next
+  line — a `:div` with no closer of its own stays open and would steal the next
+  `div:` it meets, absorbing everything in between. Validation rejects this: any line
+  that returns to (or above) an open container's indentation before its closer is an
+  error naming the unclosed line.
 
 Using the wrong form is a validation error. There is no inline text in the code —
 `:h1: Hello` is invalid; text content attaches to the node, not the code (see Content).
@@ -157,7 +164,12 @@ A token may carry a link suffix, glued directly to it:
 :link:@https://github.com/you/repo
 :link:@mailto:hello@example.com
 :link:@item              (inside an entry scope) link to the current entry's page
+:link:@locale:fr         THIS page in another locale — the language-switcher target
 ```
+
+`@locale:<code>` resolves per route: on `/plan/nest` it links `/fr/plan/nest`, on
+`/fr/` it links `/`. Use it for every language switcher — a plain `@/` or `@/fr` link
+gets locale-prefixed on non-default routes and would trap visitors in one locale.
 
 This is the **only** per-element value that lives in the code itself. Use it — links do
 not need a separate tool.
@@ -182,8 +194,19 @@ wrapped in `<a class="contents">`, so an entire card becomes one clickable regio
 
 `set_page_code` validates before saving — invalid code returns diagnostics and saves
 nothing, so a failed write is always safe to retry with fixed code. It catches: wrong
-leaf/container form, unknown element/component/collection names, unclosed containers,
+leaf/container form, unknown element/component/collection names, unclosed containers
+(including a container whose block ends — by indentation — before its closer),
 and any stray text (remember: no inline content, no attributes, no CSS classes in code).
+
+On success the response reports the identity outcome: `reconciled: {kept, created}`.
+`kept` nodes carried their classes/content/bindings across the edit; `created` nodes
+start blank. When you EDIT an existing page, expect `created` to be roughly the number
+of lines you added — a mostly-`created` result means your submitted text diverged from
+the stored code and the styling was orphaned (a warning note says so): re-read
+`get_page` and re-apply a minimal edit to THAT text. The display markers
+(`(+)`/`{+}`/`[+]`) are ignored when matching lines, so a marker-stripped resubmit is
+safe — but keeping the stored text verbatim outside your intended change is still the
+rule.
 
 ## Styling
 
@@ -193,7 +216,10 @@ or 0-based `line`) and style **the whole page in one call**. Removes are applied
 adds, so remove+add of the same class is a re-apply, not a removal. It behaves like the
 editor's Style panel:
 
-- **Conflicts auto-resolve**: adding `p-8` when `p-4` is present replaces it.
+- **Conflicts auto-resolve**: adding `p-8` when `p-4` is present replaces it. All
+  display utilities are one conflict group (`hidden` vs `flex` vs `inline-flex` …),
+  and background-COLOR classes conflict across forms — `bg-paper`, `bg-red-500`, and
+  `bg-[#f5f3edee]` replace each other.
 - **Prerequisites auto-add**: adding `grid-cols-3` auto-adds `grid`; `flex-row` adds
   `flex` — but ONLY when the element has no display class of its own yet. Any explicit
   display utility at any variant (`hidden`, `md:flex`, `block`, …) disables the
@@ -211,7 +237,8 @@ The validator accepts:
 - Spacing steps `0 1 2 3 4 5 6 8 10 12 14 16 20 24`; negative offsets/margins on the
   same scale (`-bottom-6`, `-mt-4`). Width/height (`w-` `h-` `size-`) run a wider scale
   up to 96 (`h-56`, `h-80` pass), and `translate-x-`/`translate-y-` run that same wider
-  scale in BOTH signs (`-translate-x-24`, `translate-y-1/2`, `-translate-x-full`). Whitespace control is available
+  scale in BOTH signs (`-translate-x-24`, `translate-y-1/2`, `-translate-x-full`).
+  Effects include `blur-*` and `backdrop-blur-*` (none/sm/md/lg/xl). Whitespace control is available
   (`whitespace-pre-wrap`, `whitespace-nowrap`, `break-words`, …).
 - **Any arbitrary VALUE**: `p-[13px]`, `text-[2.2rem]`, `bg-[#fffff9]`,
   `text-[clamp(2.75rem,7vw,5.25rem)]`. When a scale class is rejected, an arbitrary
@@ -323,6 +350,12 @@ multi-line code blocks — leading indentation still collapses).
 The `locale:` line in a page's `@setup` block is metadata pinned to the default locale —
 it does not select what renders and cannot make a single page French.
 
+Localization checklist beyond content: the **language switcher** is `@locale:<code>`
+link targets (see `@target`); **page titles/descriptions** localize via `set_page_seo
+{locale}`; **site-wide seo defaults** via `update_settings {seo: {locales: {fr:
+{…}}}}`; **shared component text** via `onMaster: true` + `locale` on `edit_elements`
+(see Components) so a header translates once, not once per page.
+
 ## Components
 
 Shared blocks (header, footer, cards) so a nav change is ONE edit, not one per page:
@@ -335,7 +368,18 @@ Shared blocks (header, footer, cards) so a nav change is ONE edit, not one per p
   instance. **Text content falls back to the master's** — a fresh instance renders the
   master's text as-is, so do NOT re-send identical nav/footer strings on every page.
   Set `content` on an instance element only where that page needs DIFFERENT text
-  (the override is per-instance; `""` clears it back to the master's).
+  (the override is per-instance; `""` clears it back to the master's). To WRITE the
+  shared text itself (or its translations), pass `onMaster: true` on the edit — the
+  content lands on the master once, for every page: `{id, content: "Pricing",
+  onMaster: true}`, then `{id, content: "Tarifs", onMaster: true}` with
+  `locale: "fr"`.
+- `get_page` summaries show instance elements' shared state as `masterClasses` /
+  `masterInteractionCount` / `inheritsMasterContent` — an instance element with only
+  those fields is fully styled via its master, not blank. Blanking a page and
+  re-adding `:Name:` is always safe: masters live in the component library, never on
+  a page.
+- `delete_component {componentId}` removes an unused component; it is refused (with
+  the list of pages) while instances exist.
 - `update_component {componentId, code}` — replace the structure with a full
   `:Name … Name:` block; every instance block on every page is rewritten to match
   (same-type nodes keep their identity and styles).

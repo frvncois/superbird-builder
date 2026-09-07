@@ -117,11 +117,18 @@ function knownNames(project) {
   return { componentNames, collectionNames, listFieldNames }
 }
 
-/** per-element summary keyed by 0-based source line */
-function elementSummary(page) {
+/** per-element summary keyed by 0-based source line. Inside component
+ * instances the summary is MASTER-AWARE: classes/interactions/content live on
+ * (or fall back to) the shared master, so an instance node with no own state
+ * still shows what it will render with — without this, a freshly expanded
+ * instance looked wiped even when the master was fully styled. */
+function elementSummary(project, page) {
+  const instMap = buildInstanceMap(project, page)
   const out = []
   walkNodes(page.elements ?? [], (n) => {
     if (n.line === undefined) return
+    const master = instMap.get(n.id)?.master
+    const masterInteractions = master && master !== n ? (master.interactions?.length ?? 0) : 0
     out.push({
       line: n.line,
       // the node's stable id — what bind_interaction's targetId refers to
@@ -130,8 +137,11 @@ function elementSummary(page) {
       // empty/zero/false fields are OMITTED — a bare {line, id, type} means
       // unstyled, no interactions, no own content (keeps big pages readable)
       ...(n.classes ? { classes: n.classes } : {}),
+      ...(master && master !== n && master.classes ? { masterClasses: master.classes } : {}),
       ...(n.interactions?.length ? { interactionCount: n.interactions.length } : {}),
+      ...(masterInteractions ? { masterInteractionCount: masterInteractions } : {}),
       ...(n.content || n.src || n.background ? { hasOwnContent: true } : {}),
+      ...(master && master !== n && !n.content && master.content ? { inheritsMasterContent: true } : {}),
       ...(n.htmlId ? { htmlId: n.htmlId } : {}),
       ...(n.attributes && Object.keys(n.attributes).length ? { attributes: n.attributes } : {}),
       ...(n.listQuery ? { listQuery: n.listQuery } : {}),
@@ -544,7 +554,9 @@ const tools = [
     description:
       'A page\'s DSL code (with line numbers), a version hash, and a per-element summary ' +
       '(line, id → type, plus classes/interactionCount/hasOwnContent only when set — an ' +
-      'omitted field means empty/0/false). Pass the version to writes ' +
+      'omitted field means empty/0/false; inside component instances, masterClasses/' +
+      'masterInteractionCount/inheritsMasterContent show the shared state the element ' +
+      'renders with). Pass the version to writes ' +
       '(set_page_code, edit_elements) so a stale write is rejected. Pass summaryOnly: true to ' +
       'skip the code fields — enough for harvesting ids/versions after a write you authored, ' +
       'and much smaller on big pages. Requires a target.',
@@ -558,6 +570,16 @@ const tools = [
           items: { type: 'string' },
           description: 'return only these elements in the summary (big pages: fetch just what you need)',
         },
+        codeRange: {
+          type: 'array',
+          items: { type: 'integer', minimum: 0 },
+          minItems: 2,
+          maxItems: 2,
+          description:
+            '[startLine, endLine] (0-based, inclusive) — return only this slice of the code ' +
+            '(as numberedCode with true line numbers) plus only the elements on those lines. ' +
+            'The way to read part of a page too large for one response.',
+        },
       },
       required: ['pageId'],
       additionalProperties: false,
@@ -565,10 +587,21 @@ const tools = [
     handler: async (args) => {
       const { project } = await loadTargetProject()
       const page = findPage(project, args.pageId)
-      let elements = elementSummary(page)
+      let elements = elementSummary(project, page)
       if (args.elementIds?.length) {
         const wanted = new Set(args.elementIds)
         elements = elements.filter((e) => wanted.has(e.id))
+      }
+      const lines = page.code.split('\n')
+      let codeFields = args.summaryOnly ? {} : { code: page.code, numberedCode: numbered(page.code) }
+      if (args.codeRange) {
+        const [lo, hi] = args.codeRange
+        const slice = lines
+          .slice(lo, hi + 1)
+          .map((l, i) => `${lo + i + 1}\t${l}`)
+          .join('\n')
+        codeFields = { numberedCode: slice, codeRange: [lo, Math.min(hi, lines.length - 1)] }
+        elements = elements.filter((e) => e.line >= lo && e.line <= hi)
       }
       return {
         target,
@@ -576,8 +609,9 @@ const tools = [
         name: page.name,
         slug: page.path,
         status: page.status,
+        totalLines: lines.length,
         version: sha256(page.code),
-        ...(args.summaryOnly ? {} : { code: page.code, numberedCode: numbered(page.code) }),
+        ...codeFields,
         elements,
       }
     },
@@ -639,7 +673,8 @@ const tools = [
         status: meta.status,
         locale: project.defaultLocale || 'en',
       })
-      page.elements = reconcile(page.code, rebuilt, page.elements)
+      const stats = { adopted: 0, created: 0 }
+      page.elements = reconcile(page.code, rebuilt, page.elements, undefined, stats)
       page.code = rebuilt
       page.name = meta.name
       page.path = meta.slug
@@ -647,6 +682,19 @@ const tools = [
 
       await saveTargetProject(project)
       const notes = []
+      // identity outcome: kept nodes carry their classes/content/bindings;
+      // created nodes start blank. A styled page that comes back mostly
+      // `created` means the submitted text didn't line up with the stored
+      // code — surface it loudly instead of letting the caller find out
+      // at publish time.
+      if (stats.created > stats.adopted && stats.adopted > 0) {
+        notes.push(
+          `reconcile kept only ${stats.adopted} of ${stats.adopted + stats.created} elements — ` +
+            'the rest were re-created BLANK (no classes/content/bindings). If that is not what ' +
+            'you intended, the submitted code diverged from the stored code: re-read get_page ' +
+            'and edit that text minimally',
+        )
+      }
       if (meta.locale && meta.locale !== (project.defaultLocale || 'en')) {
         notes.push(
           `the @setup \`locale: ${meta.locale}\` line was pinned back to the default — it is ` +
@@ -655,7 +703,13 @@ const tools = [
             'the export then renders /<code>/… routes automatically',
         )
       }
-      return { saved: true, pageId: page.id, version: sha256(page.code), ...(notes.length ? { notes } : {}) }
+      return {
+        saved: true,
+        pageId: page.id,
+        version: sha256(page.code),
+        reconciled: { kept: stats.adopted, created: stats.created },
+        ...(notes.length ? { notes } : {}),
+      }
     },
   },
   {
@@ -735,7 +789,9 @@ const tools = [
     name: 'set_page_seo',
     description:
       'Per-page SEO overrides: `title` (otherwise the project titleTemplate applies to the page ' +
-      'name) and `description` (otherwise the project default). "" clears an override. This is ' +
+      'name) and `description` (otherwise the project default). "" clears an override. A ' +
+      'non-default registered `locale` writes per-locale overrides used on that locale\'s ' +
+      'routes (falling back to the base title/description). This is ' +
       'the ONLY way to set page metadata — extra @setup keys are dropped. Requires a target.',
     inputSchema: {
       type: 'object',
@@ -743,6 +799,7 @@ const tools = [
         pageId: { type: 'string' },
         title: { type: 'string' },
         description: { type: 'string' },
+        locale: { type: 'string', description: 'omit for the default locale' },
       },
       required: ['pageId'],
       additionalProperties: false,
@@ -750,14 +807,33 @@ const tools = [
     handler: async (args) => {
       const { project } = await loadTargetProject()
       const page = findPage(project, args.pageId)
+      const defaultLocale = project.defaultLocale || 'en'
+      const localized = args.locale && args.locale !== defaultLocale
+      if (localized && !(project.locales ?? []).includes(args.locale)) {
+        return {
+          saved: false,
+          reason: 'unknown-locale',
+          locales: project.locales ?? [defaultLocale],
+          message: `register "${args.locale}" first: update_settings {locales: [...]}`,
+        }
+      }
       const seo = { ...(page.seo ?? {}) }
+      // write into the base fields, or into the locale bucket (pruned when empty)
+      const bucket = localized ? { ...(seo.locales?.[args.locale] ?? {}) } : seo
       if (args.title !== undefined) {
-        if (args.title) seo.title = args.title
-        else delete seo.title
+        if (args.title) bucket.title = args.title
+        else delete bucket.title
       }
       if (args.description !== undefined) {
-        if (args.description) seo.description = args.description
-        else delete seo.description
+        if (args.description) bucket.description = args.description
+        else delete bucket.description
+      }
+      if (localized) {
+        const locales = { ...(seo.locales ?? {}) }
+        if (Object.keys(bucket).length) locales[args.locale] = bucket
+        else delete locales[args.locale]
+        if (Object.keys(locales).length) seo.locales = locales
+        else delete seo.locales
       }
       if (Object.keys(seo).length) page.seo = seo
       else delete page.seo
@@ -798,7 +874,8 @@ const tools = [
       'the master, the original block is wrapped as :Name … Name: (an instance). Reuse it on ' +
       'other pages by writing :Name: in their code (set_page_code expands it). Styles and ' +
       'interactions on inner elements are SHARED across instances (edit any instance — the ' +
-      'edit lands on the master); text content stays per-instance. Requires a target.',
+      'edit lands on the master); text content falls back to the master\'s, overridable ' +
+      'per instance (write shared text once with onMaster on edit_elements). Requires a target.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -943,6 +1020,39 @@ const tools = [
     },
   },
   {
+    name: 'delete_component',
+    description:
+      'Remove a component from the library. Refused while any page still uses it — remove or ' +
+      'inline its instance blocks first (rewrite the pages without the :Name … Name: wrap). ' +
+      'Requires a target.',
+    inputSchema: {
+      type: 'object',
+      properties: { componentId: { type: 'string' } },
+      required: ['componentId'],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const { project } = await loadTargetProject()
+      const def = (project.components ?? []).find((c) => c.id === args.componentId)
+      if (!def) throw new Error(`no component with id "${args.componentId}" (use list_components)`)
+      const usedOn = (project.pages ?? [])
+        .filter((p) => {
+          let used = false
+          walkNodes(p.elements ?? [], (n) => {
+            if (n.type === def.name) used = true
+          })
+          return used
+        })
+        .map((p) => ({ pageId: p.id, name: p.name }))
+      if (usedOn.length) {
+        return { saved: false, reason: 'in-use', message: `":${def.name}:" still has instances`, usedOn }
+      }
+      project.components = project.components.filter((c) => c.id !== def.id)
+      await saveTargetProject(project)
+      return { saved: true, deleted: def.id }
+    },
+  },
+  {
     name: 'get_settings',
     description:
       'Project-level settings an agent can work with: site SEO defaults, design tokens ' +
@@ -998,6 +1108,21 @@ const tools = [
             siteName: { type: 'string' },
             titleTemplate: { type: 'string' },
             description: { type: 'string' },
+            locales: {
+              type: 'object',
+              description:
+                'per-locale overrides of the same fields, keyed by registered locale code — ' +
+                'used on that locale\'s routes, falling back per field to the base values',
+              additionalProperties: {
+                type: 'object',
+                properties: {
+                  siteName: { type: 'string' },
+                  titleTemplate: { type: 'string' },
+                  description: { type: 'string' },
+                },
+                additionalProperties: false,
+              },
+            },
           },
           additionalProperties: false,
         },
@@ -1126,6 +1251,14 @@ const tools = [
               id: { type: 'string', description: 'element id from get_page (preferred address)' },
               line: { type: 'integer', description: '0-based source line (alternative address)' },
               expectType: { type: 'string', description: 'refuse the edit unless the element is this type' },
+              onMaster: {
+                type: 'boolean',
+                description:
+                  'inside a component instance: write content/src to the shared MASTER instead ' +
+                  'of this instance — every instance without its own override renders it. Set ' +
+                  'shared chrome text (nav labels, footer strings) ONCE this way instead of ' +
+                  'repeating it per page; combines with `locale` for shared translations.',
+              },
               addClasses: { type: 'array', items: { type: 'string' } },
               removeClasses: { type: 'array', items: { type: 'string' } },
               content: { type: 'string' },
@@ -1216,7 +1349,15 @@ const tools = [
         }
       }
       if (args.version !== current) {
-        return { saved: false, reason: 'stale-version', currentVersion: current }
+        return {
+          saved: false,
+          reason: 'stale-version',
+          currentVersion: current,
+          message:
+            'the page code changed since your last read/write. If the human has the editor open, ' +
+            'its autosave/marker sync can advance the version between your calls — retrying with ' +
+            'currentVersion is safe when you made the only content edits',
+        }
       }
       const defaultLocale = project.defaultLocale || 'en'
       const locale = args.locale || defaultLocale
@@ -1273,22 +1414,40 @@ const tools = [
           }
         }
 
+        // content/src land on the node itself, or — with onMaster, inside an
+        // instance — on the shared master (instances without an override then
+        // render the master's value, so shared chrome is written ONCE)
+        const dataTarget = edit.onMaster
+          ? inComponent
+            ? masterNodeFor(project, page, node)
+            : null
+          : node
+        const dataTargetError = edit.onMaster
+          ? !inComponent
+            ? 'onMaster refused: this element is not inside a component instance'
+            : !dataTarget
+              ? 'onMaster refused: this instance node has no master counterpart (structure diverged)'
+              : null
+          : null
+
         // --- own text content (leaf elements only; rich subset sanitized) ---
         if (edit.content !== undefined) {
           if (isComponentType(node.type)) {
             errors.push('content refused: a component instance token has no own text')
           } else if (!isLeafElement(node.type)) {
             errors.push(`content refused: ':${node.type}' is a container — put text on a leaf inside it`)
+          } else if (dataTargetError) {
+            errors.push(dataTargetError)
           } else {
             const value = isRich(edit.content) ? sanitizeRich(edit.content) : edit.content
             if (localized) {
-              setLocaleOverride(node, locale, 'content', value)
+              setLocaleOverride(dataTarget, locale, 'content', value)
             } else if (value) {
-              node.content = value
+              dataTarget.content = value
             } else {
-              delete node.content
+              delete dataTarget.content
             }
-            applied.push('content')
+            applied.push(edit.onMaster ? 'content (on component master — all instances)' : 'content')
             changed = true
           }
         }
@@ -1299,15 +1458,17 @@ const tools = [
             errors.push(`src refused: ':${node.type}' is not an image/video element`)
           } else if (edit.src && !SAFE_SRC.test(edit.src)) {
             errors.push('src refused: use a /media/… path, https:// URL, or data:image|video URL')
+          } else if (dataTargetError) {
+            errors.push(dataTargetError)
           } else {
             if (localized) {
-              setLocaleOverride(node, locale, 'src', edit.src)
+              setLocaleOverride(dataTarget, locale, 'src', edit.src)
             } else if (edit.src) {
-              node.src = edit.src
+              dataTarget.src = edit.src
             } else {
-              delete node.src
+              delete dataTarget.src
             }
-            applied.push('src')
+            applied.push(edit.onMaster ? 'src (on component master — all instances)' : 'src')
             changed = true
           }
         }

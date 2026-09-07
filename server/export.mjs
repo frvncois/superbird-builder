@@ -197,6 +197,15 @@ function resolveHref(node, ctx) {
       ? `/${ctx.scope.collection.name}/${entrySlug(ctx.scope.entry)}`
       : null
   }
+  // '@locale:xx' — THIS page in another locale (the language-switcher target).
+  // A plain '/…' link can't express it: internal links are auto-prefixed with
+  // the CURRENT locale, so from /fr every path leads back to /fr/….
+  if (raw?.startsWith('locale:')) {
+    const code = raw.slice('locale:'.length)
+    if (!ctx.project.locales.includes(code)) return null
+    const path = ctx.routePath ?? '/'
+    return code === ctx.defaultLocale ? path : `/${code}${path === '/' ? '' : path}`
+  }
   if (!raw || !SAFE_HREF.test(raw)) return null
   let href = raw
   if (raw.startsWith('/')) {
@@ -469,6 +478,9 @@ function renderPage(route, project, media) {
     defaultLocale: project.defaultLocale,
     scope,
     pagePath: page.path,
+    // the locale-less path of THIS route (entry routes live at the collection
+    // path, not the template page's) — what '@locale:xx' re-prefixes
+    routePath: scope?.entry ? `/${scope.collection.name}/${entrySlug(scope.entry)}` : page.path,
     mm: buildMasterMap(page.elements, project.components),
     plainTargets: buildPlainTargets(page, project),
     // saved-interaction id → animation, for resolving bindings to timing/classes
@@ -510,11 +522,16 @@ function renderPage(route, project, media) {
       jsonTag('int-fxbp', ctx.fxbp)
     : ''
   const tail = needsRuntime ? `${fxTag}${rmTag}${bpTag}<script src="/assets/script.js" defer></script>` : ''
-  const seo = project.settings?.seo ?? {}
+  // per-locale seo overrides (page + project) apply on non-default routes,
+  // falling back field-by-field to the base values
+  const localized = locale !== project.defaultLocale
+  const baseSeo = project.settings?.seo ?? {}
+  const seo = localized ? { ...baseSeo, ...(baseSeo.locales?.[locale] ?? {}) } : baseSeo
+  const pageSeo = localized ? { ...(page.seo ?? {}), ...(page.seo?.locales?.[locale] ?? {}) } : (page.seo ?? {})
   const shell = renderShell(project, media.rewrite, {
     locale,
-    title: page.seo?.title ?? applyTitleTemplate(seo.titleTemplate, page.name),
-    description: page.seo?.description ?? seo.description ?? '',
+    title: pageSeo.title ?? applyTitleTemplate(seo.titleTemplate, page.name),
+    description: pageSeo.description ?? seo.description ?? '',
     path: '/' + (outPath ?? '').replace(/index\.html$/, ''),
     headScript: scriptTag(page.customCode?.head),
     bodyAttrs,
