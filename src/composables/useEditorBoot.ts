@@ -5,6 +5,7 @@ import { migrateStoredProject } from '@/lib/storage'
 import { hydrateStore, storeGet } from '@/lib/store'
 import { hydratePublishState } from './usePublish'
 import { useMedia } from './useMedia'
+import { useLiveSync } from './useLiveSync'
 
 // Shared admin-zone boot: hydrate the server-backed store and start
 // persistence. Lives at module scope so it runs exactly once no matter
@@ -61,6 +62,7 @@ export function useEditorBoot() {
       localStorage.removeItem('superbird-setup-name')
 
       usePersistence().init() // sync, runs against the warm cache
+      useLiveSync().start() // live-apply + hard-lock for MCP agent sessions
       ready.value = true
 
       // the media index is non-critical to boot — load it in the background so

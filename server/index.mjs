@@ -565,6 +565,36 @@ async function contributorProjectRejection(key, body) {
 
 const isProjectKey = (key) => key.startsWith('guano-project:')
 
+// ---------- live change feed (SSE) ----------
+// Editors subscribe to GET /api/events; every store write is broadcast with
+// its source ('agent' = a guano_ bearer token or the in-editor assistant,
+// 'human' = a session cookie). The editor uses this to live-apply MCP agent
+// edits and hard-lock the UI while an agent session is active.
+const eventClients = new Set()
+
+function broadcastStoreEvent(key, source) {
+  if (!eventClients.size) return
+  const payload = `data: ${JSON.stringify({ type: 'store-write', key, source, ts: Date.now() })}\n\n`
+  for (const client of eventClients) client.write(payload)
+}
+
+function handleEvents(req, res) {
+  const user = requestUser(req)
+  if (!user) return fail(res, 401, 'unauthorized')
+  res.writeHead(200, {
+    'content-type': 'text/event-stream',
+    'cache-control': 'no-cache',
+    connection: 'keep-alive',
+  })
+  res.write(':connected\n\n')
+  eventClients.add(res)
+  const heartbeat = setInterval(() => res.write(':hb\n\n'), 25_000)
+  req.on('close', () => {
+    clearInterval(heartbeat)
+    eventClients.delete(res)
+  })
+}
+
 async function handleStore(req, res, path, query) {
   // any authenticated user (incl. contributors editing content) may use the
   // store — via session cookie OR a `guano_` API-token bearer (the MCP server)
@@ -598,6 +628,8 @@ async function handleStore(req, res, path, query) {
       if (rejection) return fail(res, 403, rejection)
     }
     await writeAtomic(storeFile(key), body)
+    const viaToken = (req.headers.authorization ?? '').startsWith('Bearer guano_')
+    broadcastStoreEvent(key, viaToken ? 'agent' : 'human')
     return send(res, 200, JSON.stringify({ ok: true }))
   }
   if (req.method === 'DELETE') {
@@ -639,6 +671,7 @@ function agentAdapter(user) {
     },
     storePutRaw: async (key, raw) => {
       await writeAtomic(storeFile(key), raw)
+      broadcastStoreEvent(key, 'agent')
     },
     publish: async (project) => {
       const raw = JSON.stringify(project)
@@ -982,6 +1015,9 @@ const server = createServer(async (req, res) => {
     }
     if (path === '/api/tokens' || path.startsWith('/api/tokens/')) {
       return await handleTokens(req, res, path)
+    }
+    if (path === '/api/events' && req.method === 'GET') {
+      return handleEvents(req, res)
     }
     if (path === '/api/store' || path.startsWith('/api/store/')) {
       return await handleStore(req, res, path, url.searchParams)

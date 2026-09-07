@@ -109,6 +109,25 @@ export function usePersistence() {
     persist(snapshot)
   }
 
+  /**
+   * Like resetTo but WITHOUT the write-back — for applying a state that is
+   * already on the server (live agent sync). Persisting here would race a
+   * concurrent agent write: our echo of the fetched blob could land after a
+   * newer agent save and revert it (the store is latest-wins).
+   */
+  function replaceFromRemote(next: Project) {
+    if (timer) {
+      clearTimeout(timer)
+      timer = null
+    }
+    restoring = true
+    project.value = next
+    restoring = false
+    history.value = [JSON.stringify(next)]
+    pointer.value = 0
+    typing.value = false
+  }
+
   /** snapshot the settled state into history and storage */
   function commit() {
     if (timer) {
@@ -169,5 +188,5 @@ export function usePersistence() {
     )
   }
 
-  return { status, canUndo, canRedo, init, saveNow, undo, redo, resetTo }
+  return { status, canUndo, canRedo, init, saveNow, undo, redo, resetTo, replaceFromRemote }
 }
