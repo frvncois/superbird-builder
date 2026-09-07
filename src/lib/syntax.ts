@@ -278,31 +278,54 @@ export function parseSyntax(
 }
 
 /**
- * Maps each line of the new code to the line of the old code it came
- * from (longest common subsequence over exact lines). Lines that were
- * inserted or rewritten have no mapping.
+ * Maps each line of the new code to the line of the old code it came from.
+ * Lines that were inserted or rewritten have no mapping.
+ *
+ * Patience-style: byte-identical prefix/suffix are mapped directly, then
+ * lines UNIQUE in both remainders anchor the alignment (longest increasing
+ * subsequence keeps crossings out) and the segments between anchors recurse.
+ * Plain LCS runs only inside segments with no anchors. A pure LCS over the
+ * whole document is ambiguous on this DSL's highly repetitive lines (`:div`,
+ * `div:`, …): a mid-document insertion could shift the alignment and pair
+ * surviving nodes with the WRONG downstream lines, silently reassigning
+ * their classes/content/bindings (the reconciler adopts by mapped line).
  */
 function lineMap(oldCode: string, newCode: string): Map<number, number> {
   const a = oldCode.split('\n')
   const b = newCode.split('\n')
-  const n = a.length
-  const m = b.length
+  const map = new Map<number, number>()
+  mapRange(a, b, 0, a.length, 0, b.length, map)
+  return map
+}
 
-  // dp[i][j] = LCS length of a[i:], b[j:]
+/** classic LCS alignment over a slice — the anchorless fallback */
+function lcsRange(
+  a: string[],
+  b: string[],
+  aLo: number,
+  aHi: number,
+  bLo: number,
+  bHi: number,
+  map: Map<number, number>,
+) {
+  const n = aHi - aLo
+  const m = bHi - bLo
+  if (n <= 0 || m <= 0) return
+  // dp[i][j] = LCS length of a[aLo+i:aHi], b[bLo+j:bHi]
   const dp = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1))
   for (let i = n - 1; i >= 0; i--) {
     for (let j = m - 1; j >= 0; j--) {
       dp[i]![j] =
-        a[i] === b[j] ? dp[i + 1]![j + 1]! + 1 : Math.max(dp[i + 1]![j]!, dp[i]![j + 1]!)
+        a[aLo + i] === b[bLo + j]
+          ? dp[i + 1]![j + 1]! + 1
+          : Math.max(dp[i + 1]![j]!, dp[i]![j + 1]!)
     }
   }
-
-  const map = new Map<number, number>()
   let i = 0
   let j = 0
   while (i < n && j < m) {
-    if (a[i] === b[j]) {
-      map.set(j, i)
+    if (a[aLo + i] === b[bLo + j]) {
+      map.set(bLo + j, aLo + i)
       i++
       j++
     } else if (dp[i + 1]![j]! >= dp[i]![j + 1]!) {
@@ -311,7 +334,83 @@ function lineMap(oldCode: string, newCode: string): Map<number, number> {
       j++
     }
   }
-  return map
+}
+
+function mapRange(
+  a: string[],
+  b: string[],
+  aLo: number,
+  aHi: number,
+  bLo: number,
+  bHi: number,
+  map: Map<number, number>,
+) {
+  // byte-identical prefix/suffix map 1:1 — an insertion or removal in the
+  // middle leaves everything around it exactly aligned
+  while (aLo < aHi && bLo < bHi && a[aLo] === b[bLo]) {
+    map.set(bLo, aLo)
+    aLo++
+    bLo++
+  }
+  while (aHi > aLo && bHi > bLo && a[aHi - 1] === b[bHi - 1]) {
+    aHi--
+    bHi--
+    map.set(bHi, aHi)
+  }
+  if (aLo >= aHi || bLo >= bHi) return
+
+  // anchor on lines that appear exactly once on BOTH sides of the slice
+  const occurrences = (lines: string[], lo: number, hi: number) => {
+    const m = new Map<string, { n: number; at: number }>()
+    for (let i = lo; i < hi; i++) {
+      const e = m.get(lines[i]!)
+      if (e) e.n++
+      else m.set(lines[i]!, { n: 1, at: i })
+    }
+    return m
+  }
+  const inA = occurrences(a, aLo, aHi)
+  const inB = occurrences(b, bLo, bHi)
+  const pairs: Array<[number, number]> = [] // [aIdx, bIdx], in b order
+  for (const [line, eb] of inB) {
+    if (eb.n !== 1) continue
+    const ea = inA.get(line)
+    if (ea?.n === 1) pairs.push([ea.at, eb.at])
+  }
+  if (!pairs.length) return lcsRange(a, b, aLo, aHi, bLo, bHi, map)
+  pairs.sort((x, y) => x[1] - y[1])
+
+  // longest increasing subsequence on the a side — crossing anchors would
+  // reorder the document, so only a consistent chain survives
+  const tailAt: number[] = [] // tailAt[k] = pairs index ending a chain of length k+1
+  const prev: number[] = new Array(pairs.length).fill(-1)
+  for (let p = 0; p < pairs.length; p++) {
+    const ai = pairs[p]![0]
+    let lo = 0
+    let hi = tailAt.length
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (pairs[tailAt[mid]!]![0] < ai) lo = mid + 1
+      else hi = mid
+    }
+    if (lo > 0) prev[p] = tailAt[lo - 1]!
+    tailAt[lo] = p
+  }
+  const chain: Array<[number, number]> = []
+  for (let p = tailAt.length ? tailAt[tailAt.length - 1]! : -1; p !== -1; p = prev[p]!) {
+    chain.push(pairs[p]!)
+  }
+  chain.reverse()
+
+  let prevA = aLo
+  let prevB = bLo
+  for (const [ai, bi] of chain) {
+    mapRange(a, b, prevA, ai, prevB, bi, map)
+    map.set(bi, ai)
+    prevA = ai + 1
+    prevB = bi + 1
+  }
+  mapRange(a, b, prevA, aHi, prevB, bHi, map)
 }
 
 /**

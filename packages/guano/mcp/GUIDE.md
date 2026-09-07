@@ -201,6 +201,11 @@ The validator accepts:
   `text-[clamp(2.75rem,7vw,5.25rem)]`. When a scale class is rejected, an arbitrary
   value is the escape hatch. Arbitrary **PROPERTIES** (`[white-space:pre-wrap]`) are
   NOT supported — only value slots on known utilities.
+- Useful non-obvious accepted forms: `bg-[#0d0d0cbb]` (8-digit hex = translucent
+  overlays; there is no `bg-token/60` opacity syntax), `font-[Instrument_Serif]`
+  (arbitrary font-family — run a display face against the project body font), and
+  `group` + `group-hover:` for card-level hover states (put `group` on the card,
+  `group-hover:…` on the children).
 - Variant prefixes: `hover:` `focus:` `focus-visible:` `active:` `disabled:`
   `group-hover:` `first:` `last:` `sm:` `md:` `lg:` `xl:` `dark:` and arbitrary
   breakpoints `min-[900px]:` / `max-[767px]:`. Other variants (`before:`, `after:`,
@@ -321,4 +326,8 @@ project **favicon**, domain/smtp/publishing config, per-page `<script>` injectio
 media folder management or asset rename/delete (list + upload only), renaming a
 collection, creating new comment threads (you can only reply), **per-entry SEO** (a
 template's seo applies verbatim to every entry page — no field interpolation), or
-truly empty leaf elements. The `@link` code suffix is the supported way to set links.
+truly empty leaf elements. `:collection-list` has **no limit/filter/sort** — it always
+renders every entry, so design lists that tolerate the full set. `date` fields render
+their raw ISO value (no formatting — use a text field for display dates). `link` is a
+leaf, so a whole card can't be one clickable region — link the title. The `@link` code
+suffix is the supported way to set links.

@@ -15,7 +15,7 @@ import { themeBlock, applyTitleTemplate } from '../src/lib/shared/tokens.js'
 import { resolveBinding, resolveListScope, refDisplay } from '../src/lib/shared/fields.js'
 import { evaluateConditions, staticMatch } from '../src/lib/shared/conditions.js'
 import { isRich, sanitizeRich } from '../src/lib/shared/richtext.js'
-import { backgroundRender } from '../src/lib/shared/background.js'
+import { backgroundRender, backgroundKindFromUrl } from '../src/lib/shared/background.js'
 import { SAFE_HREF, SAFE_SRC } from '../src/lib/shared/urls.js'
 import { slugify, entrySlug } from '../src/lib/shared/slug.js'
 import { walkNodes } from './util.mjs'
@@ -434,7 +434,8 @@ function backgroundFor(node, ctx) {
   if (!ref) return null
   const url = ctx.rewrite(ref)
   if (!SAFE_SRC.test(url)) return null
-  const kind = ctx.kindFor(ref)
+  // library assets resolve kind from their mime; external/data URLs infer it
+  const kind = ctx.kindFor(ref) ?? backgroundKindFromUrl(url)
   const tokens = (styleNode.classes ?? '').split(/\s+/).filter(Boolean)
   return backgroundRender(kind, url, tokens)
 }

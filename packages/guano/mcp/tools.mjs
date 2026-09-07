@@ -763,13 +763,21 @@ const tools = [
           description: 'omit for the default locale; a non-default locale localizes content/src',
         },
       },
-      required: ['pageId', 'version', 'edits'],
+      required: ['pageId', 'edits'],
       additionalProperties: false,
     },
     handler: async (args) => {
       const { project } = await loadTargetProject()
       const page = findPage(project, args.pageId)
       const current = sha256(page.code)
+      if (typeof args.version !== 'string') {
+        return {
+          saved: false,
+          reason: 'missing-version',
+          message: 'pass the page version — here is the current one, retry with it',
+          currentVersion: current,
+        }
+      }
       if (args.version !== current) {
         return { saved: false, reason: 'stale-version', currentVersion: current }
       }
@@ -816,6 +824,7 @@ const tools = [
             const removeSet = new Set(edit.removeClasses ?? [])
             let tokens = (node.classes ?? '').split(/\s+/).filter(Boolean).filter((t) => !removeSet.has(t))
             for (const cls of edit.addClasses ?? []) {
+              if (tokens.includes(cls)) continue // idempotent re-apply — not an error
               const result = applyClass(cls, tokens)
               if (result.error !== undefined) errors.push(`class "${cls}": ${result.error}`)
               else tokens = result.tokens
@@ -1208,6 +1217,7 @@ const tools = [
           name,
           templatePageId: page.id,
           templateSlug: `/${name}`,
+          templateVersion: sha256(page.code),
           fields: collection.fields.map(fieldView),
         },
       }

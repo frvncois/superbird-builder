@@ -143,7 +143,7 @@ function buildVocabulary(): string[] {
   // the validator accepts the in-between steps too ('5', '14') — the visual
   // stepper keeps the coarse SPACING scale, but rejecting px-5 as a typed
   // class was pure friction
-  const SPACING_VALID = [...SPACING, '5', '14']
+  const SPACING_VALID = [...SPACING, '5', '14', '28', '32']
   for (const prefix of spacing) for (const stop of SPACING_VALID) out.add(`${prefix}-${stop}`)
   // width/height sizing runs far past the spacing scale (h-56 hero bands …)
   const SIZE_STOPS = ['0', '1', '2', '3', '4', '5', '6', '8', '10', '12', '14', '16', '20', '24', '28', '32', '36', '40', '44', '48', '52', '56', '60', '64', '72', '80', '96']
@@ -188,6 +188,11 @@ function buildVocabulary(): string[] {
     'inline', 'inline-block', 'inline-flex', 'inline-grid', 'outline-none',
     'whitespace-normal', 'whitespace-nowrap', 'whitespace-pre', 'whitespace-pre-line',
     'whitespace-pre-wrap', 'break-words', 'break-all',
+    // `group` marks a hover scope — without it every documented group-hover:
+    // variant was dead on arrival
+    'group', 'h-px', 'w-px', 'inset-0', 'inset-x-0', 'inset-y-0',
+    'grayscale', 'grayscale-0', 'blur-sm', 'blur-md', 'blur-none',
+    'underline-offset-1', 'underline-offset-2', 'underline-offset-4', 'underline-offset-8',
   ]
   common.forEach((c) => out.add(c))
   // grid placement — spans and explicit start/end lines

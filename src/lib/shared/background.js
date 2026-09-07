@@ -6,6 +6,20 @@
 const FIT_RE = /^object-/
 const BG_SIZE_RE = /^bg-(auto|cover|contain|\[)/
 
+/**
+ * Media kind for a background ref that is NOT a library asset (https URL or
+ * data: URL) — the library resolves kind from its mime index; everything else
+ * falls back to this. Without it, external backgrounds were silently DROPPED
+ * (kind null → backgroundRender null) in both the canvas and the export.
+ */
+export function backgroundKindFromUrl(url) {
+  const s = String(url ?? '')
+  if (/^data:video\//i.test(s)) return 'video'
+  if (/^data:image\//i.test(s)) return 'image'
+  if (/\.(mp4|webm|ogv|mov)([?#]|$)/i.test(s)) return 'video'
+  return 'image'
+}
+
 /** CSS url() with the URL quoted and every breakout character percent-encoded,
  * so a crafted URL can't close the url() and inject extra declarations into
  * the host's inline style (equivalent bytes for any URL consumer). */
