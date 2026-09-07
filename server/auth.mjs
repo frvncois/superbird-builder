@@ -448,6 +448,16 @@ export async function createApiToken(userId, name) {
   return { token: raw, record: apiTokenView(token) }
 }
 
+/** local-trust bootstrap (`guano connect`): mint a token for the first admin.
+ *  The caller proves instance ownership via a nonce file in DATA_DIR (checked
+ *  by the /api/auth/connect route) — filesystem access = owner. */
+export async function bootstrapConnectToken(name) {
+  const admin = loadUsers().find((u) => u.role === 'admin')
+  if (!admin) return null
+  const { token } = await createApiToken(admin.id, name || 'guano connect')
+  return { token, email: admin.email }
+}
+
 /** revoke a token: the owner may revoke their own; an admin may revoke any */
 export async function revokeApiToken(id, requester) {
   const token = apiTokens.find((t) => t.id === id)

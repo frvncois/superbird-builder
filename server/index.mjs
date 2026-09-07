@@ -39,6 +39,7 @@ import {
   apiTokenAllowed,
   apiTokenCount,
   apiTokenUser,
+  bootstrapConnectToken,
   clearCookieHeader,
   createApiToken,
   createFirstAdmin,
@@ -220,6 +221,37 @@ async function handleAuth(req, res, path) {
     return send(res, 200, JSON.stringify(userProfile(user)), 'application/json', {
       'set-cookie': sessionCookieHeader(createSession(user.id)),
     })
+  }
+  if (path === '/api/auth/connect' && req.method === 'POST') {
+    // local-trust bootstrap for `guano connect`: the CLI writes a random nonce
+    // into DATA_DIR and sends it here — being able to write the data dir IS
+    // ownership of the instance, so no session/token is needed. Loopback only,
+    // single-use nonce (deleted on every attempt, match or not).
+    const ip = req.socket.remoteAddress
+    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(ip)) {
+      return fail(res, 403, 'connect bootstrap is local-only')
+    }
+    const body = await readBody(req)
+    let nonce, name
+    try {
+      ;({ nonce, name } = JSON.parse(body ?? ''))
+    } catch {
+      return fail(res, 400, 'invalid request')
+    }
+    const nonceFile = join(DATA_DIR, '.connect-nonce')
+    let stored = null
+    try {
+      stored = await readFile(nonceFile, 'utf8')
+    } catch {
+      /* no nonce written */
+    }
+    await rm(nonceFile, { force: true })
+    if (typeof nonce !== 'string' || nonce.length < 32 || !stored || !timingSafeEqualStr(stored, nonce)) {
+      return fail(res, 403, 'nonce mismatch — run `guano connect` from the instance machine')
+    }
+    const minted = await bootstrapConnectToken(typeof name === 'string' ? name : '')
+    if (!minted) return fail(res, 403, 'no admin account yet — open /admin and complete setup first')
+    return send(res, 200, JSON.stringify(minted))
   }
   if (path === '/api/auth/update' && req.method === 'POST') {
     const user = sessionUser(req)

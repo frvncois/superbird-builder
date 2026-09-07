@@ -45,15 +45,29 @@ site through the same authenticated HTTP API the editor uses and shares the
 editor's own document logic, so structure edits preserve element identity,
 styling, and interactions exactly as if you'd typed them.
 
-### 1. Create an API token
+### Claude Desktop: one command
 
-In the editor: **My account → API tokens → create**. Copy the `guano_…` token
-(shown once). It carries your role — admin or editor only (contributors can't).
+On the machine running your instance (after `/admin` setup):
 
-### 2. Register the server
+```sh
+guano connect
+```
 
-The MCP server talks to your instance over HTTP; point it at the URL and token.
-For example, with Claude Code:
+It mints an API token (proving instance ownership via the data dir — no
+copy-paste) and writes the `mcpServers` entry into Claude Desktop's config with
+absolute paths. Quit Claude Desktop before running it — the app overwrites its
+config from memory on quit, which would silently undo the setup — then open it
+again: connected. `guano connect --print` emits the JSON snippet instead, for
+any other MCP client or a remote instance.
+
+### Manual setup (other clients / remote instances)
+
+**1. Create an API token** — in the editor: **My account → API tokens →
+create**. Copy the `guano_…` token (shown once). It carries your role — admin
+or editor only (contributors can't).
+
+**2. Register the server** — it talks to your instance over HTTP; point it at
+the URL and token. For example, with Claude Code:
 
 ```sh
 claude mcp add guano -- npx -y guano mcp
