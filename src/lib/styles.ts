@@ -140,7 +140,11 @@ function buildVocabulary(): string[] {
     }
   }
   const spacing = ['p', 'px', 'py', 'pt', 'pb', 'pl', 'pr', 'm', 'mx', 'my', 'mt', 'mb', 'ml', 'mr', 'gap', 'gap-x', 'gap-y']
-  for (const prefix of spacing) for (const stop of SPACING) out.add(`${prefix}-${stop}`)
+  // the validator accepts the in-between steps too ('5', '14') — the visual
+  // stepper keeps the coarse SPACING scale, but rejecting px-5 as a typed
+  // class was pure friction
+  const SPACING_VALID = [...SPACING, '5', '14']
+  for (const prefix of spacing) for (const stop of SPACING_VALID) out.add(`${prefix}-${stop}`)
   // width/height sizing runs far past the spacing scale (h-56 hero bands …)
   const SIZE_STOPS = ['0', '1', '2', '3', '4', '5', '6', '8', '10', '12', '14', '16', '20', '24', '28', '32', '36', '40', '44', '48', '52', '56', '60', '64', '72', '80', '96']
   for (const prefix of ['w', 'h', 'size']) for (const stop of SIZE_STOPS) out.add(`${prefix}-${stop}`)
@@ -182,6 +186,8 @@ function buildVocabulary(): string[] {
     'object-cover', 'object-contain', 'aspect-square', 'aspect-video',
     'antialiased', 'col-span-full', 'col-auto', 'row-span-full',
     'inline', 'inline-block', 'inline-flex', 'inline-grid', 'outline-none',
+    'whitespace-normal', 'whitespace-nowrap', 'whitespace-pre', 'whitespace-pre-line',
+    'whitespace-pre-wrap', 'break-words', 'break-all',
   ]
   common.forEach((c) => out.add(c))
   // grid placement — spans and explicit start/end lines

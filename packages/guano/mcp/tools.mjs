@@ -392,11 +392,16 @@ const tools = [
     name: 'get_page',
     description:
       'A page\'s DSL code (with line numbers), a version hash, and a per-element summary ' +
-      '(line → type, classes, interactionCount, hasOwnContent). Pass the version to writes ' +
-      '(set_page_code, edit_elements) so a stale write is rejected. Requires a target.',
+      '(line, id → type, classes, interactionCount, hasOwnContent). Pass the version to writes ' +
+      '(set_page_code, edit_elements) so a stale write is rejected. Pass summaryOnly: true to ' +
+      'skip the code fields — enough for harvesting ids/versions after a write you authored, ' +
+      'and much smaller on big pages. Requires a target.',
     inputSchema: {
       type: 'object',
-      properties: { pageId: { type: 'string' } },
+      properties: {
+        pageId: { type: 'string' },
+        summaryOnly: { type: 'boolean', description: 'omit code/numberedCode from the response' },
+      },
       required: ['pageId'],
       additionalProperties: false,
     },
@@ -410,8 +415,7 @@ const tools = [
         slug: page.path,
         status: page.status,
         version: sha256(page.code),
-        code: page.code,
-        numberedCode: numbered(page.code),
+        ...(args.summaryOnly ? {} : { code: page.code, numberedCode: numbered(page.code) }),
         elements: elementSummary(page),
       }
     },
@@ -700,9 +704,9 @@ const tools = [
   {
     name: 'edit_elements',
     description:
-      'Batch-edit elements on a page: classes, text content, media src, and html id, for MANY ' +
-      'elements in ONE call (one version check, one save — always prefer this over one call per ' +
-      'element). Address each edit by the element `id` from get_page (PREFERRED — stable and ' +
+      'Batch-edit elements on a page: classes, text content, media src, html id, and ' +
+      'interaction bindings (bindInteractions/unbindInteractionIds), for MANY elements in ONE ' +
+      'call (one version check, one save — always prefer this over one call per element). Address each edit by the element `id` from get_page (PREFERRED — stable and ' +
       'immune to line-counting mistakes) or its 0-based `line`; optionally pass `expectType` ' +
       '(e.g. "h1") to make a misaddressed edit fail instead of landing on the wrong element. ' +
       'Each result echoes the element it touched (line, id, type) — check it. ' +
@@ -735,6 +739,21 @@ const tools = [
               src: { type: 'string' },
               background: { type: 'string' },
               htmlId: { type: 'string' },
+              bindInteractions: {
+                type: 'array',
+                description: 'library interactions to bind — batch these here, not one bind_interaction call each',
+                items: {
+                  type: 'object',
+                  properties: {
+                    interactionId: { type: 'string' },
+                    trigger: { type: 'string', enum: ['hover', 'click', 'appear'] },
+                    targetId: { type: 'string', description: 'element id to animate; omit for the element itself' },
+                  },
+                  required: ['interactionId', 'trigger'],
+                  additionalProperties: false,
+                },
+              },
+              unbindInteractionIds: { type: 'array', items: { type: 'string' } },
             },
             additionalProperties: false,
           },
@@ -861,6 +880,47 @@ const tools = [
           }
         }
 
+        // --- interaction bindings (batched; live on the node like classes) ---
+        if (edit.bindInteractions?.length || edit.unbindInteractionIds?.length) {
+          if (inComponent) {
+            errors.push('interactions refused: element is inside a component instance — they live on the master')
+          } else if (localized) {
+            errors.push('interactions are not localizable — omit locale for binding edits')
+          } else {
+            for (const bindingId of edit.unbindInteractionIds ?? []) {
+              const before = node.interactions?.length ?? 0
+              node.interactions = (node.interactions ?? []).filter((b) => b.id !== bindingId)
+              if (node.interactions.length === before) errors.push(`no binding "${bindingId}" on this element`)
+              else {
+                applied.push('unbind')
+                changed = true
+              }
+              if (!node.interactions.length) delete node.interactions
+            }
+            for (const bind of edit.bindInteractions ?? []) {
+              if (!(project.interactions ?? []).some((it) => it.id === bind.interactionId)) {
+                errors.push(`no interaction with id "${bind.interactionId}" (use list_interactions)`)
+                continue
+              }
+              const rawTarget = bind.targetId
+              const bindTarget = rawTarget === 'null' || rawTarget === '' ? null : (rawTarget ?? null)
+              if (bindTarget !== null && !findNode(page.elements ?? [], bindTarget)) {
+                errors.push(`bind targetId "${bindTarget}" is not an element in this page`)
+                continue
+              }
+              node.interactions = node.interactions ?? []
+              node.interactions.push({
+                id: randomUUID(),
+                interactionId: bind.interactionId,
+                trigger: bind.trigger,
+                targetId: bindTarget,
+              })
+              applied.push('bind')
+              changed = true
+            }
+          }
+        }
+
         // --- html id (anchor target; never localized) ---
         if (edit.htmlId !== undefined) {
           if (localized) {
@@ -949,21 +1009,24 @@ const tools = [
   {
     name: 'bind_interaction',
     description:
-      'Apply a library interaction to an element (addressed by `line`). trigger is ' +
-      'hover | click | appear; targetId is the node the effect animates — a real element id in ' +
-      'this page, or OMIT it for the element itself. Pass the `version` from get_page. Elements ' +
-      'inside a component instance are refused (interactions live on the master). Requires a target.',
+      'Apply ONE library interaction to an element — for several bindings, batch them via ' +
+      'edit_elements.bindInteractions instead (one call, one version). Address by element `id` ' +
+      '(preferred) or 0-based `line`. trigger is hover | click | appear; targetId is the node ' +
+      'the effect animates — a real element id in this page, or OMIT it for the element itself. ' +
+      'Pass the `version` from get_page. Elements inside a component instance are refused ' +
+      '(interactions live on the master). Requires a target.',
     inputSchema: {
       type: 'object',
       properties: {
         pageId: { type: 'string' },
-        line: { type: 'integer' },
+        id: { type: 'string', description: 'element id from get_page (preferred address)' },
+        line: { type: 'integer', description: '0-based source line (alternative address)' },
         interactionId: { type: 'string' },
         trigger: { type: 'string', enum: ['hover', 'click', 'appear'] },
         targetId: { type: ['string', 'null'] },
         version: { type: 'string' },
       },
-      required: ['pageId', 'line', 'interactionId', 'trigger', 'version'],
+      required: ['pageId', 'interactionId', 'trigger', 'version'],
       additionalProperties: false,
     },
     handler: async (args) => {
@@ -983,7 +1046,7 @@ const tools = [
       if (targetId !== null && !findNode(page.elements ?? [], targetId)) {
         throw new Error(`targetId "${targetId}" is not an element in this page`)
       }
-      const { node, inComponent } = nodeAtLine(page, args.line)
+      const { node, inComponent } = resolveEditNode(page, args)
       if (inComponent) {
         return {
           saved: false,
@@ -996,23 +1059,24 @@ const tools = [
       node.interactions.push(binding)
       syncMarkersForNode(page, node)
       await saveTargetProject(project)
-      return { saved: true, line: args.line, binding, version: sha256(page.code) }
+      return { saved: true, line: node.line, id: node.id, binding, version: sha256(page.code) }
     },
   },
   {
     name: 'unbind_interaction',
     description:
-      'Remove an interaction binding from an element (by `line` + `bindingId`). Pass the ' +
-      '`version` from get_page. Requires a target.',
+      'Remove an interaction binding from an element (addressed by `id` or `line`, plus the ' +
+      '`bindingId`). Pass the `version` from get_page. Requires a target.',
     inputSchema: {
       type: 'object',
       properties: {
         pageId: { type: 'string' },
-        line: { type: 'integer' },
+        id: { type: 'string', description: 'element id from get_page (preferred address)' },
+        line: { type: 'integer', description: '0-based source line (alternative address)' },
         bindingId: { type: 'string' },
         version: { type: 'string' },
       },
-      required: ['pageId', 'line', 'bindingId', 'version'],
+      required: ['pageId', 'bindingId', 'version'],
       additionalProperties: false,
     },
     handler: async (args) => {
@@ -1022,7 +1086,7 @@ const tools = [
       if (args.version !== current) {
         return { saved: false, reason: 'stale-version', currentVersion: current }
       }
-      const { node } = nodeAtLine(page, args.line)
+      const { node } = resolveEditNode(page, args)
       const before = node.interactions?.length ?? 0
       node.interactions = (node.interactions ?? []).filter((b) => b.id !== args.bindingId)
       if (node.interactions.length === before) {
@@ -1031,7 +1095,7 @@ const tools = [
       if (!node.interactions.length) delete node.interactions
       syncMarkersForNode(page, node)
       await saveTargetProject(project)
-      return { saved: true, line: args.line, version: sha256(page.code) }
+      return { saved: true, line: node.line, id: node.id, version: sha256(page.code) }
     },
   },
   {
@@ -1080,8 +1144,10 @@ const tools = [
     name: 'create_collection',
     description:
       'Create a CMS collection and its template page (a real page bound with :body[name], ' +
-      'scaffolded with :h1[title]). `name` is lowercased to a slug. Starts with one text field, ' +
-      '"title". Requires a target.',
+      'scaffolded with :h1[title]). `name` is lowercased to a slug and the template CLAIMS the ' +
+      '"/<name>" route (entries render at /<name>/<slug>) — so name collections SINGULAR ' +
+      '("post", "feature") and keep the plural free for your index page. Fails if a page ' +
+      'already owns that route. Starts with one text field, "title". Requires a target.',
     inputSchema: {
       type: 'object',
       properties: { name: { type: 'string' } },
@@ -1097,6 +1163,15 @@ const tools = [
       if (!name) throw new Error('a name is required')
       if ((project.collections ?? []).some((c) => c.name === name)) {
         throw new Error(`a collection named "${name}" already exists`)
+      }
+      if ((project.pages ?? []).some((p) => p.path === `/${name}`)) {
+        return {
+          saved: false,
+          reason: 'slug-taken',
+          message:
+            `a page already owns "/${name}" — the collection template claims that route. ` +
+            'Pick another collection name (tip: singular, e.g. "feature" not "features")',
+        }
       }
       const label = name.charAt(0).toUpperCase() + name.slice(1)
       const code = buildDocument(
@@ -1126,7 +1201,16 @@ const tools = [
       project.pages.push(page)
       project.collections.push(collection)
       await saveTargetProject(project)
-      return { saved: true, collection: { id: collection.id, name, templatePageId: page.id, fields: collection.fields.map(fieldView) } }
+      return {
+        saved: true,
+        collection: {
+          id: collection.id,
+          name,
+          templatePageId: page.id,
+          templateSlug: `/${name}`,
+          fields: collection.fields.map(fieldView),
+        },
+      }
     },
   },
   {

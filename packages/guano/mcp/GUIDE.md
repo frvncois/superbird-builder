@@ -193,12 +193,14 @@ The validator accepts:
 - Classes from the editor's style catalog (layout, spacing, typography, borders,
   effects — the visual controls' vocabulary).
 - The full Tailwind color palette for `bg-` / `text-` / `border-` (`bg-slate-100` …).
-- Spacing on the editor's scale only: steps `0 1 2 3 4 6 8 10 12 16 20 24`
-  (so `py-4` and `py-6` pass, `py-5` does not). Negative offsets/margins use the same
-  steps (`-bottom-6`, `-mt-4`). Width/height (`w-` `h-` `size-`) run a wider scale up
-  to 96 (`h-56`, `h-80` pass).
-- **Any arbitrary value**: `p-[13px]`, `text-[2.2rem]`, `bg-[#fffff9]`, `max-w-[1340px]`,
-  `w-[8px]`. When a scale class is rejected, an arbitrary value is always the escape hatch.
+- Spacing steps `0 1 2 3 4 5 6 8 10 12 14 16 20 24`; negative offsets/margins on the
+  same scale (`-bottom-6`, `-mt-4`). Width/height (`w-` `h-` `size-`) run a wider scale
+  up to 96 (`h-56`, `h-80` pass). Whitespace control is available
+  (`whitespace-pre-wrap`, `whitespace-nowrap`, `break-words`, …).
+- **Any arbitrary VALUE**: `p-[13px]`, `text-[2.2rem]`, `bg-[#fffff9]`,
+  `text-[clamp(2.75rem,7vw,5.25rem)]`. When a scale class is rejected, an arbitrary
+  value is the escape hatch. Arbitrary **PROPERTIES** (`[white-space:pre-wrap]`) are
+  NOT supported — only value slots on known utilities.
 - Variant prefixes: `hover:` `focus:` `focus-visible:` `active:` `disabled:`
   `group-hover:` `first:` `last:` `sm:` `md:` `lg:` `xl:` `dark:` and arbitrary
   breakpoints `min-[900px]:` / `max-[767px]:`. Other variants (`before:`, `after:`,
@@ -228,7 +230,9 @@ Element text/media attaches to the node, not the code. Write it with `edit_eleme
   holds text directly; put a leaf inside it). Plain text, or inline rich markup limited
   to `<b> <strong> <i> <em> <u> <mark> <br> <ul> <ol> <li> <a href="…">` — anything
   else is stripped by the sanitizer (no `<span>`, no attributes/classes on inline tags).
-  `<mark>` is the highlight element. `""` clears back to the placeholder.
+  `<mark>` is the highlight element. `""` clears back to the placeholder — a truly
+  EMPTY leaf is not expressible, so build decorative dots/spacers/rules from `:div`
+  containers (styled, no content), never from text leaves.
 - **`src`** — image/video elements only: a `/media/<id>` path (media library), an
   `https://` URL, or a `data:image/…` / `data:video/…` URL.
 - **`background`** — any element: background media layered behind its content (image →
@@ -251,6 +255,15 @@ multi-reference; `removeFields`), add entries with `upsert_entry` (`values` maps
 identity; only `values` bind. An element with a `[field]` binding shows the bound value
 in entry scope — its own `content` is ignored there. `delete_collection` removes the
 collection and its template page.
+
+Collection tips: **name collections singular** (`post`, `feature`) — the template page
+claims the `/<name>` route and entries render at `/<name>/<slug>`, so the plural stays
+free for your index page. A binding and a link target combine on one token —
+`:link[title]:@item` renders each entry's title linking to its page (perfect for docs
+sidebars/blog lists). A `:collection-list` nested inside a template page works (list
+all entries while rendering one). Bound field values pass through the same rich-text
+sanitizer, so `<br>` inside a field renders as a real line break (the workaround for
+multi-line code blocks — leading indentation still collapses).
 
 **Localization**: pass a non-default `locale` to `edit_elements` (content/src) or
 `upsert_entry` (values) to write per-locale overrides; an empty string deletes the
@@ -277,10 +290,12 @@ The project has a shared interaction library (named class-swap animations):
 
 - `create_interaction` — name + `toClasses` (validated Tailwind), optional
   `duration` / `easing`. Returns the id.
-- `bind_interaction` — attach to an element by `line` with `trigger`
-  (`hover` | `click` | `appear`); OMIT `targetId` for the element itself, or pass a
-  real element id to animate another node. Each bind bumps the page version, so binds
-  on the SAME page are sequential; binds across different pages parallelize fine.
+- **Bind in batch**: put `bindInteractions: [{interactionId, trigger}]` on the
+  `edit_elements` edits — one call binds a whole page's animations along with their
+  base-state classes (e.g. `opacity-0 translate-y-8 transition-all`; the interaction
+  supplies the end state). `bind_interaction`/`unbind_interaction` (by element `id` or
+  `line`) exist for one-off tweaks; trigger is `hover` | `click` | `appear`, and you
+  OMIT `targetId` for the element itself.
 - Any bound interaction adds a small (~1.5 KB) runtime script to the published site.
   For simple hover styling, prefer a pure `hover:` class — zero JS.
 
@@ -304,5 +319,6 @@ to create or edit **components** (instances of existing ones work; styles inside
 instances live on the master, which only a human can edit), **breakpoints**, the
 project **favicon**, domain/smtp/publishing config, per-page `<script>` injection,
 media folder management or asset rename/delete (list + upload only), renaming a
-collection, or creating new comment threads (you can only reply). The `@link` code
-suffix is the supported way to set links.
+collection, creating new comment threads (you can only reply), **per-entry SEO** (a
+template's seo applies verbatim to every entry page — no field interpolation), or
+truly empty leaf elements. The `@link` code suffix is the supported way to set links.
