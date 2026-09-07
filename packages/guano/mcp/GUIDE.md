@@ -45,9 +45,11 @@ publish                       → export the target as the live static site
 
 Build the **complete structure first, in one `set_page_code` call**, then style and fill
 **many elements per `edit_elements` call** — a whole page is typically 2–4 writes total,
-never one call per element. Every write returns a new `version`; pass the latest one to
-the next write. A `stale-version` rejection means someone else edited — re-run
-`get_page` and retry.
+never one call per element. Every write returns a `version`; pass the latest one to the
+next write on that page. The version hashes the page **code**, so a node-only edit
+(classes/content) may legitimately return the SAME version — that is not a lost write.
+A `stale-version` rejection means someone else edited — re-run `get_page` and retry.
+Writes to **different pages** parallelize freely; writes to the same page are sequential.
 
 **Addressing elements:** after EVERY `set_page_code`, call `get_page` and take the
 returned `elements` list — never count lines by hand (closer lines like `section:` make
@@ -127,6 +129,11 @@ Leaves (always `:name:`):
 Special: `collection-list` (container) and `collection-item` (leaf) — see Collections.
 `body` exists only as the page wrapper; never add, move, or close it yourself.
 
+Form caveats: **forms are visual-only** — `form` exports with no action/method and
+nothing submits; every `input` exports as `type="text"` (no email/tel/date); and
+`dropdown`/`select` has **no option element**, so it renders as an empty `<select>` —
+avoid it (use an `input` plus a hint, and list real form handling in LIMITS).
+
 ### `[arg]` — collection field bindings
 
 The square-bracket slot binds an element to a **collection field by name**:
@@ -187,7 +194,9 @@ The validator accepts:
   effects — the visual controls' vocabulary).
 - The full Tailwind color palette for `bg-` / `text-` / `border-` (`bg-slate-100` …).
 - Spacing on the editor's scale only: steps `0 1 2 3 4 6 8 10 12 16 20 24`
-  (so `py-4` and `py-6` pass, `py-5` does not).
+  (so `py-4` and `py-6` pass, `py-5` does not). Negative offsets/margins use the same
+  steps (`-bottom-6`, `-mt-4`). Width/height (`w-` `h-` `size-`) run a wider scale up
+  to 96 (`h-56`, `h-80` pass).
 - **Any arbitrary value**: `p-[13px]`, `text-[2.2rem]`, `bg-[#fffff9]`, `max-w-[1340px]`,
   `w-[8px]`. When a scale class is rejected, an arbitrary value is always the escape hatch.
 - Variant prefixes: `hover:` `focus:` `focus-visible:` `active:` `disabled:`
@@ -206,8 +215,10 @@ top-level section/header/footer.
 **Set design tokens FIRST** (`update_settings { tokens: [{name, value}] }`) and style
 with `bg-<token>`/`text-<token>`/`border-<token>` instead of repeating arbitrary hex
 values — tokens are the project's theming system, the single place a human retheme
-happens. Token names are kebab-case and may not shadow Tailwind palette names
-(`red`, `slate`, …); values are `#hex`.
+happens. Token names are kebab-case, values are `#hex`, and these palette names are
+reserved: `slate gray red orange amber yellow lime green emerald teal cyan sky blue
+indigo violet purple fuchsia pink rose neutral stone zinc white black transparent
+current inherit`.
 
 ## Content, media, data
 
@@ -267,7 +278,9 @@ The project has a shared interaction library (named class-swap animations):
 - `create_interaction` — name + `toClasses` (validated Tailwind), optional
   `duration` / `easing`. Returns the id.
 - `bind_interaction` — attach to an element by `line` with `trigger`
-  (`hover` | `click` | `appear`) and `targetId` (`null` = the element itself).
+  (`hover` | `click` | `appear`); OMIT `targetId` for the element itself, or pass a
+  real element id to animate another node. Each bind bumps the page version, so binds
+  on the SAME page are sequential; binds across different pages parallelize fine.
 - Any bound interaction adds a small (~1.5 KB) runtime script to the published site.
   For simple hover styling, prefer a pure `hover:` class — zero JS.
 

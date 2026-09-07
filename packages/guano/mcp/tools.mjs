@@ -48,6 +48,7 @@ export function createToolSet({ api, runtime }) {
     SAFE_SRC,
     setStyleTokens,
     isValidToken,
+    RESERVED_TOKEN_NAMES,
     createPage,
     defaultSettings,
   } = runtime
@@ -654,7 +655,8 @@ const tools = [
             reason: 'invalid-tokens',
             invalid: invalid.map((t) => t.name),
             message:
-              'token names are kebab-case ([a-z][a-z0-9-]*, not a Tailwind palette name), values are #hex',
+              'token names are kebab-case ([a-z][a-z0-9-]*), values are #hex; reserved ' +
+              `(Tailwind palette) names: ${[...RESERVED_TOKEN_NAMES].join(', ')}`,
           }
         }
         // keep existing ids for same-name tokens so unrelated diffs stay quiet
@@ -948,8 +950,8 @@ const tools = [
     name: 'bind_interaction',
     description:
       'Apply a library interaction to an element (addressed by `line`). trigger is ' +
-      'hover | click | appear; targetId is the node the effect animates (a real element id in ' +
-      'this page, or null = the element itself). Pass the `version` from get_page. Elements ' +
+      'hover | click | appear; targetId is the node the effect animates — a real element id in ' +
+      'this page, or OMIT it for the element itself. Pass the `version` from get_page. Elements ' +
       'inside a component instance are refused (interactions live on the master). Requires a target.',
     inputSchema: {
       type: 'object',
@@ -974,7 +976,10 @@ const tools = [
       if (!(project.interactions ?? []).some((it) => it.id === args.interactionId)) {
         throw new Error(`no interaction with id "${args.interactionId}" (use list_interactions)`)
       }
-      const targetId = args.targetId ?? null
+      // some MCP clients serialize a JSON null into the literal string "null"
+      // on a ['string','null'] union — treat it (and '') as self-target
+      const rawTarget = args.targetId
+      const targetId = rawTarget === 'null' || rawTarget === '' ? null : (rawTarget ?? null)
       if (targetId !== null && !findNode(page.elements ?? [], targetId)) {
         throw new Error(`targetId "${targetId}" is not an element in this page`)
       }

@@ -141,6 +141,14 @@ function buildVocabulary(): string[] {
   }
   const spacing = ['p', 'px', 'py', 'pt', 'pb', 'pl', 'pr', 'm', 'mx', 'my', 'mt', 'mb', 'ml', 'mr', 'gap', 'gap-x', 'gap-y']
   for (const prefix of spacing) for (const stop of SPACING) out.add(`${prefix}-${stop}`)
+  // width/height sizing runs far past the spacing scale (h-56 hero bands …)
+  const SIZE_STOPS = ['0', '1', '2', '3', '4', '5', '6', '8', '10', '12', '14', '16', '20', '24', '28', '32', '36', '40', '44', '48', '52', '56', '60', '64', '72', '80', '96']
+  for (const prefix of ['w', 'h', 'size']) for (const stop of SIZE_STOPS) out.add(`${prefix}-${stop}`)
+  // negative offsets and margins (-bottom-6, -mt-4 …) — signed transform
+  // utilities already validate via the slider catalog; these did not
+  for (const prefix of ['top', 'right', 'bottom', 'left', 'inset', 'inset-x', 'inset-y', 'm', 'mx', 'my', 'mt', 'mb', 'ml', 'mr']) {
+    for (const stop of SPACING) if (stop !== '0') out.add(`-${prefix}-${stop}`)
+  }
   // `auto` is valid CSS only where margins and offsets collapse to it
   for (const prefix of ['m', 'mx', 'my', 'mt', 'mb', 'ml', 'mr']) out.add(`${prefix}-auto`)
   for (const prefix of ['inset', 'inset-x', 'inset-y', 'top', 'right', 'bottom', 'left']) out.add(`${prefix}-auto`)
@@ -173,6 +181,7 @@ function buildVocabulary(): string[] {
     'grid-cols-1', 'grid-cols-2', 'grid-cols-3', 'grid-cols-4', 'grid-cols-6', 'grid-cols-12',
     'object-cover', 'object-contain', 'aspect-square', 'aspect-video',
     'antialiased', 'col-span-full', 'col-auto', 'row-span-full',
+    'inline', 'inline-block', 'inline-flex', 'inline-grid', 'outline-none',
   ]
   common.forEach((c) => out.add(c))
   // grid placement — spans and explicit start/end lines
@@ -372,7 +381,10 @@ function prerequisiteFor(cls: string, tokens: string[]): string | undefined {
   const { variant, base } = splitVariant(cls)
   const r = propForBase(base)?.relevance
   if (!r || r.when !== 'display') return undefined
-  if (r.values.some((v) => tokens.includes(`${variant}${v}`))) return undefined
+  // an unprefixed display class applies at every breakpoint/state, so bare
+  // `grid` already satisfies `md:grid-cols-2` — don't prepend a redundant
+  // `md:grid`
+  if (r.values.some((v) => tokens.includes(`${variant}${v}`) || tokens.includes(v))) return undefined
   const preferred = r.values.includes('flex') ? 'flex' : r.values[0]!
   return `${variant}${preferred}`
 }
