@@ -345,6 +345,17 @@ function renderNode(node, ctx) {
   if (!cond.visible) return ''
   if (runtime) ctx.flags.condRuntime = true
 
+  // a component instance's :Name wrapper is a logical grouping, not a visual
+  // box — with no styling/background/interactions of its own it emits NO
+  // element (its children render inline), so `header → component` stays a
+  // bare <header>, not <div><header>. A styled/interactive wrapper stays real.
+  if (/^[A-Z]/.test(node.type)) {
+    const master = ctx.mm.get(node.id)?.master ?? node
+    const bare =
+      !master.classes?.trim() && !master.background && !(master.interactions?.length)
+    if (bare) return node.children.map((child) => renderNode(child, ctx)).join('')
+  }
+
   if (node.type === 'collection-list') {
     // the arg names a collection (all entries) or a multi-reference field
     // of the surrounding scope entry (mirrors useRenderNode.listScope)

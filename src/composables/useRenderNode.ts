@@ -247,9 +247,19 @@ export function useRenderNode(
     const kept = removed
       ? own.split(/\s+/).filter(Boolean).filter((t) => !removed.has(t)).join(' ')
       : own
+    // a bare component :Name wrapper is a logical grouping — render it
+    // layout-transparent (display:contents) so it adds no box, matching the
+    // static export which emits no wrapper element at all. A styled/interactive
+    // wrapper stays a real box.
+    const bareComponentRoot =
+      /^[A-Z]/.test(node.value.type) &&
+      !own.trim() &&
+      !interactionCls &&
+      !backgroundInfo.value
     return [
       // the body fills its frame/viewport column
       node.value.type === 'body' && 'flex-1',
+      bareComponentRoot && 'contents',
       kept,
       interactionCls,
       // background media makes the host relative (video layer) / applies bg image
