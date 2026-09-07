@@ -260,6 +260,7 @@ watch(focusTick, async () => {
           <div :ref="setFrameEl(bp.id)" class="relative">
             <div
               data-frame-drop
+              data-site-scope
               class="flex flex-col overflow-hidden bg-white text-black shadow-lg"
               :style="{
                 width: `${bp.width}px`,

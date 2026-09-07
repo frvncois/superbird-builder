@@ -60,6 +60,10 @@
   --state-class: #8d5bd6;
 }
 
+/* NOTE: the --color-* names below are re-asserted at runtime by
+   useThemeTokens (CHROME_COLOR_VARS) so a project design token sharing a name
+   (e.g. `accent`) can't recolor the app chrome — keep that list in sync when
+   adding/removing entries here. */
 @theme inline {
   --font-sans: 'Geist Variable', ui-sans-serif, system-ui, sans-serif;
   --font-mono: 'Geist Mono Variable', ui-monospace, monospace;
