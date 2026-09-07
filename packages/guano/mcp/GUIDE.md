@@ -319,7 +319,10 @@ property as the interaction's classes are **removed while fired** — so `hidden
 ```
 
 with a library interaction whose `toClasses` is `flex` (plus any panel styling).
-Clicking shows the menu, clicking again hides it.
+Clicking shows the menu, clicking again hides it. This works **inside a shared
+header/footer component** too — bind the button and target the panel; both must be
+elements of the same component instance (the binding and its target resolve on the
+master, so every page's header toggles independently).
 
 ## Project settings
 

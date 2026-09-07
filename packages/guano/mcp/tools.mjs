@@ -253,6 +253,51 @@ function masterNodeFor(project, page, instanceNode) {
   return found
 }
 
+/**
+ * instance node id → { master, rootId } for every in-component node on a page
+ * (mirrors export.mjs buildMasterMap). `rootId` is the instance's :Name
+ * wrapper id — two nodes in the same instance share it.
+ */
+function buildInstanceMap(project, page) {
+  const map = new Map()
+  const pair = (inst, master, rootId) => {
+    if (inst.type !== master.type) return
+    map.set(inst.id, { master, rootId })
+    const len = Math.min(inst.children.length, master.children.length)
+    for (let i = 0; i < len; i++) pair(inst.children[i], master.children[i], rootId)
+  }
+  walkNodes(page.elements ?? [], (n) => {
+    if (!isComponentType(n.type)) return
+    const def = (project.components ?? []).find((c) => c.name === n.type)
+    if (def) pair(n, def.root, n.id)
+  })
+  return map
+}
+
+/**
+ * Resolve a binding's stored targetId. Inside a component, a cross-element
+ * target must be stored as the MASTER node id (the exporter's scopedTargets
+ * matches master ids) and must live in the SAME instance. Returns
+ * { targetId } or { error }.
+ */
+function resolveBindTarget(project, page, ownerNode, inComponent, rawTarget) {
+  const target = rawTarget === 'null' || rawTarget === '' ? null : (rawTarget ?? null)
+  if (target === null) return { targetId: null }
+  if (!inComponent) {
+    if (!findNode(page.elements ?? [], target)) {
+      return { error: `bind targetId "${target}" is not an element in this page` }
+    }
+    return { targetId: target }
+  }
+  const instMap = buildInstanceMap(project, page)
+  const ownerInfo = instMap.get(ownerNode.id)
+  const targetInfo = instMap.get(target)
+  if (!targetInfo || targetInfo.rootId !== ownerInfo?.rootId) {
+    return { error: `bind targetId "${target}" must be another element in the same component instance` }
+  }
+  return { targetId: targetInfo.master.id }
+}
+
 /** the editor's structure-adoption: keep master nodes (ids/styles/content)
  * where types line up, mint new ones for new children — recursive, pooled
  * by type so reorders keep identity (mirrors useComponents.adoptStructure) */
@@ -1275,10 +1320,9 @@ const tools = [
                 errors.push(`no interaction with id "${bind.interactionId}" (use list_interactions)`)
                 continue
               }
-              const rawTarget = bind.targetId
-              const bindTarget = rawTarget === 'null' || rawTarget === '' ? null : (rawTarget ?? null)
-              if (bindTarget !== null && !inComponent && !findNode(page.elements ?? [], bindTarget)) {
-                errors.push(`bind targetId "${bindTarget}" is not an element in this page`)
+              const resolved = resolveBindTarget(project, page, node, inComponent, bind.targetId)
+              if (resolved.error) {
+                errors.push(resolved.error)
                 continue
               }
               bindTargetNode.interactions = bindTargetNode.interactions ?? []
@@ -1286,7 +1330,7 @@ const tools = [
                 id: randomUUID(),
                 interactionId: bind.interactionId,
                 trigger: bind.trigger,
-                targetId: bindTarget,
+                targetId: resolved.targetId,
               })
               applied.push(inComponent ? 'bind (on component master — all instances)' : 'bind')
               changed = true
@@ -1413,25 +1457,28 @@ const tools = [
       if (!(project.interactions ?? []).some((it) => it.id === args.interactionId)) {
         throw new Error(`no interaction with id "${args.interactionId}" (use list_interactions)`)
       }
-      // some MCP clients serialize a JSON null into the literal string "null"
-      // on a ['string','null'] union — treat it (and '') as self-target
-      const rawTarget = args.targetId
-      const targetId = rawTarget === 'null' || rawTarget === '' ? null : (rawTarget ?? null)
-      if (targetId !== null && !findNode(page.elements ?? [], targetId)) {
-        throw new Error(`targetId "${targetId}" is not an element in this page`)
-      }
       const { node, inComponent } = resolveEditNode(page, args)
-      if (inComponent) {
+      // in-component bindings redirect to the master (editor parity); a
+      // cross-element targetId is translated to the target's master id
+      const bindNode = inComponent ? masterNodeFor(project, page, node) : node
+      if (!bindNode) {
         return {
           saved: false,
           reason: 'component-instance',
-          message: 'interactions on a component instance live on the master — edit the master block',
+          message: 'this instance node has no master counterpart (structure diverged)',
         }
       }
-      const binding = { id: randomUUID(), interactionId: args.interactionId, trigger: args.trigger, targetId }
-      node.interactions = node.interactions ?? []
-      node.interactions.push(binding)
-      syncMarkersForNode(page, node)
+      const resolved = resolveBindTarget(project, page, node, inComponent, args.targetId)
+      if (resolved.error) throw new Error(resolved.error)
+      const binding = {
+        id: randomUUID(),
+        interactionId: args.interactionId,
+        trigger: args.trigger,
+        targetId: resolved.targetId,
+      }
+      bindNode.interactions = bindNode.interactions ?? []
+      bindNode.interactions.push(binding)
+      if (!inComponent) syncMarkersForNode(page, node)
       await saveTargetProject(project)
       return { saved: true, line: node.line, id: node.id, binding, version: sha256(page.code) }
     },
