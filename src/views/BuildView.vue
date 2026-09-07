@@ -37,7 +37,7 @@ const pagesDrawerOpen = ref(false)
     </template>
 
     <template #left>
-      <PagesDrawer v-if="pagesDrawerOpen" @close="pagesDrawerOpen = false" />
+      <PagesDrawer :open="pagesDrawerOpen" @close="pagesDrawerOpen = false" />
       <div class="h-full">
         <CodeEditor />
       </div>

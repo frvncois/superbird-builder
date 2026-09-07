@@ -233,7 +233,7 @@ function onKeydown(e: KeyboardEvent) {
     <button
       v-tooltip.right="'Insert elements (⌘E)'"
       type="button"
-      class="flex size-10 shrink-0 items-center justify-center rounded-full border border-input bg-background text-muted-foreground shadow-lg transition-all duration-200 hover:bg-accent/30 hover:text-accent-foreground"
+      class="flex size-10 shrink-0 items-center justify-center rounded-full border border-input bg-background text-muted-foreground shadow-lg transition-all duration-200"
       :class="open ? 'rotate-45' : ''"
       @click="togglePalette"
     >

@@ -36,10 +36,13 @@ list, it does not exist yet: **report it as a limitation instead of working arou
 get_status                    → who you are, whether a target is set, which drafts exist
 set_target                    → ASK the user first: Main or a draft? (their call, not yours)
 update_settings               → design tokens / fonts / SEO defaults FIRST (styling uses them)
-list_pages → get_page         → read before writing; note the `version` hash
-create_page / set_page_code   → write the WHOLE page structure in one call per page
-edit_elements                 → classes + content + media + htmlId for MANY elements, one call
-upload_media / bind_interaction / entries … → as needed
+create_page / set_page_code   → write the WHOLE page structure; the response returns the
+                                 element ids — no get_page needed before styling
+edit_elements                 → classes + content + media + htmlId for MANY elements, one
+                                 call (or `pages:[…]` to span several pages at once)
+upload_media {url} / bind_interaction / entries … → as needed
+add a locale                  → update_settings {addLocales}, then
+                                 get_translation_worklist → set_translations (whole language, ~2 calls)
 publish                       → export the target as the live static site
 ```
 
@@ -50,10 +53,15 @@ next write on that page. The version hashes the page **code**, so a node-only ed
 (classes/content) may legitimately return the SAME version — that is not a lost write.
 A `stale-version` rejection means someone else edited — re-run `get_page` and retry.
 Writes to **different pages** parallelize freely; writes to the same page are sequential.
+To touch several pages at once (shared chrome, a sweeping restyle), pass `edit_elements`
+its `pages: [{pageId, version, edits}]` form — one call, one save, per-page version checks
+(a stale page fails alone, the rest still apply).
 
-**Addressing elements:** after EVERY `set_page_code`, call `get_page` and take the
-returned `elements` list — never count lines by hand (closer lines like `section:` make
-manual counting drift, and a misaddressed edit lands on the wrong element). Prefer the
+**Addressing elements:** `set_page_code` already returns the fresh `elements` list (ids by
+line) in its response — style straight from that, no follow-up `get_page` needed. Read a
+page again only when a human may have changed it. Never count lines by hand (closer lines
+like `section:` make manual counting drift, and a misaddressed edit lands on the wrong
+element). Prefer the
 element **`id`** as the edit address (stable across structural edits); `line` values are
 **0-based** (`numberedCode` is 1-based, for humans). Add `expectType` to edits when
 using lines — with it a misaddressed edit fails loudly and shows up in `failures`
@@ -302,9 +310,10 @@ Element text/media attaches to the node, not the code. Write it with `edit_eleme
   whole page.
 
 **Media library**: `list_media` gives every asset's `/media/<id>` url; `upload_media`
-adds one from a base64 data URL (images/video/audio/pdf/fonts — the server validates
-type, size, and quota). Prefer library assets over inline `data:` srcs — inline data
-bloats the project blob.
+adds one — pass a public `url` (the server fetches it directly; PREFERRED, since the
+bytes never pass through your context) or a base64 `dataUrl` for something you hold in
+hand (images/video/audio/pdf/fonts — the server validates type, size, and quota). Prefer
+library assets over inline `data:` srcs on elements — inline data bloats the project blob.
 
 For **repeating / structured content**, use collections instead of own content: create
 a collection (`create_collection`, starts with one text field `title`), shape its schema
@@ -334,13 +343,18 @@ multi-line code blocks — leading indentation still collapses).
 
 **Localization** is project-level, and rendering it takes three steps in this order:
 
-1. **Register the locale**: `update_settings {locales: ["en", "fr"]}` (the list replaces;
-   the default locale is always kept). An unregistered locale is rejected by
-   `edit_elements` and `upsert_entry` — overrides for it could never render.
-2. **Write overrides**: pass the non-default `locale` to `edit_elements` (content/src)
-   or `upsert_entry` (values). An empty string deletes that override; keys you OMIT
-   keep their existing override (safe to fix one field alone). The default locale is
-   always the base content; classes and htmlId are never localized.
+1. **Register the locale**: `update_settings {addLocales: ["fr"]}` — additive, existing
+   locales untouched (use `removeLocales` to unregister; removing a locale with
+   translations needs `forcePurge: true` because it hard-deletes them). An unregistered
+   locale is rejected by every override write — it could never render.
+2. **Write overrides**: the fast path is `get_translation_worklist {locale}` → translate
+   → `set_translations {locale, items}` — the worklist returns EVERY translatable string
+   (page text, shared component-master text, entry text fields) with its base value and
+   current override in one read, and the write covers all three kinds across all pages in
+   one call, so a whole language is ~2 calls, not a per-page rebuild of the base pass. For
+   one-off touch-ups, `edit_elements` (content/src) and `upsert_entry` (values) also take
+   a `locale`. An empty string deletes an override; OMITTED keys keep theirs. The default
+   locale is always the base content; classes and htmlId are never localized.
 3. **Publish**: every non-default registered locale gets its own full route tree —
    `/fr`, `/fr/collections`, `/fr/<collection>/<slug>`, … — rendered with `<html
    lang="fr">`, override values where they exist, and base-content fallback where they

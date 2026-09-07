@@ -379,6 +379,22 @@ function setLocaleOverride(node, locale, key, value) {
 /** locale codes accepted by the editor (mirrors useLocale.LOCALE_RE) */
 const LOCALE_RE = /^[a-z]{2,3}(-[a-z0-9]{2,8})*$/
 
+/** how many overrides a locale holds across page elements, component masters
+ * and collection entries — the guard that keeps a careless locale removal
+ * from silently destroying a finished translation */
+function countLocaleOverrides(project, code) {
+  let n = 0
+  const count = (node) => {
+    if (node.locales?.[code]) n++
+  }
+  for (const page of project.pages ?? []) walkNodes(page.elements ?? [], count)
+  for (const comp of project.components ?? []) walkNodes([comp.root], count)
+  for (const collection of project.collections ?? []) {
+    for (const entry of collection.entries ?? []) if (entry.locales?.[code]) n++
+  }
+  return n
+}
+
 /** hard-delete every translation override for a locale across the project —
  * page elements, component masters, collection entries (mirrors
  * useLocale.deleteLocale, so removing a locale via MCP leaves no orphans) */
@@ -397,6 +413,290 @@ function purgeLocaleOverrides(project, code) {
       if (!Object.keys(entry.locales).length) delete entry.locales
     }
   }
+}
+
+/**
+ * The edit_elements core for ONE page: applies a batch of edits and returns
+ * { changed, results }. Extracted so the tool can run it per page in a
+ * multi-page batch (one call, one save) as well as for the single-page form.
+ */
+function applyPageEdits(project, page, edits, locale, defaultLocale) {
+  const localized = locale !== defaultLocale
+  let changed = false
+  const results = []
+  for (const edit of edits) {
+    const errors = []
+    const applied = []
+    let node, inComponent
+    try {
+      ;({ node, inComponent } = resolveEditNode(page, edit))
+    } catch (e) {
+      results.push({ ...(edit.id ? { id: edit.id } : {}), line: edit.line, errors: [e.message] })
+      continue
+    }
+    if (edit.expectType && node.type !== edit.expectType) {
+      results.push({
+        line: node.line,
+        id: node.id,
+        type: node.type,
+        errors: [`expectType mismatch: element here is ':${node.type}', not ':${edit.expectType}' — re-read get_page`],
+      })
+      continue
+    }
+
+    // --- classes (never localized; masters own them inside instances —
+    //     in-component edits REDIRECT to the mapped master, editor-style) ---
+    if (edit.addClasses?.length || edit.removeClasses?.length) {
+      const styleTarget = inComponent ? masterNodeFor(project, page, node) : node
+      if (localized) {
+        errors.push('classes are not localizable — omit locale for class edits')
+      } else if (!styleTarget) {
+        errors.push('classes refused: this instance node has no master counterpart (structure diverged)')
+      } else {
+        // removes run FIRST so remove+add of the same class nets to the add
+        // (a re-apply), not a silent removal
+        const removeSet = new Set(edit.removeClasses ?? [])
+        let tokens = (styleTarget.classes ?? '').split(/\s+/).filter(Boolean).filter((t) => !removeSet.has(t))
+        for (const cls of edit.addClasses ?? []) {
+          if (tokens.includes(cls)) continue // idempotent re-apply — not an error
+          const result = applyClass(cls, tokens)
+          if (result.error !== undefined) errors.push(`class "${cls}": ${result.error}`)
+          else tokens = result.tokens
+        }
+        styleTarget.classes = tokens.join(' ')
+        if (!styleTarget.classes) delete styleTarget.classes // keep untouched nodes byte-identical
+        applied.push(inComponent ? 'classes (on component master — all instances)' : 'classes')
+        changed = true
+      }
+    }
+
+    // content/src land on the node itself, or — with onMaster, inside an
+    // instance — on the shared master (instances without an override then
+    // render the master's value, so shared chrome is written ONCE)
+    const dataTarget = edit.onMaster
+      ? inComponent
+        ? masterNodeFor(project, page, node)
+        : null
+      : node
+    const dataTargetError = edit.onMaster
+      ? !inComponent
+        ? 'onMaster refused: this element is not inside a component instance'
+        : !dataTarget
+          ? 'onMaster refused: this instance node has no master counterpart (structure diverged)'
+          : null
+      : null
+
+    // --- own text content (leaf elements only; rich subset sanitized) ---
+    if (edit.content !== undefined) {
+      if (isComponentType(node.type)) {
+        errors.push('content refused: a component instance token has no own text')
+      } else if (!isLeafElement(node.type)) {
+        errors.push(`content refused: ':${node.type}' is a container — put text on a leaf inside it`)
+      } else if (dataTargetError) {
+        errors.push(dataTargetError)
+      } else {
+        const value = isRich(edit.content) ? sanitizeRich(edit.content) : edit.content
+        if (localized) {
+          setLocaleOverride(dataTarget, locale, 'content', value)
+        } else if (value) {
+          dataTarget.content = value
+        } else {
+          delete dataTarget.content
+        }
+        applied.push(edit.onMaster ? 'content (on component master — all instances)' : 'content')
+        changed = true
+      }
+    }
+
+    // --- media src (image/video only; scheme allowlist) ---
+    if (edit.src !== undefined) {
+      if (node.type !== 'image' && node.type !== 'video') {
+        errors.push(`src refused: ':${node.type}' is not an image/video element`)
+      } else if (edit.src && !SAFE_SRC.test(edit.src)) {
+        errors.push('src refused: use a /media/… path, https:// URL, or data:image|video URL')
+      } else if (dataTargetError) {
+        errors.push(dataTargetError)
+      } else {
+        if (localized) {
+          setLocaleOverride(dataTarget, locale, 'src', edit.src)
+        } else if (edit.src) {
+          dataTarget.src = edit.src
+        } else {
+          delete dataTarget.src
+        }
+        applied.push(edit.onMaster ? 'src (on component master — all instances)' : 'src')
+        changed = true
+      }
+    }
+
+    // --- background media (any element; layered behind content) ---
+    if (edit.background !== undefined) {
+      if (localized) {
+        errors.push('background is not localizable — omit locale for background edits')
+      } else if (edit.background && !SAFE_SRC.test(edit.background)) {
+        errors.push('background refused: use a /media/… path, https:// URL, or data:image|video URL')
+      } else {
+        if (edit.background) node.background = edit.background
+        else delete node.background
+        applied.push('background')
+        changed = true
+      }
+    }
+
+    // --- arg (the token's […] slot — CODE-owned, so patch the line and
+    //     reconcile with a same-line identity map; no line count change) ---
+    if (edit.arg !== undefined) {
+      const value = String(edit.arg)
+      if (node.line === undefined || node.type === 'body') {
+        errors.push('arg refused: this element\'s arg is not editable')
+      } else if (value && !/^[a-z0-9.+-]+$/.test(value)) {
+        errors.push('arg refused: lowercase field path ([a-z0-9.-], one dot max for a reference hop)')
+      } else if (
+        (node.type === 'collection-list' || node.type === 'collection-item') &&
+        (() => {
+          const { collectionNames, listFieldNames } = knownNames(project)
+          return !value || !(collectionNames.includes(value) ||
+            (node.type === 'collection-list' && listFieldNames.includes(value)))
+        })()
+      ) {
+        errors.push(`arg refused: ':${node.type}' needs a real collection name`)
+      } else {
+        const lines = page.code.split('\n')
+        const head = lines[node.line]?.match(/^(\s*:[a-zA-Z][a-zA-Z0-9-]*)(\[[a-z0-9.+-]*\])?/)
+        if (!head) {
+          errors.push('arg refused: could not locate the element token on its line')
+        } else {
+          const rest = lines[node.line].slice(head[1].length + (head[2]?.length ?? 0))
+          lines[node.line] = head[1] + (value ? `[${value}]` : '') + rest
+          const newCode = lines.join('\n')
+          const identity = new Map(lines.map((_, i) => [i, i]))
+          page.elements = reconcile(page.code, newCode, page.elements, identity)
+          page.code = newCode
+          node.arg = value || undefined
+          applied.push('arg')
+          changed = true
+        }
+      }
+    }
+
+    // --- listQuery (collection-list only; filter → sort → limit) ---
+    if (edit.listQuery !== undefined) {
+      if (node.type !== 'collection-list') {
+        errors.push(`listQuery refused: ':${node.type}' is not a collection-list`)
+      } else {
+        const q = edit.listQuery
+        const empty = q === null || (typeof q === 'object' && !Object.keys(q).length)
+        if (empty) {
+          delete node.listQuery
+          applied.push('listQuery')
+          changed = true
+        } else {
+          // soft-validate field names against the collection the list names
+          const col = (project.collections ?? []).find((c) => c.name === node.arg)
+          const fieldOk = (name) =>
+            name === 'createdAt' || !col || (col.fields ?? []).some((f) => f.name === name)
+          const bad = []
+          if (q.sortField && q.sortField !== 'name' && !fieldOk(q.sortField)) bad.push(`sortField "${q.sortField}"`)
+          if (q.filter?.field && !fieldOk(q.filter.field)) bad.push(`filter.field "${q.filter.field}"`)
+          if (Array.isArray(q.pick) && col) {
+            const ids = new Set((col.entries ?? []).map((e) => e.id))
+            const missing = q.pick.filter((id) => !ids.has(id))
+            if (missing.length) bad.push(`pick ids ${missing.join(', ')} not in "${node.arg}"`)
+          }
+          if (bad.length) {
+            errors.push(`listQuery refused: ${bad.join(', ')} not in collection "${node.arg}"`)
+          } else {
+            node.listQuery = q
+            applied.push('listQuery')
+            changed = true
+          }
+        }
+      }
+    }
+
+    // --- interaction bindings (batched; masters own them inside instances) ---
+    if (edit.bindInteractions?.length || edit.unbindInteractionIds?.length) {
+      const bindTargetNode = inComponent ? masterNodeFor(project, page, node) : node
+      if (localized) {
+        errors.push('interactions are not localizable — omit locale for binding edits')
+      } else if (!bindTargetNode) {
+        errors.push('interactions refused: this instance node has no master counterpart (structure diverged)')
+      } else {
+        for (const bindingId of edit.unbindInteractionIds ?? []) {
+          const before = bindTargetNode.interactions?.length ?? 0
+          bindTargetNode.interactions = (bindTargetNode.interactions ?? []).filter((b) => b.id !== bindingId)
+          if (bindTargetNode.interactions.length === before) errors.push(`no binding "${bindingId}" on this element`)
+          else {
+            applied.push('unbind')
+            changed = true
+          }
+          if (!bindTargetNode.interactions.length) delete bindTargetNode.interactions
+        }
+        for (const bind of edit.bindInteractions ?? []) {
+          if (!(project.interactions ?? []).some((it) => it.id === bind.interactionId)) {
+            errors.push(`no interaction with id "${bind.interactionId}" (use list_interactions)`)
+            continue
+          }
+          const resolved = resolveBindTarget(project, page, node, inComponent, bind.targetId)
+          if (resolved.error) {
+            errors.push(resolved.error)
+            continue
+          }
+          bindTargetNode.interactions = bindTargetNode.interactions ?? []
+          bindTargetNode.interactions.push({
+            id: randomUUID(),
+            interactionId: bind.interactionId,
+            trigger: bind.trigger,
+            targetId: resolved.targetId,
+          })
+          applied.push(inComponent ? 'bind (on component master — all instances)' : 'bind')
+          changed = true
+        }
+      }
+    }
+
+    // --- html id (anchor target; never localized) ---
+    if (edit.htmlId !== undefined) {
+      if (localized) {
+        errors.push('htmlId is not localizable — omit locale for htmlId edits')
+      } else if (edit.htmlId && !/^[A-Za-z][A-Za-z0-9_-]*$/.test(edit.htmlId)) {
+        errors.push('htmlId refused: must start with a letter and use only letters/digits/-/_')
+      } else {
+        if (edit.htmlId) node.htmlId = edit.htmlId
+        else delete node.htmlId
+        applied.push('htmlId')
+        changed = true
+      }
+    }
+
+    // --- custom attributes (allowlisted; replaces the whole set) ---
+    if (edit.attributes !== undefined) {
+      if (localized) {
+        errors.push('attributes are not localizable — omit locale for attribute edits')
+      } else {
+        const incoming = edit.attributes && typeof edit.attributes === 'object' ? edit.attributes : {}
+        const clean = sanitizeAttributes(incoming)
+        const refused = Object.keys(incoming).filter((n) => !(n.toLowerCase() in clean))
+        if (refused.length) errors.push(`attributes ignored (not allowed): ${refused.join(', ')}`)
+        if (Object.keys(clean).length) node.attributes = clean
+        else delete node.attributes
+        applied.push('attributes')
+        changed = true
+      }
+    }
+
+    // marker truth-sync skips component-instance subtrees, like the editor
+    if (!inComponent && syncMarkersForNode(page, node)) changed = true
+    // echo the element's identity so a misaddressed edit is visible
+    results.push({
+      line: node.line,
+      id: node.id,
+      type: node.type,
+      applied,
+      ...(errors.length ? { errors } : {}),
+    })
+  }
+  return { changed, results }
 }
 
 /** a short human summary of an interaction library entry */
@@ -622,7 +922,9 @@ const tools = [
       "Replace a page's DSL code. Pass the `version` from get_page — a mismatch means a human " +
       'edited the page since you read it, so the write is rejected (re-read and retry). Invalid ' +
       'code is returned as diagnostics WITHOUT saving. On success the element tree is re-derived ' +
-      'while carrying node identity + styling/interactions/content (exactly like the editor). ' +
+      'while carrying node identity + styling/interactions/content (exactly like the editor), ' +
+      'and the response includes the fresh per-element summary (`elements`: ids by line) — go ' +
+      'straight to edit_elements with those ids; no get_page needed in between. ' +
       'Requires a target; concurrency is latest-wins, so prefer a draft over Main.',
     inputSchema: {
       type: 'object',
@@ -708,6 +1010,9 @@ const tools = [
         pageId: page.id,
         version: sha256(page.code),
         reconciled: { kept: stats.adopted, created: stats.created },
+        // the fresh per-element summary — proceed straight to edit_elements,
+        // no follow-up get_page needed just to harvest ids
+        elements: elementSummary(project, page),
         ...(notes.length ? { notes } : {}),
       }
     },
@@ -1084,12 +1389,12 @@ const tools = [
       'classes); `seo` merges {siteName, titleTemplate ("%s" = page name), description}; ' +
       '`fonts` merges {family, googleFontsUrl (must be a https://fonts.googleapis.com/… CSS ' +
       'URL)}; `customCodeHead` replaces the raw HTML injected into every exported <head> — ' +
-      'intended for font @font-face/preload links, keep it minimal; `locales` REPLACES ' +
-      'the registered locale list (the defaultLocale is always kept). Register a locale ' +
-      'BEFORE writing per-locale overrides — the export renders every non-default locale ' +
-      "as its own /<code>/… route tree using those overrides (a page's @setup `locale:` " +
-      'line does NOT do this). Removing a locale hard-deletes all its overrides. ' +
-      'Requires a target.',
+      'intended for font @font-face/preload links, keep it minimal; `addLocales` registers ' +
+      'locales additively (the way to add a language) and `removeLocales` unregisters — ' +
+      'removal is refused while the locale holds translations unless forcePurge: true. ' +
+      'Register a locale BEFORE writing per-locale overrides — the export renders every ' +
+      'non-default locale as its own /<code>/… route tree using those overrides ' +
+      "(a page's @setup `locale:` line does NOT do this). Requires a target.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -1132,12 +1437,31 @@ const tools = [
           additionalProperties: false,
         },
         customCodeHead: { type: 'string' },
+        addLocales: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'register locales ADDITIVELY, e.g. ["fr"] — the safe way to add a language ' +
+            '(lowercase BCP-47-ish codes); existing locales and their overrides are untouched',
+        },
+        removeLocales: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'unregister locales — refused while a locale still holds overrides unless ' +
+            'forcePurge: true (removal hard-deletes all its translations)',
+        },
         locales: {
           type: 'array',
           items: { type: 'string' },
           description:
-            'full registered-locale list, e.g. ["en", "fr"] — lowercase BCP-47-ish codes; ' +
-            'the defaultLocale is always kept; removed locales lose all their overrides',
+            'full registered-locale list REPLACEMENT — prefer addLocales/removeLocales; the ' +
+            'defaultLocale is always kept, and dropping a locale with overrides is refused ' +
+            'unless forcePurge: true',
+        },
+        forcePurge: {
+          type: 'boolean',
+          description: 'confirm hard-deleting the overrides of every locale being removed',
         },
       },
       additionalProperties: false,
@@ -1148,8 +1472,9 @@ const tools = [
       const s = project.settings
       const defaultLocale = project.defaultLocale || 'en'
 
-      if (args.locales !== undefined) {
-        const codes = args.locales.map((l) => String(l).trim().toLowerCase())
+      if (args.locales !== undefined || args.addLocales !== undefined || args.removeLocales !== undefined) {
+        const norm = (list) => (list ?? []).map((l) => String(l).trim().toLowerCase())
+        const codes = [...norm(args.locales), ...norm(args.addLocales), ...norm(args.removeLocales)]
         const invalid = codes.filter((c) => !LOCALE_RE.test(c))
         if (invalid.length) {
           return {
@@ -1159,10 +1484,34 @@ const tools = [
             message: 'locale codes look like "fr", "pt-br" — lowercase letters, dash-separated',
           }
         }
-        const next = [...new Set([defaultLocale, ...codes])]
-        for (const code of project.locales ?? []) {
-          if (!next.includes(code)) purgeLocaleOverrides(project, code)
+        const currentList = project.locales ?? [defaultLocale]
+        let next
+        if (args.locales !== undefined) {
+          next = norm(args.locales)
+        } else {
+          const removeSet = new Set(norm(args.removeLocales))
+          next = [...currentList.filter((c) => !removeSet.has(c)), ...norm(args.addLocales)]
         }
+        next = [...new Set([defaultLocale, ...next])]
+        // removing a locale destroys its translations — refuse unless the
+        // caller explicitly opts in, so "add es" phrased as {locales:["es"]}
+        // can't silently wipe a finished fr
+        const dropped = currentList.filter((c) => !next.includes(c))
+        const blocked = dropped
+          .map((code) => ({ code, overrides: countLocaleOverrides(project, code) }))
+          .filter((d) => d.overrides > 0)
+        if (blocked.length && args.forcePurge !== true) {
+          return {
+            saved: false,
+            reason: 'locale-has-overrides',
+            blocked,
+            message:
+              `removing ${blocked.map((d) => `"${d.code}" (${d.overrides} overrides)`).join(', ')} would ` +
+              'hard-delete those translations. If you meant to ADD a locale, use addLocales; to really ' +
+              'remove, retry with forcePurge: true',
+          }
+        }
+        for (const code of dropped) purgeLocaleOverrides(project, code)
         project.locales = next
       }
 
@@ -1221,9 +1570,11 @@ const tools = [
   {
     name: 'edit_elements',
     description:
-      'Batch-edit elements on a page: classes, text content, media src, html id, and ' +
+      'Batch-edit elements: classes, text content, media src, html id, and ' +
       'interaction bindings (bindInteractions/unbindInteractionIds), for MANY elements in ONE ' +
-      'call (one version check, one save — always prefer this over one call per element). Address each edit by the element `id` from get_page (PREFERRED — stable and ' +
+      'call (one save — always prefer this over one call per element). Pass pageId+version+' +
+      'edits for one page, or `pages: [{pageId, version, edits}]` to cover SEVERAL pages at ' +
+      'once (shared chrome, sweeping changes). Address each edit by the element `id` from get_page (PREFERRED — stable and ' +
       'immune to line-counting mistakes) or its 0-based `line`; optionally pass `expectType` ' +
       '(e.g. "h1") to make a misaddressed edit fail instead of landing on the wrong element. ' +
       'The response is terse on success ({saved, version, edited, failed}); edits with errors ' +
@@ -1324,6 +1675,24 @@ const tools = [
             additionalProperties: false,
           },
         },
+        pages: {
+          type: 'array',
+          description:
+            'MULTI-PAGE form: [{pageId, version, edits}] applies batches to several pages in ' +
+            'ONE call (one save; per-page version checks — a stale page fails alone, the rest ' +
+            'proceed). Each edits[] entry has the same shape as the top-level `edits`. When ' +
+            'present, top-level pageId/version/edits are ignored.',
+          items: {
+            type: 'object',
+            properties: {
+              pageId: { type: 'string' },
+              version: { type: 'string' },
+              edits: { type: 'array', items: { type: 'object' } },
+            },
+            required: ['pageId', 'version', 'edits'],
+            additionalProperties: false,
+          },
+        },
         locale: {
           type: 'string',
           description: 'omit for the default locale; a non-default locale localizes content/src',
@@ -1333,325 +1702,279 @@ const tools = [
           description: 'echo a per-edit result (line, id, type, applied) for every edit, not just failures',
         },
       },
-      required: ['pageId', 'edits'],
       additionalProperties: false,
     },
     handler: async (args) => {
       const { project } = await loadTargetProject()
-      const page = findPage(project, args.pageId)
-      const current = sha256(page.code)
-      if (typeof args.version !== 'string') {
-        return {
-          saved: false,
-          reason: 'missing-version',
-          message: 'pass the page version — here is the current one, retry with it',
-          currentVersion: current,
-        }
-      }
-      if (args.version !== current) {
-        return {
-          saved: false,
-          reason: 'stale-version',
-          currentVersion: current,
-          message:
-            'the page code changed since your last read/write. If the human has the editor open, ' +
-            'its autosave/marker sync can advance the version between your calls — retrying with ' +
-            'currentVersion is safe when you made the only content edits',
-        }
-      }
       const defaultLocale = project.defaultLocale || 'en'
       const locale = args.locale || defaultLocale
-      const localized = locale !== defaultLocale
-      if (localized && !(project.locales ?? [defaultLocale]).includes(locale)) {
+      if (locale !== defaultLocale && !(project.locales ?? [defaultLocale]).includes(locale)) {
         return { saved: false, reason: 'unknown-locale', locales: project.locales ?? [defaultLocale] }
       }
+      if (!args.pages && !args.pageId) {
+        throw new Error('pass pageId + version + edits (single page) or pages: [{pageId, version, edits}]')
+      }
 
-      let changed = false
-      const results = []
-      for (const edit of args.edits) {
-        const errors = []
-        const applied = []
-        let node, inComponent
+      const jobs = args.pages ?? [{ pageId: args.pageId, version: args.version, edits: args.edits }]
+      const staleMessage =
+        'the page code changed since your last read/write. If the human has the editor open, ' +
+        'its autosave/marker sync can advance the version between your calls — retrying with ' +
+        'currentVersion is safe when you made the only content edits'
+      let anyChanged = false
+      const pageResults = []
+      for (const job of jobs) {
+        let page
         try {
-          ;({ node, inComponent } = resolveEditNode(page, edit))
+          page = findPage(project, job.pageId)
         } catch (e) {
-          results.push({ ...(edit.id ? { id: edit.id } : {}), line: edit.line, errors: [e.message] })
+          pageResults.push({ pageId: job.pageId, saved: false, reason: 'not-found', message: e.message })
           continue
         }
-        if (edit.expectType && node.type !== edit.expectType) {
-          results.push({
-            line: node.line,
-            id: node.id,
-            type: node.type,
-            errors: [`expectType mismatch: element here is ':${node.type}', not ':${edit.expectType}' — re-read get_page`],
+        const current = sha256(page.code)
+        if (typeof job.version !== 'string') {
+          pageResults.push({
+            pageId: page.id,
+            saved: false,
+            reason: 'missing-version',
+            message: 'pass the page version — here is the current one, retry with it',
+            currentVersion: current,
           })
           continue
         }
-
-        // --- classes (never localized; masters own them inside instances —
-        //     in-component edits REDIRECT to the mapped master, editor-style) ---
-        if (edit.addClasses?.length || edit.removeClasses?.length) {
-          const styleTarget = inComponent ? masterNodeFor(project, page, node) : node
-          if (localized) {
-            errors.push('classes are not localizable — omit locale for class edits')
-          } else if (!styleTarget) {
-            errors.push('classes refused: this instance node has no master counterpart (structure diverged)')
-          } else {
-            // removes run FIRST so remove+add of the same class nets to the add
-            // (a re-apply), not a silent removal
-            const removeSet = new Set(edit.removeClasses ?? [])
-            let tokens = (styleTarget.classes ?? '').split(/\s+/).filter(Boolean).filter((t) => !removeSet.has(t))
-            for (const cls of edit.addClasses ?? []) {
-              if (tokens.includes(cls)) continue // idempotent re-apply — not an error
-              const result = applyClass(cls, tokens)
-              if (result.error !== undefined) errors.push(`class "${cls}": ${result.error}`)
-              else tokens = result.tokens
-            }
-            styleTarget.classes = tokens.join(' ')
-            if (!styleTarget.classes) delete styleTarget.classes // keep untouched nodes byte-identical
-            applied.push(inComponent ? 'classes (on component master — all instances)' : 'classes')
-            changed = true
-          }
+        if (job.version !== current) {
+          pageResults.push({
+            pageId: page.id,
+            saved: false,
+            reason: 'stale-version',
+            currentVersion: current,
+            message: staleMessage,
+          })
+          continue
         }
-
-        // content/src land on the node itself, or — with onMaster, inside an
-        // instance — on the shared master (instances without an override then
-        // render the master's value, so shared chrome is written ONCE)
-        const dataTarget = edit.onMaster
-          ? inComponent
-            ? masterNodeFor(project, page, node)
-            : null
-          : node
-        const dataTargetError = edit.onMaster
-          ? !inComponent
-            ? 'onMaster refused: this element is not inside a component instance'
-            : !dataTarget
-              ? 'onMaster refused: this instance node has no master counterpart (structure diverged)'
-              : null
-          : null
-
-        // --- own text content (leaf elements only; rich subset sanitized) ---
-        if (edit.content !== undefined) {
-          if (isComponentType(node.type)) {
-            errors.push('content refused: a component instance token has no own text')
-          } else if (!isLeafElement(node.type)) {
-            errors.push(`content refused: ':${node.type}' is a container — put text on a leaf inside it`)
-          } else if (dataTargetError) {
-            errors.push(dataTargetError)
-          } else {
-            const value = isRich(edit.content) ? sanitizeRich(edit.content) : edit.content
-            if (localized) {
-              setLocaleOverride(dataTarget, locale, 'content', value)
-            } else if (value) {
-              dataTarget.content = value
-            } else {
-              delete dataTarget.content
-            }
-            applied.push(edit.onMaster ? 'content (on component master — all instances)' : 'content')
-            changed = true
-          }
+        if (!Array.isArray(job.edits) || !job.edits.length) {
+          pageResults.push({ pageId: page.id, saved: false, reason: 'no-edits' })
+          continue
         }
-
-        // --- media src (image/video only; scheme allowlist) ---
-        if (edit.src !== undefined) {
-          if (node.type !== 'image' && node.type !== 'video') {
-            errors.push(`src refused: ':${node.type}' is not an image/video element`)
-          } else if (edit.src && !SAFE_SRC.test(edit.src)) {
-            errors.push('src refused: use a /media/… path, https:// URL, or data:image|video URL')
-          } else if (dataTargetError) {
-            errors.push(dataTargetError)
-          } else {
-            if (localized) {
-              setLocaleOverride(dataTarget, locale, 'src', edit.src)
-            } else if (edit.src) {
-              dataTarget.src = edit.src
-            } else {
-              delete dataTarget.src
-            }
-            applied.push(edit.onMaster ? 'src (on component master — all instances)' : 'src')
-            changed = true
-          }
-        }
-
-        // --- background media (any element; layered behind content) ---
-        if (edit.background !== undefined) {
-          if (localized) {
-            errors.push('background is not localizable — omit locale for background edits')
-          } else if (edit.background && !SAFE_SRC.test(edit.background)) {
-            errors.push('background refused: use a /media/… path, https:// URL, or data:image|video URL')
-          } else {
-            if (edit.background) node.background = edit.background
-            else delete node.background
-            applied.push('background')
-            changed = true
-          }
-        }
-
-        // --- arg (the token's […] slot — CODE-owned, so patch the line and
-        //     reconcile with a same-line identity map; no line count change) ---
-        if (edit.arg !== undefined) {
-          const value = String(edit.arg)
-          if (node.line === undefined || node.type === 'body') {
-            errors.push('arg refused: this element\'s arg is not editable')
-          } else if (value && !/^[a-z0-9.+-]+$/.test(value)) {
-            errors.push('arg refused: lowercase field path ([a-z0-9.-], one dot max for a reference hop)')
-          } else if (
-            (node.type === 'collection-list' || node.type === 'collection-item') &&
-            (() => {
-              const { collectionNames, listFieldNames } = knownNames(project)
-              return !value || !(collectionNames.includes(value) ||
-                (node.type === 'collection-list' && listFieldNames.includes(value)))
-            })()
-          ) {
-            errors.push(`arg refused: ':${node.type}' needs a real collection name`)
-          } else {
-            const lines = page.code.split('\n')
-            const head = lines[node.line]?.match(/^(\s*:[a-zA-Z][a-zA-Z0-9-]*)(\[[a-z0-9.+-]*\])?/)
-            if (!head) {
-              errors.push('arg refused: could not locate the element token on its line')
-            } else {
-              const rest = lines[node.line].slice(head[1].length + (head[2]?.length ?? 0))
-              lines[node.line] = head[1] + (value ? `[${value}]` : '') + rest
-              const newCode = lines.join('\n')
-              const identity = new Map(lines.map((_, i) => [i, i]))
-              page.elements = reconcile(page.code, newCode, page.elements, identity)
-              page.code = newCode
-              node.arg = value || undefined
-              applied.push('arg')
-              changed = true
-            }
-          }
-        }
-
-        // --- listQuery (collection-list only; filter → sort → limit) ---
-        if (edit.listQuery !== undefined) {
-          if (node.type !== 'collection-list') {
-            errors.push(`listQuery refused: ':${node.type}' is not a collection-list`)
-          } else {
-            const q = edit.listQuery
-            const empty = q === null || (typeof q === 'object' && !Object.keys(q).length)
-            if (empty) {
-              delete node.listQuery
-              applied.push('listQuery')
-              changed = true
-            } else {
-              // soft-validate field names against the collection the list names
-              const col = (project.collections ?? []).find((c) => c.name === node.arg)
-              const fieldOk = (name) =>
-                name === 'createdAt' || !col || (col.fields ?? []).some((f) => f.name === name)
-              const bad = []
-              if (q.sortField && q.sortField !== 'name' && !fieldOk(q.sortField)) bad.push(`sortField "${q.sortField}"`)
-              if (q.filter?.field && !fieldOk(q.filter.field)) bad.push(`filter.field "${q.filter.field}"`)
-              if (Array.isArray(q.pick) && col) {
-                const ids = new Set((col.entries ?? []).map((e) => e.id))
-                const missing = q.pick.filter((id) => !ids.has(id))
-                if (missing.length) bad.push(`pick ids ${missing.join(', ')} not in "${node.arg}"`)
-              }
-              if (bad.length) {
-                errors.push(`listQuery refused: ${bad.join(', ')} not in collection "${node.arg}"`)
-              } else {
-                node.listQuery = q
-                applied.push('listQuery')
-                changed = true
-              }
-            }
-          }
-        }
-
-        // --- interaction bindings (batched; masters own them inside instances) ---
-        if (edit.bindInteractions?.length || edit.unbindInteractionIds?.length) {
-          const bindTargetNode = inComponent ? masterNodeFor(project, page, node) : node
-          if (localized) {
-            errors.push('interactions are not localizable — omit locale for binding edits')
-          } else if (!bindTargetNode) {
-            errors.push('interactions refused: this instance node has no master counterpart (structure diverged)')
-          } else {
-            for (const bindingId of edit.unbindInteractionIds ?? []) {
-              const before = bindTargetNode.interactions?.length ?? 0
-              bindTargetNode.interactions = (bindTargetNode.interactions ?? []).filter((b) => b.id !== bindingId)
-              if (bindTargetNode.interactions.length === before) errors.push(`no binding "${bindingId}" on this element`)
-              else {
-                applied.push('unbind')
-                changed = true
-              }
-              if (!bindTargetNode.interactions.length) delete bindTargetNode.interactions
-            }
-            for (const bind of edit.bindInteractions ?? []) {
-              if (!(project.interactions ?? []).some((it) => it.id === bind.interactionId)) {
-                errors.push(`no interaction with id "${bind.interactionId}" (use list_interactions)`)
-                continue
-              }
-              const resolved = resolveBindTarget(project, page, node, inComponent, bind.targetId)
-              if (resolved.error) {
-                errors.push(resolved.error)
-                continue
-              }
-              bindTargetNode.interactions = bindTargetNode.interactions ?? []
-              bindTargetNode.interactions.push({
-                id: randomUUID(),
-                interactionId: bind.interactionId,
-                trigger: bind.trigger,
-                targetId: resolved.targetId,
-              })
-              applied.push(inComponent ? 'bind (on component master — all instances)' : 'bind')
-              changed = true
-            }
-          }
-        }
-
-        // --- html id (anchor target; never localized) ---
-        if (edit.htmlId !== undefined) {
-          if (localized) {
-            errors.push('htmlId is not localizable — omit locale for htmlId edits')
-          } else if (edit.htmlId && !/^[A-Za-z][A-Za-z0-9_-]*$/.test(edit.htmlId)) {
-            errors.push('htmlId refused: must start with a letter and use only letters/digits/-/_')
-          } else {
-            if (edit.htmlId) node.htmlId = edit.htmlId
-            else delete node.htmlId
-            applied.push('htmlId')
-            changed = true
-          }
-        }
-
-        // --- custom attributes (allowlisted; replaces the whole set) ---
-        if (edit.attributes !== undefined) {
-          if (localized) {
-            errors.push('attributes are not localizable — omit locale for attribute edits')
-          } else {
-            const incoming = edit.attributes && typeof edit.attributes === 'object' ? edit.attributes : {}
-            const clean = sanitizeAttributes(incoming)
-            const refused = Object.keys(incoming).filter((n) => !(n.toLowerCase() in clean))
-            if (refused.length) errors.push(`attributes ignored (not allowed): ${refused.join(', ')}`)
-            if (Object.keys(clean).length) node.attributes = clean
-            else delete node.attributes
-            applied.push('attributes')
-            changed = true
-          }
-        }
-
-        // marker truth-sync skips component-instance subtrees, like the editor
-        if (!inComponent && syncMarkersForNode(page, node)) changed = true
-        // echo the element's identity so a misaddressed edit is visible
-        results.push({
-          line: node.line,
-          id: node.id,
-          type: node.type,
-          applied,
-          ...(errors.length ? { errors } : {}),
+        const { changed, results } = applyPageEdits(project, page, job.edits, locale, defaultLocale)
+        anyChanged = anyChanged || changed
+        // terse by default: a 140-edit call used to echo ~14 KB of what the
+        // agent just sent — failures keep their full echo so they stay debuggable
+        const failures = results.filter((r) => r.errors?.length)
+        pageResults.push({
+          pageId: page.id,
+          saved: changed,
+          version: sha256(page.code),
+          edited: results.length - failures.length,
+          failed: failures.length,
+          ...(failures.length ? { failures } : {}),
+          ...(args.verbose ? { results } : {}),
         })
       }
 
-      if (changed) await saveTargetProject(project)
-      // terse by default: a 140-edit call used to echo ~14 KB of what the
-      // agent just sent — failures keep their full echo so they stay debuggable
-      const failures = results.filter((r) => r.errors?.length)
+      if (anyChanged) await saveTargetProject(project)
+      // single-page calls keep their original flat response shape
+      if (!args.pages) return pageResults[0]
+      return { saved: anyChanged, pages: pageResults }
+    },
+  },
+  {
+    name: 'get_translation_worklist',
+    description:
+      'Everything translatable in the project for one registered non-default locale, in ONE ' +
+      'read: page elements with own text (kind "element"), shared component-master text (kind ' +
+      '"master" — translating these covers every instance), and collection-entry text fields ' +
+      '(kind "entry"). Each item carries the base text and the existing override (if any), so ' +
+      'the whole localization pass is read worklist → translate → ONE set_translations call — ' +
+      'no per-page re-reads. Requires a target.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        locale: { type: 'string', description: 'a registered non-default locale, e.g. "fr"' },
+        missingOnly: { type: 'boolean', description: 'return only items without an override yet' },
+      },
+      required: ['locale'],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const { project } = await loadTargetProject()
+      const defaultLocale = project.defaultLocale || 'en'
+      const locale = String(args.locale)
+      if (locale === defaultLocale) throw new Error('the default locale IS the base content — pick a non-default locale')
+      if (!(project.locales ?? []).includes(locale)) {
+        throw new Error(`"${locale}" is not registered — update_settings {addLocales: ["${locale}"]} first`)
+      }
+      const items = []
+      const push = (item, override) => {
+        if (args.missingOnly && override) return
+        items.push({ ...item, ...(override ? { override } : {}) })
+      }
+      for (const page of project.pages ?? []) {
+        const visit = (nodes, inComponent) => {
+          for (const n of nodes) {
+            const inside = inComponent || isComponentType(n.type)
+            // own base text on a leaf, not a field binding — bound values are
+            // translated on the entry, not the node. Inside instances, only
+            // nodes that OVERRIDE the master's text carry their own item.
+            if (isLeafElement(n.type) && n.content && n.arg === undefined) {
+              push(
+                { kind: 'element', pageId: page.id, page: page.name, id: n.id, line: n.line, type: n.type, base: n.content },
+                n.locales?.[locale]?.content,
+              )
+            }
+            visit(n.children ?? [], inside)
+          }
+        }
+        visit(page.elements ?? [], false)
+      }
+      for (const comp of project.components ?? []) {
+        walkNodes([comp.root], (n) => {
+          if (!isLeafElement(n.type) || !n.content || n.arg !== undefined) return
+          push(
+            { kind: 'master', componentId: comp.id, component: comp.name, id: n.id, type: n.type, base: n.content },
+            n.locales?.[locale]?.content,
+          )
+        })
+      }
+      for (const c of project.collections ?? []) {
+        const textFields = (c.fields ?? []).filter((f) => f.type === 'text').map((f) => f.name)
+        for (const entry of c.entries ?? []) {
+          for (const field of textFields) {
+            const base = entry.values?.[field]
+            if (!base) continue
+            push(
+              { kind: 'entry', collectionId: c.id, collection: c.name, entryId: entry.id, entry: entry.name, field, base },
+              entry.locales?.[locale]?.[field],
+            )
+          }
+        }
+      }
+      const translated = items.filter((i) => i.override).length
+      return { locale, total: items.length, translated, missing: items.length - translated, items }
+    },
+  },
+  {
+    name: 'set_translations',
+    description:
+      'Write per-locale overrides in bulk, across pages, component masters, and collection ' +
+      'entries in ONE call — the write half of get_translation_worklist. Items: {kind: ' +
+      '"element", pageId, id, content} | {kind: "master", componentId, id, content} | {kind: ' +
+      '"entry", collectionId, entryId, values: {field: text}}. "" deletes an override (falls ' +
+      'back to base); omitted fields keep theirs. Node-only writes — page versions are not ' +
+      'needed and do not change. Requires a target.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        locale: { type: 'string', description: 'a registered non-default locale' },
+        items: {
+          type: 'array',
+          minItems: 1,
+          items: {
+            type: 'object',
+            properties: {
+              kind: { type: 'string', enum: ['element', 'master', 'entry'] },
+              pageId: { type: 'string' },
+              componentId: { type: 'string' },
+              collectionId: { type: 'string' },
+              id: { type: 'string', description: 'element/master node id (element and master kinds)' },
+              entryId: { type: 'string' },
+              content: { type: 'string' },
+              values: { type: 'object', additionalProperties: { type: 'string' } },
+            },
+            required: ['kind'],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ['locale', 'items'],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const { project } = await loadTargetProject()
+      const defaultLocale = project.defaultLocale || 'en'
+      const locale = String(args.locale)
+      if (locale === defaultLocale) throw new Error('the default locale IS the base content — pick a non-default locale')
+      if (!(project.locales ?? []).includes(locale)) {
+        return {
+          saved: false,
+          reason: 'unknown-locale',
+          locales: project.locales ?? [defaultLocale],
+          message: `register "${locale}" first: update_settings {addLocales: ["${locale}"]}`,
+        }
+      }
+      let written = 0
+      const failures = []
+      const fail = (item, message) => failures.push({ ...item, message })
+      for (const item of args.items) {
+        if (item.kind === 'element' || item.kind === 'master') {
+          if (item.content === undefined) {
+            fail(item, 'element/master items need `content`')
+            continue
+          }
+          let node = null
+          if (item.kind === 'element') {
+            const page = (project.pages ?? []).find((p) => p.id === item.pageId)
+            if (!page) {
+              fail(item, `no page with id "${item.pageId}"`)
+              continue
+            }
+            node = findNode(page.elements ?? [], item.id)
+          } else {
+            const comp = (project.components ?? []).find((c) => c.id === item.componentId)
+            if (!comp) {
+              fail(item, `no component with id "${item.componentId}"`)
+              continue
+            }
+            node = findNode([comp.root], item.id)
+          }
+          if (!node) {
+            fail(item, `no element with id "${item.id}"`)
+            continue
+          }
+          if (!isLeafElement(node.type)) {
+            fail(item, `':${node.type}' is a container — text lives on leaves`)
+            continue
+          }
+          const value = isRich(item.content) ? sanitizeRich(item.content) : item.content
+          setLocaleOverride(node, locale, 'content', value)
+          written++
+        } else if (item.kind === 'entry') {
+          const c = (project.collections ?? []).find((col) => col.id === item.collectionId)
+          if (!c) {
+            fail(item, `no collection with id "${item.collectionId}"`)
+            continue
+          }
+          const entry = (c.entries ?? []).find((e) => e.id === item.entryId)
+          if (!entry) {
+            fail(item, `no entry with id "${item.entryId}"`)
+            continue
+          }
+          const fieldNames = new Set((c.fields ?? []).map((f) => f.name))
+          const unknown = Object.keys(item.values ?? {}).filter((k) => !fieldNames.has(k))
+          if (unknown.length) {
+            fail(item, `unknown fields: ${unknown.join(', ')}`)
+            continue
+          }
+          entry.locales = entry.locales ?? {}
+          const bucket = { ...(entry.locales[locale] ?? {}) }
+          for (const [k, v] of Object.entries(item.values ?? {})) {
+            const s = String(v)
+            if (s === '') delete bucket[k]
+            else bucket[k] = isRich(s) ? sanitizeRich(s) : s
+          }
+          if (Object.keys(bucket).length) entry.locales[locale] = bucket
+          else delete entry.locales[locale]
+          if (entry.locales && !Object.keys(entry.locales).length) delete entry.locales
+          written++
+        } else {
+          fail(item, `unknown kind "${item.kind}"`)
+        }
+      }
+      if (written) await saveTargetProject(project)
       return {
-        saved: changed,
-        version: sha256(page.code),
-        edited: results.length - failures.length,
+        saved: written > 0,
+        written,
         failed: failures.length,
         ...(failures.length ? { failures } : {}),
-        ...(args.verbose ? { results } : {}),
       }
     },
   },
@@ -2207,7 +2530,9 @@ const tools = [
   {
     name: 'upload_media',
     description:
-      'Upload an asset to the media library from a base64 data URL (data:<mime>;base64,…). ' +
+      'Upload an asset to the media library — from a base64 data URL (data:<mime>;base64,…) ' +
+      'or, PREFERRED for anything non-trivial, from a public https `url` (fetched directly, so ' +
+      'megabytes never travel through your context). ' +
       'The server enforces the same mime allowlist, size caps and quota as browser uploads ' +
       '(images/video/audio/pdf/fonts; no html/js). Returns the asset and its /media/… url — ' +
       'use that as an element `src` or `background`. Library-wide, not per-target.',
@@ -2216,21 +2541,68 @@ const tools = [
       properties: {
         name: { type: 'string', description: 'display name, e.g. "editor-screenshot.png"' },
         dataUrl: { type: 'string', description: 'data:<mime>;base64,<payload>' },
+        url: {
+          type: 'string',
+          description:
+            'public https:// URL to fetch the asset from (alternative to dataUrl; ' +
+            'no localhost/private hosts)',
+        },
         folderId: { type: 'string' },
       },
-      required: ['name', 'dataUrl'],
+      required: ['name'],
       additionalProperties: false,
     },
     handler: async (args) => {
       if (!mediaUpload) throw new Error('media is not supported by this connection')
-      const m = String(args.dataUrl ?? '').match(/^data:([a-z0-9.+/-]+);base64,(.+)$/is)
-      if (!m) throw new Error('dataUrl must be a base64 data URL: data:<mime>;base64,…')
-      const bytes = Buffer.from(m[2], 'base64')
-      if (!bytes.length) throw new Error('dataUrl payload is empty or not valid base64')
+      if (!args.dataUrl && !args.url) throw new Error('pass a dataUrl or a url')
+      let mime, bytes
+      if (args.dataUrl) {
+        const m = String(args.dataUrl).match(/^data:([a-z0-9.+/-]+);base64,(.+)$/is)
+        if (!m) throw new Error('dataUrl must be a base64 data URL: data:<mime>;base64,…')
+        mime = m[1].toLowerCase()
+        bytes = Buffer.from(m[2], 'base64')
+        if (!bytes.length) throw new Error('dataUrl payload is empty or not valid base64')
+      } else {
+        let parsed
+        try {
+          parsed = new URL(String(args.url))
+        } catch {
+          throw new Error('url is not a valid URL')
+        }
+        // public https only — this fetch runs with the user's network access,
+        // so keep it from being a probe into localhost / private ranges
+        if (parsed.protocol !== 'https:') throw new Error('url must be https://')
+        const host = parsed.hostname.toLowerCase()
+        const privateHost =
+          host === 'localhost' ||
+          host.endsWith('.local') ||
+          host.endsWith('.internal') ||
+          /^\d+\.\d+\.\d+\.\d+$/.test(host) || // literal IPv4 (incl. 127/10/192.168…)
+          host.includes(':') // literal IPv6
+        if (privateHost) throw new Error('url must point at a public hostname (no IPs/localhost)')
+        const controller = new AbortController()
+        const timeout = setTimeout(() => controller.abort(), 30_000)
+        let res
+        try {
+          res = await fetch(parsed, { signal: controller.signal, redirect: 'follow' })
+        } catch (e) {
+          throw new Error(`could not fetch url: ${e.message ?? e}`)
+        } finally {
+          clearTimeout(timeout)
+        }
+        if (!res.ok) throw new Error(`fetch failed: HTTP ${res.status}`)
+        const MAX = 50 * 1024 * 1024 // generous local cap; the server enforces its own
+        const buf = Buffer.from(await res.arrayBuffer())
+        if (buf.length > MAX) throw new Error(`asset is ${buf.length} bytes — over the 50 MB fetch cap`)
+        if (!buf.length) throw new Error('fetched an empty response')
+        bytes = buf
+        mime = (res.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase()
+        if (!mime) throw new Error('the server sent no content-type — download and pass a dataUrl instead')
+      }
       const asset = await mediaUpload({
         name: String(args.name ?? '').trim() || 'untitled',
         folderId: args.folderId,
-        mime: m[1].toLowerCase(),
+        mime,
         bytes,
       })
       return {

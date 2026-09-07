@@ -10,6 +10,10 @@ export interface PopoverOptions {
   /** element the popover is positioned against (rAF-tracked, so it may move) */
   anchor: HTMLElement
   placement: Placement
+  /** gap in px between the popover and its anchor along the placement axis
+   *  (default 8). Rail buttons are inset in the sidebar, so their popovers
+   *  bump this up to clear the sidebar edge. */
+  offset?: number
   title: MaybeRefOrGetter<string>
   /** a component or a Ref to one — NEVER a getter function: lucide icons ARE
    *  bare functions, so the host resolves with unref (which leaves functions

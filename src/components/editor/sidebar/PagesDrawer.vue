@@ -16,6 +16,9 @@ import { useLocaleQuickAdd } from '@/composables/useLocaleQuickAdd'
 import { useModal } from '@/composables/useModal'
 import type { Collection, CollectionEntry } from '@/types/editor'
 
+// kept mounted by the parent; `open` drives the slide/fade transitions so the
+// leave animation can play out (a parent v-if would unmount before it runs)
+const props = defineProps<{ open: boolean }>()
 const emit = defineEmits<{ close: [] }>()
 
 const { homePage, duplicatePage, removePage } = usePage()
@@ -59,7 +62,7 @@ async function confirmDeleteLocale(loc: string) {
 // Capture-phase Escape so the drawer closes before SettingsEditor's
 // window handler (bubble phase) pulls focus back to the code editor.
 function onKeydownCapture(e: KeyboardEvent) {
-  if (e.key !== 'Escape') return
+  if (!props.open || e.key !== 'Escape') return
   e.stopPropagation()
   emit('close')
 }
@@ -69,9 +72,12 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydownCapture, tr
 
 <template>
   <!-- backdrop: outside click closes -->
-  <div class="fixed inset-0 z-40" @click="emit('close')" @contextmenu.prevent="emit('close')" />
+  <Transition name="drawer-backdrop">
+    <div v-if="open" class="fixed inset-0 z-40" @click="emit('close')" @contextmenu.prevent="emit('close')" />
+  </Transition>
 
-  <div class="absolute inset-0 z-50 flex flex-col overflow-y-auto border-r border-accent/50 bg-background p-1">
+  <Transition name="drawer-panel">
+  <div v-if="open" class="absolute inset-0 z-50 flex flex-col overflow-y-auto bg-background p-1">
     <div class="flex items-center gap-2 px-2 py-1">
       <Files class="size-3.5 shrink-0 text-muted-foreground" />
       <span class="flex-1 text-xs font-medium">Pages</span>
@@ -203,4 +209,25 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydownCapture, tr
       />
     </div>
   </div>
+  </Transition>
 </template>
+
+<style scoped>
+.drawer-panel-enter-active,
+.drawer-panel-leave-active {
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.drawer-panel-enter-from,
+.drawer-panel-leave-to {
+  transform: translateX(-100%);
+}
+
+.drawer-backdrop-enter-active,
+.drawer-backdrop-leave-active {
+  transition: opacity 0.25s ease;
+}
+.drawer-backdrop-enter-from,
+.drawer-backdrop-leave-to {
+  opacity: 0;
+}
+</style>

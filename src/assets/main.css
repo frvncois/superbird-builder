@@ -134,9 +134,10 @@ input:autofill {
 .custom-scrollbar {
   scrollbar-width: thin;
   scrollbar-color: color-mix(in oklch, var(--muted-foreground) 35%, transparent) transparent;
-  /* reserve the scrollbar's width always, so content doesn't shift when the
-     bar appears once the container becomes scrollable */
-  scrollbar-gutter: stable;
+  /* gutter only when actually scrollable — 'stable' would reserve a right-edge
+     gutter permanently, which reads as extra padding in short containers
+     (popovers/panels) and is pure waste under macOS overlay scrollbars */
+  scrollbar-gutter: auto;
 }
 .custom-scrollbar::-webkit-scrollbar {
   width: 6px;

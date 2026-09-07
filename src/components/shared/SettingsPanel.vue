@@ -47,9 +47,10 @@ const { email: authEmail, isAdmin, canBuild, logout } = useAuth()
 const { confirm } = useModal()
 
 // opened via useModal (mounted = open); Esc/backdrop close through the host
+const props = defineProps<{ initialSection?: string }>()
 const emit = defineEmits<{ close: [] }>()
 
-const active = ref('general')
+const active = ref(props.initialSection ?? 'general')
 
 // --- nav: sections under Project / Site / Admin group headings; the Admin
 // group is hidden entirely for non-admins ---

@@ -63,6 +63,12 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onWindowKeydown))
 const { onMain } = useBranches()
 const { theme, toggleTheme } = useTheme()
 
+// rail buttons (w-7) sit inset ~10px inside the w-12 rail; the default 8px gap
+// would leave popovers nearly flush against the sidebar, so bump the offset to
+// clear its edge by ~8px — matching the InsertDock's gap-2 (8px) between its
+// trigger button and the panel that grows out of it
+const RAIL_POPOVER_OFFSET = 18
+
 // save status as a bare stroke-circle icon (check / ! / ✕); click opens the
 // save/publish popover (status badges + the Publish button live there)
 const { status } = usePersistence()
@@ -78,6 +84,7 @@ function togglePublish() {
     component: PublishPopover,
     anchor,
     placement: 'left-start',
+    offset: RAIL_POPOVER_OFFSET,
     title: 'Publish',
     icon: Rocket,
     closeOnOutside: true,
@@ -94,6 +101,7 @@ function toggleComments() {
     component: CommentsEditor,
     anchor,
     placement: 'left-start',
+    offset: RAIL_POPOVER_OFFSET,
     title: 'Comments',
     icon: MessageCircle,
     closeOnOutside: true,
@@ -116,25 +124,38 @@ const headerIcon = computed(() => {
   return activePanel.value?.icon
 })
 
-// --- the panel popover lives in the app PopoverHost, anchored to this rail.
-// It opens once per null → panel transition; switching panels just swaps the
-// body/title reactively (PanelPopoverBody reads activePanelId itself).
+// --- the panel popover lives in the app PopoverHost, anchored to the rail
+// button that opened it (so it sits vertically vis-à-vis its trigger, like the
+// publish/comments popovers). Switching panels re-anchors to the new button: a
+// same-id openPopover updates anchor/title/icon in place — no reopen, no
+// onClose — so PanelPopoverBody's body still swaps reactively.
 const railEl = ref<HTMLElement>()
 const { currentId, openPopover, closePopover } = usePopover()
 
-watch(activePanel, (panel, prev) => {
-  if (panel && !prev && railEl.value) {
+// per-panel button DOM nodes, keyed by panel id (function refs in the v-for)
+const panelBtns = new Map<string, HTMLElement>()
+function setPanelBtn(id: string, el: unknown) {
+  const dom = (el as { $el?: HTMLElement } | null)?.$el
+  if (dom) panelBtns.set(id, dom)
+  else panelBtns.delete(id)
+}
+
+watch(activePanel, (panel) => {
+  if (panel) {
+    const anchor = panelBtns.get(panel.id) ?? railEl.value
+    if (!anchor) return
     openPopover({
       id: 'sidebar-panel',
       component: PanelPopoverBody,
-      anchor: railEl.value,
+      anchor,
       placement: 'left-start',
+      offset: RAIL_POPOVER_OFFSET,
       title: () => activePanel.value?.label ?? '',
       icon: headerIcon,
       closeOnEscape: false,
       onClose: () => closePanel(),
     })
-  } else if (!panel && currentId.value === 'sidebar-panel') {
+  } else if (currentId.value === 'sidebar-panel') {
     closePopover()
   }
 })
@@ -149,7 +170,7 @@ watch(activePanel, (panel, prev) => {
       :tooltip="status === 'error' ? 'Save failed' : SAVE_STATES[status].label"
       tooltip-side="left"
       class="w-7"
-      :class="SAVE_COLORS[status]"
+      :class="currentId === 'publish-status' ? '!bg-accent/30 text-accent-foreground' : SAVE_COLORS[status]"
       @click="togglePublish"
     />
     <div class="my-1 h-px w-full bg-input" />
@@ -157,6 +178,7 @@ watch(activePanel, (panel, prev) => {
     <template v-for="panel in panels" :key="panel.id">
       <div v-if="panel.divider" class="my-1 h-px w-full bg-input" />
       <ButtonUI
+        :ref="(el) => setPanelBtn(panel.id, el)"
         variant="ghost"
         :icon="panel.icon"
         class="w-7"
@@ -164,11 +186,11 @@ watch(activePanel, (panel, prev) => {
         :class="
           blocked(panel.id)
             ? 'opacity-40'
-            : panel.id === 'branches' && !onMain
-              ? 'text-pending'
-              : activePanelId === panel.id
-                ? 'text-accent-foreground'
-                : 'text-muted-foreground text-muted-foreground'
+            : activePanelId === panel.id
+              ? '!bg-accent/30 text-accent-foreground'
+              : panel.id === 'branches' && !onMain
+                ? 'text-pending'
+                : 'text-muted-foreground'
         "
         @click="onTabClick(panel.id)"
       />
@@ -180,7 +202,8 @@ watch(activePanel, (panel, prev) => {
       :icon="MessageCircle"
       tooltip="Comments"
       tooltip-side="left"
-      class="w-7 text-muted-foreground"
+      class="w-7"
+      :class="currentId === 'comments' ? '!bg-accent/30 text-accent-foreground' : 'text-muted-foreground'"
       @click="toggleComments"
     />
     <ButtonUI

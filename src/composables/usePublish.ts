@@ -71,7 +71,7 @@ export function usePublish() {
   /** publishes Main to the server, whatever branch is active; throws on
    * failure. Only the client enforces Main-only publishing — the server
    * stores whatever snapshot it's sent. */
-  async function markPublished(method: PublishMethod = 'server'): Promise<void> {
+  async function markPublished(method: PublishMethod = 'server', signal?: AbortSignal): Promise<void> {
     // settle any pending edit so the committed snapshot is what we publish
     usePersistence().saveNow()
     let snapshot: string
@@ -89,6 +89,7 @@ export function usePublish() {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: snapshot,
+      signal,
     })
     if (res.status === 401) onUnauthorized() // dead session — back to login
     if (!res.ok) {
