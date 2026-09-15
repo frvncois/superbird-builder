@@ -1,6 +1,6 @@
 import { ref } from 'vue'
 import { useAuth, type Role } from './useAuth'
-import { onUnauthorized } from '@/lib/store'
+import { apiJson } from '@/lib/api'
 
 export interface UserRow {
   /** absent in the redacted (non-admin) members view */
@@ -24,17 +24,6 @@ export interface InviteRow {
 const users = ref<UserRow[]>([])
 const invites = ref<InviteRow[]>([])
 
-async function json(path: string, init?: RequestInit) {
-  const res = await fetch(path, {
-    headers: init?.body ? { 'content-type': 'application/json' } : undefined,
-    ...init,
-  })
-  if (res.status === 401) onUnauthorized() // dead session — back to login
-  const detail = await res.json().catch(() => null)
-  if (!res.ok) throw new Error(detail?.error ?? `request failed (${res.status})`)
-  return detail
-}
-
 /** build the shareable accept link from a raw invite token */
 export const inviteLink = (token: string) => `${window.location.origin}/admin/invite/${token}`
 
@@ -44,14 +33,14 @@ export function useUsers() {
 
   async function load() {
     // admins get the full list (with tokens); everyone else a redacted view
-    const data = await json(isAdmin() ? '/api/users' : '/api/users/members')
+    const data = await apiJson(isAdmin() ? '/api/users' : '/api/users/members')
     users.value = data.users
     invites.value = data.invites
   }
 
   /** create an invite; returns { link, token } (also retrievable later) */
   async function invite(payload: { name: string; email: string; role: Role }) {
-    const created = await json('/api/users/invite', {
+    const created = await apiJson('/api/users/invite', {
       method: 'POST',
       body: JSON.stringify(payload),
     })
@@ -64,7 +53,7 @@ export function useUsers() {
     id: string,
     patch: { role?: Role; extend?: boolean; regenerate?: boolean },
   ) {
-    const updated = await json(`/api/users/invite/${id}`, {
+    const updated = await apiJson(`/api/users/invite/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(patch),
     })
@@ -73,17 +62,17 @@ export function useUsers() {
   }
 
   async function revokeInvite(id: string) {
-    await json(`/api/users/invite/${id}`, { method: 'DELETE' })
+    await apiJson(`/api/users/invite/${id}`, { method: 'DELETE' })
     await load()
   }
 
   async function setRole(id: string, role: Role) {
-    await json(`/api/users/${id}`, { method: 'PATCH', body: JSON.stringify({ role }) })
+    await apiJson(`/api/users/${id}`, { method: 'PATCH', body: JSON.stringify({ role }) })
     await load()
   }
 
   async function remove(id: string) {
-    await json(`/api/users/${id}`, { method: 'DELETE' })
+    await apiJson(`/api/users/${id}`, { method: 'DELETE' })
     await load()
   }
 

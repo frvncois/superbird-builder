@@ -1,5 +1,5 @@
 import { ref } from 'vue'
-import { onUnauthorized } from '@/lib/store'
+import { apiJson } from '@/lib/api'
 
 // Per-user API tokens (bearer credentials for the Guano MCP server & scripts).
 // The raw token is returned by create() exactly once and never stored client- or
@@ -13,25 +13,14 @@ export interface ApiTokenRow {
 
 const tokens = ref<ApiTokenRow[]>([])
 
-async function json(path: string, init?: RequestInit) {
-  const res = await fetch(path, {
-    headers: init?.body ? { 'content-type': 'application/json' } : undefined,
-    ...init,
-  })
-  if (res.status === 401) onUnauthorized() // dead session — back to login
-  const detail = await res.json().catch(() => null)
-  if (!res.ok) throw new Error(detail?.error ?? `request failed (${res.status})`)
-  return detail
-}
-
 export function useApiTokens() {
   async function load() {
-    tokens.value = (await json('/api/tokens')).tokens
+    tokens.value = (await apiJson('/api/tokens')).tokens
   }
 
   /** create a token; returns the raw token string (shown once, then unrecoverable) */
   async function create(name: string): Promise<string> {
-    const created = await json('/api/tokens', {
+    const created = await apiJson('/api/tokens', {
       method: 'POST',
       body: JSON.stringify({ name }),
     })
@@ -40,7 +29,7 @@ export function useApiTokens() {
   }
 
   async function revoke(id: string) {
-    await json(`/api/tokens/${id}`, { method: 'DELETE' })
+    await apiJson(`/api/tokens/${id}`, { method: 'DELETE' })
     await load()
   }
 
