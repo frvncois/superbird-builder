@@ -1,10 +1,10 @@
 import { ref } from 'vue'
-import { usePersistence } from './usePersistence'
+import { usePersistence, projectStorageKey, BRANCHES_META_KEY, MAIN_ID } from './usePersistence'
 import { useProject } from './useProject'
 import { startEditTracking } from './useEditTracking'
 import { migrateStoredProject } from '@/lib/storage'
 import { hydrateStore, storeGet } from '@/lib/store'
-import { hydratePublishState } from './usePublish'
+import { hydratePublishState, PUBLISHED_BASELINE_KEY, PUBLISHED_INFO_KEY } from './usePublish'
 import { useMedia } from './useMedia'
 import { useLiveSync } from './useLiveSync'
 
@@ -35,16 +35,12 @@ export function useEditorBoot() {
           localStorage.removeItem(k)
         }
       }
-      await hydrateStore([
-        'guano-branches',
-        'guano-published-baseline',
-        'guano-published-info',
-      ])
-      const meta = storeGet('guano-branches')
-      const activeId = meta ? ((JSON.parse(meta).activeId as string) ?? 'main') : 'main'
+      await hydrateStore([BRANCHES_META_KEY, PUBLISHED_BASELINE_KEY, PUBLISHED_INFO_KEY])
+      const meta = storeGet(BRANCHES_META_KEY)
+      const activeId = meta ? ((JSON.parse(meta).activeId as string) ?? MAIN_ID) : MAIN_ID
       // Main's key too: publish/the Unpublished dot always read Main, even
       // when the session resumes straight onto a draft (hydrateStore de-dupes)
-      await hydrateStore([`guano-project:${activeId}`, 'guano-project:main'])
+      await hydrateStore([projectStorageKey(activeId), projectStorageKey(MAIN_ID)])
       hydratePublishState()
 
       // fresh install: no stored project yet, so init() will persist the
@@ -55,7 +51,7 @@ export function useEditorBoot() {
       const setupName =
         localStorage.getItem('guano-setup-name') ?? localStorage.getItem('superbird-setup-name')
       if (setupName) {
-        if (!storeGet(`guano-project:${activeId}`)) {
+        if (!storeGet(projectStorageKey(activeId))) {
           useProject().renameProject(setupName)
         }
       }

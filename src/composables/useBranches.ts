@@ -1,7 +1,13 @@
 import { computed, ref } from 'vue'
 import { useAuth } from './useAuth'
 import { useProject } from './useProject'
-import { usePersistence, activeBranchId, projectStorageKey } from './usePersistence'
+import {
+  usePersistence,
+  activeBranchId,
+  projectStorageKey,
+  BRANCHES_META_KEY,
+  MAIN_ID,
+} from './usePersistence'
 import { computeMerge, applyResolutions, summarizeChanges } from '@/lib/merge'
 import { readStoredProject } from '@/lib/storage'
 import { hydrateStore, storeGet, storeRemove, storeSet } from '@/lib/store'
@@ -25,8 +31,7 @@ export interface DraftStatus {
   conflictCount: number
 }
 
-const META_KEY = 'guano-branches'
-export const MAIN_ID = 'main'
+export { MAIN_ID } // the canonical definition lives in usePersistence
 
 const branches = ref<BranchMeta[]>([{ id: MAIN_ID, name: 'Main', createdAt: 0 }])
 let metaLoaded = false
@@ -46,7 +51,7 @@ export function useBranches() {
   if (!metaLoaded) {
     metaLoaded = true
     try {
-      const raw = storeGet(META_KEY)
+      const raw = storeGet(BRANCHES_META_KEY)
       if (raw) {
         const meta = JSON.parse(raw) as { branches: BranchMeta[] }
         if (Array.isArray(meta.branches) && meta.branches.some((b) => b.id === MAIN_ID)) {
@@ -65,7 +70,7 @@ export function useBranches() {
 
   function saveMeta() {
     storeSet(
-      META_KEY,
+      BRANCHES_META_KEY,
       JSON.stringify({ activeId: activeBranchId.value, branches: branches.value }),
     )
   }

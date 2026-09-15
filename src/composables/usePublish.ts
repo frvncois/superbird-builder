@@ -8,7 +8,7 @@ import type { PublishMethod } from '@/types/editor'
 
 /** mirror of the last-published snapshot so the Unpublished dot
  * survives editor reloads (server-stored; hydrated by the boot flow) */
-const BASELINE_KEY = 'guano-published-baseline'
+export const PUBLISHED_BASELINE_KEY = 'guano-published-baseline'
 
 // snapshot of the project at the last publish; null = never published.
 // (migrations can make an old save differ from its own published
@@ -16,7 +16,7 @@ const BASELINE_KEY = 'guano-published-baseline'
 const publishedSnapshot = ref<string | null>(null)
 
 /** stats of the last successful publish (Publishing settings tab) */
-const INFO_KEY = 'guano-published-info'
+export const PUBLISHED_INFO_KEY = 'guano-published-info'
 const publishedInfo = ref<{
   publishedAt: number
   routes: number
@@ -45,10 +45,10 @@ watch(activeBranchId, () => {
 
 /** called from the editor boot flow once the store cache is hydrated */
 export function hydratePublishState() {
-  publishedSnapshot.value = storeGet(BASELINE_KEY)
+  publishedSnapshot.value = storeGet(PUBLISHED_BASELINE_KEY)
   storedMainSnapshot.value = readMainSnapshot()
   try {
-    publishedInfo.value = JSON.parse(storeGet(INFO_KEY) ?? 'null')
+    publishedInfo.value = JSON.parse(storeGet(PUBLISHED_INFO_KEY) ?? 'null')
   } catch {
     publishedInfo.value = null
   }
@@ -116,8 +116,8 @@ export function usePublish() {
       bytes: stats.bytes,
       commit: stats.commit,
     }
-    storeSet(BASELINE_KEY, snapshot)
-    storeSet(INFO_KEY, JSON.stringify(publishedInfo.value))
+    storeSet(PUBLISHED_BASELINE_KEY, snapshot)
+    storeSet(PUBLISHED_INFO_KEY, JSON.stringify(publishedInfo.value))
   }
 
   return { hasUnpublishedChanges, markPublished, publishedInfo }

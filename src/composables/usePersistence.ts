@@ -20,11 +20,20 @@ export const SAVE_STATES: Record<
 const DEBOUNCE_MS = 500
 const HISTORY_LIMIT = 50
 
+/** the always-present trunk branch. Defined here rather than in useBranches
+ * for the same reason activeBranchId is — everything storage-keyed needs it,
+ * and useBranches already depends on this module. Re-exported from
+ * useBranches, which is where callers read it from. */
+export const MAIN_ID = 'main'
+
+/** the branch-list + activeId blob (which branch to resume) */
+export const BRANCHES_META_KEY = 'guano-branches'
+
 /**
  * Branch whose project is loaded; lives here (not in useBranches) so
  * storage stays branch-keyed without a circular import.
  */
-export const activeBranchId = ref('main')
+export const activeBranchId = ref(MAIN_ID)
 
 /** While true the deep autosave watcher is a no-op. The AI assistant sets this
  * around a run: the store is latest-wins, so a debounced autosave of the stale
@@ -144,8 +153,8 @@ export function usePersistence() {
     try {
       // resume the branch that was active last session
       // (the boot sequence hydrated these keys before init() runs)
-      const meta = storeGet('guano-branches')
-      if (meta) activeBranchId.value = (JSON.parse(meta).activeId as string) || 'main'
+      const meta = storeGet(BRANCHES_META_KEY)
+      if (meta) activeBranchId.value = (JSON.parse(meta).activeId as string) || MAIN_ID
 
       const stored = readStoredProject(projectStorageKey(activeBranchId.value))
       if (stored) {

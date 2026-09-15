@@ -5502,18 +5502,10 @@ const tools = [
       // the list never has to transit the model's context
       let items = args.items
       if (args.manifestPath) {
-        const file = String(args.manifestPath)
-        const full = await resolveInputPath(file, 'manifestPath')
-        let parsed
-        try {
-          parsed = JSON.parse(await readFile(full, 'utf8'))
-        } catch (e) {
-          throw new Error(`cannot read manifest "${file}": ${e.message ?? e}`)
-        }
-        const list = Array.isArray(parsed) ? parsed : parsed?.items
-        if (!Array.isArray(list) || !list.length) {
-          throw new Error('manifest must be a non-empty JSON array of {name?, path?|url?|dataUrl?, folderId?}')
-        }
+        const list = await readJsonArray(args.manifestPath, 'manifest', {
+          key: 'items',
+          describe: '{name?, path?|url?|dataUrl?, folderId?}',
+        })
         items = [...list, ...(items ?? [])]
       }
 
