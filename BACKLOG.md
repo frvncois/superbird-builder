@@ -247,7 +247,8 @@ action on media-library SVGs.
 ## Tooling
 
 - **C7 — `npm run test:e2e` silently requires a prior `npm run build`** (the e2e
-  server serves `dist/`); only a code comment says so. Fix: pre-step or README note.
+  server serves `dist/`). Now stated in CLAUDE.md's Commands section; a real
+  pre-step (or a `pretest:e2e` script) would still be better than a note.
 - **C8 — `scripts/generate-demo.ts` needs `npx tsx` but `tsx` isn't a
   devDependency** and there's no npm script; output path is cwd-relative. Fix: add
   `tsx` to devDependencies and a `gen:demo` script.
