@@ -88,7 +88,7 @@ export function useRenderNode(
   const frameBreakpointId = inject(FRAME_BREAKPOINT, null)
   const renderBreakpointId = computed(() => frameBreakpointId ?? liveBreakpointId.value)
   const { collections, collectionByName, activeCollection, activeEntry, entryPath } = useCollections()
-  const { nodeContent, nodeSrc, entryValue } = useLocale()
+  const { nodeContent, nodeSrc, entryValue, setNodeContent, setEntryValue } = useLocale()
   const { assetForSrc } = useMedia()
 
   const def = computed(() => ELEMENTS[node.value.type])
@@ -258,6 +258,45 @@ export function useRenderNode(
       ? (customAttrs.value.alt ?? assetForSrc(srcAttr.value)?.alt ?? '')
       : undefined,
   )
+
+  // --- inline text editing (shared by both renderers) ---
+  //
+  // Which elements can be text-edited, and what an edit reads from and writes
+  // to, is the same question in Build and Preview — only the gesture and the
+  // Esc behaviour differ, and those stay in the renderers. Duplicating this
+  // meant the field-type rules had to be kept in step by hand.
+
+  /** text-content elements only; a bound element needs an entry to write to —
+   * and a reference bind isn't text, it's picked in the Data panel */
+  const editableText = computed(
+    () =>
+      def.value?.defaultContent !== undefined &&
+      !node.value.children.length &&
+      (!boundField.value ||
+        (!!boundEntry.value && !['reference', 'multi-reference'].includes(boundField.value.type))),
+  )
+
+  /** already-rich content keeps its formatting while inline-editing */
+  const richEditing = computed(() => richContent.value !== null)
+
+  /** a {field} placeholder starts empty; everything else starts from the
+   * displayed text, so translating edits begin from the fallback */
+  function inlineInitialText() {
+    const placeholder =
+      !!boundField.value &&
+      !!boundEntry.value &&
+      !entryValue(boundEntry.value, boundField.value).value
+    return placeholder ? '' : (displayContent.value ?? '')
+  }
+
+  /** a bound element writes the entry field; everything else its own content */
+  function commitInlineText(text: string) {
+    if (boundField.value && boundEntry.value) {
+      setEntryValue(boundEntry.value, boundField.value.name, text)
+    } else {
+      setNodeContent(node.value, text)
+    }
+  }
 
   // --- links ---
 
@@ -572,6 +611,10 @@ export function useRenderNode(
     srcInfo,
     srcAttr,
     altAttr,
+    editableText,
+    richEditing,
+    inlineInitialText,
+    commitInlineText,
     linkRaw,
     baseClasses,
     hoverHandlers,

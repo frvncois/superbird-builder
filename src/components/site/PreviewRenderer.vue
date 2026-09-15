@@ -38,9 +38,7 @@ const props = defineProps<{ node: ElementNode }>()
 const { project } = useProject()
 const { setActivePage } = usePage()
 const { openEntry, activeEntryId } = useCollections()
-const {
-  entryValue, setNodeContent, setNodeSrc, setEntryValue, setActiveLocale,
-} = useLocale()
+const { setNodeSrc, setEntryValue, setActiveLocale } = useLocale()
 const { openMenu, editRequest, consumeEditRequest } = usePreviewEditing()
 
 const {
@@ -48,6 +46,7 @@ const {
   listCollection, listEntries, itemCollection, itemEntry, itemTemplateChildren, selfNested,
   boundField, boundEntry, customAttrs, backgroundInfo,
   displayContent, richContent, srcAttr, altAttr, linkRaw, baseClasses,
+  editableText, richEditing, inlineInitialText, commitInlineText,
   hoverHandlers, fireClickInteractions, el,
   motionStyle,
 } = useRenderNode(() => props.node)
@@ -57,35 +56,14 @@ const classes = computed(() => [baseClasses.value])
 const isMedia = computed(() => props.node.type === 'image' || props.node.type === 'video')
 
 // --- inline text editing (Cmd+Click; Esc saves like blur) ---
-
-const editableText = computed(
-  () =>
-    def.value?.defaultContent !== undefined &&
-    !props.node.children.length &&
-    (!boundField.value ||
-      (!!boundEntry.value && !['reference', 'multi-reference'].includes(boundField.value.type))),
-)
-
-// already-rich content keeps its formatting while inline-editing
-const richEditing = computed(() => richContent.value !== null)
+// what's editable, what it opens with and where it commits all come from the
+// render core; Preview differs only in Esc committing instead of discarding
 
 const { editing, editEl, startEditing, finishEditing, onEditKeydown } = useInlineEdit({
   editable: editableText,
   rich: richEditing,
-  initialText: () => {
-    const placeholder =
-      !!boundField.value &&
-      !!boundEntry.value &&
-      !entryValue(boundEntry.value, boundField.value).value
-    return placeholder ? '' : (displayContent.value ?? '')
-  },
-  commit: (text) => {
-    if (boundField.value && boundEntry.value) {
-      setEntryValue(boundEntry.value, boundField.value.name, text)
-    } else {
-      setNodeContent(props.node, text)
-    }
-  },
+  initialText: inlineInitialText,
+  commit: commitInlineText,
   escBehavior: 'save',
 })
 

@@ -8,7 +8,6 @@ import { useReorderAnimation } from '@/composables/useReorderAnimation'
 import EntryScope from '@/components/shared/EntryScope.vue'
 import { useInteraction } from '@/composables/useInteraction'
 import { useContextMenu } from '@/composables/useContextMenu'
-import { useLocale } from '@/composables/useLocale'
 import { useRenderNode } from '@/composables/useRenderNode'
 import { useInlineEdit } from '@/composables/useInlineEdit'
 import type { ElementNode } from '@/types/editor'
@@ -19,7 +18,6 @@ const { selectedElement, selectedElementIds, selectElement, draggingId, dropTarg
 const { canvasReorder } = useReorderAnimation()
 const { pickingFor, pickTarget } = useInteraction()
 const { openMenu } = useContextMenu()
-const { entryValue, setNodeContent, setEntryValue } = useLocale()
 
 // shared rendering core (also used by Preview's PreviewRenderer):
 // def/mapping, collection + entry-scope resolution, interaction firing,
@@ -33,8 +31,6 @@ const {
   itemEntry,
   itemTemplateChildren,
   selfNested,
-  boundField,
-  boundEntry,
   customAttrs,
   backgroundInfo,
   contentInfo,
@@ -43,6 +39,10 @@ const {
   srcInfo,
   srcAttr,
   altAttr,
+  editableText,
+  richEditing,
+  inlineInitialText,
+  commitInlineText,
   baseClasses,
   hoverHandlers,
   fireClickInteractions,
@@ -119,39 +119,14 @@ const classes = computed(() => [
 ])
 
 // --- inline text editing (double-click) ---
-
-// text-content elements only; bound elements need an entry to write to —
-// and a reference bind isn't text, it's picked in the Data panel
-const editableText = computed(
-  () =>
-    def.value?.defaultContent !== undefined &&
-    !props.node.children.length &&
-    (!boundField.value ||
-      (!!boundEntry.value && !['reference', 'multi-reference'].includes(boundField.value.type))),
-)
-
-// already-rich content keeps its formatting while inline-editing
-const richEditing = computed(() => richContent.value !== null)
+// what's editable, what it opens with and where it commits all come from the
+// render core; Build differs only in the gesture and in Esc discarding
 
 const { editing, editEl, startEditing, finishEditing, onEditKeydown } = useInlineEdit({
   editable: editableText,
   rich: richEditing,
-  // a {field} placeholder starts empty; everything else starts from the
-  // displayed text, so translating edits begin from the fallback
-  initialText: () => {
-    const placeholder =
-      !!boundField.value &&
-      !!boundEntry.value &&
-      !entryValue(boundEntry.value, boundField.value).value
-    return placeholder ? '' : (displayContent.value ?? '')
-  },
-  commit: (text) => {
-    if (boundField.value && boundEntry.value) {
-      setEntryValue(boundEntry.value, boundField.value.name, text)
-    } else {
-      setNodeContent(props.node, text)
-    }
-  },
+  initialText: inlineInitialText,
+  commit: commitInlineText,
   escBehavior: 'cancel',
   onExit: () => requestEditorFocus(), // Esc/Enter returns the caret to the code editor line
 })
