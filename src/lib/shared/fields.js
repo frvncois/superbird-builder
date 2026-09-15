@@ -40,18 +40,108 @@ export function resolveBinding(collections, collection, entry, path) {
   return { collection: refCollection, field: refField, entry: refEntry }
 }
 
+/** urls stored on a multi-image field, always as an array */
+export function mediaUrls(entry, fieldName) {
+  const v = entry?.values?.[fieldName]
+  if (Array.isArray(v)) return v.filter((u) => typeof u === 'string' && u)
+  return typeof v === 'string' && v ? [v] : []
+}
+
+/**
+ * The scope a `multi-image` field presents to :collection-list: one synthetic
+ * entry per stored url, in a synthetic collection carrying a single image field
+ * named after the source field. So inside `:collection-list[gallery]` you bind
+ * `:image[gallery]:` and get exactly as many <img> as the entry actually has —
+ * the whole point of the type, versus fixed gallery-1…gallery-7 slots that ship
+ * empty <img> tags for every image an entry doesn't have.
+ *
+ * The synthetic collection is not in project.collections, so it mints no entry
+ * routes and `@item` inside the list stays inert — it exists only as a scope.
+ */
+function mediaListScope(field, scopeEntry) {
+  const urls = mediaUrls(scopeEntry, field.name)
+  return {
+    collection: {
+      id: `media:${field.id ?? field.name}`,
+      name: field.name,
+      synthetic: true,
+      fields: [{ id: `${field.id ?? field.name}:src`, name: field.name, type: 'image' }],
+      entries: [],
+    },
+    entries: urls.map((url, i) => ({
+      id: `${field.name}:${i}`,
+      name: '',
+      slug: '',
+      values: { [field.name]: url },
+    })),
+  }
+}
+
 /**
  * Entries a :collection-list[arg] iterates: a collection name lists all of
  * its entries; a multi-reference field of the scoped entry lists the
- * referenced entries (dangling ids skipped, order preserved).
- * Returns { collection, entries } or null when arg names neither.
+ * referenced entries (dangling ids skipped, order preserved); a multi-image
+ * field lists one synthetic entry per stored image url.
+ * Returns { collection, entries } or null when arg names none of those.
  */
-export function resolveListScope(collections, scopeCollection, scopeEntry, arg) {
+/**
+ * The site's own published pages, as a synthetic collection.
+ *
+ * `:collection-list[@pages]` repeats over them, so an auto nav / footer menu is
+ * DATA rather than a hand-maintained list of links — which is also what makes
+ * "every page except the one you're on" expressible (`excludeCurrent`, since the
+ * synthetic entry ids ARE page ids) and what lets `@item` link each row to its
+ * page. The `@` prefix is reserved by the lexer, so this can never collide with
+ * a collection someone actually named "pages".
+ *
+ * Fields: `title` (the page name), `path`, `slug` (the last path segment).
+ * @param {{id: string, name: string, path: string, status?: string, collectionId?: string}[]} pages
+ */
+export function pagesListScope(pages) {
+  const entries = (pages ?? [])
+    // template pages render per ENTRY, not as themselves — listing them would
+    // put "Post" in the nav next to the real pages
+    .filter((p) => p.status === 'published' && !p.collectionId)
+    .map((page) => {
+      const path = page.path || '/'
+      const slug = path.split('/').filter(Boolean).pop() ?? ''
+      return {
+        id: page.id,
+        name: page.name,
+        slug,
+        // the route this row links to — read by entryRoutePath, so `@item`
+        // resolves to the page itself rather than to a collection route
+        routePath: path,
+        values: { title: page.name, path, slug },
+        createdAt: 0,
+      }
+    })
+  return {
+    collection: {
+      id: '@pages',
+      name: '@pages',
+      fields: [
+        { id: '@title', name: 'title', type: 'text' },
+        { id: '@path', name: 'path', type: 'text' },
+        { id: '@slug', name: 'slug', type: 'text' },
+      ],
+      entries,
+    },
+    entries,
+  }
+}
+
+export function resolveListScope(collections, scopeCollection, scopeEntry, arg, pages) {
   if (!arg) return null
+  // built-in sources are '@'-prefixed and resolve before collections; the
+  // lexer reserves '@' in args so there is no ambiguity to resolve
+  if (arg === '@pages') return pagesListScope(pages)
   const named = collections.find((c) => c.name === arg)
   if (named) return { collection: named, entries: named.entries }
   const field = scopeCollection?.fields.find((f) => f.name === arg)
-  if (!field || field.type !== 'multi-reference') return null
+  if (!field) return null
+  if (field.type === 'multi-image') return mediaListScope(field, scopeEntry)
+  if (field.type !== 'multi-reference') return null
   const target = collections.find((c) => c.id === field.refCollectionId)
   if (!target) return null
   const entries = refIds(scopeEntry, arg)
@@ -72,9 +162,14 @@ export function resolveListScope(collections, scopeCollection, scopeEntry, arg) 
  * queries fail OPEN (input returned unchanged) — a bad query must never
  * blank a published list.
  */
-export function applyListQuery(entries, query) {
+export function applyListQuery(entries, query, opts) {
   if (!query || typeof query !== 'object' || Array.isArray(query)) return entries
   let out = entries
+  // drop the entry currently in scope (template "related posts" pattern);
+  // a no-op outside entry scope, where opts.currentEntryId is absent
+  if (query.excludeCurrent && opts && opts.currentEntryId) {
+    out = out.filter((entry) => entry.id !== opts.currentEntryId)
+  }
   // hand-picked entries (absent = all); membership only — order stays with
   // the source/sort so pick and sort compose predictably
   if (Array.isArray(query.pick)) {
@@ -108,6 +203,9 @@ export function applyListQuery(entries, query) {
       return String(ka).localeCompare(String(kb), undefined, { numeric: true }) * dir
     })
   }
+  // offset after sort, before limit — "skip N" for slot placement
+  const offset = Number(query.offset)
+  if (Number.isFinite(offset) && offset > 0) out = out.slice(offset)
   const limit = Number(query.limit)
   if (Number.isFinite(limit) && limit > 0) out = out.slice(0, limit)
   return out

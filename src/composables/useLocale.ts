@@ -3,6 +3,7 @@ import { useProject } from './useProject'
 import { parseSetup, replaceSetup } from '@/lib/document'
 import { reconcile } from '@/lib/syntax'
 import { walkNodes } from '@/lib/tree'
+import { purgeLocaleSeo } from '@/lib/shared/locales.js'
 import type { CollectionEntry, ElementNode } from '@/types/editor'
 
 /** the locale being edited/previewed — runtime editor state, shared
@@ -73,6 +74,11 @@ export function useLocale() {
         if (!Object.keys(entry.locales).length) delete entry.locales
       }
     }
+    // per-locale SEO lives outside the node/entry `locales` buckets — page
+    // overrides and the project defaults. Left behind, they are orphaned
+    // strings for a locale that no longer renders, and nothing in the UI can
+    // reach them to clean up.
+    purgeLocaleSeo(project.value, code)
   }
 
   /**
@@ -114,12 +120,22 @@ export function useLocale() {
     return typeof raw === 'string' ? raw : undefined
   }
 
-  function entryValue(entry: CollectionEntry, field: string): LocalizedValue {
-    if (isDefault.value) return { value: baseEntryText(entry, field), translated: true }
-    const override = entry.locales?.[activeLocale.value]?.[field]
+  // accepts the field object where the caller has it: a field flagged
+  // localize:false always reads its base value (never a stale stored
+  // override), matching the exporter's entryValue
+  function entryValue(
+    entry: CollectionEntry,
+    field: string | { name: string; localize?: boolean },
+  ): LocalizedValue {
+    const name = typeof field === 'string' ? field : field.name
+    const localizable = typeof field === 'string' || field.localize !== false
+    if (isDefault.value || !localizable) {
+      return { value: baseEntryText(entry, name), translated: true }
+    }
+    const override = entry.locales?.[activeLocale.value]?.[name]
     return override
       ? { value: override, translated: true }
-      : { value: baseEntryText(entry, field), translated: false }
+      : { value: baseEntryText(entry, name), translated: false }
   }
 
   // --- panel edits (raw override, no fallback) ---

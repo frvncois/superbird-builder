@@ -7,9 +7,12 @@ const BASE = (process.env.GUANO_URL || 'http://localhost:4174').replace(/\/+$/, 
 const TOKEN = process.env.GUANO_TOKEN || ''
 
 class ApiError extends Error {
-  constructor(status, message) {
+  constructor(status, message, detail) {
     super(message)
     this.status = status
+    // the server's JSON body, when it sent one — carries retryAfterSeconds on a
+    // 429 so a caller can wait the exact cooldown instead of guessing
+    if (detail?.retryAfterSeconds !== undefined) this.retryAfterSeconds = detail.retryAfterSeconds
   }
 }
 
@@ -30,7 +33,7 @@ async function req(method, path, body) {
   if (!res.ok) {
     const detail = await res.json().catch(() => null)
     const msg = detail?.error ?? `request failed (${res.status})`
-    throw new ApiError(res.status, msg)
+    throw new ApiError(res.status, msg, detail)
   }
   return res
 }
@@ -88,7 +91,7 @@ export async function mediaUpload({ name, folderId, mime, bytes }) {
   }
   if (!res.ok) {
     const detail = await res.json().catch(() => null)
-    throw new ApiError(res.status, detail?.error ?? `upload failed (${res.status})`)
+    throw new ApiError(res.status, detail?.error ?? `upload failed (${res.status})`, detail)
   }
   return res.json()
 }

@@ -1,46 +1,47 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import {
+  ArrowDownWideNarrow,
+  ArrowUpNarrowWide,
   Check,
-  FileText,
-  Film,
   FolderPlus,
-  Folder as FolderIcon,
   Image as ImageIcon,
+  FolderInput,
+  Folder as FolderIcon,
   LayoutGrid,
-  Music,
-  Pencil,
+  List,
   Search,
+  SlidersHorizontal,
   Trash2,
-  Type,
   Upload,
   X,
 } from 'lucide-vue-next'
 import ModalHost from '@/components/modal/ModalHost.vue'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
-import InputUI from '@/components/ui/InputUI.vue'
+import SelectUI from '@/components/ui/SelectUI.vue'
+import MenuUI from '@/components/ui/MenuUI.vue'
 import MediaGrid from '@/components/editor/media/MediaGrid.vue'
 import MediaDetails from '@/components/editor/media/MediaDetails.vue'
 import { useMedia } from '@/composables/useMedia'
 import { useMediaLibrary } from '@/composables/useMediaLibrary'
 import { useModal } from '@/composables/useModal'
-import { acceptFor, KIND_LABELS } from '@/lib/media'
-import type { MediaAsset, MediaKind } from '@/types/media'
+import { acceptFor, formatBytes, KIND_LABELS } from '@/lib/media'
+import type { MediaAsset, MediaFolder, MediaKind } from '@/types/media'
 
 const emit = defineEmits<{ close: [] }>()
 
-const { assets, folders, loaded, loadMedia, upload, updateAsset, removeAsset, usage, createFolder, renameFolder, removeFolder } =
-  useMedia()
+const {
+  assets, folders, loaded, loadMedia, upload, updateAsset, removeAsset, usage,
+  createFolder, renameFolder, moveFolder, removeFolder, thumbUrl, mediaUrl,
+} = useMedia()
 const { selectAccept, pick } = useMediaLibrary()
+const { confirm } = useModal()
 
-/** select mode: resolve the caller's promise, then close through the modal host */
 function pickAndClose(asset: MediaAsset) {
   pick(asset)
   emit('close')
 }
-const { confirm } = useModal()
 
-// boot may have failed silently — retry when the modal opens
 const loadError = ref<string | null>(null)
 onMounted(() => {
   loadMedia().catch((err) => {
@@ -50,56 +51,216 @@ onMounted(() => {
 
 const selecting = computed(() => selectAccept.value !== null)
 
-// ----- filtering: folder / kind / search -----
-// filter is either 'all', a kind, or a folder id
-const filter = ref<string>('all')
-const query = ref('')
-
-const KIND_ICONS = { image: ImageIcon, video: Film, audio: Music, document: FileText, font: Type }
+// ----- toolbar state -----
 const KINDS = Object.keys(KIND_LABELS) as MediaKind[]
-/** kinds shown in the sidebar — narrowed to the accepted set in select mode */
+const type = ref<'all' | MediaKind>('all')
+const query = ref('')
+const view = ref<'grid' | 'list'>('grid')
+const sortKey = ref<'date' | 'name' | 'size' | 'type'>('date')
+const sortDir = ref<'asc' | 'desc'>('desc')
+const sizeFilter = ref<'any' | 's' | 'm' | 'l' | 'xl'>('any')
+const dateFilter = ref<'any' | 'today' | '7d' | '30d' | '1y'>('any')
+
+/** kinds shown as chips — narrowed to the accepted set in select mode */
 const visibleKinds = computed(() => KINDS.filter((k) => !selectAccept.value || selectAccept.value.includes(k)))
 
-const filtered = computed(() => {
-  let list = assets.value
-  if (selectAccept.value) list = list.filter((a) => selectAccept.value!.includes(a.kind))
-  if (KINDS.includes(filter.value as MediaKind)) list = list.filter((a) => a.kind === filter.value)
-  else if (filter.value !== 'all') list = list.filter((a) => a.folderId === filter.value)
-  const q = query.value.trim().toLowerCase()
-  if (q) {
-    list = list.filter(
-      (a) => a.name.toLowerCase().includes(q) || a.filename.toLowerCase().includes(q),
-    )
+const SORT_OPTIONS = [
+  { label: 'Date', value: 'date' },
+  { label: 'Name', value: 'name' },
+  { label: 'Size', value: 'size' },
+  { label: 'Type', value: 'type' },
+]
+const SIZE_OPTIONS = [
+  { label: 'Any size', value: 'any' },
+  { label: '< 100 KB', value: 's' },
+  { label: '100 KB – 1 MB', value: 'm' },
+  { label: '1 – 10 MB', value: 'l' },
+  { label: '> 10 MB', value: 'xl' },
+]
+const DATE_OPTIONS = [
+  { label: 'Any date', value: 'any' },
+  { label: 'Today', value: 'today' },
+  { label: 'Last 7 days', value: '7d' },
+  { label: 'Last 30 days', value: '30d' },
+  { label: 'Last year', value: '1y' },
+]
+
+/** badge on the Filter button — sort isn't a filter, so it doesn't count */
+const activeFilters = computed(
+  () => (sizeFilter.value !== 'any' ? 1 : 0) + (dateFilter.value !== 'any' ? 1 : 0),
+)
+const filtersDirty = computed(
+  () => !!activeFilters.value || sortKey.value !== 'date' || sortDir.value !== 'desc',
+)
+function resetFilters() {
+  sortKey.value = 'date'
+  sortDir.value = 'desc'
+  sizeFilter.value = 'any'
+  dateFilter.value = 'any'
+}
+
+// ----- folder navigation -----
+const currentFolderId = ref<string | null>(null)
+
+// any active filter/search flattens the view: show every match across folders
+const flatMode = computed(
+  () =>
+    type.value !== 'all' ||
+    !!query.value.trim() ||
+    sizeFilter.value !== 'any' ||
+    dateFilter.value !== 'any',
+)
+
+const breadcrumb = computed(() => {
+  const chain: MediaFolder[] = []
+  let id: string | undefined = currentFolderId.value ?? undefined
+  while (id) {
+    const f = folders.value.find((x) => x.id === id)
+    if (!f) break
+    chain.unshift(f)
+    id = f.parentId
   }
-  return list
+  return chain
 })
 
-// ----- selection + details rail -----
-const selectedId = ref<string | null>(null)
-const selected = computed(() => assets.value.find((a) => a.id === selectedId.value) ?? null)
-/** bumped after replace-in-place so previews escape the browser cache */
+function inSizeBucket(size: number, b: typeof sizeFilter.value): boolean {
+  const KB = 1024
+  const MB = 1024 * 1024
+  if (b === 's') return size < 100 * KB
+  if (b === 'm') return size >= 100 * KB && size < MB
+  if (b === 'l') return size >= MB && size < 10 * MB
+  if (b === 'xl') return size >= 10 * MB
+  return true
+}
+function inDateRange(createdAt: string, d: typeof dateFilter.value): boolean {
+  if (d === 'any') return true
+  const day = 86_400_000
+  const span = d === 'today' ? day : d === '7d' ? 7 * day : d === '30d' ? 30 * day : 365 * day
+  return Date.now() - new Date(createdAt).getTime() <= span
+}
+
+function matches(a: MediaAsset): boolean {
+  if (selectAccept.value && !selectAccept.value.includes(a.kind)) return false
+  if (type.value !== 'all' && a.kind !== type.value) return false
+  const q = query.value.trim().toLowerCase()
+  if (q && !(a.name.toLowerCase().includes(q) || a.filename.toLowerCase().includes(q))) return false
+  if (!inSizeBucket(a.size, sizeFilter.value)) return false
+  if (!inDateRange(a.createdAt, dateFilter.value)) return false
+  return true
+}
+
+function sortAssets(list: MediaAsset[]): MediaAsset[] {
+  const dir = sortDir.value === 'asc' ? 1 : -1
+  return [...list].sort((a, b) => {
+    let cmp = 0
+    if (sortKey.value === 'name') cmp = a.name.localeCompare(b.name)
+    else if (sortKey.value === 'size') cmp = a.size - b.size
+    else if (sortKey.value === 'type') cmp = a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name)
+    else cmp = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+    return cmp * dir
+  })
+}
+
+const visibleAssets = computed(() => {
+  const list = flatMode.value
+    ? assets.value.filter(matches)
+    : assets.value.filter((a) => (a.folderId ?? null) === currentFolderId.value && matches(a))
+  return sortAssets(list)
+})
+const visibleFolders = computed(() =>
+  flatMode.value
+    ? []
+    : [...folders.value.filter((f) => (f.parentId ?? null) === currentFolderId.value)].sort((a, b) =>
+        a.name.localeCompare(b.name),
+      ),
+)
+const isEmpty = computed(() => !visibleFolders.value.length && !visibleAssets.value.length)
+
+/** direct asset count per folder, for the folder chips */
+const folderCounts = computed<Record<string, number>>(() => {
+  const counts: Record<string, number> = {}
+  for (const a of assets.value) {
+    if (a.folderId) counts[a.folderId] = (counts[a.folderId] ?? 0) + 1
+  }
+  return counts
+})
+
+// ----- selection (single → details rail, multiple → floating batch pill) -----
+const selectedIds = ref<string[]>([])
+const selected = computed(() =>
+  selectedIds.value.length === 1
+    ? (assets.value.find((a) => a.id === selectedIds.value[0]) ?? null)
+    : null,
+)
+const batch = computed(() => selectedIds.value.length >= 2)
 const version = ref(0)
+
+function onSelect(asset: MediaAsset, additive: boolean) {
+  if (additive) {
+    selectedIds.value = selectedIds.value.includes(asset.id)
+      ? selectedIds.value.filter((id) => id !== asset.id)
+      : [...selectedIds.value, asset.id]
+  } else {
+    selectedIds.value = [asset.id]
+  }
+}
+const clearSelection = () => (selectedIds.value = [])
 
 function onPick(asset: MediaAsset) {
   if (selecting.value) pickAndClose(asset)
 }
 
+// full "Parent / Child" folder paths for the move-to menus
+function folderPath(id: string): string {
+  const names: string[] = []
+  const seen = new Set<string>()
+  let cur = folders.value.find((f) => f.id === id)
+  while (cur && !seen.has(cur.id)) {
+    seen.add(cur.id)
+    names.unshift(cur.name)
+    cur = cur.parentId ? folders.value.find((f) => f.id === cur!.parentId) : undefined
+  }
+  return names.join(' / ')
+}
+const folderTargets = computed(() =>
+  [...folders.value.map((f) => ({ id: f.id, label: folderPath(f.id) }))].sort((a, b) =>
+    a.label.localeCompare(b.label),
+  ),
+)
+
+async function batchMove(folderId: string | null) {
+  for (const id of [...selectedIds.value]) {
+    await updateAsset(id, { folderId }).catch((e) => (uploadError.value = errMsg(e)))
+  }
+}
+async function batchDelete() {
+  const n = selectedIds.value.length
+  const ok = await confirm({
+    title: 'Delete files',
+    message: `Delete ${n} file${n === 1 ? '' : 's'}? This cannot be undone.`,
+  })
+  if (!ok) return
+  for (const id of [...selectedIds.value]) {
+    await removeAsset(id).catch((e) => (uploadError.value = errMsg(e)))
+  }
+  clearSelection()
+}
+
 // ----- upload (file input + drag-and-drop share one path) -----
 const uploadInput = ref<HTMLInputElement>()
-/** "2/5" while a batch runs, null when idle */
 const uploadProgress = ref<string | null>(null)
 const uploadError = ref<string | null>(null)
 
 async function uploadFiles(files: File[], folderId?: string) {
   if (!files.length || uploadProgress.value) return
   uploadError.value = null
-  // no explicit target: the active folder filter becomes the destination
-  folderId ??= folders.value.some((f) => f.id === filter.value) ? filter.value : undefined
+  // no explicit target → the folder currently open
+  folderId ??= currentFolderId.value ?? undefined
   for (const [i, file] of files.entries()) {
     uploadProgress.value = `${i + 1}/${files.length}`
     try {
       const asset = await upload(file, folderId)
-      selectedId.value = asset.id
+      selectedIds.value = [asset.id]
     } catch (err) {
       uploadError.value = err instanceof Error ? err.message : 'upload failed'
     }
@@ -113,12 +274,10 @@ function onUploadFiles(e: Event) {
   void uploadFiles(files)
 }
 
-// drop zone: files dropped anywhere on the grid pane upload; the overlay
-// shows only for OS file drags (not for tile-to-folder drags)
+// OS file drop overlay (only for OS file drags, not tile/folder moves)
 const dragDepth = ref(0)
 const dragActive = computed(() => dragDepth.value > 0)
 const isFileDrag = (e: DragEvent) => [...(e.dataTransfer?.types ?? [])].includes('Files')
-
 function onDragEnter(e: DragEvent) {
   if (isFileDrag(e)) dragDepth.value++
 }
@@ -127,20 +286,62 @@ function onDragLeave(e: DragEvent) {
 }
 function onDrop(e: DragEvent) {
   dragDepth.value = 0
-  void uploadFiles([...(e.dataTransfer?.files ?? [])])
+  const files = [...(e.dataTransfer?.files ?? [])]
+  if (files.length) void uploadFiles(files)
 }
 
-// sidebar folders accept both tile drags (move) and file drags (upload into)
-async function onFolderDrop(e: DragEvent, folderId: string | null) {
-  const assetId = e.dataTransfer?.getData('application/x-guano-asset')
-  if (assetId) {
-    await updateAsset(assetId, { folderId })
-    return
+// ----- MediaGrid events -----
+function openFolder(folder: MediaFolder) {
+  currentFolderId.value = folder.id
+}
+async function onMoveAsset(assetId: string, folderId: string | null) {
+  // dragging one of several selected items moves the whole selection
+  const ids =
+    selectedIds.value.includes(assetId) && selectedIds.value.length > 1
+      ? [...selectedIds.value]
+      : [assetId]
+  for (const id of ids) {
+    await updateAsset(id, { folderId }).catch((e) => (uploadError.value = errMsg(e)))
   }
-  void uploadFiles([...(e.dataTransfer?.files ?? [])], folderId ?? undefined)
+}
+async function onMoveFolder(folderId: string, targetId: string | null) {
+  await moveFolder(folderId, targetId).catch((e) => (uploadError.value = errMsg(e)))
+}
+function onRenameFolder(id: string, name: string) {
+  void renameFolder(id, name).catch((e) => (uploadError.value = errMsg(e)))
+}
+function onRenameAsset(id: string, name: string) {
+  void updateAsset(id, { name }).catch((e) => (uploadError.value = errMsg(e)))
+}
+/** the grid has no <a>, so the download is triggered programmatically */
+function downloadAsset(asset: MediaAsset) {
+  const a = document.createElement('a')
+  a.href = `${mediaUrl(asset)}?download=1`
+  a.download = asset.filename
+  a.click()
+}
+const errMsg = (e: unknown) => (e instanceof Error ? e.message : 'action failed')
+
+// ----- create folder (at the current level, opens straight into rename) -----
+const freshFolderId = ref<string | null>(null)
+async function createFolderHere() {
+  try {
+    const f = await createFolder('New folder', currentFolderId.value ?? undefined)
+    freshFolderId.value = f.id
+  } catch (e) {
+    uploadError.value = errMsg(e)
+  }
 }
 
-// ----- delete (with usage warning) -----
+// ----- breadcrumb drop targets (move up to an ancestor / root) -----
+function onCrumbDrop(e: DragEvent, folderId: string | null) {
+  const assetId = e.dataTransfer?.getData('application/x-guano-asset')
+  if (assetId) return void onMoveAsset(assetId, folderId)
+  const fId = e.dataTransfer?.getData('application/x-guano-folder')
+  if (fId && fId !== folderId) void onMoveFolder(fId, folderId)
+}
+
+// ----- delete (asset / folder) -----
 async function requestDelete(asset: MediaAsset) {
   let message = `Delete “${asset.name}”? This cannot be undone.`
   try {
@@ -153,51 +354,38 @@ async function requestDelete(asset: MediaAsset) {
         '. Elements using it will appear broken after deletion.'
     }
   } catch {
-    /* scan failing shouldn't block deletion — fall back to the generic message */
+    /* ignore */
   }
   if (!(await confirm({ title: 'Delete file', message }))) return
   await removeAsset(asset.id)
-  if (selectedId.value === asset.id) selectedId.value = null
+  selectedIds.value = selectedIds.value.filter((id) => id !== asset.id)
 }
 
-// ----- folders -----
-const addingFolder = ref(false)
-const folderName = ref('')
-const renamingFolderId = ref<string | null>(null)
-
-async function commitFolder() {
-  const name = folderName.value.trim()
-  folderName.value = ''
-  if (addingFolder.value) {
-    addingFolder.value = false
-    if (name) filter.value = (await createFolder(name)).id
-  } else if (renamingFolderId.value) {
-    const id = renamingFolderId.value
-    renamingFolderId.value = null
-    if (name) await renameFolder(id, name)
-  }
-}
-
-async function requestFolderDelete(id: string) {
+async function requestFolderDelete(folder: MediaFolder) {
   const ok = await confirm({
     title: 'Delete folder',
-    message: 'The folder will be removed; its files move to the library root.',
+    message: `Delete “${folder.name}”? Its files and any subfolders move up one level.`,
   })
   if (!ok) return
-  await removeFolder(id)
-  if (filter.value === id) filter.value = 'all'
+  const up = folder.parentId ?? null
+  await removeFolder(folder.id).catch((e) => (uploadError.value = errMsg(e)))
+  if (currentFolderId.value === folder.id) currentFolderId.value = up
 }
+
+const MENU_ITEM =
+  'flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs outline-none hover:bg-accent/30 focus-visible:bg-accent/30'
 </script>
 
 <template>
-  <ModalHost size="full" @close="$emit('close')">
+  <ModalHost size="full" @close="emit('close')">
     <div class="flex h-full flex-col">
-      <!-- top bar -->
-      <div class="flex shrink-0 items-center gap-3 border-b border-input px-4 py-2.5">
+      <!-- header: [icon] [title] ——— [search] [close] -->
+      <div class="flex shrink-0 items-center gap-2 border-b border-input py-2.5 pr-1.5 pl-4">
+        <ImageIcon class="size-4 shrink-0 text-muted-foreground" />
+        <span class="text-xs font-medium">{{ selecting ? 'Choose a file' : 'Media library' }}</span>
+        <div class="flex-1" />
         <div class="relative w-64">
-          <Search
-            class="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
-          />
+          <Search class="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
           <input
             v-model="query"
             type="text"
@@ -206,11 +394,111 @@ async function requestFolderDelete(id: string) {
             class="h-8 w-full rounded-lg bg-input pr-2 pl-8 text-xs outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-accent"
           />
         </div>
-        <span v-if="selecting" class="text-xs text-muted-foreground">
-          Pick a file — double-click or use the button in the side panel
-        </span>
+        <ButtonUI variant="icon" size="sm" :icon="X" class="w-7 text-muted-foreground" @click="emit('close')" />
+      </div>
+
+      <!-- toolbar: type chips ——— filter · view · new folder · upload -->
+      <div class="flex shrink-0 items-center gap-2 border-b border-input px-4 py-2">
+        <div class="flex min-w-0 flex-wrap items-center gap-1">
+          <ButtonUI
+            size="xs"
+            :variant="type === 'all' ? 'default' : 'ghost'"
+            class="text-muted-foreground"
+            :class="type === 'all' && '!text-primary-foreground'"
+            @click="type = 'all'"
+          >
+            All
+          </ButtonUI>
+          <ButtonUI
+            v-for="k in visibleKinds"
+            :key="k"
+            size="xs"
+            :variant="type === k ? 'default' : 'ghost'"
+            class="text-muted-foreground"
+            :class="type === k && '!text-primary-foreground'"
+            @click="type = k"
+          >
+            {{ KIND_LABELS[k] }}
+          </ButtonUI>
+        </div>
+
         <div class="flex-1" />
-        <span v-if="uploadError" class="text-xs text-danger">{{ uploadError }}</span>
+
+        <!-- filter & sort: a small form, not a list of menu items -->
+        <MenuUI
+          width="w-64"
+          trigger-class="flex h-9 items-center gap-2 rounded-xl border border-accent px-3 text-xs font-medium outline-none hover:bg-accent/30 focus-visible:ring-2 focus-visible:ring-accent"
+        >
+          <template #trigger>
+            <SlidersHorizontal class="size-3.5" />
+            Filter
+            <span
+              v-if="activeFilters"
+              class="flex size-4 items-center justify-center rounded-full bg-primary text-[9px] text-primary-foreground"
+            >{{ activeFilters }}</span>
+          </template>
+          <template #default>
+            <div class="flex flex-col gap-2 p-2" @click.stop>
+              <div class="flex flex-col gap-1">
+                <span class="text-[9px] font-medium tracking-wide text-muted-foreground uppercase">Sort by</span>
+                <div class="flex items-center gap-1">
+                  <div class="min-w-0 flex-1"><SelectUI v-model="sortKey" :options="SORT_OPTIONS" /></div>
+                  <ButtonUI
+                    variant="outline"
+                    size="sm"
+                    :icon="sortDir === 'asc' ? ArrowUpNarrowWide : ArrowDownWideNarrow"
+                    :tooltip="sortDir === 'asc' ? 'Ascending' : 'Descending'"
+                    class="w-8 shrink-0 text-muted-foreground"
+                    @click="sortDir = sortDir === 'asc' ? 'desc' : 'asc'"
+                  />
+                </div>
+              </div>
+              <div class="flex flex-col gap-1">
+                <span class="text-[9px] font-medium tracking-wide text-muted-foreground uppercase">File size</span>
+                <SelectUI v-model="sizeFilter" :options="SIZE_OPTIONS" />
+              </div>
+              <div class="flex flex-col gap-1">
+                <span class="text-[9px] font-medium tracking-wide text-muted-foreground uppercase">Uploaded</span>
+                <SelectUI v-model="dateFilter" :options="DATE_OPTIONS" />
+              </div>
+              <template v-if="filtersDirty">
+                <div class="h-px bg-input" />
+                <ButtonUI variant="ghost" size="sm" class="justify-center text-muted-foreground" @click="resetFilters">
+                  Reset
+                </ButtonUI>
+              </template>
+            </div>
+          </template>
+        </MenuUI>
+
+        <div class="flex items-center rounded-lg bg-input p-0.5">
+          <ButtonUI
+            variant="ghost"
+            size="sm"
+            :icon="LayoutGrid"
+            tooltip="Grid"
+            class="w-7"
+            :class="view === 'grid' ? 'text-foreground' : 'text-muted-foreground'"
+            @click="view = 'grid'"
+          />
+          <ButtonUI
+            variant="ghost"
+            size="sm"
+            :icon="List"
+            tooltip="List"
+            class="w-7"
+            :class="view === 'list' ? 'text-foreground' : 'text-muted-foreground'"
+            @click="view = 'list'"
+          />
+        </div>
+        <ButtonUI
+          variant="outline"
+          size="sm"
+          :icon="FolderPlus"
+          tooltip="New folder"
+          class="w-9 shrink-0"
+          @click="createFolderHere"
+        />
         <ButtonUI size="sm" :icon="Upload" :disabled="!!uploadProgress" @click="uploadInput?.click()">
           {{ uploadProgress ? `Uploading ${uploadProgress}…` : 'Upload' }}
         </ButtonUI>
@@ -222,145 +510,174 @@ async function requestFolderDelete(id: string) {
           class="hidden"
           @change="onUploadFiles"
         />
-        <ButtonUI variant="ghost" :icon="X" class="w-7 text-muted-foreground" @click="$emit('close')" />
+      </div>
+
+      <!-- errors get their own line so they can't distort the toolbar -->
+      <div
+        v-if="uploadError"
+        class="flex shrink-0 items-center gap-2 border-b border-input px-4 py-1.5 text-xs text-danger"
+      >
+        <span class="min-w-0 flex-1 truncate">{{ uploadError }}</span>
+        <ButtonUI variant="icon" size="xs" :icon="X" class="w-5" @click="uploadError = null" />
       </div>
 
       <div class="flex min-h-0 flex-1">
-        <!-- sidebar: kinds + folders -->
-        <div class="flex w-52 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-input p-2">
-          <ButtonUI
-            variant="ghost" size="sm" :icon="LayoutGrid"
-            class="w-full justify-start"
-            :class="filter === 'all' ? 'text-foreground' : 'text-muted-foreground'"
-            @click="filter = 'all'"
-            @dragover.prevent
-            @drop.prevent="onFolderDrop($event, null)"
-          >
-            All media
-          </ButtonUI>
-          <ButtonUI
-            v-for="kind in visibleKinds"
-            :key="kind"
-            variant="ghost" size="sm" :icon="KIND_ICONS[kind]"
-            class="w-full justify-start"
-            :class="filter === kind ? 'text-foreground' : 'text-muted-foreground'"
-            @click="filter = kind"
-          >
-            {{ KIND_LABELS[kind] }}
-          </ButtonUI>
-
-          <div class="mx-1 my-2 h-px shrink-0 bg-input" />
-
-          <div v-for="folder in folders" :key="folder.id" class="group/folder relative">
-            <InputUI
-              v-if="renamingFolderId === folder.id"
-              v-model="folderName"
-              placeholder="Folder name"
-              @keydown.enter="commitFolder"
-              @blur="commitFolder"
-            />
-            <template v-else>
-              <ButtonUI
-                variant="ghost" size="sm" :icon="FolderIcon"
-                class="w-full justify-start pr-12"
-                :class="filter === folder.id ? 'text-foreground' : 'text-muted-foreground'"
-                @click="filter = folder.id"
-                @dragover.prevent
-                @drop.prevent="onFolderDrop($event, folder.id)"
-              >
-                <span class="truncate">{{ folder.name }}</span>
-              </ButtonUI>
-              <span
-                class="absolute top-1/2 right-1 hidden -translate-y-1/2 gap-0.5 group-hover/folder:flex"
-              >
-                <ButtonUI
-                  variant="icon" size="xs" :icon="Pencil"
-                  class="text-muted-foreground"
-                  @click="((renamingFolderId = folder.id), (folderName = folder.name))"
-                />
-                <ButtonUI
-                  variant="icon" size="xs" :icon="Trash2"
-                  class="text-muted-foreground"
-                  @click="requestFolderDelete(folder.id)"
-                />
-              </span>
-            </template>
-          </div>
-
-          <InputUI
-            v-if="addingFolder"
-            v-model="folderName"
-            placeholder="Folder name"
-            @keydown.enter="commitFolder"
-            @blur="commitFolder"
-          />
-          <ButtonUI
-            v-else
-            variant="ghost" size="sm" :icon="FolderPlus"
-            class="w-full justify-start text-muted-foreground"
-            @click="((addingFolder = true), (folderName = ''))"
-          >
-            New folder
-          </ButtonUI>
-        </div>
-
-        <!-- grid (drop files anywhere on it to upload) -->
+        <!-- content -->
         <div
           class="relative min-w-0 flex-1 overflow-y-auto p-4"
+          @click.self="clearSelection"
           @dragenter.prevent="onDragEnter"
           @dragover.prevent
           @dragleave="onDragLeave"
           @drop.prevent="onDrop"
         >
+          <!-- breadcrumbs (browse mode only) -->
+          <div v-if="!flatMode" class="mb-3 flex items-center gap-1 text-xs">
+            <button
+              type="button"
+              class="rounded px-1.5 py-0.5 text-muted-foreground hover:bg-accent/30"
+              @click="currentFolderId = null"
+              @dragover.prevent
+              @drop.prevent="onCrumbDrop($event, null)"
+            >
+              Library
+            </button>
+            <template v-for="f in breadcrumb" :key="f.id">
+              <span class="text-muted-foreground/50">/</span>
+              <button
+                type="button"
+                class="rounded px-1.5 py-0.5 hover:bg-accent/30"
+                :class="f.id === currentFolderId ? 'font-medium' : 'text-muted-foreground'"
+                @click="currentFolderId = f.id"
+                @dragover.prevent
+                @drop.prevent="onCrumbDrop($event, f.id)"
+              >
+                {{ f.name }}
+              </button>
+            </template>
+          </div>
+
           <div
             v-if="dragActive"
             class="pointer-events-none absolute inset-2 z-10 flex items-center justify-center rounded-xl border-2 border-dashed border-accent bg-accent/10"
           >
             <p class="text-sm font-medium">Drop to upload</p>
           </div>
-          <div
-            v-if="loadError"
-            class="flex h-full flex-col items-center justify-center gap-2 text-xs text-muted-foreground"
-          >
+
+          <div v-if="loadError" class="flex h-full flex-col items-center justify-center gap-2 text-xs text-muted-foreground">
             <p>{{ loadError }}</p>
             <ButtonUI variant="outline" size="sm" @click="loadMedia().catch(() => {})">Retry</ButtonUI>
           </div>
           <div
-            v-else-if="loaded && !filtered.length"
+            v-else-if="loaded && isEmpty"
             class="flex h-full flex-col items-center justify-center gap-1 text-muted-foreground"
           >
-            <p class="text-sm">{{ query ? 'No matches.' : 'No media here yet.' }}</p>
-            <p v-if="!query" class="text-xs">Upload images, video, audio, documents or fonts.</p>
+            <p class="text-sm">{{ flatMode ? 'No matches.' : 'Nothing here yet.' }}</p>
+            <p v-if="!flatMode" class="text-xs">Upload files or create a folder.</p>
           </div>
           <MediaGrid
             v-else
-            :assets="filtered"
-            :selected-id="selectedId"
+            :folders="visibleFolders"
+            :assets="visibleAssets"
+            :selected-ids="selectedIds"
             :version="version"
-            @select="selectedId = $event.id"
+            :view="view"
+            :start-rename-id="freshFolderId"
+            :folder-counts="folderCounts"
+            :folder-targets="folderTargets"
+            @select="onSelect"
+            @bgclick="clearSelection"
             @pick="onPick"
+            @open="openFolder"
+            @move-asset="onMoveAsset"
+            @move-folder="onMoveFolder"
+            @upload-to="(id, files) => uploadFiles(files, id)"
+            @rename="onRenameFolder"
+            @remove="requestFolderDelete"
+            @rename-asset="onRenameAsset"
+            @download="downloadAsset"
+            @remove-asset="requestDelete"
           />
-        </div>
 
-        <!-- details rail -->
-        <div v-if="selected" class="w-72 shrink-0 border-l border-input">
-          <div class="flex h-full flex-col">
-            <ButtonUI
-              v-if="selecting"
-              size="sm" :icon="Check"
-              class="mx-4 mt-4 justify-center"
-              @click="pickAndClose(selected)"
+          <!-- batch actions: a pill floating over the grid. sticky (not absolute)
+               so it stays put while the grid scrolls under it -->
+          <div
+            v-if="batch"
+            class="sticky bottom-0 z-20 mx-auto mt-4 flex w-fit items-center gap-1 rounded-2xl border border-input bg-background p-1.5 shadow-xl"
+          >
+            <span class="px-2 text-xs font-medium">{{ selectedIds.length }} selected</span>
+            <MenuUI
+              side="top"
+              width="w-56"
+              trigger-class="flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs outline-none hover:bg-accent/30 focus-visible:ring-2 focus-visible:ring-accent"
             >
-              Use this file
+              <template #trigger>
+                <FolderInput class="size-3.5" /> Move to
+              </template>
+              <template #default="{ close }">
+                <div class="flex max-h-64 flex-col overflow-y-auto">
+                  <button type="button" :class="MENU_ITEM" @click="(batchMove(null), close())">
+                    <FolderInput class="size-3.5" /> Library (root)
+                  </button>
+                  <button
+                    v-for="t in folderTargets"
+                    :key="t.id"
+                    type="button"
+                    :class="MENU_ITEM"
+                    @click="(batchMove(t.id), close())"
+                  >
+                    <FolderIcon class="size-3.5 shrink-0" />
+                    <span class="truncate">{{ t.label }}</span>
+                  </button>
+                </div>
+              </template>
+            </MenuUI>
+            <ButtonUI variant="ghost" size="sm" :icon="Trash2" class="text-danger" @click="batchDelete">
+              Delete
             </ButtonUI>
-            <MediaDetails
-              :asset="selected"
-              :version="version"
-              @replaced="version++"
-              @delete="requestDelete(selected)"
+            <div class="mx-0.5 h-5 w-px bg-input" />
+            <ButtonUI
+              variant="icon"
+              size="sm"
+              :icon="X"
+              tooltip="Clear selection"
+              class="w-7 text-muted-foreground"
+              @click="clearSelection"
             />
           </div>
         </div>
+
+        <!-- rail: single-item details -->
+        <div v-if="selected" class="flex w-72 shrink-0 flex-col border-l border-input">
+          <MediaDetails
+            :asset="selected"
+            :version="version"
+            @replaced="version++"
+            @delete="requestDelete(selected)"
+          />
+        </div>
+      </div>
+
+      <!-- select mode: confirm the chosen file -->
+      <div
+        v-if="selecting && selected"
+        class="flex shrink-0 items-center gap-3 border-t border-input px-4 py-2.5"
+      >
+        <span class="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded bg-muted/60">
+          <img
+            v-if="selected.kind === 'image'"
+            :src="`${thumbUrl(selected)}?v=${version}`"
+            :alt="selected.name"
+            class="size-full object-cover"
+          />
+          <ImageIcon v-else class="size-4 text-muted-foreground" />
+        </span>
+        <span class="flex min-w-0 flex-col">
+          <span class="truncate text-xs font-medium">{{ selected.name }}</span>
+          <span class="truncate text-[10px] text-muted-foreground">{{ formatBytes(selected.size) }}</span>
+        </span>
+        <div class="flex-1" />
+        <ButtonUI size="sm" :icon="Check" @click="pickAndClose(selected)">Use this file</ButtonUI>
       </div>
     </div>
   </ModalHost>

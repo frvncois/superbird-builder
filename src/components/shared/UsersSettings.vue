@@ -1,22 +1,81 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { Check, Copy, Link2, Plus, RefreshCw, Trash2, Clock } from 'lucide-vue-next'
+import { Check, Copy, Link2, Plus, RefreshCw, Trash2, Clock, X } from 'lucide-vue-next'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import MenuUI from '@/components/ui/MenuUI.vue'
+import InputUI from '@/components/ui/InputUI.vue'
+import RowUI from '@/components/ui/RowUI.vue'
 import RolePicker from '@/components/editor/users/RolePicker.vue'
-import InviteDialog from '@/components/editor/users/InviteDialog.vue'
 import { useUsers, inviteLink, type InviteRow, type UserRow } from '@/composables/useUsers'
 import { useAuth, type Role } from '@/composables/useAuth'
 import { useModal } from '@/composables/useModal'
 import { roleLabel } from '@/lib/roles'
 
-const { users, invites, isAdmin, load, updateInvite, revokeInvite, setRole, remove } = useUsers()
+const { users, invites, isAdmin, load, invite, updateInvite, revokeInvite, setRole, remove } = useUsers()
 const { email: myEmail } = useAuth()
-const { openModal, confirm } = useModal()
+const { confirm } = useModal()
 
 const error = ref<string | null>(null)
 const notice = ref<string | null>(null)
 onMounted(() => load().catch((e) => (error.value = e.message)))
+
+// --- inline "Add user" form (was a modal) ---
+const adding = ref(false)
+const iName = ref('')
+const iEmail = ref('')
+const iRole = ref<Role>('editor')
+const iBusy = ref(false)
+const iError = ref<string | null>(null)
+// step 2: the created invite link (shown in place before resetting)
+const createdLink = ref<string | null>(null)
+const createdEmail = ref('')
+const createdRole = ref<Role>('editor')
+const linkCopied = ref(false)
+
+const isEmail = (v: string) => /.+@.+\..+/.test(v)
+
+function openAdd() {
+  adding.value = true
+  createdLink.value = null
+  iName.value = ''
+  iEmail.value = ''
+  iRole.value = 'editor'
+  iError.value = null
+}
+function closeAdd() {
+  adding.value = false
+}
+
+async function submitInvite() {
+  if (iBusy.value) return
+  iError.value = null
+  if (!isEmail(iEmail.value.trim())) {
+    iError.value = 'Enter a valid email address'
+    return
+  }
+  iBusy.value = true
+  try {
+    const { link } = await invite({
+      name: iName.value.trim(),
+      email: iEmail.value.trim(),
+      role: iRole.value,
+    })
+    createdLink.value = link
+    createdEmail.value = iEmail.value.trim()
+    createdRole.value = iRole.value
+  } catch (e) {
+    iError.value = e instanceof Error ? e.message : 'Could not create the invite'
+  } finally {
+    iBusy.value = false
+  }
+}
+
+async function copyCreated() {
+  if (!createdLink.value) return
+  await navigator.clipboard.writeText(createdLink.value).catch(() => {})
+  linkCopied.value = true
+  setTimeout(() => (linkCopied.value = false), 1600)
+}
 
 const admin = computed(() => isAdmin())
 
@@ -121,7 +180,52 @@ function revoke(i: InviteRow) {
   <div class="flex flex-col gap-2 p-1">
     <div class="flex items-center justify-between">
       <p class="text-xs font-medium">Users</p>
-      <ButtonUI v-if="admin" size="xs" :icon="Plus" @click="openModal(InviteDialog)">Invite</ButtonUI>
+      <ButtonUI
+        v-if="admin"
+        size="xs"
+        :icon="adding ? X : Plus"
+        @click="adding ? closeAdd() : openAdd()"
+      >
+        {{ adding ? 'Close' : 'Add user' }}
+      </ButtonUI>
+    </div>
+
+    <!-- inline add-user form (before the list) -->
+    <div v-if="admin && adding" class="flex flex-col gap-2 rounded-xl border border-input p-3">
+      <!-- step 1: form -->
+      <template v-if="!createdLink">
+        <RowUI label="Name"><InputUI v-model="iName" placeholder="Their name" /></RowUI>
+        <RowUI label="Email">
+          <InputUI v-model="iEmail" type="email" placeholder="them@example.com" @keydown.enter="submitInvite" />
+        </RowUI>
+        <RowUI label="Role"><RolePicker :role="iRole" @change="(r) => (iRole = r)" /></RowUI>
+        <p v-if="iError" class="text-[10px] text-danger">{{ iError }}</p>
+        <div class="flex justify-end gap-1.5">
+          <ButtonUI variant="outline" size="xs" @click="closeAdd">Cancel</ButtonUI>
+          <ButtonUI size="xs" :disabled="iBusy" @click="submitInvite">
+            {{ iBusy ? 'Creating…' : 'Create invite link' }}
+          </ButtonUI>
+        </div>
+      </template>
+
+      <!-- step 2: created link -->
+      <template v-else>
+        <p class="flex items-center gap-1.5 text-xs">
+          <Check class="size-3.5 shrink-0 text-success" />
+          <span class="font-medium">{{ createdEmail }}</span>
+          <span class="text-muted-foreground">· {{ roleLabel(createdRole) }}</span>
+        </p>
+        <ButtonUI :icon="linkCopied ? Check : Link2" size="sm" class="w-full justify-center" @click="copyCreated">
+          {{ linkCopied ? 'Copied to clipboard' : 'Copy invite link' }}
+        </ButtonUI>
+        <p class="text-[10px] text-muted-foreground">
+          Works once · expires in 7 days. You can copy it again from the list below.
+        </p>
+        <div class="flex justify-end gap-1.5">
+          <ButtonUI variant="outline" size="xs" @click="openAdd">Add another</ButtonUI>
+          <ButtonUI size="xs" @click="closeAdd">Done</ButtonUI>
+        </div>
+      </template>
     </div>
 
     <div class="flex flex-col rounded-xl border border-input">

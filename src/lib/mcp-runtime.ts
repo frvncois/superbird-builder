@@ -22,6 +22,13 @@ export {
   lexLine,
   isBodyOpenLine,
   elementBlockLines,
+  // the node-only state a node carries (classes/content/bindings/…): one
+  // definition, shared by reconcile's reparent guard and by set_page_code's
+  // `fresh`. They had drifted when spelled out separately.
+  hasNodeState,
+  stripNodeState,
+  NODE_STATE_KEYS,
+  BUILTIN_LIST_SOURCES,
   // display-only code markers ((+) styled, {+} interactions) — the MCP keeps
   // them in step when it writes node.classes / node.interactions, because the
   // editor's marker truth-sync does NOT run on load (only on later change)
@@ -43,6 +50,9 @@ export {
   serializeNode,
   expandComponentInstances,
   adoptStructure,
+  cloneForMaster,
+  stripExtractedInstanceState,
+  alignInstanceLines,
 } from './components'
 export type { AdoptResult, OrphanedNode } from './components'
 
@@ -98,9 +108,56 @@ export { SAFE_HREF, SAFE_SRC } from './shared/urls.js'
 // sanitizes attributes with the SAME allowlist the editor and exporter use
 export { sanitizeAttributes, isAllowedAttribute } from './shared/attributes.js'
 
+// --- per-locale SEO purge (src/lib/shared/locales.js) — page/project SEO
+// overrides live outside the node `locales` buckets, so removing a locale has
+// to clear them too, identically in the editor and here
+export { purgeLocaleSeo, countLocaleSeo } from './shared/locales.js'
+
 // --- design-token validation (src/lib/shared/tokens.js) + settings defaults
-export { isValidToken, TOKEN_NAME_RE, HEX_RE, RESERVED_TOKEN_NAMES } from './shared/tokens.js'
+export {
+  isValidToken,
+  isEmittableToken,
+  isReservedToken,
+  tokenError,
+  TOKEN_NAME_RE,
+  HEX_RE,
+  RESERVED_TOKEN_NAMES,
+  isThemeValue,
+} from './shared/tokens.js'
+
+// --- custom webfonts (src/lib/shared/fonts.js) — agents register fonts as
+// data, NOT as hand-written @font-face in customCodeHead (head code is
+// exporter-only, so those fonts never render in the editor or preview)
+export { fontError, fontFormatForUrl, FONT_FORMATS } from './shared/fonts.js'
+
+// motion engine — the validators and vocabulary agents need to author
+// animations, plus the compiler so a tool can report a timeline's length.
+// DOM-free by construction (see src/lib/shared/motion.js).
+export {
+  MOTION_PROPS,
+  EASINGS,
+  EASING_KEYS,
+  compileAnimation,
+  validateAnimation,
+  validateBinding,
+} from './shared/motion.js'
 export { defaultSettings } from './settings'
+
+// --- interaction key identity + vocabulary (src/lib/shared/interactionKeys.js).
+// The MCP validates bindings against the SAME trigger/action lists the editor,
+// exporter and published runtime use — and state being keyed by
+// (interaction, target) rather than by binding is what makes an open button and
+// a close button drive one effect, so agents can build modals at all.
+export {
+  INTERACTION_ACTIONS,
+  INTERACTION_CLOSE_ON,
+  INTERACTION_ONCE,
+  INTERACTION_TRIGGERS,
+  DEFAULT_SCROLL_AT,
+  interactionStateKey,
+  interactionGroupKey,
+  isSymmetricTrigger,
+} from './shared/interactionKeys.js'
 
 // --- page factory (src/lib/factories.ts) — create_page mirrors the editor
 export { createPage } from './factories'

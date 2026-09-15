@@ -1,0 +1,148 @@
+// Typed surface over the shared motion engine. The math lives in
+// src/lib/shared/motion.js (plain JS, shared with the exporter, the published
+// site runtime and the MCP); this file gives the client the types.
+import type { AnimProp, Animation, AnimationBinding } from '@/types/editor'
+import {
+  MOTION_PROPS as MOTION_PROPS_DATA,
+  EASINGS as EASINGS_DATA,
+  EASING_KEYS,
+  animationBindingKey,
+  compileAnimation as compileAnimationRaw,
+  sampleAnimation as sampleAnimationRaw,
+  sampleValues as sampleValuesRaw,
+  composeMotionStyle as composeMotionStyleRaw,
+  splitByStagger as splitByStaggerRaw,
+  initialStyle as initialStyleRaw,
+  endStyle as endStyleRaw,
+  foldReverseTime as foldReverseTimeRaw,
+  hasInfinite as hasInfiniteRaw,
+  appearRootMargin,
+  parseTrackValue as parseTrackValueRaw,
+  lerpColor,
+  parseColor,
+  validateAnimation as validateAnimationRaw,
+  validateBinding as validateBindingRaw,
+  motionBreakpointId,
+  scrubProgress as scrubProgressJs,
+  scrubProgressRaw as scrubProgressRawJs,
+  MOTION_CSS_PROPS,
+  SCRUB_DEFAULTS,
+  APPEAR_AT_DEFAULT,
+} from './shared/motion.js'
+
+export interface MotionPropDef {
+  kind: 'transform' | 'opacity' | 'filter' | 'color' | 'size' | 'clip'
+  /** the unit a bare number adopts */
+  unit: string
+  /** units a string value may carry; empty = unitless property */
+  units: string[]
+  css?: string
+  def: number | string
+  label: string
+}
+
+export interface CompiledTrack {
+  prop: AnimProp
+  from?: number | string
+  to: number | string
+  start: number
+  duration: number
+  easing: string
+  stagger: number
+  repeat: number
+  yoyo: boolean
+  stepIndex: number
+}
+
+export interface CompiledAnimation {
+  tracks: CompiledTrack[]
+  /** timeline length in ms, ignoring infinite repeats */
+  duration: number
+}
+
+export type MotionStyle = Record<string, string | number>
+
+/** one property's sampled value: a number+unit, or a resolved color */
+export interface MotionValue {
+  n?: number
+  unit?: string
+  color?: string
+}
+export type MotionValues = Record<string, MotionValue>
+
+export interface StaggerSplit {
+  element: CompiledAnimation
+  staggered: CompiledAnimation
+  hasStagger: boolean
+  selector: string
+}
+
+export interface SampleOptions {
+  childIndex?: number
+  /** measured current values for tracks that omit `from` */
+  current?: Partial<Record<AnimProp, number | string>>
+}
+
+export type ValidationResult = { ok: true } | { ok: false; error: string }
+
+export const MOTION_PROPS = MOTION_PROPS_DATA as Record<AnimProp, MotionPropDef>
+export const EASINGS: Record<string, (t: number) => number> = EASINGS_DATA
+export const EASING_NAMES: string[] = EASING_KEYS
+
+export const compileAnimation = compileAnimationRaw as (a: Animation) => CompiledAnimation
+export const sampleAnimation = sampleAnimationRaw as (
+  compiled: CompiledAnimation,
+  t: number,
+  opts?: SampleOptions,
+) => MotionStyle
+export const endStyle = endStyleRaw as (
+  compiled: CompiledAnimation,
+  opts?: SampleOptions,
+) => MotionStyle
+export const validateAnimation = validateAnimationRaw as (a: unknown) => ValidationResult
+export const validateBinding = validateBindingRaw as (
+  b: unknown,
+  ctx?: { animationIds?: string[] },
+) => ValidationResult
+export const scrubProgress = scrubProgressJs as (
+  top: number,
+  vh: number,
+  scrub?: AnimationBinding['scrub'],
+) => number
+/** unclamped variant — used by the runtime to rank competing scrub bindings */
+export const scrubProgressRaw = scrubProgressRawJs as (
+  top: number,
+  vh: number,
+  scrub?: AnimationBinding['scrub'],
+) => number
+
+export const sampleValues = sampleValuesRaw as (
+  compiled: CompiledAnimation,
+  t: number,
+  opts?: SampleOptions,
+) => MotionValues
+export const composeMotionStyle = composeMotionStyleRaw as (values: MotionValues) => MotionStyle
+export const splitByStagger = splitByStaggerRaw as (c: CompiledAnimation) => StaggerSplit
+export const initialStyle = initialStyleRaw as (c: CompiledAnimation) => MotionStyle
+export const foldReverseTime = foldReverseTimeRaw as (c: CompiledAnimation, t: number) => number
+export const hasInfinite = hasInfiniteRaw as (c: CompiledAnimation) => boolean
+export const parseTrackValue = parseTrackValueRaw as (
+  value: number | string,
+  prop: AnimProp,
+) => { n: number; unit: string } | null
+
+export {
+  animationBindingKey,
+  appearRootMargin,
+  lerpColor,
+  parseColor,
+  motionBreakpointId,
+  MOTION_CSS_PROPS,
+  SCRUB_DEFAULTS,
+  APPEAR_AT_DEFAULT,
+}
+
+/** honours the OS "reduce motion" setting; safe in Node (no matchMedia) */
+export function reducedMotion(): boolean {
+  return typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches
+}

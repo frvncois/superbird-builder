@@ -8,17 +8,48 @@ export {
   HEX_RE,
   RESERVED_TOKEN_NAMES,
   isValidToken,
+  isEmittableToken,
+  isReservedToken,
+  tokenError,
   themeBlock,
+  rootFontSizeCss,
+  isThemeValue,
   applyTitleTemplate,
 } from './shared/tokens.js'
+
+// custom webfonts: the @font-face builder + the legacy head-code importer,
+// shared verbatim with the exporter
+export {
+  fontFaceBlock,
+  fontError,
+  fontSrcRefs,
+  fontFormatForMime,
+  fontFormatForUrl,
+  parseFontFaces,
+  stripFontFaces,
+  validFonts,
+  FONT_FAMILY_RE,
+} from './shared/fonts.js'
 
 /** human error for the token name input; null = fine */
 export function tokenNameError(name: string, others: DesignToken[]): string | null {
   if (!name) return 'Name required'
   if (!TOKEN_NAME_RE.test(name)) return 'Lowercase letters, digits and dashes only'
-  if (RESERVED_TOKEN_NAMES.has(name)) return `"${name}" is a Tailwind color name`
   if (others.some((t) => t.name === name)) return 'Duplicate name'
   return null
+}
+
+/**
+ * A non-blocking note for the token name input; null = nothing to say.
+ * Shadowing a palette name used to be a hard error, which forced every brand
+ * palette with a colour called "blue" to rename it and rewrite every class. A
+ * token defines `bg-blue`, never `bg-blue-500`, so the shades keep working —
+ * it is worth flagging, not worth refusing.
+ */
+export function tokenNameNote(name: string): string | null {
+  return RESERVED_TOKEN_NAMES.has(name)
+    ? `"${name}" is also a Tailwind color — bg-${name} will mean your token`
+    : null
 }
 
 export const FONT_STACKS: { label: string; value: string }[] = [
@@ -35,8 +66,9 @@ export function defaultSettings(): ProjectSettings {
     seo: { siteName: '', titleTemplate: '%s', description: '', ogImage: undefined },
     domain: '',
     smtp: { host: '', port: '', user: '', password: '', from: '' },
+    integrations: { stripe: { publishableKey: '' }, mailing: { provider: '' } },
     tokens: [],
     customCode: { head: '' },
-    fonts: { family: '', googleFontsUrl: undefined },
+    fonts: { family: '', googleFontsUrl: undefined, custom: [] },
   }
 }

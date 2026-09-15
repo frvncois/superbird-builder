@@ -1,7 +1,17 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { usePanel } from '@/composables/usePanel'
-import { Crosshair, Eye, MousePointer2, MousePointerClick, Plus, Trash2, X } from 'lucide-vue-next'
+import {
+  Crosshair,
+  Eye,
+  MousePointer2,
+  MousePointerClick,
+  MoveVertical,
+  Plus,
+  ToggleLeft,
+  Trash2,
+  X,
+} from 'lucide-vue-next'
 import GroupPopover from '@/components/popover/GroupPopover.vue'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import InputUI from '@/components/ui/InputUI.vue'
@@ -9,6 +19,7 @@ import RowUI from '@/components/ui/RowUI.vue'
 import SliderUI from '@/components/ui/SliderUI.vue'
 import IconGroupUI from '@/components/ui/IconGroupUI.vue'
 import ClassFieldInput from '@/components/editor/style/ClassFieldInput.vue'
+import AnimationEditor from '@/components/editor/interactions/AnimationEditor.vue'
 import SelectUI from '@/components/ui/SelectUI.vue'
 import { useElement } from '@/composables/useElement'
 import { useInteraction } from '@/composables/useInteraction'
@@ -45,7 +56,40 @@ const TRIGGERS = [
   { label: 'Hover', value: 'hover', icon: MousePointer2 },
   { label: 'Click', value: 'click', icon: MousePointerClick },
   { label: 'Appear', value: 'appear', icon: Eye },
+  { label: 'Scrolled', value: 'scrolled', icon: MoveVertical },
+  { label: 'Input change', value: 'change', icon: ToggleLeft },
 ]
+
+/** what a click does to the effect. State is keyed by (interaction, target), so
+ * an "Open" button and a "Close" button drive the SAME effect — which is what
+ * makes modals and drawers work. */
+const ACTIONS = [
+  { label: 'Toggle', value: 'toggle' },
+  { label: 'Turn on', value: 'on' },
+  { label: 'Turn off', value: 'off' },
+]
+
+const ONCE_OPTIONS = [
+  { label: 'Always', value: '' },
+  { label: 'Once per session', value: 'session' },
+  { label: 'Once per browser', value: 'local' },
+]
+
+/** only a discrete gesture can choose a direction; hover/scrolled/change drive
+ * both directions themselves */
+const isDiscrete = (binding: InteractionBinding) => binding.trigger === 'click'
+
+function isDismissOn(binding: InteractionBinding, mode: 'outside' | 'escape'): boolean {
+  return !!binding.closeOn?.includes(mode)
+}
+
+function toggleDismiss(binding: InteractionBinding, mode: 'outside' | 'escape') {
+  const next = new Set(binding.closeOn ?? [])
+  if (next.has(mode)) next.delete(mode)
+  else next.add(mode)
+  // omitted when empty so untouched bindings stay byte-identical for merge
+  binding.closeOn = next.size ? [...next] : undefined
+}
 
 const DURATION_STOPS = ['75', '100', '150', '200', '300', '500', '700', '1000']
 
@@ -160,7 +204,11 @@ function toggleBreakpoint(binding: InteractionBinding, id: string) {
 </script>
 
 <template>
-  <!-- applied to the selected element -->
+  <!-- tween animations (timeline engine) come first: the richer system.
+       GroupPopover borders already separate the two halves. -->
+  <AnimationEditor />
+
+  <!-- class-toggle interactions: still the right tool for hover states -->
   <GroupPopover
     v-for="binding in bindings"
     :key="binding.id"
@@ -189,6 +237,63 @@ function toggleBreakpoint(binding: InteractionBinding, id: string) {
           @update:model-value="(v) => (binding.trigger = v as InteractionBinding['trigger'])"
         />
       </RowUI>
+
+      <RowUI v-if="isDiscrete(binding)" label="Action">
+        <SelectUI
+          :model-value="binding.action ?? 'toggle'"
+          :options="ACTIONS"
+          @update:model-value="
+            (v) => (binding.action = v === 'toggle' ? undefined : (v as 'on' | 'off'))
+          "
+        />
+      </RowUI>
+
+      <RowUI v-if="binding.trigger === 'scrolled'" label="Scrolled past">
+        <InputUI
+          type="number"
+          :model-value="String(binding.scrollAt ?? 50)"
+          @update:model-value="(v) => (binding.scrollAt = Number(v) || undefined)"
+        />
+        <span class="w-6 shrink-0 text-right text-xs text-muted-foreground">px</span>
+      </RowUI>
+
+      <RowUI v-if="isDiscrete(binding)" label="Dismiss on">
+        <div class="flex flex-1 justify-end gap-1">
+          <ButtonUI
+            v-for="mode in (['outside', 'escape'] as const)"
+            :key="mode"
+            :variant="isDismissOn(binding, mode) ? 'outline' : 'ghost'"
+            size="xs"
+            :class="isDismissOn(binding, mode) ? '' : 'text-muted-foreground opacity-60'"
+            @click="toggleDismiss(binding, mode)"
+          >
+            {{ mode === 'outside' ? 'Outside click' : 'Escape' }}
+          </ButtonUI>
+        </div>
+      </RowUI>
+
+      <RowUI v-if="isDiscrete(binding)" label="Exclusive group">
+        <InputUI
+          placeholder="e.g. faq"
+          :model-value="binding.group ?? ''"
+          @update:model-value="(v) => (binding.group = v.trim() || undefined)"
+        />
+      </RowUI>
+
+      <RowUI v-if="isDiscrete(binding)" label="Remember">
+        <SelectUI
+          :model-value="binding.once ?? ''"
+          :options="ONCE_OPTIONS"
+          @update:model-value="
+            (v) => (binding.once = v ? (v as 'session' | 'local') : undefined)
+          "
+        />
+      </RowUI>
+
+      <p v-if="binding.once" class="px-1 text-[10px] text-muted-foreground">
+        Remembered on the published site only — the editor always shows the element so you
+        can still style it.
+      </p>
 
       <RowUI v-if="breakpoints.length > 1" label="Breakpoints">
         <div class="flex flex-1 flex-wrap justify-end gap-1">
@@ -268,8 +373,9 @@ function toggleBreakpoint(binding: InteractionBinding, id: string) {
     </template>
   </GroupPopover>
 
-  <!-- project library -->
-  <GroupPopover label="Library">
+  <!-- project library: the list, then this half's action — grouped together
+       so "New interaction" reads as part of this section, not a panel footer -->
+  <GroupPopover label="Interaction library">
     <p v-if="!library.length" class="text-xs text-muted-foreground">
       No saved interactions yet.
     </p>
@@ -308,11 +414,11 @@ function toggleBreakpoint(binding: InteractionBinding, id: string) {
         </ButtonUI>
       </div>
     </div>
-  </GroupPopover>
 
-  <div class="p-3">
-    <ButtonUI variant="outline" size="sm" :icon="Plus" class="w-full" @click="createAndApply">
-      New interaction
-    </ButtonUI>
-  </div>
+    <div class="pt-1">
+      <ButtonUI variant="outline" size="sm" :icon="Plus" class="w-full" @click="createAndApply">
+        New interaction
+      </ButtonUI>
+    </div>
+  </GroupPopover>
 </template>

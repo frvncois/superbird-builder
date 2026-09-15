@@ -40,35 +40,47 @@ const percent = computed(() => {
   -webkit-appearance: none;
   appearance: none;
   width: 100%;
-  height: 4px;
+  height: 3px;
   border-radius: 9999px;
   cursor: pointer;
   outline: none;
 }
 
+/* the ring of background around the thumb keeps it legible against both the
+   filled and unfilled halves of the track, in either theme */
 .slider::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  width: 10px;
-  height: 10px;
+  width: 12px;
+  height: 12px;
   border-radius: 9999px;
   background: var(--foreground);
-  border: none;
+  border: 2px solid var(--background);
+  box-shadow: 0 0 0 1px var(--muted);
   transition: transform 0.1s ease;
 }
 
 .slider::-moz-range-thumb {
-  width: 10px;
-  height: 10px;
+  width: 12px;
+  height: 12px;
   border-radius: 9999px;
   background: var(--foreground);
-  border: none;
+  border: 2px solid var(--background);
+  box-shadow: 0 0 0 1px var(--muted);
+  transition: transform 0.1s ease;
 }
 
 .slider:hover::-webkit-slider-thumb {
-  transform: scale(1.2);
+  transform: scale(1.15);
 }
 .slider:hover::-moz-range-thumb {
-  transform: scale(1.2);
+  transform: scale(1.15);
+}
+
+.slider:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.slider:focus-visible::-moz-range-thumb {
+  box-shadow: 0 0 0 2px var(--accent);
 }
 </style>

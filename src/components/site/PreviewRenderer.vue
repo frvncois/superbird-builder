@@ -49,6 +49,7 @@ const {
   boundField, boundEntry, customAttrs, backgroundInfo,
   displayContent, richContent, srcAttr, altAttr, linkRaw, baseClasses,
   hoverHandlers, fireClickInteractions, el,
+  motionStyle,
 } = useRenderNode(() => props.node)
 
 const classes = computed(() => [baseClasses.value])
@@ -75,7 +76,7 @@ const { editing, editEl, startEditing, finishEditing, onEditKeydown } = useInlin
     const placeholder =
       !!boundField.value &&
       !!boundEntry.value &&
-      !entryValue(boundEntry.value, boundField.value.name).value
+      !entryValue(boundEntry.value, boundField.value).value
     return placeholder ? '' : (displayContent.value ?? '')
   },
   commit: (text) => {
@@ -193,6 +194,7 @@ const handlers = {
     :id="node.htmlId || undefined"
     :data-node-id="node.id"
     :class="classes"
+    :style="motionStyle"
     v-on="handlers"
   >
     <template v-if="listCollection && listEntries.length">
@@ -221,6 +223,7 @@ const handlers = {
     :id="node.htmlId || undefined"
     :data-node-id="node.id"
     :class="classes"
+    :style="motionStyle"
     v-on="handlers"
   >
     <template v-if="itemCollection && itemEntry && !selfNested">
@@ -240,6 +243,7 @@ const handlers = {
     :src="srcAttr"
     :alt="altAttr"
     :class="[classes, hoverAffordance]"
+    :style="motionStyle"
     v-on="handlers"
   />
   <component
@@ -256,7 +260,7 @@ const handlers = {
       hoverAffordance,
       editing && 'cursor-text outline outline-2 -outline-offset-2 outline-accent bg-accent/5',
     ]"
-    :style="backgroundInfo?.style || undefined"
+    :style="[backgroundInfo?.style, motionStyle]"
     v-on="handlers"
   >
     <video

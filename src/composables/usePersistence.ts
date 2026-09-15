@@ -1,7 +1,8 @@
 import { computed, ref, watch } from 'vue'
 import { useProject } from './useProject'
-import { readStoredProject } from '@/lib/storage'
-import { pendingWrites, storeError, storeGet, storeSet } from '@/lib/store'
+import { migrateStoredProject, readStoredProject } from '@/lib/storage'
+import { pendingWrites, storeError, storeGet, storeGetFresh, storeSet } from '@/lib/store'
+import { computeMerge } from '@/lib/merge'
 import type { Project } from '@/types/editor'
 
 export type SaveStatus = 'saved' | 'pending' | 'error'
@@ -53,16 +54,90 @@ let timer: ReturnType<typeof setTimeout> | null = null
 let restoring = false
 let initialized = false
 
+/**
+ * The project as this tab last knew the SERVER to hold — the common ancestor
+ * for merge-on-save. The store is latest-wins on one whole-project blob, so
+ * without this an open tab's autosave silently reverts anything another
+ * writer (an MCP agent, another session) changed in the meantime: a deleted
+ * animation would come back from the dead. With it, a save that finds the
+ * stored blob changed merges per entity instead of overwriting.
+ * null = no baseline yet (fresh boot / corrupt read) → plain write.
+ */
+let baseline: string | null = null
+
 export function usePersistence() {
-  const { project } = useProject()
+  const { project, projectVersion } = useProject()
 
   const canUndo = computed(() => pointer.value > 0)
   const canRedo = computed(() => pointer.value < history.value.length - 1)
 
-  /** the single storage write — server-backed via the store adapter */
+  /** the single storage write — server-backed via the store adapter.
+   * Deliberate wholesale writes (load/reset/undo) use this directly and take
+   * ownership of the baseline; edits go through persistMerged instead. */
   function persist(snapshot: string) {
     storeSet(projectStorageKey(activeBranchId.value), snapshot)
+    baseline = snapshot
     typing.value = false
+  }
+
+  /**
+   * Writes an edit, merging first if the stored project moved under us.
+   *
+   * Three cases:
+   *  - nothing changed server-side (the overwhelmingly common one) → plain write
+   *  - we have no baseline, or an agent owns the project (live sync replaces
+   *    wholesale), or the read fails → plain write, same as before
+   *  - the blob changed → 3-way merge against the baseline. Our edits win any
+   *    genuine conflict (the human is here and typing); entities only THEY
+   *    touched — including deletions — survive.
+   */
+  async function persistMerged(snapshot: string) {
+    const key = projectStorageKey(activeBranchId.value)
+    if (baseline === null || autosaveSuspended.value) {
+      persist(snapshot)
+      return
+    }
+    let storedRaw: string | null
+    try {
+      storedRaw = await storeGetFresh(key)
+    } catch {
+      persist(snapshot) // offline / server hiccup — behave as before
+      return
+    }
+    if (storedRaw === null || storedRaw === baseline) {
+      persist(snapshot)
+      return
+    }
+    let merged: Project
+    try {
+      const theirs = migrateStoredProject(JSON.parse(storedRaw) as Project)
+      if (!theirs) {
+        persist(snapshot)
+        return
+      }
+      const { merged: result } = computeMerge(
+        JSON.parse(baseline) as Project,
+        JSON.parse(snapshot) as Project,
+        theirs,
+      )
+      merged = result
+    } catch {
+      persist(snapshot) // unparseable remote — our state is the better bet
+      return
+    }
+    const mergedSnapshot = JSON.stringify(merged)
+    persist(mergedSnapshot)
+    if (mergedSnapshot === snapshot) return
+    // adopt what we actually stored, so the editor shows the merged truth.
+    // History gains an entry (rather than being wiped) so undo still works.
+    restoring = true
+    project.value = merged
+    restoring = false
+    const next = history.value.slice(0, pointer.value + 1)
+    next.push(mergedSnapshot)
+    if (next.length > HISTORY_LIMIT) next.shift()
+    history.value = next
+    pointer.value = next.length - 1
   }
 
   function load() {
@@ -77,6 +152,7 @@ export function usePersistence() {
         restoring = true
         project.value = stored
         restoring = false
+        baseline = JSON.stringify(stored)
       } else {
         // fresh instance: persist the default project immediately, instead of
         // only on the first edit — otherwise the server has no project blob
@@ -123,8 +199,11 @@ export function usePersistence() {
     restoring = true
     project.value = next
     restoring = false
-    history.value = [JSON.stringify(next)]
+    const snapshot = JSON.stringify(next)
+    history.value = [snapshot]
     pointer.value = 0
+    // this state came FROM the server, so it is the new common ancestor
+    baseline = snapshot
     typing.value = false
   }
 
@@ -136,7 +215,7 @@ export function usePersistence() {
     }
     const snapshot = JSON.stringify(project.value)
     if (snapshot === history.value[pointer.value]) {
-      persist(snapshot)
+      void persistMerged(snapshot)
       return
     }
     const next = history.value.slice(0, pointer.value + 1)
@@ -144,7 +223,7 @@ export function usePersistence() {
     if (next.length > HISTORY_LIMIT) next.shift()
     history.value = next
     pointer.value = next.length - 1
-    persist(snapshot)
+    void persistMerged(snapshot)
   }
 
   function saveNow() {
@@ -176,16 +255,14 @@ export function usePersistence() {
     if (initialized) return
     initialized = true
     load()
-    watch(
-      project,
-      () => {
-        if (restoring || autosaveSuspended.value) return
-        typing.value = true
-        if (timer) clearTimeout(timer)
-        timer = setTimeout(commit, DEBOUNCE_MS)
-      },
-      { deep: true },
-    )
+    // projectVersion is useProject's single shared deep watcher — watching it
+    // avoids a second whole-document traversal on every keystroke
+    watch(projectVersion, () => {
+      if (restoring || autosaveSuspended.value) return
+      typing.value = true
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(commit, DEBOUNCE_MS)
+    })
   }
 
   return { status, canUndo, canRedo, init, saveNow, undo, redo, resetTo, replaceFromRemote }

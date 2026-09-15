@@ -16,8 +16,8 @@
 //         PUBLISH_TOKEN optionally allows CI publishes)
 
 import { createServer } from 'node:http'
-import { chmod, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { chmod, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { existsSync, readFileSync } from 'node:fs'
 import { extname, join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { exportSite } from './export.mjs'
@@ -31,6 +31,13 @@ import {
 } from './media.mjs'
 import { pushSiteToGitHub } from './github.mjs'
 import { createZip, readZip } from './zip.mjs'
+import { mergeContributorProject, redactSecretsForContributor } from './contributor-merge.mjs'
+import { protectedFieldDelta, readAgentPolicy, writeAgentPolicy } from './agent-policy.mjs'
+import {
+  resolve4 as dnsResolve4,
+  resolve6 as dnsResolve6,
+  resolveCname as dnsResolveCname,
+} from 'node:dns/promises'
 import { DATA_DIR, fail, readDirFiles, send, timingSafeEqualStr, writeAtomic } from './util.mjs'
 import {
   ROLES,
@@ -46,6 +53,7 @@ import {
   createSession,
   deleteUser,
   destroySession,
+  destroyUserSessions,
   findInviteByToken,
   findUserByEmail,
   hasValidRole,
@@ -88,6 +96,26 @@ const MEDIA_DIR = join(DATA_DIR, 'media')
 // /api/store project blob (which any authed user can read)
 const PUBLISH_CONFIG = join(DATA_DIR, 'publish.json')
 const DIST = join(ROOT, 'dist')
+// The version of the `guano` package this server belongs to, surfaced on
+// /api/auth/me. The MCP process is spawned by the agent's client and does NOT
+// restart when this server does, so comparing the two is the only way an agent
+// can tell its tool surface is stale. Read the package the MCP ships in (in an
+// installed copy this IS the same package.json).
+const APP_VERSION = (() => {
+  for (const p of [
+    join(ROOT, 'packages', 'guano', 'package.json'),
+    join(ROOT, 'package.json'),
+  ]) {
+    try {
+      const v = JSON.parse(readFileSync(p, 'utf8')).version
+      if (v) return v
+    } catch {
+      /* try the next candidate */
+    }
+  }
+  return 'unknown'
+})()
+
 const PORT = Number(process.env.PORT) || 4174
 const TOKEN = process.env.PUBLISH_TOKEN || ''
 const MAX_BODY = 10 * 1024 * 1024 // data-URL images make snapshots heavy
@@ -158,16 +186,32 @@ async function readBodyRaw(req, cap) {
   return Buffer.concat(chunks)
 }
 
-/** the server-managed publish config (holds the GitHub token). Always returns
- * a well-formed shape so callers can read `.github.token` unconditionally. */
+/** every server-side secret, by namespace. These never reach /api/store (the
+ * project blob any authed user can read) nor an export.
+ * The reader normalizes to the FULL shape on purpose: both handlers below
+ * read-modify-write the same file, so a namespace missing here would be
+ * silently dropped by the next write from the other handler. */
 async function readPublishConfig() {
+  let parsed = null
   try {
-    const parsed = JSON.parse(await readFile(PUBLISH_CONFIG, 'utf8'))
-    return { github: { token: parsed?.github?.token ?? '' } }
+    parsed = JSON.parse(await readFile(PUBLISH_CONFIG, 'utf8'))
   } catch {
-    return { github: { token: '' } }
+    /* no file yet — fall through to the empty shape */
+  }
+  return {
+    github: { token: parsed?.github?.token ?? '' },
+    stripe: { secretKey: parsed?.stripe?.secretKey ?? '' },
+    mailing: { apiKey: parsed?.mailing?.apiKey ?? '' },
+    smtp: { password: parsed?.smtp?.password ?? '' },
   }
 }
+
+/** booleans only — the shape every secret endpoint answers with */
+const secretsSetShape = (cfg) => ({
+  stripe: { secretKeySet: !!cfg.stripe.secretKey },
+  mailing: { apiKeySet: !!cfg.mailing.apiKey },
+  smtp: { passwordSet: !!cfg.smtp.password },
+})
 
 // ---------- auth endpoints ----------
 
@@ -192,6 +236,53 @@ function requestUser(req) {
   return user
 }
 
+/**
+ * True when this request authenticated as an MCP agent (a `guano_` bearer)
+ * rather than a human at a browser. Mirrors requestUser's precedence — a
+ * session cookie wins when both are present — so the two can never disagree
+ * about who is calling. This is the signal the agent policy gates on.
+ */
+const isAgentRequest = (req) =>
+  !sessionUser(req) && (req.headers.authorization ?? '').startsWith('Bearer guano_')
+
+/**
+ * Sliding-window rate limiter, one counter per id. Like the media uploader's
+ * (media.mjs), it exists to stop a runaway agent loop rather than to size
+ * legitimate work, and every refusal says when to retry — the MCP client reads
+ * `retryAfterSeconds` off the 429 body and waits exactly that long.
+ */
+function slidingLimiter(limit, windowMs) {
+  const hits = new Map()
+  return (id) => {
+    const now = Date.now()
+    const times = (hits.get(id) ?? []).filter((t) => now - t < windowMs)
+    if (times.length >= limit) {
+      hits.set(id, times)
+      const freesAt = times[0] + windowMs
+      return { ok: false, retryAfterSeconds: Math.max(1, Math.ceil((freesAt - now) / 1000)) }
+    }
+    times.push(now)
+    hits.set(id, times)
+    return { ok: true }
+  }
+}
+
+// Autosave is debounced to 500ms, so a busy human tab tops out near 120/min —
+// 600 leaves every real workflow untouched while still capping a hot loop.
+const storeWriteAllowed = slidingLimiter(600, 60_000)
+// A publish is a full Tailwind compile + static export; a dozen a minute is
+// already far past what a human does deliberately.
+const publishAllowed = slidingLimiter(12, 60_000)
+
+const tooManyRequests = (res, retryAfterSeconds, what) =>
+  send(
+    res,
+    429,
+    JSON.stringify({ error: `too many ${what} — retry in ${retryAfterSeconds}s`, retryAfterSeconds }),
+    'application/json',
+    { 'retry-after': String(retryAfterSeconds) },
+  )
+
 async function handleAuth(req, res, path) {
   if (path === '/api/auth/me' && req.method === 'GET') {
     if (needsSetup()) return send(res, 401, JSON.stringify({ needsSetup: true }))
@@ -199,7 +290,7 @@ async function handleAuth(req, res, path) {
     // on boot to fail fast on a bad URL/token and to learn who it is
     const user = requestUser(req)
     if (!user) return send(res, 401, JSON.stringify({ needsSetup: false }))
-    return send(res, 200, JSON.stringify(userProfile(user)))
+    return send(res, 200, JSON.stringify({ ...userProfile(user), serverVersion: APP_VERSION }))
   }
   if (path === '/api/auth/setup' && req.method === 'POST') {
     // bootstrap the first admin — only when no users exist yet
@@ -285,7 +376,17 @@ async function handleAuth(req, res, path) {
         return fail(res, 409, 'that email is already in use')
       }
     }
+    const changingPassword = password !== undefined && password !== ''
     const updated = await updateUser(user.id, { name, email, password })
+    if (changingPassword) {
+      // a password change revokes every existing session (a stolen 30-day
+      // cookie must not outlive the credential it was minted from), then
+      // re-issues one for THIS request so the caller stays signed in here (S8)
+      destroyUserSessions(user.id)
+      return send(res, 200, JSON.stringify(userProfile(updated)), 'application/json', {
+        'set-cookie': sessionCookieHeader(createSession(user.id)),
+      })
+    }
     return send(res, 200, JSON.stringify(userProfile(updated)))
   }
   if (path === '/api/auth/login' && req.method === 'POST') {
@@ -375,9 +476,13 @@ async function handleUsers(req, res, path) {
   const admin = sessionUser(req)
   if (!admin) return fail(res, 401, 'unauthorized')
 
-  // team visibility for everyone: a redacted, read-only membership view (no
-  // tokens/ids). Gated only on being authenticated — sits BEFORE the admin gate.
+  // team visibility for EDITOR+: a redacted, read-only membership view (no
+  // tokens/ids). Sits before the admin gate so editors can see the team, but
+  // contributors are refused: the payload carries every member's and pending
+  // invite's email, and a content-only user has no need for the team's
+  // addresses (S14 — harvesting/phishing surface).
   if (path === '/api/users/members' && req.method === 'GET') {
+    if (admin.role === 'contributor') return fail(res, 403, 'forbidden')
     return send(res, 200, JSON.stringify({ users: listMembers(), invites: listInvitesPublic() }))
   }
 
@@ -462,6 +567,13 @@ async function handleTokens(req, res, path) {
     return send(res, 200, JSON.stringify({ tokens: listApiTokens(user.id) }))
   }
   if (path === '/api/tokens' && req.method === 'POST') {
+    // Minting is session-only: a token that can mint tokens makes revocation
+    // meaningless, because a leaked one quietly spawns replacements that
+    // survive revoking the credential anyone knows about. Listing and revoking
+    // stay open to tokens — those only ever reduce access.
+    if (!sessionUser(req)) {
+      return fail(res, 403, 'API tokens can only be created from a signed-in browser session')
+    }
     const body = await readBody(req)
     let name
     try {
@@ -489,7 +601,13 @@ async function handleTokens(req, res, path) {
 // ---------- authed key-value store (the editor's persistence) ----------
 
 const STORE_DIR = join(DATA_DIR, 'store')
-const STORE_KEY_RE = /^[A-Za-z0-9:_-]{1,100}$/
+// `_` is deliberately NOT allowed. Keys map to filenames by `:` → `__`, so an
+// underscore makes that mapping non-injective — `guano-project__main` would
+// land on Main's file while sliding past every `startsWith('guano-project:')`
+// guard below (the contributor merge and the secret redaction), and even
+// `a_:b` / `a:_b` would collide. Barring `_` keeps key and file in lockstep, so
+// a guard can never disagree with the blob it protects. No real key uses one.
+const STORE_KEY_RE = /^[A-Za-z0-9:-]{1,100}$/
 
 const storeFile = (key) => join(STORE_DIR, key.replaceAll(':', '__') + '.json')
 
@@ -504,65 +622,59 @@ async function currentProjectName() {
   }
 }
 
-// canonical (key-order-insensitive) serialization, so a re-serialized but
-// semantically identical field never reads as a change
-function stableStringify(v) {
-  if (Array.isArray(v)) return '[' + v.map(stableStringify).join(',') + ']'
-  if (v && typeof v === 'object') {
-    return (
-      '{' +
-      Object.keys(v)
-        .sort()
-        .map((k) => JSON.stringify(k) + ':' + stableStringify(v[k]))
-        .join(',') +
-      '}'
-    )
-  }
-  return JSON.stringify(v ?? null)
-}
-
-// the fields a contributor must never change: custom code (published as raw
-// <script>) and mail credentials
-function sensitiveProjectFields(project) {
-  const settings = project?.settings ?? {}
-  return {
-    smtp: settings.smtp ?? null,
-    customCode: settings.customCode ?? null,
-    pages: Array.isArray(project?.pages)
-      ? project.pages.map((p) => [p?.id ?? null, p?.customCode ?? null])
-      : [],
-  }
-}
-
-/**
- * For a contributor writing a project key: reject (returns an error string)
- * when the write would change customCode or smtp vs the stored copy. The
- * contributor UI (Preview) can't touch those fields, so a legitimate
- * autosave carries them unchanged and passes; only a hand-crafted PUT trips
- * it. Returns null when the write is allowed.
- */
-async function contributorProjectRejection(key, body) {
-  let current
+/** a store blob as a string, or null when the key has nothing stored */
+async function readFileOrNull(path) {
   try {
-    current = JSON.parse(await readFile(storeFile(key), 'utf8'))
+    return await readFile(path, 'utf8')
   } catch {
-    // fail closed: a contributor has no legitimate reason to write a project
-    // with no stored baseline (only an admin seeds one). A backup restore or
-    // wiped seed must not silently open a write window for the whole blob.
-    return 'contributors cannot create a project'
+    return null
   }
-  let incoming
-  try {
-    incoming = JSON.parse(body)
-  } catch {
-    return 'invalid project snapshot'
-  }
-  const before = stableStringify(sensitiveProjectFields(current))
-  const after = stableStringify(sensitiveProjectFields(incoming))
-  return before === after ? null : 'contributors cannot change custom code or mail settings'
 }
 
 const isProjectKey = (key) => key.startsWith('guano-project:')
+const MAIN_PROJECT_KEY = 'guano-project:main'
+// A `guano-base:<id>` merge-base snapshot is a FULL project copy — same
+// settings, same secrets, and the structural truth the 3-way merge diffs
+// against. So it needs the same two guards as a project key: redact secrets on
+// a contributor read, and run a contributor write through the authoritative
+// merge (otherwise a poisoned base makes the editor's merge propose structural
+// changes nobody authored).
+const isProjectBlobKey = (key) => isProjectKey(key) || key.startsWith('guano-base:')
+
+/** parsed JSON or null — for blobs we only want to peek inside */
+function parseJsonOrNull(str) {
+  if (typeof str !== 'string') return null
+  try {
+    return JSON.parse(str)
+  } catch {
+    return null
+  }
+}
+
+// Disk ceiling for the store. Media has had a quota all along; the store had
+// none, so a token writing fresh keys in a loop could fill the disk. The total
+// is cached (recomputing it on every autosave would be absurd) and nudged up by
+// each write, so a hot loop still trips the cap well inside the refresh window.
+const STORE_QUOTA = Number(process.env.STORE_QUOTA) || 512 * 1024 * 1024
+let storeSize = { bytes: 0, at: 0 }
+
+async function storeBytes() {
+  if (storeSize.at && Date.now() - storeSize.at < 30_000) return storeSize.bytes
+  let total = 0
+  try {
+    for (const name of await readdir(STORE_DIR)) {
+      try {
+        total += (await stat(join(STORE_DIR, name))).size
+      } catch {
+        /* vanished mid-scan — it contributes nothing */
+      }
+    }
+  } catch {
+    /* no store dir yet */
+  }
+  storeSize = { bytes: total, at: Date.now() }
+  return total
+}
 
 // ---------- live change feed (SSE) ----------
 // Editors subscribe to GET /api/events; every store write is broadcast with
@@ -607,11 +719,16 @@ async function handleStore(req, res, path, query) {
     }
     const out = {}
     for (const key of keys) {
-      try {
-        out[key] = await readFile(storeFile(key), 'utf8')
-      } catch {
-        out[key] = null
+      let val = await readFileOrNull(storeFile(key))
+      // S4: never hand a contributor the server-side secrets (smtp/integration
+      // keys) carried in the project blob. Safe because contributor writes
+      // ignore incoming `settings`, so a redacted round-trip can't blank them.
+      // `guano-base:` snapshots are full project copies, so they carry the same
+      // secrets and get the same treatment.
+      if (val && user.role === 'contributor' && isProjectBlobKey(key)) {
+        val = redactSecretsForContributor(val)
       }
+      out[key] = val
     }
     return send(res, 200, JSON.stringify(out))
   }
@@ -620,46 +737,168 @@ async function handleStore(req, res, path, query) {
   if (!STORE_KEY_RE.test(key)) return fail(res, 400, 'invalid key')
 
   if (req.method === 'PUT') {
+    const limit = storeWriteAllowed(user.id)
+    if (!limit.ok) return tooManyRequests(res, limit.retryAfterSeconds, 'store writes')
+
     const body = await readBody(req)
     if (body === null) return fail(res, 400, 'too large')
-    if (user.role === 'contributor' && isProjectKey(key)) {
-      const rejection = await contributorProjectRejection(key, body)
-      if (rejection) return fail(res, 403, rejection)
+
+    const existing = await readFileOrNull(storeFile(key))
+    const existingBytes = existing === null ? 0 : Buffer.byteLength(existing)
+    if ((await storeBytes()) - existingBytes + Buffer.byteLength(body) > STORE_QUOTA) {
+      return fail(res, 507, 'project storage is full')
     }
-    await writeAtomic(storeFile(key), body)
-    const viaToken = (req.headers.authorization ?? '').startsWith('Bearer guano_')
-    broadcastStoreEvent(key, viaToken ? 'agent' : 'human')
+
+    if (isProjectBlobKey(key)) {
+      const denied = await protectedWriteDenial(req, user, key, existing, body)
+      if (denied) return fail(res, 403, denied)
+    }
+
+    let toWrite = body
+    if (user.role === 'contributor' && isProjectBlobKey(key)) {
+      // server-authoritative merge: structure/settings come from the stored
+      // copy (or Main for a new draft), only the content allowlist from the
+      // contributor's blob — a hand-crafted structural edit is silently dropped
+      const main = await readFileOrNull(storeFile(MAIN_PROJECT_KEY))
+      const r = mergeContributorProject(existing, main, body)
+      if (r.error) return fail(res, 403, r.error)
+      toWrite = r.merged
+    }
+    await writeAtomic(storeFile(key), toWrite)
+    storeSize.bytes += Math.max(0, Buffer.byteLength(toWrite) - existingBytes)
+    broadcastStoreEvent(key, isAgentRequest(req) ? 'agent' : 'human')
     return send(res, 200, JSON.stringify({ ok: true }))
   }
   if (req.method === 'DELETE') {
-    // mirror of the PUT guard, stricter: the contributor UI (Preview) never
-    // deletes store keys at all, so any contributor DELETE is anomalous —
-    // deleting the project/branch/baseline blobs is destruction, not editing
+    // contributors may discard their own drafts — the branch project copy and
+    // its merge-base snapshot — but never the live project (Main) or any other
+    // stored blob (that would be destruction, not editing).
     if (user.role === 'contributor') {
-      return fail(res, 403, 'contributors cannot delete stored data')
+      const isDraftKey =
+        (isProjectKey(key) && key !== MAIN_PROJECT_KEY) ||
+        (key.startsWith('guano-base:') && key !== 'guano-base:main')
+      if (!isDraftKey) return fail(res, 403, 'contributors cannot delete stored data')
+      if (!(await ownsDraft(user, key))) {
+        return fail(res, 403, 'contributors can only discard their own drafts')
+      }
+    }
+    // Main is the live project and its history is in-memory client-side only,
+    // so an agent deleting it is unrecoverable — hold it to the same switch
+    // that gates agent writes to Main.
+    if (isAgentRequest(req) && (key === MAIN_PROJECT_KEY || key === 'guano-base:main')) {
+      const policy = await readAgentPolicy()
+      if (!policy.allowMainWrites) return fail(res, 403, AGENT_MAIN_DENIED)
     }
     await rm(storeFile(key), { force: true })
+    storeSize.at = 0 // force a recount rather than tracking the freed bytes
     return send(res, 200, JSON.stringify({ ok: true }))
   }
   return fail(res, 404, 'not found')
 }
 
+/**
+ * Does `user` own the draft a `guano-project:<id>` / `guano-base:<id>` key
+ * belongs to? Ownership is the `createdBy` stamp the editor and the MCP server
+ * write into the branches meta at creation.
+ *
+ * Drafts created before ownership was tracked carry no stamp; those stay shared
+ * rather than becoming undeletable, so an upgrade doesn't strand anyone's work.
+ */
+async function ownsDraft(user, key) {
+  const id = key.slice(key.indexOf(':') + 1)
+  const meta = parseJsonOrNull(await readFileOrNull(storeFile('guano-branches')))
+  const draft = Array.isArray(meta?.branches) ? meta.branches.find((b) => b?.id === id) : null
+  if (!draft?.createdBy) return true // unknown or legacy — shared
+  return draft.createdBy === user.id
+}
+
+const AGENT_MAIN_DENIED =
+  'agent writes to Main are disabled — work in a draft and let a human apply it, ' +
+  'or enable agent Main writes in Settings'
+
+/**
+ * Guard one project-blob write: the reason to refuse, or null to allow.
+ *
+ * Two callers, one rule. An MCP **agent** is checked against the agent policy —
+ * may this token touch Main at all, and may it write a field that ships raw
+ * script to the live site? That is what breaks the injection chain the audit
+ * found: a comment telling an agent to write `customCode.head` and publish now
+ * fails here, at the server, whatever the agent believes it was authorized to
+ * do. A **contributor** is never allowed either field, by role.
+ *
+ * Contributors previously had these fields silently dropped by the content
+ * merge. Refusing out loud is better: a silent drop looks like success, so a
+ * contributor (or the agent acting for one) keeps retrying a write that will
+ * never take effect, and nobody learns that something tried.
+ */
+async function protectedWriteDenial(req, user, key, existingStr, bodyStr) {
+  const agent = isAgentRequest(req)
+  const contributor = user.role === 'contributor'
+  if (!agent && !contributor) return null // admin/editor at a browser: their call
+
+  if (agent && (key === MAIN_PROJECT_KEY || key === 'guano-base:main')) {
+    if (!(await readAgentPolicy()).allowMainWrites) return AGENT_MAIN_DENIED
+  }
+  // For a brand-new draft there is nothing stored yet, so Main is the baseline
+  // the copy must match — otherwise custom code could ride in at creation.
+  const baseline =
+    parseJsonOrNull(existingStr) ??
+    parseJsonOrNull(await readFileOrNull(storeFile(MAIN_PROJECT_KEY)))
+  const delta = protectedFieldDelta(baseline, parseJsonOrNull(bodyStr))
+  if (!delta) return null
+
+  const who = contributor ? 'contributors' : 'agents'
+  if (delta.kind === 'publishing') {
+    return `${who} cannot change ${delta.field} — the publish target is set by an admin in Settings`
+  }
+  if (contributor || !(await readAgentPolicy()).allowCustomCode) {
+    return (
+      `${who} cannot change ${delta.field} — custom code runs as raw script on every ` +
+      'published page. Ask an admin to make this edit' +
+      (contributor ? '.' : ', or enable agent custom code in Settings.')
+    )
+  }
+  return null
+}
+
 
 async function handlePost(req, res, params) {
   // the session is the credential; PUBLISH_TOKEN stays as a CI escape hatch.
-  // Publishing is admin/editor only — contributors are content-only.
   const bearerOk = !!TOKEN && timingSafeEqualStr(req.headers.authorization ?? '', `Bearer ${TOKEN}`)
+  let user = null
   if (!bearerOk) {
-    // session cookie or a `guano_` API-token bearer (editor+); the PUBLISH_TOKEN
-    // CI escape hatch above bypasses this entirely
-    const user = requestUser(req)
+    // session cookie or a `guano_` API-token bearer; the PUBLISH_TOKEN CI escape
+    // hatch above bypasses this entirely. Contributors may publish, but the
+    // content merge below (mergeContributorProject) rebuilds their snapshot from
+    // Main's structure/settings, so they can only ever ship content changes.
+    user = requestUser(req)
     if (!user) return fail(res, 401, 'unauthorized')
-    if (user.role === 'contributor') return fail(res, 403, 'forbidden')
   }
   const method = ['server', 'zip', 'github'].includes(params.get('method'))
     ? params.get('method')
     : 'server'
-  const raw = await readBody(req)
+
+  if (user) {
+    // zip and github ship the site OUT of this instance (a download, a push to
+    // a remote repo), so they are build-capable roles only — the doc has always
+    // said so, but the check was missing and contributors fell straight through.
+    if (method !== 'server' && user.role === 'contributor') {
+      return fail(res, 403, 'forbidden')
+    }
+    // Publishing is the one action an agent cannot walk back: it puts bytes on
+    // the live origin. Off unless a human turned it on (see agent-policy.mjs).
+    if (isAgentRequest(req) && !(await readAgentPolicy()).allowPublish) {
+      return fail(
+        res,
+        403,
+        'agent publishing is disabled — ask a human to publish, or enable agent publishing in Settings',
+      )
+    }
+    const limit = publishAllowed(user.id)
+    if (!limit.ok) return tooManyRequests(res, limit.retryAfterSeconds, 'publishes')
+  }
+
+  let raw = await readBody(req)
   if (raw === null) return fail(res, 400, 'snapshot too large')
   let parsed
   try {
@@ -669,11 +908,28 @@ async function handlePost(req, res, params) {
     return fail(res, 400, 'invalid project snapshot')
   }
 
-  // github: fail fast on missing config BEFORE the (expensive) export
+  // a contributor may only publish CONTENT changes: merge their snapshot onto
+  // Main's stored structure/settings and export THAT, never their raw blob —
+  // otherwise a hand-crafted publish would push structure straight to the live
+  // site, bypassing the store write guard
+  if (user?.role === 'contributor') {
+    const stored = await readFileOrNull(storeFile('guano-project:main'))
+    const r = mergeContributorProject(stored, stored, raw)
+    if (r.error) return fail(res, 403, r.error)
+    raw = r.merged
+    parsed = JSON.parse(raw)
+  }
+
+  // github: fail fast on missing config BEFORE the (expensive) export.
+  // repo/branch come from the STORED Main settings, never from the request
+  // body — the server signs this push with its own PAT, so letting the caller
+  // name the destination would hand that PAT's write access to anyone who can
+  // publish, pointed at any repo it can reach.
   let github
   if (method === 'github') {
+    const storedMain = parseJsonOrNull(await readFileOrNull(storeFile(MAIN_PROJECT_KEY)))
     github = {
-      ...(parsed.settings?.publishing?.github ?? {}),
+      ...(storedMain?.settings?.publishing?.github ?? {}),
       token: (await readPublishConfig()).github.token,
     }
     if (!github.repo || !github.branch || !github.token) {
@@ -710,6 +966,31 @@ async function handlePost(req, res, params) {
   }
 }
 
+// ---------- 🔒 GET/PUT /api/agent-policy (what MCP agents may do) ----------
+
+/**
+ * Session-only and admin-only, deliberately: these switches are exactly what an
+ * agent would want flipped, so a `guano_` bearer must never be able to flip
+ * them — otherwise the policy would guard nothing. Same rule as /api/users and
+ * /api/publish-config.
+ */
+async function handleAgentPolicy(req, res) {
+  const user = sessionUser(req)
+  if (!user) return fail(res, 401, 'unauthorized')
+  if (user.role !== 'admin') return fail(res, 403, 'forbidden')
+
+  if (req.method === 'GET') {
+    return send(res, 200, JSON.stringify(await readAgentPolicy()))
+  }
+  if (req.method === 'PUT') {
+    const body = await readBody(req)
+    const patch = parseJsonOrNull(body)
+    if (!patch || typeof patch !== 'object') return fail(res, 400, 'invalid request')
+    return send(res, 200, JSON.stringify(await writeAgentPolicy(patch)))
+  }
+  return fail(res, 404, 'not found')
+}
+
 // ---------- 🔒 GET/PUT /api/publish-config (server-side GitHub token) ----------
 
 async function handlePublishConfig(req, res) {
@@ -738,6 +1019,74 @@ async function handlePublishConfig(req, res) {
     return send(res, 200, JSON.stringify({ ok: true, github: { tokenSet: !!cfg.github.token } }))
   }
   return fail(res, 404, 'not found')
+}
+
+// ---------- 🔒 GET/PUT /api/integrations-config (Stripe / mailing / SMTP secrets) ----------
+
+async function handleIntegrationsConfig(req, res) {
+  const user = sessionUser(req)
+  if (!user) return fail(res, 401, 'unauthorized')
+  if (user.role === 'contributor') return fail(res, 403, 'forbidden')
+
+  if (req.method === 'GET') {
+    // NEVER return a key in any shape — only whether one is set
+    return send(res, 200, JSON.stringify(secretsSetShape(await readPublishConfig())))
+  }
+  if (req.method === 'PUT') {
+    const body = await readBody(req)
+    let patch
+    try {
+      patch = JSON.parse(body ?? '')
+    } catch {
+      return fail(res, 400, 'invalid request')
+    }
+    const cfg = await readPublishConfig()
+    // field-wise so a patch for one namespace can't clear another; '' clears
+    const set = (ns, field) => {
+      if (patch?.[ns] && field in patch[ns]) cfg[ns][field] = String(patch[ns][field] ?? '').trim()
+    }
+    set('stripe', 'secretKey')
+    set('mailing', 'apiKey')
+    set('smtp', 'password')
+    await writeAtomic(PUBLISH_CONFIG, JSON.stringify(cfg))
+    return send(res, 200, JSON.stringify({ ok: true, ...secretsSetShape(cfg) }))
+  }
+  return fail(res, 404, 'not found')
+}
+
+// ---------- 🔒 GET /api/domain-check (what a domain resolves to) ----------
+
+// Bare hostname only: labels of letters/digits/hyphens, at least one dot, no
+// scheme, port, path or userinfo. This is the guard — the value goes straight
+// into a resolver, and GET requests skip the same-origin check.
+const HOSTNAME_RE = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/
+
+async function handleDomainCheck(req, res, params) {
+  const user = sessionUser(req)
+  if (!user) return fail(res, 401, 'unauthorized')
+  if (user.role === 'contributor') return fail(res, 403, 'forbidden')
+  if (req.method !== 'GET') return fail(res, 404, 'not found')
+
+  const domain = (params.get('domain') ?? '').trim().toLowerCase()
+  if (!HOSTNAME_RE.test(domain)) return fail(res, 400, 'enter a bare domain, e.g. example.com')
+
+  // purely informational: this server does no per-domain routing, so a lookup
+  // failure is an answer ("not resolving yet"), never an error
+  const lookup = async (fn) => {
+    try {
+      return await fn(domain)
+    } catch {
+      return []
+    }
+  }
+  const timeout = new Promise((resolve) => setTimeout(() => resolve(null), 4000))
+  const records = await Promise.race([
+    Promise.all([lookup(dnsResolve4), lookup(dnsResolve6), lookup(dnsResolveCname)]),
+    timeout,
+  ])
+  if (!records) return send(res, 200, JSON.stringify({ domain, timedOut: true, a: [], aaaa: [], cname: [] }))
+  const [a, aaaa, cname] = records
+  return send(res, 200, JSON.stringify({ domain, a, aaaa, cname }))
 }
 
 // ---------- 🔒 project export / import (full backup package) ----------
@@ -915,7 +1264,23 @@ async function handleStatic(req, res) {
     const target = isDistFile ? distFile : join(DIST, 'index.html')
     try {
       const data = await readFile(target)
-      return send(res, 200, data, MIME[extname(target)] ?? 'application/octet-stream', headersFor(target))
+      // The EDITOR must never be framable: an invisible iframe over a decoy
+      // page turns a logged-in admin's clicks into publish/delete actions.
+      // frame-ancestors only — deliberately NOT a full CSP, because the editor
+      // compiles Tailwind in the browser at runtime and a script-src would
+      // white-screen it (that half stays open; see BACKLOG S10).
+      const base = headersFor(target)
+      const adminHeaders = {
+        ...base,
+        'x-frame-options': 'DENY',
+        // APPEND, never replace: a .svg under /admin/ already carries the
+        // no-script CSP from headersFor, and dropping it would let a served
+        // SVG run script on this origin when navigated to directly
+        'content-security-policy': [base['content-security-policy'], "frame-ancestors 'none'"]
+          .filter(Boolean)
+          .join('; '),
+      }
+      return send(res, 200, data, MIME[extname(target)] ?? 'application/octet-stream', adminHeaders)
     } catch {
       return send(res, 404, 'Not found — run `npm run build` first.', 'text/plain')
     }
@@ -954,6 +1319,9 @@ const server = createServer(async (req, res) => {
       return await handlePost(req, res, url.searchParams)
     }
     if (path === '/api/publish-config') return await handlePublishConfig(req, res)
+    if (path === '/api/agent-policy') return await handleAgentPolicy(req, res)
+    if (path === '/api/integrations-config') return await handleIntegrationsConfig(req, res)
+    if (path === '/api/domain-check') return await handleDomainCheck(req, res, url.searchParams)
     if (path === '/api/project-export' && req.method === 'GET') {
       return await handleProjectExport(req, res)
     }

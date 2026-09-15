@@ -9,6 +9,9 @@ export interface ElementDef {
   void?: boolean
   /** the element type ghost-suggested as this block's first child (autocomplete) */
   suggest?: string
+  /** attributes the element type IMPLIES (a :checkbox is <input type="checkbox">).
+   * Emitted by every renderer, and overridable by the author's own attributes. */
+  attrs?: Record<string, string>
 }
 
 import { ELEMENTS_DATA } from './shared/elements.js'
@@ -37,7 +40,7 @@ export function createNode(type: string): ElementNode {
 
 /** types an element can switch between (same structural shape per group) */
 const TYPE_GROUPS: string[][] = [
-  ['section', 'div', 'container', 'grid', 'header', 'footer', 'article', 'nav', 'main', 'aside'],
+  ['section', 'div', 'container', 'grid', 'header', 'footer', 'article', 'nav', 'main', 'aside', 'list-item'],
   ['heading', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'],
   ['text', 'paragraph', 'span', 'label'],
   ['button', 'link'],

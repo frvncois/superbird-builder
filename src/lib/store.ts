@@ -115,6 +115,24 @@ export async function hydrateStore(keys: string[]): Promise<void> {
   }
 }
 
+/**
+ * Reads ONE key straight from the server, bypassing the cache entirely.
+ * Used by the merge-on-save path, which must see what is actually stored
+ * right now — not what this tab believes. Deliberately does not touch the
+ * cache or the hydration bookkeeping, so it can never disturb a pending
+ * local write. Returns null when the key does not exist.
+ */
+export async function storeGetFresh(key: string): Promise<string | null> {
+  const res = await fetch(`/api/store?keys=${encodeURIComponent(key)}`)
+  if (res.status === 401) {
+    onUnauthorized()
+    await new Promise(() => {}) // navigation is taking over
+  }
+  if (!res.ok) throw new Error(`store fetch failed (${res.status})`)
+  const data = (await res.json()) as Record<string, string | null>
+  return data[key] ?? null
+}
+
 /** force-refetches keys even when already hydrated — for when a server-side
  * writer (the AI assistant) changed them behind the cache. The in-flight
  * write guard in hydrateStore still applies, so pending local writes are

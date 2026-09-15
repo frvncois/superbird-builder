@@ -1,4 +1,60 @@
 import type { ComponentDef, ElementNode } from '@/types/editor'
+import { isLeafElement } from './elements'
+import { walkNodes } from './tree'
+
+/**
+ * Deep-clone a subtree into the master id space: fresh ids, line info dropped,
+ * and interaction/animation binding `targetId`s that point INSIDE the subtree
+ * rewritten onto the new ids — without the rewrite every internal binding
+ * (a modal's close button, an accordion trigger) keeps aiming at the PAGE
+ * node ids and goes dead the moment the block becomes a component.
+ * Returns the clone plus the old→new id map (the key set doubles as "which
+ * page ids are inside the extracted subtree" for outside-target detection).
+ */
+export function cloneForMaster(source: ElementNode): {
+  cloned: ElementNode
+  idMap: Map<string, string>
+} {
+  const cloned = JSON.parse(JSON.stringify(source)) as ElementNode
+  const idMap = new Map<string, string>()
+  walkNodes([cloned], (n) => {
+    const next = crypto.randomUUID()
+    idMap.set(n.id, next)
+    n.id = next
+    delete n.line
+    delete n.endLine
+  })
+  walkNodes([cloned], (n) => {
+    for (const b of n.interactions ?? []) {
+      if (b.targetId && idMap.has(b.targetId)) b.targetId = idMap.get(b.targetId)!
+    }
+    for (const b of n.animations ?? []) {
+      if (b.targetId && idMap.has(b.targetId)) b.targetId = idMap.get(b.targetId)!
+    }
+  })
+  return { cloned, idMap }
+}
+
+/**
+ * After extraction the MASTER owns the subtree's presentation and content —
+ * clear the source nodes' node-only state so the new instance INHERITS instead
+ * of shadowing. A shadow looks identical at extraction time but bites later:
+ * shared chrome gets translated once per page, and a master restructure can
+ * re-seat the stale override onto the wrong node. `htmlId` stays (a per-page
+ * anchor), `arg`/`link` stay (code-owned).
+ */
+export function stripExtractedInstanceState(source: ElementNode): void {
+  walkNodes([source], (n) => {
+    delete n.classes
+    delete n.interactions
+    delete n.animations
+    delete n.attributes
+    delete n.src
+    delete n.background
+    delete n.locales
+    delete n.content
+  })
+}
 
 /** component types are Capitalized in the syntax; built-ins stay lowercase */
 export function isComponentType(type: string): boolean {
@@ -28,7 +84,12 @@ export function serializeNode(node: ElementNode, indent: string): string[] {
   const arg = node.arg ? `[${node.arg}]` : ''
   // node.link stores '@item' for the current-entry sentinel, verbatim otherwise
   const link = node.link ? `@${node.link === '@item' ? 'item' : node.link}` : ''
-  if (!node.children.length) return [`${indent}:${node.type}${arg}:${link}`]
+  // form follows the REGISTRY, not the child count: a childless container
+  // (an empty :textarea, an empty :div) keeps its block spelling. Collapsing
+  // it to the leaf form desynced expansion alignment from the author's own
+  // block-form line, and the instance node — with its htmlId — was orphaned
+  // on the next re-expansion.
+  if (isLeafElement(node.type)) return [`${indent}:${node.type}${arg}:${link}`]
   return [
     `${indent}:${node.type}${arg}${link}`,
     ...node.children.flatMap((child) => serializeNode(child, `${indent}\t`)),
@@ -79,6 +140,39 @@ function lcsAlign(a: string[], b: string[]): Map<number, number> {
   return map
 }
 
+/** a line's token type: `:h1[x]:(+)` → ':h1', a closer `section:` → 'section:' */
+function lineTypeSig(line: string): string {
+  const t = line.trim()
+  const open = t.match(/^:([A-Za-z][A-Za-z0-9-]*)/)
+  if (open) return `:${open[1]}`
+  const close = t.match(/^([A-Za-z][A-Za-z0-9-]*):$/)
+  return close ? `${close[1]}:` : t
+}
+
+/**
+ * Align an instance block's OLD inner lines to the freshly serialized NEW ones
+ * (map: newIndex → oldIndex, both relative to the block). Exact-text LCS
+ * first, then a weak pass matching leftover lines by token TYPE in order —
+ * so a master edit that inserts a node or tweaks a link/arg keeps every other
+ * instance node (and its per-instance content overrides) on the line it came
+ * from, instead of the pure positional map re-seating everything after the
+ * insertion one node off.
+ */
+export function alignInstanceLines(oldLines: string[], newLines: string[]): Map<number, number> {
+  const matches = lcsAlign(oldLines.map((l) => l.trim()), newLines.map((l) => l.trim()))
+  const used = new Set(matches.values())
+  const freeOld = oldLines.map((_, i) => i).filter((i) => !used.has(i))
+  const freeNew = newLines.map((_, i) => i).filter((i) => !matches.has(i))
+  if (freeOld.length && freeNew.length) {
+    const weak = lcsAlign(
+      freeOld.map((i) => lineTypeSig(oldLines[i]!)),
+      freeNew.map((i) => lineTypeSig(newLines[i]!)),
+    )
+    for (const [nj, oj] of weak) matches.set(freeNew[nj]!, freeOld[oj]!)
+  }
+  return matches
+}
+
 /** a master node that lost its place in an adoption — its id/classes/
  * interactions no longer render on any instance (surfaced by update_component
  * so the loss is never silent) */
@@ -119,6 +213,22 @@ export function adoptStructure(
   const mSigs = masterChildren.map(nodeSignature)
   const eSigs = editedChildren.map(nodeSignature)
   const matches = lcsAlign(mSigs, eSigs) // editedIndex → masterIndex
+  // Second chance on a WEAKER signature (type + arg, no link): a link-suffix
+  // edit is the most common component change (`@#rooms` → `@/#rooms`), and the
+  // strong signature would orphan every touched node — dropping its classes,
+  // content and bindings for a change that never meant to replace it. Only
+  // children the strong pass left unmatched participate, aligned in order, so
+  // links still disambiguate siblings whenever they CAN.
+  const weakSignature = (n: ElementNode) => `${n.type}|${n.arg ?? ''}`
+  const freeMaster = masterChildren.map((_, i) => i).filter((i) => ![...matches.values()].includes(i))
+  const freeEdited = editedChildren.map((_, i) => i).filter((i) => !matches.has(i))
+  if (freeMaster.length && freeEdited.length) {
+    const weak = lcsAlign(
+      freeMaster.map((i) => weakSignature(masterChildren[i]!)),
+      freeEdited.map((i) => weakSignature(editedChildren[i]!)),
+    )
+    for (const [ej, mj] of weak) matches.set(freeEdited[ej]!, freeMaster[mj]!)
+  }
   const usedMaster = new Set(matches.values())
 
   master.children = editedChildren.map((child, ei) => {
@@ -154,7 +264,7 @@ export function adoptStructure(
       id: m.id,
       type: m.type,
       hadClasses: !!m.classes?.trim(),
-      hadInteractions: m.interactions?.length ?? 0,
+      hadInteractions: (m.interactions?.length ?? 0) + (m.animations?.length ?? 0),
     })
   })
   return result
@@ -165,10 +275,20 @@ export function adoptStructure(
  * block: a `:Card:` leaf, or an empty `:Card` / `Card:` pair, becomes
  * `:Card` + the master's structure + `Card:`.
  */
-export function expandComponentInstances(code: string, components: ComponentDef[]): string {
-  if (!components.length) return code
+export function expandComponentInstances(
+  code: string,
+  components: ComponentDef[],
+  /** filled with the output line index of each input line — lets a caller
+   * report how much instance expansion shifted the author's line numbers */
+  lineMap?: number[],
+): string {
+  if (!components.length) {
+    if (lineMap) code.split('\n').forEach((_, i) => lineMap.push(i))
+    return code
+  }
   const lines = code.split('\n')
   const out: string[] = []
+  const mark = () => lineMap?.push(out.length)
   /** component blocks currently open — a component never expands inside itself */
   const stack: string[] = []
 
@@ -180,6 +300,7 @@ export function expandComponentInstances(code: string, components: ComponentDef[
     const close = trimmed.match(/^([A-Z][a-zA-Z0-9-]*):$/)
     if (close && stack[stack.length - 1] === close[1]) {
       stack.pop()
+      mark()
       out.push(line)
       continue
     }
@@ -187,6 +308,7 @@ export function expandComponentInstances(code: string, components: ComponentDef[
     const leaf = trimmed.match(/^:([A-Z][a-zA-Z0-9-]*):$/)
     const leafDef = leaf ? components.find((c) => c.name === leaf[1]) : null
     if (leafDef && !stack.includes(leafDef.name)) {
+      mark()
       out.push(`${indent}:${leafDef.name}`)
       out.push(...leafDef.root.children.flatMap((c) => serializeNode(c, `${indent}\t`)))
       out.push(`${indent}${leafDef.name}:`)
@@ -196,14 +318,17 @@ export function expandComponentInstances(code: string, components: ComponentDef[
     const open = trimmed.match(/^:([A-Z][a-zA-Z0-9-]*)$/)
     const openDef = open ? components.find((c) => c.name === open[1]) : null
     if (openDef && !stack.includes(openDef.name) && lines[i + 1]?.trim() === `${openDef.name}:`) {
+      mark()
       out.push(line)
       out.push(...openDef.root.children.flatMap((c) => serializeNode(c, `${indent}\t`)))
+      mark()
       out.push(lines[i + 1]!)
       i++
       continue
     }
 
     if (open) stack.push(open[1]!)
+    mark()
     out.push(line)
   }
 

@@ -1,4 +1,7 @@
 <script setup lang="ts">
+// The single editing shell. A rail toggle switches the surface between Build
+// (code editor + breakpoint canvas + full inspector) and Preview (full-site
+// render, no code, restricted sidebar). Contributors are pinned to Preview.
 import { ref } from 'vue'
 import EditorLayout from '@/layouts/EditorLayout.vue'
 import AppRail from '@/components/editor/sidebar/AppRail.vue'
@@ -8,17 +11,20 @@ import CodeEditor from '@/components/editor/code/CodeEditor.vue'
 import SettingsEditor from '@/components/editor/sidebar/SettingsEditor.vue'
 import ContextMenu from '@/components/editor/canvas/ContextMenu.vue'
 import InsertDragChip from '@/components/editor/canvas/InsertDragChip.vue'
+import SitePreview from '@/components/site/SitePreview.vue'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import { useEditorShortcuts } from '@/composables/useEditorShortcuts'
 import { useEditorBoot } from '@/composables/useEditorBoot'
+import { useViewMode } from '@/composables/useViewMode'
 
 // editor-zone globals: keymaps live here (NOT in App.vue) so the public
-// site never boots them
+// site never boots them. Structural shortcuts self-gate to Build mode.
 useEditorShortcuts()
 
 const { ready, bootError, reloadPage } = useEditorBoot()
+const { isBuild } = useViewMode()
 
-// pages drawer overlays the code pane; opened from the left rail
+// pages drawer overlays the shell (both modes); opened from the left rail
 const pagesDrawerOpen = ref(false)
 </script>
 
@@ -31,28 +37,40 @@ const pagesDrawerOpen = ref(false)
     <ButtonUI variant="outline" size="sm" @click="reloadPage">Retry</ButtonUI>
   </div>
 
-  <EditorLayout v-else-if="ready">
-    <template #rail>
-      <AppRail :drawer-open="pagesDrawerOpen" @toggle-drawer="pagesDrawerOpen = !pagesDrawerOpen" />
-    </template>
+  <template v-else-if="ready">
+    <EditorLayout :left="isBuild">
+      <template #rail>
+        <AppRail
+          :drawer-open="pagesDrawerOpen"
+          @toggle-drawer="pagesDrawerOpen = !pagesDrawerOpen"
+          @close-drawer="pagesDrawerOpen = false"
+        />
+      </template>
 
-    <template #left>
-      <PagesDrawer :open="pagesDrawerOpen" @close="pagesDrawerOpen = false" />
-      <div class="h-full">
-        <CodeEditor />
-      </div>
-    </template>
+      <template v-if="isBuild" #left>
+        <div class="h-full">
+          <CodeEditor />
+        </div>
+      </template>
 
-    <div class="relative h-full">
-      <CanvasEditor />
-    </div>
-    <ContextMenu />
-    <InsertDragChip />
+      <!-- center: Build canvas or full-site preview -->
+      <template v-if="isBuild">
+        <div class="relative h-full">
+          <CanvasEditor />
+        </div>
+        <ContextMenu />
+        <InsertDragChip />
+      </template>
+      <SitePreview v-else />
 
-    <template #right>
-      <SettingsEditor />
-    </template>
-  </EditorLayout>
+      <template #right>
+        <SettingsEditor />
+      </template>
+    </EditorLayout>
+
+    <!-- shell-level overlay so Pages works in both modes -->
+    <PagesDrawer :open="pagesDrawerOpen" @close="pagesDrawerOpen = false" />
+  </template>
 
   <div v-else class="flex min-h-screen items-center justify-center bg-background">
     <p class="text-xs text-muted-foreground">Loading…</p>

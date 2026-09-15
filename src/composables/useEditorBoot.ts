@@ -1,6 +1,7 @@
 import { ref } from 'vue'
 import { usePersistence } from './usePersistence'
 import { useProject } from './useProject'
+import { startEditTracking } from './useEditTracking'
 import { migrateStoredProject } from '@/lib/storage'
 import { hydrateStore, storeGet } from '@/lib/store'
 import { hydratePublishState } from './usePublish'
@@ -62,6 +63,7 @@ export function useEditorBoot() {
       localStorage.removeItem('superbird-setup-name')
 
       usePersistence().init() // sync, runs against the warm cache
+      startEditTracking() // stamp updatedAt/updatedBy on edited pages/entries
       useLiveSync().start() // live-apply + hard-lock for MCP agent sessions
       ready.value = true
 

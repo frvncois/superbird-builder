@@ -11,16 +11,125 @@ export interface Interaction {
 
 /** an element applying a saved interaction — the "when/where" (trigger +
  * target) is per-application, the animation is shared via interactionId */
+/** what a trigger does to its target's state */
+export type InteractionAction = 'toggle' | 'on' | 'off'
+
+/** hover / scrolled / change are symmetric (they drive both directions and
+ * ignore `action`); click is discrete and honours `action`; appear fires once */
+export type InteractionTrigger = 'hover' | 'click' | 'appear' | 'scrolled' | 'change'
+
 export interface InteractionBinding {
   id: string
   /** the saved Interaction (project.interactions) this applies */
   interactionId: string
-  trigger: 'hover' | 'click' | 'appear'
+  trigger: InteractionTrigger
   /** node the effect applies to; null = the trigger element itself */
   targetId: string | null
   /** breakpoint ids this application is active on; `undefined` = all (the
    * default). Stored in project breakpoint order; omitted when all are on so
    * untouched bindings stay byte-identical for merge signatures. */
+  breakpoints?: string[]
+  /** click only: force the effect on / off instead of toggling. Together with
+   * state being keyed by (interaction, target) — see lib/shared/interactionKeys.js
+   * — this is what makes an open button + a close button + an overlay work.
+   * `undefined` = 'toggle'. */
+  action?: InteractionAction
+  /** gestures that force the effect OFF while it is on: a pointerdown outside
+   * both the trigger and the target, and/or the Escape key. */
+  closeOn?: ('outside' | 'escape')[]
+  /** exclusive group: turning this effect on turns off every other effect in the
+   * same group. Scoped per component instance but SHARED across a
+   * collection-list's repeats, so "one accordion open at a time" works. */
+  group?: string
+  /** remember the effect's state so a dismissal sticks. Published site only —
+   * the editor always shows the element so it stays authorable. */
+  once?: 'session' | 'local'
+  /** 'scrolled' only: px of page scroll past which the effect is on (default 50) */
+  scrollAt?: number
+}
+
+/** a property the motion engine can tween. Units and neutral values live in
+ * MOTION_PROPS (src/lib/shared/motion.js) — the single source of truth. */
+export type AnimProp =
+  | 'x'
+  | 'y'
+  | 'scale'
+  | 'rotate'
+  | 'opacity'
+  | 'blur'
+  | 'brightness'
+  | 'saturate'
+  | 'bgColor'
+  | 'textColor'
+  | 'borderColor'
+  | 'width'
+  | 'height'
+  | 'clipTop'
+  | 'clipRight'
+  | 'clipBottom'
+  | 'clipLeft'
+
+/** one property's journey inside a step. `from` omitted = start from the
+ * element's current computed value (measured at play time).
+ * Values are a number (the property's default unit) or a string carrying one
+ * — '110%', '1em', '50vw' — so a move can be relative to the element or the
+ * viewport. Both sides of a tween must use the same unit. */
+export interface AnimationTrack {
+  prop: AnimProp
+  from?: number | string
+  to: number | string
+}
+
+/** one segment of a timeline: a set of tracks sharing duration/easing */
+export interface AnimationStep {
+  id: string
+  tracks: AnimationTrack[]
+  /** milliseconds */
+  duration: number
+  /** key into EASINGS ('linear', 'ease-out', 'back-out'…) */
+  easing: string
+  /** ms from the previous step's END; negative overlaps. Omitted = 0. */
+  offset?: number
+  /** per-child delay (ms) when the target has children. Omitted = none.
+   * Only the STAGGERED tracks move the children — unstaggered tracks in the
+   * same step still move the element itself. */
+  stagger?: number
+  /** narrows a staggered step to matching descendants instead of direct
+   * children (e.g. 'img'). Requires `stagger`. Published site + Preview only. */
+  staggerSelector?: string
+  /** extra iterations; -1 = forever. Omitted = play once. */
+  repeat?: number
+  /** reverse every other iteration. Omitted = false. */
+  yoyo?: boolean
+}
+
+/** a reusable timeline in the project library — the "what happens",
+ * shared across elements exactly like Interaction */
+export interface Animation {
+  id: string
+  name: string
+  steps: AnimationStep[]
+}
+
+/** an element playing a saved Animation — the "when/where" */
+export interface AnimationBinding {
+  id: string
+  /** the saved Animation (project.animations) this plays */
+  animationId: string
+  trigger: 'load' | 'appear' | 'scrub' | 'hover' | 'click'
+  /** node the animation moves; null = the trigger element itself */
+  targetId: string | null
+  /** appear only. Omitted = play once on first entry. */
+  appearMode?: 'replay' | 'reverse'
+  /** appear only: the viewport fraction the element's top must cross before
+   * firing (0.8 ≈ ScrollTrigger's 'top 80%'). Omitted = fire on first pixel. */
+  appearAt?: number
+  /** scrub only: viewport fractions the element's top travels between,
+   * progress 0 → 1. Omitted = { start: 1, end: 0.25 }. */
+  /** smooth: seconds the play lags scroll (exponential catch-up, published runtime) */
+  scrub?: { start?: number; end?: number; smooth?: number }
+  /** breakpoint ids this binding is active on; omitted = all (see
+   * InteractionBinding — same byte-stability discipline) */
   breakpoints?: string[]
 }
 
@@ -33,6 +142,8 @@ export interface ElementNode {
   classes?: string
   /** saved interactions applied to this element (their effect may target another node) */
   interactions?: InteractionBinding[]
+  /** saved animations played by this element (may target another node) */
+  animations?: AnimationBinding[]
   /** custom HTML attributes (allowlisted; node-only state, like classes).
    * see lib/shared/attributes.sanitizeAttributes */
   attributes?: Record<string, string>
@@ -56,11 +167,17 @@ export interface ElementNode {
    * repeats (node-only state, like classes; see shared/fields.applyListQuery) */
   listQuery?: {
     limit?: number
+    /** skip the first N entries after sort, before limit (decouples slot
+     * placement — hero/lead/stack — from the CMS schema) */
+    offset?: number
     sortField?: string
     sortDir?: 'asc' | 'desc'
     filter?: { field: string; equals?: string; notEmpty?: boolean }
     /** hand-picked entry ids to include; absent = all entries */
     pick?: string[]
+    /** in entry scope (a collection template), drop the entry being viewed —
+     * the "related posts / more from" pattern */
+    excludeCurrent?: boolean
   }
   children: ElementNode[]
   /** Source range in the page code (0-based line indexes, open → close) */
@@ -90,14 +207,24 @@ export interface Page {
   /** per-page custom JavaScript, injected (export-only) as <script> tags:
    * `head` at the top of the page, `body` before </body> */
   customCode?: { head?: string; body?: string }
+  /** authorship/timestamps — stamped on create and on every content edit.
+   * Optional so projects saved before tracking existed still load. */
+  createdAt?: number
+  updatedAt?: number
+  createdBy?: string
+  updatedBy?: string
 }
 
 export interface CollectionField {
   id: string
   name: string
-  type: 'text' | 'image' | 'date' | 'reference' | 'multi-reference'
+  type: 'text' | 'image' | 'date' | 'reference' | 'multi-reference' | 'multi-image'
   /** reference/multi-reference: the collection the field points into */
   refCollectionId?: string
+  /** text fields only: false marks the field non-translatable (label names,
+   * catalog numbers, proper nouns) so the translation worklist skips it.
+   * Absent/true = translatable. */
+  localize?: boolean
 }
 
 export interface CollectionEntry {
@@ -110,7 +237,16 @@ export interface CollectionEntry {
   values: Record<string, string | string[]>
   /** per-locale field overrides; base values is the default locale */
   locales?: Record<string, Record<string, string>>
+  /** draft/published — an entry can now be held back independently of its
+   * template page. Absent = 'published' (back-compat with older entries). */
+  status?: string
+  /** per-entry SEO overrides; falls back to the template page's SEO, then
+   * the site defaults. Values may contain {field} tokens. */
+  seo?: { title?: string; description?: string }
   createdAt: number
+  updatedAt?: number
+  createdBy?: string
+  updatedBy?: string
 }
 
 export interface Collection {
@@ -120,6 +256,14 @@ export interface Collection {
   fields: CollectionField[]
   templatePageId: string
   entries: CollectionEntry[]
+  /** false = a DATA-ONLY collection: rendered inside other pages, with no page
+   * of its own. No template page is created, no entry routes are exported, and
+   * an `@item` link to it is a diagnostic. Absent/true = a page per entry. */
+  detailRoutes?: boolean
+  /** path prefix for entry routes; defaults to the collection `name`. `''`
+   * puts entries at the site root (`/<slug>`) — the WordPress-style layout a
+   * real port often has to reproduce. */
+  routeBase?: string
 }
 
 export interface CommentReply {
@@ -190,13 +334,59 @@ export interface ProjectSettings {
   }
   /** bare domain (example.com) — canonical/og URLs in exports when set */
   domain: string
-  /** stored config only; redacted from the public snapshot endpoint */
+  /** stored config only; redacted from the public snapshot endpoint.
+   * `password` is legacy — new saves keep it server-side (see integrations) */
   smtp: { host: string; port: string; user: string; password: string; from: string }
+  /** NON-secret halves of third-party integrations. Every secret (Stripe
+   * secret key, mailing API key, SMTP password) lives server-side only, in
+   * server/data/publish.json via /api/integrations-config */
+  integrations: {
+    stripe: { publishableKey: string }
+    mailing: { provider: string }
+  }
   /** Tailwind theme tokens (colors) */
   tokens: DesignToken[]
+  /** the project's own type / spacing scale, compiled into the same @theme
+   * block as the colour tokens. A design system usually sets its own root size
+   * and type ramp; without this a project could only approximate its own scale.
+   * `rootFontSize` becomes an `html { font-size }` rule in the export (exact);
+   * in the editor it is applied to the site scope so it can't rescale the
+   * editor's own chrome. Values are validated as CSS lengths (isThemeValue). */
+  theme?: {
+    rootFontSize?: string
+    /** the whole spacing scale: v4 derives it as calc(--spacing * n) */
+    spacing?: string
+    /** step name → value, e.g. `{ base: '.875rem', '2xl': '2rem' }` */
+    text?: Record<string, string>
+    leading?: Record<string, string>
+    tracking?: Record<string, string>
+    radius?: Record<string, string>
+  }
   /** raw HTML injected into exported <head> */
   customCode: { head: string }
-  fonts: { family: string; googleFontsUrl?: string }
+  fonts: {
+    family: string
+    monoFamily?: string
+    serifFamily?: string
+    googleFontsUrl?: string
+    /** webfonts hosted in this project's media library, emitted as @font-face
+     * on every surface (editor, preview, export) — see lib/shared/fonts.js */
+    custom?: CustomFont[]
+  }
+}
+
+/** one @font-face: a family name pointing at a font file in the media library */
+export interface CustomFont {
+  id: string
+  /** the font-family name to reference in styles, e.g. "OffSans" */
+  family: string
+  /** '/media/<id>' (library asset) or an https:// URL */
+  src: string
+  /** the format() hint — derived from the asset's mime when picked */
+  format?: string
+  /** '400', 'bold', or a variable range like '100 900'; default normal */
+  weight?: string
+  style?: 'normal' | 'italic'
 }
 
 export interface Project {
@@ -207,6 +397,8 @@ export interface Project {
   collections: Collection[]
   /** shared interaction library — applied to elements by id */
   interactions: Interaction[]
+  /** shared animation library — played by elements by id */
+  animations: Animation[]
   /** shared across all pages — they map to global CSS media queries */
   breakpoints: Breakpoint[]
   comments: Comment[]

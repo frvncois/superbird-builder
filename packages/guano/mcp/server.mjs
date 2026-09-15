@@ -16,7 +16,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 
 import * as api from './api.mjs'
-import { createToolSet, GUIDE } from './tools.mjs'
+import { createToolSet, GUIDE, MCP_VERSION } from './tools.mjs'
 
 // the bundled editor runtime (built by `npm run build:mcp-runtime`)
 const RUNTIME_URL = new URL('../runtime/mcp-runtime.mjs', import.meta.url)
@@ -42,7 +42,7 @@ const { tools, toolMap } = createToolSet({
 // `instructions` into the model's context, so agents know the DSL, the element
 // registry, and the workflow BEFORE their first tool call (no discovery cost)
 const server = new Server(
-  { name: 'guano', version: '0.1.0' },
+  { name: 'guano', version: MCP_VERSION },
   { capabilities: { tools: {} }, ...(GUIDE ? { instructions: GUIDE } : {}) },
 )
 
@@ -68,6 +68,15 @@ export async function main() {
   try {
     const user = await api.whoami()
     console.error(`guano mcp: connected to ${api.BASE} as ${user.email} (${user.role})`)
+    // The tools take local paths for bulk payloads, which is a read-anything
+    // primitive whenever an agent can be talked into a path — and its output
+    // lands in a project that may get published. A root confines it.
+    if (!process.env.GUANO_MCP_FILE_ROOT) {
+      console.error(
+        'guano mcp: GUANO_MCP_FILE_ROOT is not set — path arguments can read any file this ' +
+          'user can. Set it to the directory holding your payloads to confine them.',
+      )
+    }
   } catch (e) {
     console.error(`guano mcp: ${e.message}`)
     process.exit(1)

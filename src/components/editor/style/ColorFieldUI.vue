@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import ColorPickerUI from '@/components/ui/ColorPickerUI.vue'
 
 // A color value text field (hex, palette name, keyword, or a project design
 // token) with an autocomplete dropdown of the project's design tokens. Edits
 // stay local until blur / Enter, then validate: valid text commits, invalid
 // reverts. Empty commits as '' (unset). Focusing shows every token; typing
 // filters by name. ↑/↓ + Enter pick a suggestion.
+// With `swatch`, the palette picker rides inside the field rather than sitting
+// beside it, so a colour is one control instead of two.
 
 const props = withDefaults(
   defineProps<{
@@ -16,11 +19,13 @@ const props = withDefaults(
     /** guard applied to typed text before commit */
     validate?: (text: string) => boolean
     placeholder?: string
+    /** resolved colour for the embedded picker; omit to hide the swatch */
+    swatch?: string
   }>(),
   { placeholder: '–' },
 )
 
-const emit = defineEmits<{ commit: [string] }>()
+const emit = defineEmits<{ commit: [string]; pick: [string] }>()
 
 const editing = ref<string | null>(null)
 const shown = computed(() => editing.value ?? props.modelValue)
@@ -88,12 +93,23 @@ function onKeydown(e: KeyboardEvent) {
 
 <template>
   <div class="relative min-w-0 flex-1">
+    <div v-if="swatch !== undefined" class="absolute top-1/2 left-1 z-10 -translate-y-1/2">
+      <ColorPickerUI
+        :model-value="swatch"
+        size="sm"
+        align="left"
+        @update:model-value="(v) => emit('pick', v)"
+      />
+    </div>
     <input
       :value="shown"
       :placeholder="placeholder"
       spellcheck="false"
-      class="h-7 w-full rounded-md bg-input px-2 text-left font-mono text-[10px] outline-none focus-visible:ring-2 focus-visible:ring-accent"
-      :class="modelValue === '' && editing === null ? 'text-muted-foreground' : 'text-foreground'"
+      class="h-7 w-full rounded-md bg-input pr-2 text-left font-mono text-[10px] outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      :class="[
+        modelValue === '' && editing === null ? 'text-muted-foreground' : 'text-foreground',
+        swatch !== undefined ? 'pl-7' : 'pl-2',
+      ]"
       @focus="onFocus"
       @input="onInput"
       @blur="commit"

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
-import { Plus, X } from 'lucide-vue-next'
+import { ChevronDown, ChevronUp, Plus, X } from 'lucide-vue-next'
 import { usePanel } from '@/composables/usePanel'
 import GroupPopover from '@/components/popover/GroupPopover.vue'
 import RowUI from '@/components/ui/RowUI.vue'
@@ -17,7 +17,7 @@ import { useElement } from '@/composables/useElement'
 import { usePage } from '@/composables/usePage'
 import { useCollections } from '@/composables/useCollections'
 import { useLocale } from '@/composables/useLocale'
-import { resolveBinding, refIds } from '@/lib/shared/fields.js'
+import { resolveBinding, refIds, mediaUrls } from '@/lib/shared/fields.js'
 import type { CollectionEntry, CollectionField } from '@/types/editor'
 
 const { selectedElement, changeElementType, setElementArg, setElementLink } = useElement()
@@ -144,7 +144,7 @@ const bindOptions = computed(() => [
 const tailOptions = computed(() => [
   { label: 'Entry name', value: '' },
   ...(refTarget.value?.fields
-    .filter((f) => f.type !== 'reference' && f.type !== 'multi-reference')
+    .filter((f) => !['reference', 'multi-reference', 'multi-image'].includes(f.type))
     .map((f) => ({ label: f.name, value: f.name })) ?? []),
 ])
 
@@ -163,7 +163,11 @@ function setTail(tail: string | null) {
 const listOptions = computed(() => {
   const options = collections.value.map((c) => ({ label: c.name, value: c.name }))
   for (const f of activeCollection.value?.fields ?? []) {
-    if (f.type === 'multi-reference') options.push({ label: `${f.name} (field)`, value: f.name })
+    // a gallery field repeats over its images, exactly like a multi-reference
+    // field repeats over the entries it points to
+    if (f.type === 'multi-reference' || f.type === 'multi-image') {
+      options.push({ label: `${f.name} (field)`, value: f.name })
+    }
   }
   return options
 })
@@ -262,6 +266,19 @@ function setLimit(raw: string) {
   patchListQuery({ limit: Number.isFinite(n) && n > 0 ? n : undefined })
 }
 
+const offsetText = computed(() => (lq.value.offset ? String(lq.value.offset) : ''))
+function setOffset(raw: string) {
+  const n = parseInt(raw, 10)
+  patchListQuery({ offset: Number.isFinite(n) && n > 0 ? n : undefined })
+}
+
+// "related posts" — only meaningful on a collection template page (entry scope)
+const onTemplatePage = computed(() => !!activePage.value?.collectionId)
+const excludeCurrent = computed(() => !!lq.value.excludeCurrent)
+function setExcludeCurrent(on: boolean) {
+  patchListQuery({ excludeCurrent: on ? true : undefined })
+}
+
 // filter: a field + mode ('is' a value / 'not empty')
 const filterFieldOptions = computed(() => [
   { label: 'None', value: '' },
@@ -338,6 +355,7 @@ const FIELD_TYPES = [
   { label: 'Date', value: 'date' },
   { label: 'Reference', value: 'reference' },
   { label: 'Multi-ref', value: 'multi-reference' },
+  { label: 'Gallery', value: 'multi-image' },
 ]
 
 const isRefType = (t: string) => t === 'reference' || t === 'multi-reference'
@@ -397,6 +415,43 @@ const refOptions = computed(() => [
 const multiIds = computed(() =>
   headField.value && activeEntry.value ? refIds(activeEntry.value, headField.value.name) : [],
 )
+// multi-image ("gallery"): an ordered list of media urls on the entry. Order
+// is what the :collection-list renders, so it is editable here.
+const galleryUrls = computed(() =>
+  headField.value && activeEntry.value ? mediaUrls(activeEntry.value, headField.value.name) : [],
+)
+function writeGallery(next: string[]) {
+  const entry = activeEntry.value
+  const field = headField.value
+  if (!entry || !field) return
+  const clean = next.filter(Boolean)
+  // an emptied gallery drops the key entirely, so the entry stays
+  // byte-identical to one that never had images (keeps merge signatures quiet)
+  if (clean.length) entry.values[field.name] = clean
+  else delete entry.values[field.name]
+}
+/** clearing a slot REMOVES it — a gallery never holds empty holes, which is
+ *  the whole reason this type exists instead of numbered image fields */
+function setGalleryAt(index: number, url: string) {
+  const next = [...galleryUrls.value]
+  if (url) next[index] = url
+  else next.splice(index, 1)
+  writeGallery(next)
+}
+function addGalleryImage(url: string) {
+  if (url) writeGallery([...galleryUrls.value, url])
+}
+function moveGalleryImage(index: number, delta: -1 | 1) {
+  const next = [...galleryUrls.value]
+  const to = index + delta
+  if (to < 0 || to >= next.length) return
+  ;[next[index], next[to]] = [next[to], next[index]]
+  writeGallery(next)
+}
+const showGalleryPicker = computed(
+  () => headField.value?.type === 'multi-image' && !!activeEntry.value,
+)
+
 function toggleRef(id: string) {
   const entry = activeEntry.value
   const field = headField.value
@@ -489,6 +544,12 @@ const src = computed({
         <RowUI v-if="isRefType(field.type)" label="To">
           <SelectUI v-model="field.refCollectionId" :options="collectionOptions" />
         </RowUI>
+        <RowUI v-if="field.type === 'text'" label="Translatable">
+          <ToggleUI
+            :model-value="field.localize !== false"
+            @update:model-value="(v) => (field.localize = v ? undefined : false)"
+          />
+        </RowUI>
       </div>
       <ButtonUI variant="outline" size="sm" :icon="Plus" class="w-full" @click="addField(activeCollection!)">
         Add field
@@ -516,6 +577,46 @@ const src = computed({
           No entries in the referenced collection yet.
         </p>
       </template>
+    </GroupPopover>
+
+    <!-- gallery values: one picker per image, reorderable; clearing removes -->
+    <GroupPopover v-if="showGalleryPicker" :label="headField!.name">
+      <div v-for="(url, i) in galleryUrls" :key="`${url}-${i}`" class="flex items-start gap-1">
+        <MediaPickerControl
+          :model-value="url"
+          kind="image"
+          class="flex-1"
+          @update:model-value="(v) => setGalleryAt(i, v)"
+        />
+        <div class="flex flex-col">
+          <ButtonUI
+            variant="ghost"
+            size="sm"
+            :icon="ChevronUp"
+            :disabled="i === 0"
+            tooltip="Move up"
+            @click="moveGalleryImage(i, -1)"
+          />
+          <ButtonUI
+            variant="ghost"
+            size="sm"
+            :icon="ChevronDown"
+            :disabled="i === galleryUrls.length - 1"
+            tooltip="Move down"
+            @click="moveGalleryImage(i, 1)"
+          />
+        </div>
+      </div>
+      <MediaPickerControl
+        :key="`add-${galleryUrls.length}`"
+        model-value=""
+        kind="image"
+        @update:model-value="addGalleryImage"
+      />
+      <p class="text-[10px] text-muted-foreground">
+        Rendered by <span class="font-mono">:collection-list[{{ headField!.name }}]</span> — one
+        item per image.
+      </p>
     </GroupPopover>
 
     <GroupPopover v-if="hasContent && !boundIsRef">
@@ -578,6 +679,12 @@ const src = computed({
       </RowUI>
       <RowUI label="Limit">
         <InputUI :model-value="limitText" type="number" placeholder="All" @update:model-value="setLimit" />
+      </RowUI>
+      <RowUI label="Skip">
+        <InputUI :model-value="offsetText" type="number" placeholder="0" @update:model-value="setOffset" />
+      </RowUI>
+      <RowUI v-if="onTemplatePage" label="Exclude current">
+        <ToggleUI :model-value="excludeCurrent" @update:model-value="setExcludeCurrent" />
       </RowUI>
       <RowUI label="Filter">
         <SelectUI

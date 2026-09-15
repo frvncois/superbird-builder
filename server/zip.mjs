@@ -5,6 +5,14 @@
 // relative path; readZip refuses anything that could escape a target dir.
 import { deflateRawSync, inflateRawSync } from 'node:zlib'
 
+// Decompression ceilings for READING an untrusted archive (a project-package
+// import). Without them a "zip bomb" — a few KB of deflate that expands to
+// gigabytes — is allocated in full before the size-mismatch check can reject
+// it. Per-entry is enforced by zlib itself (maxOutputLength), cumulative by
+// the running total in readZip.
+const MAX_ENTRY_BYTES = 100 * 1024 * 1024
+const MAX_TOTAL_BYTES = 600 * 1024 * 1024
+
 // ---------- CRC32 ----------
 
 const CRC_TABLE = (() => {
@@ -122,6 +130,7 @@ export function readZip(buf) {
   let ptr = buf.readUInt32LE(eocd + 16) // central directory offset
 
   const out = []
+  let totalBytes = 0
   for (let i = 0; i < count; i++) {
     if (ptr + 46 > buf.length || buf.readUInt32LE(ptr) !== 0x02014b50) {
       throw expose('corrupt central directory')
@@ -151,13 +160,24 @@ export function readZip(buf) {
     const dataStart = localOffset + 30 + localNameLen + localExtraLen
     const compressed = buf.subarray(dataStart, dataStart + compSize)
 
+    // refuse before allocating: the declared size is the attacker's own claim,
+    // so an honest bomb is rejected here and a lying one by maxOutputLength
+    if (uncompSize > MAX_ENTRY_BYTES) throw expose(`entry too large: ${name}`)
     let data
     if (method === 0) data = Buffer.from(compressed)
-    else if (method === 8) data = inflateRawSync(compressed)
-    else throw expose(`unsupported compression method ${method}`)
+    else if (method === 8) {
+      try {
+        data = inflateRawSync(compressed, { maxOutputLength: MAX_ENTRY_BYTES })
+      } catch {
+        // RangeError once the cap is crossed mid-inflate, or a corrupt stream
+        throw expose(`entry too large or corrupt: ${name}`)
+      }
+    } else throw expose(`unsupported compression method ${method}`)
 
     if (data.length !== uncompSize) throw expose(`size mismatch for ${name}`)
     if (crc32(data) !== crc) throw expose(`crc mismatch for ${name}`)
+    totalBytes += data.length
+    if (totalBytes > MAX_TOTAL_BYTES) throw expose('archive decompresses too large')
     out.push({ path: name, data })
   }
   return out

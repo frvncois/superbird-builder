@@ -64,18 +64,21 @@ export function migrateStoredProject(parsed: Project): Project | null {
     parsed.components ??= []
     parsed.collections ??= []
     parsed.comments ??= []
+    parsed.animations ??= []
     migrateInlineInteractions(parsed)
     for (const comment of parsed.comments) {
       comment.author ||= 'You'
       for (const reply of comment.replies ?? []) reply.author ||= 'You'
     }
     for (const collection of parsed.collections) {
-      const multiRef = collection.fields.filter((f) => f.type === 'multi-reference')
+      const multiValue = collection.fields.filter(
+        (f) => f.type === 'multi-reference' || f.type === 'multi-image',
+      )
       for (const entry of collection.entries) {
         entry.slug ||= slugify(entry.name)
-        // multi-reference values must be arrays (defensive: a field's type
-        // may have changed after values were written)
-        for (const field of multiRef) {
+        // multi-reference/multi-image values must be arrays (defensive: a
+        // field's type may have changed after values were written)
+        for (const field of multiValue) {
           const v = entry.values[field.name]
           if (v !== undefined && !Array.isArray(v)) entry.values[field.name] = v ? [v] : []
         }
@@ -89,9 +92,14 @@ export function migrateStoredProject(parsed: Project): Project | null {
     parsed.settings.tokens ??= []
     parsed.settings.customCode ??= defaults.customCode
     parsed.settings.fonts ??= defaults.fonts
+    // projects saved before custom webfonts existed have no list
+    parsed.settings.fonts.custom ??= []
     parsed.settings.domain ??= ''
     parsed.settings.publishing ??= defaults.publishing
     parsed.settings.publishing.github ??= { repo: '', branch: 'main' }
+    parsed.settings.integrations ??= defaults.integrations
+    parsed.settings.integrations.stripe ??= { publishableKey: '' }
+    parsed.settings.integrations.mailing ??= { provider: '' }
     // locale backfills (list before pages: the migration reads it)
     parsed.defaultLocale ||= 'en'
     parsed.locales ??= [parsed.defaultLocale]

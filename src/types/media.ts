@@ -30,10 +30,11 @@ export interface MediaAsset {
   uploadedBy: string
 }
 
-/** flat, no nesting in v1 */
 export interface MediaFolder {
   id: string
   name: string
+  /** parent folder id; absent = a root-level folder */
+  parentId?: string
 }
 
 export interface MediaIndex {

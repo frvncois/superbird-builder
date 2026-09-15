@@ -27,7 +27,7 @@ const sizes: Record<Size, string> = {
 
 <template>
   <div
-    class="fixed inset-0 z-100 flex items-center justify-center bg-black/50 backdrop-blur-xs"
+    class="fixed inset-0 z-100 flex items-center justify-center bg-accent/25 backdrop-blur-sm"
     @click.self="$emit('close')"
   >
     <div

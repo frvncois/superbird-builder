@@ -1,8 +1,9 @@
 import { computed, ref } from 'vue'
 import { useProject } from './useProject'
 import { usePage } from './usePage'
+import { useAuth } from './useAuth'
 import { buildDocument, extractBodyLines, slugify } from '@/lib/document'
-import { entrySlug } from '@/lib/shared/slug.js'
+import { entrySlug, entryRoutePath } from '@/lib/shared/slug.js'
 import { parseSyntax } from '@/lib/syntax'
 import { deepClone, walkNodes } from '@/lib/tree'
 import type { Collection, CollectionEntry, CollectionField, Page } from '@/types/editor'
@@ -13,6 +14,8 @@ const activeEntryId = ref<string | null>(null)
 export function useCollections() {
   const { project } = useProject()
   const { activePage, setActivePage, homePage } = usePage()
+  const { name: authName, email: authEmail } = useAuth()
+  const actor = () => authName.value || authEmail.value || 'Someone'
 
   const collections = computed(() => project.value.collections)
 
@@ -46,6 +49,7 @@ export function useCollections() {
       ['\t:section', '\t\t:h1[title]:', '\tsection:'],
       name,
     )
+    const now = Date.now()
     const page: Page = {
       id: crypto.randomUUID(),
       // matches the scaffold's @setup `name:` — the first code edit re-derives
@@ -56,6 +60,10 @@ export function useCollections() {
       code,
       elements: parseSyntax(code),
       collectionId: '',
+      createdAt: now,
+      updatedAt: now,
+      createdBy: actor(),
+      updatedBy: actor(),
     }
     const collection: Collection = {
       id: crypto.randomUUID(),
@@ -88,20 +96,27 @@ export function useCollections() {
     let slug = slugify(name)
     let i = n
     while (collection.entries.some((e) => e.slug === slug)) slug = `${slugify(collection.name)}-${++i}`
+    const now = Date.now()
     const entry: CollectionEntry = {
       id: crypto.randomUUID(),
       name,
       slug,
       values: {},
-      createdAt: Date.now(),
+      status: 'published',
+      createdAt: now,
+      updatedAt: now,
+      createdBy: actor(),
+      updatedBy: actor(),
     }
     collection.entries.push(entry)
     return entry
   }
 
   /** full route path of an entry: /<collection>/<slug> */
-  function entryPath(collection: Collection, entry: CollectionEntry): string {
-    return `/${collection.name}/${entrySlug(entry)}`
+  /** the entry's site path, or null for a data-only collection (no detail
+   * routes) — callers render the element unlinked rather than linking nowhere */
+  function entryPath(collection: Collection, entry: CollectionEntry): string | null {
+    return entryRoutePath(collection, entry)
   }
 
   function duplicateEntry(collection: Collection, entryId: string): CollectionEntry | null {
@@ -110,13 +125,19 @@ export function useCollections() {
     let slug = `${source.slug}-copy`
     let n = 2
     while (collection.entries.some((e) => e.slug === slug)) slug = `${source.slug}-copy-${n++}`
+    const now = Date.now()
     const entry: CollectionEntry = {
       id: crypto.randomUUID(),
       name: `${source.name} copy`,
       slug,
       values: { ...source.values },
       locales: source.locales ? deepClone(source.locales) : undefined,
-      createdAt: Date.now(),
+      status: source.status ?? 'published',
+      seo: source.seo ? { ...source.seo } : undefined,
+      createdAt: now,
+      updatedAt: now,
+      createdBy: actor(),
+      updatedBy: actor(),
     }
     collection.entries.push(entry)
     return entry
@@ -150,6 +171,8 @@ export function useCollections() {
       extractBodyLines(page.code),
       name,
     )
+    page.createdAt = page.updatedAt = Date.now()
+    page.createdBy = page.updatedBy = actor()
 
     // entries get fresh ids, so self-references must follow them (fields
     // pointing at OTHER collections keep targeting the originals)
@@ -199,6 +222,22 @@ export function useCollections() {
     if (onTemplate) setActivePage(homePage.value.id)
   }
 
+  /** edit an entry's identity fields (name/slug/status). Slug is slugified to
+   * match the code-editor write-back path. Stamps updatedAt/updatedBy. */
+  function updateEntryMeta(
+    collection: Collection,
+    entryId: string,
+    patch: { name?: string; slug?: string; status?: string },
+  ) {
+    const entry = collection.entries.find((e) => e.id === entryId)
+    if (!entry) return
+    if (patch.name !== undefined) entry.name = patch.name
+    if (patch.slug !== undefined) entry.slug = slugify(patch.slug)
+    if (patch.status !== undefined) entry.status = patch.status
+    entry.updatedAt = Date.now()
+    entry.updatedBy = actor()
+  }
+
   /** open the collection's template with this entry loaded for editing */
   function openEntry(collection: Collection, entryId: string) {
     setActivePage(collection.templatePageId)
@@ -224,6 +263,7 @@ export function useCollections() {
     addEntry,
     duplicateEntry,
     removeEntry,
+    updateEntryMeta,
     duplicateCollection,
     removeCollection,
     openEntry,

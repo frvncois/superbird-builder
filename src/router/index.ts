@@ -13,13 +13,10 @@ const router = createRouter({
       component: () => import('@/views/BuildView.vue'),
     },
     { path: '/editor', redirect: '/' },
-    {
-      path: '/preview',
-      name: 'preview',
-      component: () => import('@/views/PreviewView.vue'),
-      meta: { title: 'Preview — Guano' },
-    },
-    { path: '/content', redirect: '/preview' },
+    // Preview is now a mode inside the single editor shell — keep the old paths
+    // working as redirects so bookmarks / invite links don't break
+    { path: '/preview', redirect: '/' },
+    { path: '/content', redirect: '/' },
     {
       path: '/invite/:token',
       name: 'invite',
@@ -47,13 +44,11 @@ router.beforeEach(async (to) => {
   const auth = useAuth()
   await auth.check()
   const authed = !!auth.email.value
-  if ((to.name === 'build' || to.name === 'preview') && !authed) {
+  if (to.name === 'build' && !authed) {
     return auth.needsSetup.value ? '/setup' : '/login'
   }
-  // contributors are preview-only — keep them out of the build view
-  if (to.name === 'build' && authed && auth.role.value === 'contributor') {
-    return '/preview'
-  }
+  // contributors reach the same shell but are pinned to Preview mode
+  // (useViewMode + a hidden Code rail button) — no route-level redirect needed
   if ((to.name === 'login' || to.name === 'setup') && authed) return '/'
   if (to.name === 'login' && auth.needsSetup.value) return '/setup'
   if (to.name === 'setup' && !auth.needsSetup.value && !authed) return '/login'

@@ -13,6 +13,7 @@ export function defaultBreakpoints(): Breakpoint[] {
 
 export function createPage(name: string, path: string, locale = 'en'): Page {
   const code = buildDocument({ name, slug: path, status: 'published', locale }, [])
+  const now = Date.now()
   return {
     id: crypto.randomUUID(),
     name,
@@ -20,6 +21,8 @@ export function createPage(name: string, path: string, locale = 'en'): Page {
     status: 'published',
     code,
     elements: parseSyntax(code),
+    createdAt: now,
+    updatedAt: now,
   }
 }
 
@@ -32,6 +35,7 @@ export function createProject(name: string): Project {
     components: [],
     collections: [],
     interactions: [],
+    animations: [],
     breakpoints: defaultBreakpoints(),
     comments: [],
     locales: ['en'],

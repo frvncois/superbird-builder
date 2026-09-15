@@ -23,7 +23,10 @@ import type { ElementNode } from '@/types/editor'
 const LINE_HEIGHT = 20 // leading-5
 // vertical padding above the first line — keep in sync with the padding
 // class shared by the gutter, textarea and overlays (currently px-2 → 0)
-const PAD_Y = 0
+// top breathing room inside the scroll area (part of the content, so it
+// scrolls away — not a fixed gap). Every text/gutter/overlay layer offsets by
+// this, and the rect overlays already bake it into their `top`.
+const PAD_Y = 8
 
 const { activePage, pages } = usePage()
 const { selectedElement, selectedElementIds, isMultiSelect, extendSelection, moveSelectionGroup, selectByLine, selectElement, elementAtLine, getElement, removeElement, draggingId, dropTarget, reorderElement, highlightedElement, editorFocusTick, syncNodeMarkers } =
@@ -47,10 +50,18 @@ const { registerCodeResolver } = useInsertDrag()
 const { collections, activeCollection, activeEntry, entryPath } = useCollections()
 const { activeLocale, locales, defaultLocale, setActiveLocale } = useLocale()
 const collectionNames = computed(() => collections.value.map((c) => c.name))
-// multi-reference field names are also valid :collection-list sources
+// data-only collections own no entry route, so an `@item` link inside one is a
+// diagnostic rather than a link that silently goes nowhere
+const dataOnlyCollectionNames = computed(() =>
+  collections.value.filter((c) => c.detailRoutes === false).map((c) => c.name),
+)
+// multi-reference and multi-image field names are also valid
+// :collection-list sources (they name what the list repeats over)
 const listFieldNames = computed(() =>
   collections.value.flatMap((c) =>
-    c.fields.filter((f) => f.type === 'multi-reference').map((f) => f.name),
+    c.fields
+      .filter((f) => f.type === 'multi-reference' || f.type === 'multi-image')
+      .map((f) => f.name),
   ),
 )
 // page paths for '@' link autocomplete (templates aren't linkable targets)
@@ -63,7 +74,8 @@ const entrySetup = computed(() =>
   activeEntry.value && activeCollection.value
     ? {
         name: activeEntry.value.name,
-        slug: entryPath(activeCollection.value, activeEntry.value),
+        // a data-only collection has no entry route; show the template path
+        slug: entryPath(activeCollection.value, activeEntry.value) ?? activePage.value.path,
         status: activePage.value.status,
         locale: defaultLocale.value,
       }
@@ -862,7 +874,13 @@ onBeforeUnmount(() => {
 // validate the FULL source so folded (hidden) close lines don't read
 // as unclosed; diagnostic line indices are real
 const allDiagnostics = computed(() =>
-  validateDocument(rawSource.value, componentNames.value, collectionNames.value, listFieldNames.value),
+  validateDocument(
+    rawSource.value,
+    componentNames.value,
+    collectionNames.value,
+    listFieldNames.value,
+    dataOnlyCollectionNames.value,
+  ),
 )
 
 // The line the caret is on gets a grace period so a half-typed token doesn't
@@ -931,7 +949,7 @@ function jumpToLine(real: number) {
   const pos = code.value.split('\n').slice(0, display + 1).join('\n').length
   el.focus()
   el.setSelectionRange(pos, pos)
-  el.scrollTop = Math.max(0, display * LINE_HEIGHT - el.clientHeight / 2)
+  el.scrollTop = Math.max(0, display * LINE_HEIGHT + PAD_Y - el.clientHeight / 2)
   trackCursor()
 }
 
@@ -1540,7 +1558,10 @@ function finalizeInteractionBrace() {
   const lines = page.code.split('\n')
   const node = getElement(session.nodeId)
   if (node && node.line !== undefined && lines[node.line] !== undefined) {
-    const next = withInteractionMarker(lines[node.line]!, !!node.interactions?.length)
+    const next = withInteractionMarker(
+      lines[node.line]!,
+      !!node.interactions?.length || !!node.animations?.length,
+    )
     if (next === lines[node.line]) return
     lines[node.line] = next
   } else {
@@ -1594,7 +1615,7 @@ const markersSig = computed(() => {
   const visit = (nodes: ElementNode[]) => {
     for (const n of nodes) {
       parts.push(
-        `${n.id}:${n.classes ?? ''}:${n.interactions?.length ?? 0}:${n.arg ?? ''}:${n.content ? 1 : 0}:${n.src ? 1 : 0}`,
+        `${n.id}:${n.classes ?? ''}:${n.interactions?.length ?? 0}:${n.animations?.length ?? 0}:${n.arg ?? ''}:${n.content ? 1 : 0}:${n.src ? 1 : 0}`,
       )
       if (!isComponentType(n.type)) visit(n.children)
     }
@@ -1680,7 +1701,7 @@ function onInput() {
     <div class="flex flex-1 overflow-hidden px-2">
     <div
       ref="gutter"
-      class="shrink-0 select-none overflow-hidden pr-1 text-muted-foreground"
+      class="shrink-0 select-none overflow-hidden pr-1 pt-2 text-muted-foreground"
     >
       <div
         v-for="n in lineCount"
@@ -1732,7 +1753,7 @@ function onInput() {
       </div>
 
       <!-- colored text layer: scaffold muted, editable code per-token Moonlight colors -->
-      <div class="pointer-events-none absolute inset-0 overflow-hidden px-2">
+      <div class="pointer-events-none absolute inset-0 overflow-hidden px-2 pt-2">
         <div ref="textLayer" :style="{ transform: `translate(${-scroll.left}px, ${-scroll.top}px)` }">
           <div
             v-for="(parts, i) in styledLines"
@@ -1756,7 +1777,7 @@ function onInput() {
 
       <!-- custom caret: mirrors the line prefix so the bar lands at the exact
            column, keeping the caret glued to the glyphs -->
-      <div v-if="caretVisible" class="pointer-events-none absolute inset-0 overflow-hidden px-2">
+      <div v-if="caretVisible" class="pointer-events-none absolute inset-0 overflow-hidden px-2 pt-2">
         <div :style="{ transform: `translate(${-scroll.left}px, ${-scroll.top}px)` }">
           <div class="h-5 whitespace-pre" :style="caretRowStyle">
             <span :key="cursor" class="relative"><span class="invisible">{{ caretPrefix }}</span><span class="code-caret"></span></span>
@@ -1768,7 +1789,7 @@ function onInput() {
         ref="input"
         v-model="code"
         spellcheck="false"
-        class="code-scrollbar relative h-full w-full resize-none overflow-auto whitespace-pre bg-transparent px-2 text-transparent caret-transparent outline-none tab-2"
+        class="code-scrollbar relative h-full w-full resize-none overflow-auto whitespace-pre bg-transparent px-2 pt-2 text-transparent caret-transparent outline-none tab-2"
         @scroll="syncScroll"
         @beforeinput="onBeforeInput"
         @input="onInput"
@@ -1793,7 +1814,7 @@ function onInput() {
 
       <!-- status caret: invisible copy of the status line positions a
            mini dropdown right after its text -->
-      <div v-if="statusLine" class="pointer-events-none absolute inset-0 overflow-hidden px-2">
+      <div v-if="statusLine" class="pointer-events-none absolute inset-0 overflow-hidden px-2 pt-2">
         <div
           class="whitespace-pre"
           :style="{ transform: `translate(${-scroll.left}px, ${-scroll.top}px)` }"
@@ -1831,7 +1852,7 @@ function onInput() {
       </div>
 
       <!-- mirror overlay: invisible text up to the cursor, then the ghost -->
-      <div v-if="ghost" class="pointer-events-none absolute inset-0 overflow-hidden px-2">
+      <div v-if="ghost" class="pointer-events-none absolute inset-0 overflow-hidden px-2 pt-2">
         <div
           class="whitespace-pre"
           :style="{ transform: `translate(${-scroll.left}px, ${-scroll.top}px)` }"

@@ -22,6 +22,14 @@ export async function pushSiteToGitHub(dir, { repo, branch, token }, message = '
   if (!REPO_RE.test(repo ?? '') || !BRANCH_RE.test(branch ?? '') || !token) {
     throw expose('github publishing is not configured (repo/branch/token)')
   }
+  // the regexes above allow dots, so `a/../b` passes them — and these values are
+  // interpolated straight into api.github.com paths under a real token. Reject
+  // dot segments explicitly rather than trusting URL normalisation. (S13)
+  const hasDotSegment = (value) =>
+    String(value).split('/').some((seg) => seg === '.' || seg === '..')
+  if (hasDotSegment(repo) || hasDotSegment(branch)) {
+    throw expose('invalid repo or branch name')
+  }
 
   async function api(path, init) {
     let res

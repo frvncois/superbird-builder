@@ -1,9 +1,18 @@
-import { computed, ref } from 'vue'
+import { computed, effectScope, ref, watch } from 'vue'
 import { createProject } from '@/lib/factories'
 import { breakpointVariant, breakpointIdForWidth } from '@/lib/responsive'
 import type { Breakpoint } from '@/types/editor'
 
 const project = ref(createProject('Untitled project'))
+
+// bumps on ANY project mutation. Deep-watching the project re-traverses the
+// whole document per flush, so this is the ONE deep watcher — consumers that
+// only need "something changed" (autosave, edit stamping) watch this counter
+// instead of adding their own full traversal per keystroke.
+const projectVersion = ref(0)
+effectScope(true).run(() => {
+  watch(project, () => projectVersion.value++, { deep: true })
+})
 
 // which breakpoint the Style panel is editing — runtime-only (never persisted).
 // null / unknown falls back to the widest breakpoint (the unprefixed base).
@@ -108,6 +117,7 @@ export function useProject() {
 
   return {
     project,
+    projectVersion,
     breakpoints,
     baseBreakpoint,
     activeBreakpoint,

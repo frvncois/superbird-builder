@@ -6,6 +6,8 @@ export type Role = 'admin' | 'editor' | 'contributor'
 const email = ref<string | null>(null)
 const name = ref('')
 const role = ref<Role | null>(null)
+/** the signed-in user's id — stamped onto drafts so ownership is knowable */
+const userId = ref<string | null>(null)
 const needsSetup = ref(false)
 let checked = false
 
@@ -28,6 +30,7 @@ export function useAuth() {
         email.value = profile.email
         name.value = profile.name ?? ''
         role.value = profile.role ?? null
+        userId.value = profile.id ?? null
       } else {
         const detail = await res.json().catch(() => null)
         needsSetup.value = !!detail?.needsSetup
@@ -85,5 +88,5 @@ export function useAuth() {
   const isAdmin = computed(() => role.value === 'admin')
   const canBuild = computed(() => role.value === 'admin' || role.value === 'editor')
 
-  return { email, name, role, isAdmin, canBuild, needsSetup, check, login, setup, updateAccount, logout }
+  return { email, name, userId, role, isAdmin, canBuild, needsSetup, check, login, setup, updateAccount, logout }
 }

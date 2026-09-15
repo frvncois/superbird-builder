@@ -4,7 +4,7 @@ import { dataMarkerOf, hasOpenArgBracket, interactionMarkerOf, reconcile, styleM
 import { isKnownElement } from '@/lib/elements'
 import { isComponentType } from '@/lib/components'
 import { deepClone, findNode, walkNodes } from '@/lib/tree'
-import type { ElementNode, InteractionBinding } from '@/types/editor'
+import type { AnimationBinding, ElementNode, InteractionBinding } from '@/types/editor'
 
 /** per-node settings captured alongside a copied code block, DFS order */
 interface NodeProps {
@@ -17,6 +17,7 @@ interface NodeProps {
   link?: string
   locales?: ElementNode['locales']
   interactions?: InteractionBinding[]
+  animations?: AnimationBinding[]
   attributes?: Record<string, string>
 }
 
@@ -37,6 +38,7 @@ function captureProps(n: ElementNode): NodeProps {
     link: n.link,
     locales: n.locales ? deepClone(n.locales) : undefined,
     interactions: n.interactions ? deepClone(n.interactions) : undefined,
+    animations: n.animations ? deepClone(n.animations) : undefined,
     attributes: n.attributes ? deepClone(n.attributes) : undefined,
   }
 }
@@ -181,7 +183,7 @@ export function useElement() {
             }
             const inter = interactionMarkerOf(line)
             if (inter === undefined || inter === '{+}') {
-              const want = !!node.interactions?.length
+              const want = !!node.interactions?.length || !!node.animations?.length
               if (want !== (inter === '{+}')) line = withInteractionMarker(line, want)
             }
             if (line !== lines[node.line]) {
@@ -316,6 +318,13 @@ export function useElement() {
             ...x,
             id: crypto.randomUUID(),
             // internal target → its copy; external target or null → unchanged
+            targetId: x.targetId ? (idMap.get(x.targetId) ?? x.targetId) : null,
+          }))
+        }
+        if (p.animations) {
+          n.animations = p.animations.map((x) => ({
+            ...x,
+            id: crypto.randomUUID(),
             targetId: x.targetId ? (idMap.get(x.targetId) ?? x.targetId) : null,
           }))
         }

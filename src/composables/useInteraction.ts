@@ -2,15 +2,37 @@ import { computed, ref } from 'vue'
 import { usePage } from './usePage'
 import { useProject } from './useProject'
 import { walkNodes } from '@/lib/tree'
-import type { ElementNode, Interaction, InteractionBinding } from '@/types/editor'
+import {
+  interactionGroupKey,
+  interactionStateKey,
+  nextInteractionState,
+} from '@/lib/shared/interactionKeys.js'
+import type { AnimationBinding, ElementNode, Interaction, InteractionBinding } from '@/types/editor'
 
-/** interaction ids currently active (hovered, click-toggled on, appeared) */
+/**
+ * State keys currently active. A state key is `interactionId:targetId[@scope]`
+ * (see lib/shared/interactionKeys.js) — NOT a binding id. That is what lets an
+ * "open" button and a "close" button drive the same effect: they share one
+ * boolean. Keyed by binding, a close button flipped its own independent flag and
+ * the to-classes were applied twice, so modals could never be closed.
+ */
 const fired = ref(new Set<string>())
+
+/** exclusive groups: group key → the one state key currently open in it */
+const firedGroups = new Map<string, string>()
+
+/** state keys that are open AND dismissable, → the gestures that dismiss them */
+const openDismissals = new Map<string, Set<string>>()
+
+/** state key → the DOM elements that count as "inside" it (its triggers and its
+ * targets), for outside-click hit-testing. Populated by the renderers. */
+const dismissEls = new Map<string, Set<HTMLElement>>()
 
 /** binding waiting for a canvas click to choose its target element.
  * Holds the binding object itself (not an id) so it resolves even when
- * the binding lives on a component master, which isn't in the page tree. */
-const pickingFor = ref<InteractionBinding | null>(null)
+ * the binding lives on a component master, which isn't in the page tree.
+ * Shared by interaction AND animation bindings — both carry a targetId. */
+const pickingFor = ref<InteractionBinding | AnimationBinding | null>(null)
 
 // These derive from the active page and are read once per rendered node
 // (classesFor). They live at MODULE scope — one shared computed each —
@@ -48,6 +70,36 @@ const targetIndex = computed(() => {
   return index
 })
 
+/**
+ * Per-EFFECT options, folded together from every binding that drives the same
+ * target. These belong to the effect, not to the trigger that declares them: a
+ * close button can carry `closeOn` and an overlay can carry the `group` while
+ * the effect is the one an open button fires. Reading them off the firing
+ * binding alone meant a dismissal declared on an `action: 'off'` button was
+ * never armed — that button never turns the effect ON, which is when dismissal
+ * has to be registered.
+ *
+ * Keyed by target node id (the state key's target half). Built over the active
+ * page AND every component master, since bindings on masters aren't in the page
+ * tree but do render.
+ */
+const effectOptions = computed(() => {
+  const index = new Map<string, { closeOn: Set<string>; group?: string }>()
+  const collect = (owner: ElementNode) => {
+    for (const binding of owner.interactions ?? []) {
+      if (!binding.closeOn?.length && !binding.group) continue
+      const targetId = binding.targetId ?? owner.id
+      const entry = index.get(targetId) ?? { closeOn: new Set<string>() }
+      for (const mode of binding.closeOn ?? []) entry.closeOn.add(mode)
+      if (binding.group && !entry.group) entry.group = binding.group
+      index.set(targetId, entry)
+    }
+  }
+  walkNodes(activePage.value.elements, collect)
+  for (const component of project.value.components ?? []) walkNodes([component.root], collect)
+  return index
+})
+
 /** whether a binding applies at the breakpoint being rendered. `undefined`
  * breakpoints = all; a null render breakpoint (unknown) never gates. */
 export function bindingActiveAt(binding: InteractionBinding, breakpointId: string | null): boolean {
@@ -55,67 +107,88 @@ export function bindingActiveAt(binding: InteractionBinding, breakpointId: strin
   return binding.breakpoints.includes(breakpointId)
 }
 
-/** transition setup + (when active) the to-classes contributed by a binding.
- * Contributes nothing at a breakpoint the binding isn't scoped to. */
-function bindingClasses(
-  binding: InteractionBinding,
-  active: boolean,
-  breakpointId: string | null,
-): string {
-  if (!bindingActiveAt(binding, breakpointId)) return ''
-  const animation = animationIndex.value.get(binding.interactionId)
-  if (!animation) return ''
-  const base = `transition-all ${animation.duration} ${animation.easing}`
-  return active ? `${base} ${animation.toClasses}` : base
+/** replace the fired set (Vue needs a new Set to see the change) */
+function rawSet(key: string, on: boolean) {
+  if (on === fired.value.has(key)) return
+  const next = new Set(fired.value)
+  if (on) next.add(key)
+  else next.delete(key)
+  fired.value = next
+}
+
+// --- outside-click / Escape dismissal ---
+//
+// One pair of capture-phase document listeners, installed the first time a
+// dismissable interaction opens. Both the Build canvas and Preview run this:
+// click interactions already fire in both, so dismissal has to as well or a menu
+// opened on the canvas could never be closed.
+
+let dismissListening = false
+
+function elementsFor(key: string): HTMLElement[] {
+  return [...(dismissEls.get(key) ?? [])]
+}
+
+function closeDismissable(key: string) {
+  openDismissals.delete(key)
+  // a dismissed interaction also vacates any exclusive group slot it held
+  for (const [groupKey, stateKey] of firedGroups) {
+    if (stateKey === key) firedGroups.delete(groupKey)
+  }
+  rawSet(key, false)
+}
+
+function onDocumentPointerDown(event: PointerEvent) {
+  if (!openDismissals.size) return
+  const target = event.target as Node | null
+  if (!target) return
+  for (const [key, modes] of [...openDismissals]) {
+    if (!modes.has('outside')) continue
+    // inside the trigger or inside the thing that opened — not an outside click
+    if (elementsFor(key).some((el) => el.contains(target))) continue
+    closeDismissable(key)
+  }
+}
+
+function onDocumentKeyDown(event: KeyboardEvent) {
+  if (event.key !== 'Escape' || !openDismissals.size) return
+  for (const [key, modes] of [...openDismissals]) {
+    if (modes.has('escape')) closeDismissable(key)
+  }
+}
+
+function installDismissListeners() {
+  if (dismissListening || typeof document === 'undefined') return
+  dismissListening = true
+  document.addEventListener('pointerdown', onDocumentPointerDown, true)
+  document.addEventListener('keydown', onDocumentKeyDown, true)
 }
 
 export function useInteraction() {
   /**
-   * Classes a binding contributes to its target: the transition setup is
-   * always on (so both directions animate), the To-classes only while the
-   * interaction is active. Resolved from the shared animation library.
+   * Classes a target node receives: the transition setup is always on (so both
+   * directions animate), the To-classes only while the effect is active.
+   *
+   * Deduped by INTERACTION, not by binding — several bindings (an open button, a
+   * close button, an overlay) drive one effect on one target, so its classes are
+   * contributed once. Without the dedupe the to-classes appeared N times.
    */
-  function classesFor(nodeId: string, breakpointId: string | null = null): string {
+  function classesFor(nodeId: string, breakpointId: string | null = null, scope?: string): string {
     const targeting = targetIndex.value.get(nodeId)
     if (!targeting?.length) return ''
-    return targeting
-      .map((binding) => bindingClasses(binding, fired.value.has(binding.id), breakpointId))
-      .filter(Boolean)
-      .join(' ')
-  }
-
-  function fire(id: string) {
-    if (!fired.value.has(id)) fired.value = new Set(fired.value).add(id)
-  }
-
-  function unfire(id: string) {
-    if (!fired.value.has(id)) return
-    const next = new Set(fired.value)
-    next.delete(id)
-    fired.value = next
-  }
-
-  function toggle(id: string) {
-    if (fired.value.has(id)) unfire(id)
-    else fire(id)
-  }
-
-  // --- component-scoped firing: interactions on master nodes fire per
-  // instance, keyed `${id}@${instanceId}`, so hovering one card never
-  // animates its siblings ---
-
-  const scopedKey = (id: string, scope: string) => `${id}@${scope}`
-
-  function fireScoped(id: string, scope: string) {
-    fire(scopedKey(id, scope))
-  }
-
-  function unfireScoped(id: string, scope: string) {
-    unfire(scopedKey(id, scope))
-  }
-
-  function toggleScoped(id: string, scope: string) {
-    toggle(scopedKey(id, scope))
+    const seen = new Set<string>()
+    const parts: string[] = []
+    for (const binding of targeting) {
+      if (!bindingActiveAt(binding, breakpointId)) continue
+      if (seen.has(binding.interactionId)) continue
+      seen.add(binding.interactionId)
+      const animation = animationIndex.value.get(binding.interactionId)
+      if (!animation) continue
+      const key = interactionStateKey(binding.interactionId, nodeId, scope)
+      const base = `transition-all ${animation.duration} ${animation.easing}`
+      parts.push(fired.value.has(key) ? `${base} ${animation.toClasses}` : base)
+    }
+    return parts.join(' ')
   }
 
   /**
@@ -129,14 +202,146 @@ export function useInteraction() {
     scope: string,
     breakpointId: string | null = null,
   ): string {
+    const seen = new Set<string>()
     const parts: string[] = []
     walkNodes([componentRoot], (owner) => {
       for (const binding of owner.interactions ?? []) {
         if ((binding.targetId ?? owner.id) !== masterId) continue
-        parts.push(bindingClasses(binding, fired.value.has(scopedKey(binding.id, scope)), breakpointId))
+        if (!bindingActiveAt(binding, breakpointId)) continue
+        if (seen.has(binding.interactionId)) continue
+        seen.add(binding.interactionId)
+        const animation = animationIndex.value.get(binding.interactionId)
+        if (!animation) continue
+        const key = interactionStateKey(binding.interactionId, masterId, scope)
+        const base = `transition-all ${animation.duration} ${animation.easing}`
+        parts.push(fired.value.has(key) ? `${base} ${animation.toClasses}` : base)
       }
     })
-    return parts.filter(Boolean).join(' ')
+    return parts.join(' ')
+  }
+
+  /** the state keys whose effect lands on this node — registered for
+   * outside-click hit-testing so a click inside an open menu isn't "outside" */
+  function targetStateKeys(nodeId: string, scope?: string): string[] {
+    const targeting = targetIndex.value.get(nodeId)
+    if (!targeting?.length) return []
+    return [
+      ...new Set(targeting.map((b) => interactionStateKey(b.interactionId, nodeId, scope))),
+    ]
+  }
+
+  /** targetStateKeys for a master node rendered inside a component instance */
+  function scopedTargetStateKeys(
+    masterId: string,
+    componentRoot: ElementNode,
+    scope: string,
+  ): string[] {
+    const keys = new Set<string>()
+    walkNodes([componentRoot], (owner) => {
+      for (const binding of owner.interactions ?? []) {
+        if ((binding.targetId ?? owner.id) !== masterId) continue
+        keys.add(interactionStateKey(binding.interactionId, masterId, scope))
+      }
+    })
+    return [...keys]
+  }
+
+  /** the state key a binding drives, given the node that owns it */
+  function bindingStateKey(
+    binding: InteractionBinding,
+    ownerId: string,
+    scope?: string,
+  ): string {
+    return interactionStateKey(binding.interactionId, binding.targetId ?? ownerId, scope)
+  }
+
+  /** true when a binding's effect is currently on */
+  function isBindingOn(binding: InteractionBinding, ownerId: string, scope?: string): boolean {
+    return fired.value.has(bindingStateKey(binding, ownerId, scope))
+  }
+
+  /**
+   * Apply a binding's effect.
+   *
+   * `on` forces a state (hover enter/leave, scroll position, input change);
+   * omitting it honours the binding's `action` — 'on' / 'off' / 'toggle'
+   * (default). Handles exclusive groups and dismissal registration.
+   *
+   * `instanceScope` is the component-instance part of the scope only: exclusive
+   * groups must hold across a collection-list's repeats (one accordion open at a
+   * time) while staying independent per component instance.
+   *
+   * NOTE: `binding.once` is deliberately NOT honoured here. Remembering a
+   * dismissal across reloads would hide the element from the author, who still
+   * has to select and style it. It applies on the published site only
+   * (server/site-runtime.js).
+   */
+  function applyBinding(
+    binding: InteractionBinding,
+    ownerId: string,
+    scope?: string,
+    instanceScope?: string,
+    on?: boolean,
+  ) {
+    const key = bindingStateKey(binding, ownerId, scope)
+    const next = on ?? nextInteractionState(binding.action, fired.value.has(key))
+    // options come from the EFFECT, not this one binding (see effectOptions)
+    const options = effectOptions.value.get(binding.targetId ?? ownerId)
+
+    if (options?.group) {
+      const groupKey = interactionGroupKey(options.group, instanceScope)
+      if (next) {
+        const open = firedGroups.get(groupKey)
+        if (open && open !== key) {
+          openDismissals.delete(open)
+          rawSet(open, false)
+        }
+        firedGroups.set(groupKey, key)
+      } else if (firedGroups.get(groupKey) === key) {
+        firedGroups.delete(groupKey)
+      }
+    }
+
+    if (options?.closeOn.size) {
+      if (next) {
+        openDismissals.set(key, options.closeOn)
+        installDismissListeners()
+      } else {
+        openDismissals.delete(key)
+      }
+    }
+
+    rawSet(key, next)
+  }
+
+  /**
+   * Register a rendered element as "inside" the given state keys, so an
+   * outside-click dismissal can tell a click on the menu from a click off it.
+   * Renderers call this for the keys they trigger AND the keys that target them.
+   */
+  function registerInteractionEl(keys: string[], el: HTMLElement) {
+    for (const key of keys) {
+      const set = dismissEls.get(key) ?? new Set<HTMLElement>()
+      set.add(el)
+      dismissEls.set(key, set)
+    }
+  }
+
+  function unregisterInteractionEl(keys: string[], el: HTMLElement) {
+    for (const key of keys) {
+      const set = dismissEls.get(key)
+      if (!set) continue
+      set.delete(el)
+      if (!set.size) dismissEls.delete(key)
+    }
+  }
+
+  /** drop every fired state for an interaction (optionally one target only) —
+   * used when a binding or a library entry goes away */
+  function clearStateFor(interactionId: string, targetId?: string) {
+    const prefix = targetId ? `${interactionId}:${targetId}` : `${interactionId}:`
+    const stale = [...fired.value].filter((k) => k.startsWith(prefix))
+    for (const key of stale) closeDismissable(key)
   }
 
   /** assign the picked canvas element as the pending binding's target */
@@ -192,10 +397,10 @@ export function useInteraction() {
   /** delete a saved interaction and un-apply it from every element */
   function deleteInteraction(interactionId: string) {
     project.value.interactions = project.value.interactions.filter((a) => a.id !== interactionId)
+    clearStateFor(interactionId)
     for (const tree of allTrees()) {
       walkNodes(tree, (node) => {
         if (!node.interactions?.some((b) => b.interactionId === interactionId)) return
-        for (const b of node.interactions) if (b.interactionId === interactionId) unfire(b.id)
         node.interactions = node.interactions.filter((b) => b.interactionId !== interactionId)
       })
     }
@@ -216,7 +421,8 @@ export function useInteraction() {
 
   function removeBinding(node: ElementNode, bindingId: string) {
     if (!node.interactions) return
-    unfire(bindingId)
+    const binding = node.interactions.find((b) => b.id === bindingId)
+    if (binding) clearStateFor(binding.interactionId, binding.targetId ?? node.id)
     if (pickingFor.value?.id === bindingId) pickingFor.value = null
     node.interactions = node.interactions.filter((b) => b.id !== bindingId)
   }
@@ -225,13 +431,15 @@ export function useInteraction() {
     fired,
     pickingFor,
     classesFor,
-    fire,
-    unfire,
-    toggle,
-    fireScoped,
-    unfireScoped,
-    toggleScoped,
     scopedClassesFor,
+    targetStateKeys,
+    scopedTargetStateKeys,
+    bindingStateKey,
+    isBindingOn,
+    applyBinding,
+    registerInteractionEl,
+    unregisterInteractionEl,
+    clearStateFor,
     pickTarget,
     library,
     animationFor,

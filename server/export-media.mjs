@@ -8,6 +8,8 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { sanitizeSvg } from './media.mjs'
 import { DATA_DIR, walkNodes } from './util.mjs'
+import { fontSrcRefs } from '../src/lib/shared/fonts.js'
+import { mediaRefsInRich } from '../src/lib/shared/richtext.js'
 
 const MIME_EXT = {
   'image/png': 'png',
@@ -75,18 +77,49 @@ export async function extractMedia(project) {
     intern(node.src)
     intern(node.background)
     intern(node.conditions?.swapSrc)
-    for (const override of Object.values(node.locales ?? {})) intern(override.src)
+    // a LINK to a library asset (a PDF download, a logo pack) is just as
+    // server-specific as an <img src> — left alone, `/media/<id>` shipped
+    // verbatim and 404'd on any host but this one
+    intern(node.link)
+    // …and so are hrefs/srcs written inside rich body copy
+    for (const ref of mediaRefsInRich(node.content)) intern(ref)
+    for (const override of Object.values(node.locales ?? {})) {
+      intern(override.src)
+      intern(override.link)
+      for (const ref of mediaRefsInRich(override.content)) intern(ref)
+    }
   }
   intern(project.settings?.favicon)
   intern(project.settings?.seo?.ogImage)
+  // registered webfonts: without this the exported @font-face still pointed at
+  // /media/<id>, which only THIS server answers — the export is supposed to be
+  // deployable to any static host, fonts included
+  for (const ref of fontSrcRefs(project.settings)) intern(ref)
   for (const page of project.pages) walkNodes(page.elements, scanNode)
   for (const component of project.components ?? []) walkNodes([component.root], scanNode)
   for (const collection of project.collections ?? []) {
     const imageFields = collection.fields.filter((f) => f.type === 'image').map((f) => f.name)
+    // multi-image holds an ARRAY of urls — every one of them has to be
+    // extracted, or a gallery exports with dead /media/ links
+    const mediaFields = collection.fields.filter((f) => f.type === 'multi-image').map((f) => f.name)
     for (const entry of collection.entries) {
       for (const field of imageFields) {
         intern(entry.values[field])
         for (const values of Object.values(entry.locales ?? {})) intern(values[field])
+      }
+      for (const field of mediaFields) {
+        const urls = entry.values[field]
+        if (Array.isArray(urls)) for (const url of urls) intern(url)
+      }
+      // rich-text fields carry their own links/images (an article body linking a
+      // PDF from the library) — same server-specific refs as a node's content
+      for (const value of Object.values(entry.values ?? {})) {
+        if (typeof value === 'string') for (const ref of mediaRefsInRich(value)) intern(ref)
+      }
+      for (const values of Object.values(entry.locales ?? {})) {
+        for (const value of Object.values(values ?? {})) {
+          if (typeof value === 'string') for (const ref of mediaRefsInRich(value)) intern(ref)
+        }
       }
     }
   }

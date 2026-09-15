@@ -116,16 +116,53 @@ const VARIANTS = [
   'hover',
   'focus',
   'focus-visible',
+  'focus-within',
   'active',
+  'visited',
   'disabled',
+  'checked',
+  'required',
+  'invalid',
   'group-hover',
+  'group-focus',
+  'peer-hover',
+  'peer-focus',
+  'peer-checked',
   'first',
   'last',
+  'only',
+  'odd',
+  'even',
+  'empty',
+  'first-of-type',
+  'last-of-type',
+  // pseudo-ELEMENTS: decorative bullets/arrows, selection colours and input
+  // placeholders were all unreachable without these — every one of them had to
+  // be faked with literal characters or dropped entirely
+  'before',
+  'after',
+  'marker',
+  'selection',
+  'placeholder',
+  'first-line',
+  'first-letter',
+  'file',
+  'backdrop',
   'sm',
   'md',
   'lg',
   'xl',
+  '2xl',
   'dark',
+  'print',
+  'motion-safe',
+  'motion-reduce',
+  'rtl',
+  'ltr',
+  // project-defined (see shared/prose.js CUSTOM_VARIANTS): the link pointing at
+  // the page being rendered
+  'current',
+  'group-current',
 ]
 
 function buildVocabulary(): string[] {
@@ -174,13 +211,46 @@ function buildVocabulary(): string[] {
     const prefix = borderWidthScheme.slot('border', s)
     for (const step of borderWidthScheme.steps) out.add(borderWidthScheme.className(prefix, step))
   }
-  for (const prefix of ['bg', 'text', 'border']) {
+  for (const prefix of ['bg', 'text', 'border', 'outline', 'ring', 'accent', 'decoration', 'divide']) {
     for (const color of Object.keys(TAILWIND_COLORS)) {
       for (const shade of TAILWIND_SHADES) out.add(`${prefix}-${color}-${shade}`)
     }
   }
+  // divide utilities (borders between children) — refused while the arbitrary
+  // [&>*]:border-b equivalent passed, which read as a vocabulary hole
+  for (const axis of ['x', 'y']) {
+    out.add(`divide-${axis}`)
+    out.add(`divide-${axis}-reverse`)
+    for (const w of ['0', '2', '4', '8']) out.add(`divide-${axis}-${w}`)
+  }
+  for (const kw of ['solid', 'dashed', 'dotted', 'double', 'none', 'white', 'black', 'transparent', 'current']) {
+    out.add(`divide-${kw}`)
+  }
+  // focus styling (outline/ring) and form accents — everyday a11y utilities the
+  // catalog never listed, which left focus-visible: with no valid target
+  for (const w of ['0', '1', '2', '4', '8']) {
+    out.add(`outline-${w}`)
+    out.add(`outline-offset-${w}`)
+    out.add(`ring-${w}`)
+    out.add(`ring-offset-${w}`)
+  }
+  const focusExtras = [
+    'outline', 'outline-hidden', 'outline-dashed', 'outline-dotted', 'outline-double', 'outline-solid',
+    'ring', 'ring-inset',
+    'outline-white', 'outline-black', 'outline-transparent', 'outline-current',
+    'ring-white', 'ring-black', 'ring-transparent', 'ring-current',
+    'accent-auto', 'accent-white', 'accent-black', 'accent-current',
+    // the standard visually-hidden label pattern
+    'sr-only', 'not-sr-only',
+  ]
+  focusExtras.forEach((c) => out.add(c))
   const common = [
     'bg-white', 'bg-black', 'bg-transparent', 'text-white', 'text-black',
+    // the non-palette colour keywords on `border-` too: the full palette was
+    // already generated below, but `border-white` / `border-black` were not,
+    // which read as an arbitrary exclusion next to `bg-white` / `text-white`
+    'border-white', 'border-black', 'border-transparent', 'border-current',
+    'text-transparent', 'text-current', 'bg-current',
     'relative', 'absolute', 'fixed', 'sticky',
     'flex-wrap', 'flex-1', 'shrink-0', 'grow',
     'w-full', 'w-auto', 'w-screen', 'w-fit', 'h-full', 'h-auto', 'h-screen', 'h-fit',
@@ -190,6 +260,8 @@ function buildVocabulary(): string[] {
     'rounded', 'shadow', 'shadow-sm', 'shadow-md', 'shadow-lg', 'shadow-xl',
     'opacity-0', 'opacity-50', 'opacity-75', 'opacity-100',
     'overflow-hidden', 'overflow-auto', 'overflow-x-auto', 'overflow-y-auto',
+    'overflow-x-hidden', 'overflow-y-hidden', 'overflow-x-scroll', 'overflow-y-scroll',
+    'overflow-clip', 'overflow-x-clip', 'overflow-y-clip',
     'transition-all', 'transition-colors', 'duration-150', 'duration-300', 'duration-500',
     'ease-in', 'ease-out', 'ease-in-out',
     'cursor-pointer', 'select-none', 'pointer-events-none',
@@ -203,6 +275,10 @@ function buildVocabulary(): string[] {
     // `group` marks a hover scope — without it every documented group-hover:
     // variant was dead on arrival
     'group', 'h-px', 'w-px', 'inset-0', 'inset-x-0', 'inset-y-0',
+    // the rich-text container class (shared/prose.js ships its CSS in every
+    // export) — the handbook documented it while the validator refused it
+    'prose',
+    'visible', 'invisible', 'collapse',
     'grayscale', 'grayscale-0', 'blur-sm', 'blur-md', 'blur-none',
     'backdrop-blur-none', 'backdrop-blur-sm', 'backdrop-blur', 'backdrop-blur-md',
     'backdrop-blur-lg', 'backdrop-blur-xl',
@@ -230,7 +306,19 @@ const VOCABULARY = buildVocabulary()
 let TOKEN_CLASSES: string[] = []
 
 export function setStyleTokens(names: string[]) {
-  TOKEN_CLASSES = names.flatMap((n) => [`bg-${n}`, `text-${n}`, `border-${n}`])
+  // every color-consuming family, so a token works wherever a palette color
+  // does (outline-<token> / ring-<token> / accent-<token> used to be refused
+  // while bg-<token> passed — an arbitrary exclusion)
+  TOKEN_CLASSES = names.flatMap((n) => [
+    `bg-${n}`,
+    `text-${n}`,
+    `border-${n}`,
+    `outline-${n}`,
+    `ring-${n}`,
+    `accent-${n}`,
+    `decoration-${n}`,
+    `divide-${n}`,
+  ])
 }
 
 /**
@@ -239,9 +327,9 @@ export function setStyleTokens(names: string[]) {
  * being typed ("hov"), the prefix completion ("hover:") is offered.
  */
 export function suggestClasses(query: string, limit = 8): string[] {
-  const match = query.trim().match(/^((?:[a-z-]+:)*)(.*)$/)
-  const prefix = match?.[1] ?? ''
-  const base = (match?.[2] ?? '').toLowerCase()
+  const split = splitClassVariants(query.trim())
+  const prefix = split.variants.length ? `${split.variants.join(':')}:` : ''
+  const base = split.base.toLowerCase()
   if (!base && !prefix) return []
 
   const results: string[] = []
@@ -326,21 +414,61 @@ const STATE_VARIANTS = new Set([
 
 /** true when a class carries a state variant, e.g. `hover:…`, `focus:…` */
 export function isStateClass(cls: string): boolean {
-  const segments = cls.split(':')
-  segments.pop() // drop the base class
-  return segments.some((v) => STATE_VARIANTS.has(v))
+  return splitClassVariants(cls).variants.some((v) => STATE_VARIANTS.has(v))
 }
 
-/** splits `hover:md:bg-red-500` into its variant prefix and base class */
+/** splits `hover:md:bg-red-500` into its variant prefix and base class.
+ * Bracket-aware, so `[&_a]:underline` and `bg-[url(https://x)]` both split where
+ * they actually should. */
 function splitVariant(cls: string): { variant: string; base: string } {
-  const i = cls.lastIndexOf(':')
-  return i === -1 ? { variant: '', base: cls } : { variant: cls.slice(0, i + 1), base: cls.slice(i + 1) }
+  const { variants, base } = splitClassVariants(cls)
+  return { variant: variants.length ? `${variants.join(':')}:` : '', base }
 }
 
 /** true when a variant segment is known — a fixed variant, or an arbitrary
  *  min/max-width breakpoint variant like `max-[767px]` / `min-[48rem]` */
+/** an arbitrary variant: `[&_a]`, `[&>*]`, `[&_li]:` — a raw selector with `&`.
+ * Length-capped and brace-free because it lands in a stylesheet. */
+const ARBITRARY_VARIANT_RE = /^\[&[^{};]{0,80}\]$/
+
+/** the bracketed-parameter variants: data-[...], aria-[...], has-[...], … */
+const PARAM_VARIANT_RE = /^(?:data|aria|has|not|group-has|peer-has|supports|nth|nth-last)-\[[^{};]{1,80}\]$/
+
+/** `group-*` / `peer-*` with a named state (`group-focus-visible`, `peer-invalid`) */
+const GROUP_PEER_RE = /^(?:group|peer)-[a-z][a-z-]*$/
+
 function isKnownVariant(v: string): boolean {
-  return VARIANT_SET.has(v) || /^(?:min|max)-\[[0-9.]+(?:px|rem|em)\]$/.test(v)
+  return (
+    VARIANT_SET.has(v) ||
+    /^(?:min|max)-\[[0-9.]+(?:px|rem|em)\]$/.test(v) ||
+    ARBITRARY_VARIANT_RE.test(v) ||
+    PARAM_VARIANT_RE.test(v) ||
+    GROUP_PEER_RE.test(v)
+  )
+}
+
+/**
+ * Split a class into its variant segments and base, respecting brackets.
+ *
+ * A plain `split(':')` breaks every class whose brackets contain a colon —
+ * `[&_a:hover]:underline`, `bg-[url(https://…)]` — which is most of what
+ * descendant styling is for. Depth tracking is the difference between those
+ * being expressible and being rejected as malformed.
+ */
+export function splitClassVariants(cls: string): { variants: string[]; base: string } {
+  const variants: string[] = []
+  let depth = 0
+  let start = 0
+  for (let i = 0; i < cls.length; i++) {
+    const ch = cls[i]
+    if (ch === '[' || ch === '(') depth++
+    else if (ch === ']' || ch === ')') depth--
+    else if (ch === ':' && depth === 0) {
+      variants.push(cls.slice(start, i))
+      start = i + 1
+    }
+  }
+  return { variants, base: cls.slice(start) }
 }
 
 /** numeric flex shorthand Tailwind v4 accepts on its scale: `flex-2`, `flex-0.5` */
@@ -375,9 +503,58 @@ const FONT_ARBITRARY_FAMILY_RE = /^font-\[[^\]]*[A-Za-z][^\]]*\]$/
  * (`h-11` failed while `h-10`/`h-12` passed). Signed for the offset/margin/
  * translate families. */
 const SPACING_PREFIX =
-  '(?:p[xytblr]?|m[xytblr]?|gap(?:-[xy])?|space-[xy]|w|h|size|min-w|min-h|max-w|max-h|' +
+  '(?:p[xytblr]?|m[xytblr]?|gap(?:-[xy])?|space-[xy]|w|h|size|min-w|min-h|max-w|max-h|basis|' +
   'top|right|bottom|left|inset(?:-[xy])?|translate-[xy]|scroll-m[xytblr]?|scroll-p[xytblr]?)'
 const SPACING_NUMERIC_RE = new RegExp(`^-?${SPACING_PREFIX}-\\d+(?:\\.\\d+)?$`)
+
+/** fraction sizing — `basis-1/2`, `w-2/3`, `max-w-1/2`, `-translate-x-1/3`.
+ * Tailwind resolves any n/d on these families, and they are everyday classes;
+ * the numeric-only rule above rejected them, which read as "not a real class"
+ * when it only meant "not enumerated". */
+const SPACING_FRACTION_RE = new RegExp(`^-?${SPACING_PREFIX}-\\d+\\/\\d+$`)
+
+/** the keyword sizing values (`max-w-full`, `basis-auto`, `min-w-fit`, …) —
+ * same families, same everyday status, also missing from the enumerated vocab */
+const SIZE_KEYWORDS = ['full', 'auto', 'min', 'max', 'fit', 'none', 'screen', 'prose', 'px']
+const SIZE_KEYWORD_RE = new RegExp(
+  `^(?:w|h|size|min-w|min-h|max-w|max-h|basis)-(?:${SIZE_KEYWORDS.join('|')})$`,
+)
+
+/** the t-shirt sizing scale on the same families. `max-w-4xl` used to pass only
+ * because it happened to be hand-listed in `common` while `max-w-3xl` and
+ * `max-w-7xl` were not — an enumeration gap that read as "not a real class".
+ * Folds into the `size:<family>` conflict group via sizeFamily(). */
+const SIZE_TSHIRT_RE =
+  /^(?:w|h|size|min-w|min-h|max-w|max-h|basis)-(?:3xs|2xs|xs|sm|md|lg|xl|[2-7]xl)$/
+
+/** Tailwind v4 resolves these families from any number, so the enumerated
+ * sliders in the catalog (scale 0–150 in steps, z 0/10/20/50) were rejecting
+ * perfectly ordinary values like `scale-140` and `z-2`. */
+const DYNAMIC_NUMERIC_RE =
+  /^-?(?:scale|scale-x|scale-y|rotate|skew-x|skew-y|z|opacity|order|grow|shrink|columns|leading)-\d+(?:\.\d+)?$/
+
+/** the whole border-radius family incl. v4's `rounded-4xl` and the per-corner /
+ * logical-side forms, none of which the icon-group catalog lists */
+const ROUNDED_RE =
+  /^rounded(?:-(t|r|b|l|tl|tr|br|bl|s|e|ss|se|es|ee))?(?:-(?:none|xs|sm|md|lg|xl|[2-4]xl|full))?$/
+
+/** background-position keywords — the natural companion of `background` media
+ * (`bg-center`, `bg-top`, v4's `bg-top-left` plus the legacy `bg-left-top`
+ * order). The catalog covers bg-size and bg-repeat but never listed these, so
+ * `bg-center` read as "not a real class" while `bg-cover` passed. One conflict
+ * group: a background has one position. */
+const BG_POSITION_RE =
+  /^bg-(?:center|top|bottom|left|right|top-left|top-right|bottom-left|bottom-right|left-top|left-bottom|right-top|right-bottom)$/
+
+/** transform-origin keywords (`origin-top-left` …). Authored as whole tokens, so
+ * the generic "use the arbitrary form" hint used to suggest the INVALID
+ * `origin-top-[…]` by splitting at the last dash. */
+const ORIGIN_RE =
+  /^origin-(?:center|top|top-right|right|bottom-right|bottom|bottom-left|left|top-left)$/
+
+/** visibility — a property of its own, NOT part of the display group: `invisible`
+ * must not evict `flex` (it hides the box without changing its layout role) */
+const VISIBILITY_CLASSES = new Set(['visible', 'invisible', 'collapse'])
 
 /**
  * A class is valid if every variant segment is known and the base is either
@@ -385,14 +562,37 @@ const SPACING_NUMERIC_RE = new RegExp(`^-?${SPACING_PREFIX}-\\d+(?:\\.\\d+)?$`)
  * vocabulary, or a design token.
  */
 export function isValidClass(cls: string): boolean {
-  const segments = cls.split(':')
-  const base = segments.pop() ?? ''
+  const { variants: segments, base } = splitClassVariants(cls)
   if (!base) return false
   if (segments.some((v) => !isKnownVariant(v))) return false
   if (/-\[.+\]$/.test(base)) return true // arbitrary value
   if (FLEX_NUMERIC_RE.test(base)) return true // flex-2, flex-0.5, …
   if (SPACING_NUMERIC_RE.test(base)) return true // h-11, p-7, -mt-13, gap-9 … (v4 dynamic scale)
+  if (SPACING_FRACTION_RE.test(base)) return true // basis-1/2, w-2/3, -translate-x-1/3
+  if (SIZE_KEYWORD_RE.test(base)) return true // max-w-full, basis-auto, min-w-fit …
+  if (SIZE_TSHIRT_RE.test(base)) return true // max-w-3xl, max-w-7xl, min-w-xs …
+  if (DYNAMIC_NUMERIC_RE.test(base)) return true // scale-140, z-2, opacity-85, rotate-7
+  if (ROUNDED_RE.test(base)) return true // rounded-4xl, rounded-t-2xl, rounded
+  if (BG_POSITION_RE.test(base)) return true // bg-center, bg-top, bg-top-left …
+  if (ORIGIN_RE.test(base)) return true // origin-top-left …
+  if (VISIBILITY_CLASSES.has(base)) return true // visible, invisible, collapse
   return VOCAB_SET.has(base) || TOKEN_CLASSES.includes(base)
+}
+
+/** the sizing family a class belongs to (`max-w-full` → "max-w", `w-1/2` → "w"),
+ * longest prefix first so `max-w-*` never reads as `w-*`. One conflict group per
+ * family, so the fraction/keyword forms replace the enumerated ones instead of
+ * coexisting — without this `w-1/2` would simply stack onto `w-full`. */
+const SIZE_FAMILIES = ['min-w', 'min-h', 'max-w', 'max-h', 'basis', 'size', 'w', 'h']
+function sizeFamily(base: string): string | undefined {
+  for (const family of SIZE_FAMILIES) {
+    // every utility on these prefixes sets that one dimension, whatever the
+    // value shape (scale step, fraction, keyword, t-shirt size, arbitrary) —
+    // so the whole family is one group, and `max-w-2xl` from the catalog and
+    // `max-w-full` from the keyword rule land on the SAME key
+    if (base.startsWith(`${family}-`) && base.length > family.length + 1) return `size:${family}`
+  }
+  return undefined
 }
 
 /** the catalog property a bare class belongs to, if any */
@@ -420,8 +620,28 @@ function propKey(base: string): StyleProperty | string | undefined {
   // pattern groups run before the catalog so classes the catalog doesn't
   // list (inline-flex, bg-[#…]) still conflict with the ones it does
   if (DISPLAY_CLASSES.has(base)) return 'display'
+  // visibility is its own property — grouping it with display would make
+  // `invisible` evict `flex`, silently changing the layout it was meant to keep
+  if (VISIBILITY_CLASSES.has(base)) return 'visibility'
+  const size = sizeFamily(base)
+  if (size) return size
+  if (BG_POSITION_RE.test(base) || base.startsWith('bg-position-')) return 'background-position'
   if (base.startsWith('bg-') && !NON_COLOR_BG_RE.test(base)) return 'background-color'
   if (FONT_FAMILY_RE.test(base) || FONT_ARBITRARY_FAMILY_RE.test(base)) return 'font-family'
+  if (ORIGIN_RE.test(base)) return 'transform-origin'
+  // line-height spans a keyword scale AND a numeric one — one group, or
+  // `leading-6` would stack onto `leading-tight` and the winner would be
+  // whichever Tailwind happened to emit last
+  if (base.startsWith('leading-')) return 'line-height'
+  // the rounded family is one group whatever the value shape, so `rounded-4xl`
+  // replaces `rounded-lg` instead of stacking; per-corner forms are distinct
+  // properties and keep their own key
+  const rounded = ROUNDED_RE.exec(base)
+  if (rounded) return `border-radius:${rounded[1] ?? 'all'}`
+  // the dynamic numeric families conflict with their enumerated catalog
+  // counterparts (a typed `scale-140` must replace an icon-picked `scale-110`)
+  const dynamic = /^-?([a-z-]+?)-\d+(?:\.\d+)?$/.exec(base)
+  if (dynamic && DYNAMIC_NUMERIC_RE.test(base)) return `dynamic:${dynamic[1]}`
   return propForBase(base)
 }
 
@@ -462,6 +682,44 @@ export function sameProperty(a: string, b: string): boolean {
   return ka !== undefined && ka === propKey(b)
 }
 
+/** families where an off-scale value really is expressible as `prefix-[value]`.
+ * The old hint split ANY class at its last dash and offered the arbitrary form,
+ * which produced invalid advice for keyword utilities — `origin-top-left` became
+ * "use origin-top-[…]", a class that does not exist. */
+const ARBITRARY_CAPABLE =
+  /^(?:p[xytblr]?|m[xytblr]?|gap(?:-[xy])?|w|h|size|min-w|min-h|max-w|max-h|basis|top|right|bottom|left|inset(?:-[xy])?|translate-[xy]|scale|scale-[xy]|rotate|z|opacity|leading|tracking|text|bg|border|rounded|blur|duration|delay|grid-cols|grid-rows|col-span|row-span|aspect|shadow|outline|ring)$/
+
+/**
+ * Why a class was rejected and what to try instead: the arbitrary form when the
+ * family supports one, plus the nearest real classes from the vocabulary. Both
+ * halves matter — "not a known class" alone leaves a caller guessing, and a
+ * fabricated arbitrary form sends them somewhere that silently does nothing.
+ */
+function unknownClassHint(value: string): string {
+  const { variants, base } = splitClassVariants(value)
+  const variant = variants.length ? `${variants.join(':')}:` : ''
+  const parts: string[] = []
+
+  // `bg-line` when no token "line" exists reads like a vocabulary bug — name
+  // the real cause (the token isn't saved yet) instead of "not a known class"
+  const tokenish = /^(?:bg|text|border|outline|ring|accent|decoration|divide)-([a-z][a-z0-9-]*)$/.exec(base)
+  if (tokenish && !TOKEN_CLASSES.includes(base)) {
+    parts.push(
+      `if "${tokenish[1]}" is meant to be a design token, no token with that name exists yet — save it in the project settings first`,
+    )
+  }
+
+  const dash = base.lastIndexOf('-')
+  const prefix = dash > 0 ? base.slice(0, dash) : ''
+  if (prefix && ARBITRARY_CAPABLE.test(prefix)) {
+    parts.push(`for an off-scale value use the arbitrary form "${variant}${prefix}-[…]"`)
+  }
+  const near = suggestClasses(base, 3).filter((c) => c !== base && !c.endsWith(':'))
+  if (near.length) parts.push(`did you mean ${near.map((c) => `"${variant}${c}"`).join(', ')}?`)
+
+  return parts.length ? ` — ${parts.join('; ')}` : ''
+}
+
 export type ApplyClassResult = { tokens: string[] } | { error: string }
 
 /**
@@ -478,7 +736,9 @@ export function applyClass(
 ): ApplyClassResult {
   const value = cls.trim()
   if (!value) return { error: '' }
-  if (!isValidClass(value)) return { error: `"${value}" is not a known class` }
+  if (!isValidClass(value)) {
+    return { error: `"${value}" is not a known class${unknownClassHint(value)}` }
+  }
   if (tokens.includes(value)) return { error: `${value} is already added` }
 
   let next = [...tokens]

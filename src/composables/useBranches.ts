@@ -1,4 +1,5 @@
 import { computed, ref } from 'vue'
+import { useAuth } from './useAuth'
 import { useProject } from './useProject'
 import { usePersistence, activeBranchId, projectStorageKey } from './usePersistence'
 import { computeMerge, applyResolutions, summarizeChanges } from '@/lib/merge'
@@ -13,6 +14,9 @@ export interface BranchMeta {
   /** optional one-line purpose, set at creation ("Summer campaign") */
   description?: string
   createdAt: number
+  /** id of the user who created it. Absent on drafts made before ownership was
+   *  tracked — those stay shared, since there is no one to attribute them to. */
+  createdBy?: string
 }
 
 /** what a draft row displays: what it changed, and whether applying will conflict */
@@ -36,6 +40,7 @@ function baseStorageKey(branchId: string) {
 
 export function useBranches() {
   const { project } = useProject()
+  const { userId } = useAuth()
   const { saveNow, resetTo } = usePersistence()
 
   if (!metaLoaded) {
@@ -81,6 +86,7 @@ export function useBranches() {
         name: name.trim() || 'Draft',
         description: description?.trim() || undefined,
         createdAt: Date.now(),
+        createdBy: userId.value ?? undefined,
       },
     ]
     activeBranchId.value = id

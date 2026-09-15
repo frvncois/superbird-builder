@@ -20,6 +20,35 @@ const DISPLAY = new Set([
   'inline-grid', 'table', 'contents', 'flow-root', 'hidden',
 ])
 
+// Color-bearing families: any bg-/text-/border- value that is not one of the
+// known non-color utilities is a color (palette shade, project token, or
+// arbitrary), and every color in a family styles the SAME property — so
+// `text-ink` must evict `text-cream` exactly like `bg-ink` evicts `bg-cream`.
+// The head-of heuristic below can't see this: token-named colors have no
+// value-shaped tail, so `text-cream` and `text-ink` read as unrelated heads.
+const BG_NON_COLOR_RE =
+  /^bg-(?:auto$|cover$|contain$|center$|top|bottom|left|right|repeat|no-repeat|fixed$|local$|scroll$|clip-|origin-|gradient-|linear-|radial-|conic-|none$|blend-|size-|position-)/
+const TEXT_NON_COLOR_RE =
+  /^text-(?:xs|sm|base|lg|xl|[2-9]xl|left|center|right|justify|start|end|wrap|nowrap|balance|pretty|ellipsis|clip)$/
+const BORDER_NON_COLOR_RE =
+  /^border(?:-(?:[xytblrse]|solid|dashed|dotted|double|hidden|none|\d+))?(?:-\d+)?$/
+// arbitrary values on these families split on VALUE shape: text-[#fff] is a
+// color, text-[14px] is a size; bg-[url(…)] is an image, bg-[#fff] a color
+const ARBITRARY_COLOR_RE = /^\[(?:#|rgb|hsl|oklch|oklab|color\(|var\()/
+
+function colorHead(base) {
+  for (const family of ['bg', 'text', 'border']) {
+    if (!base.startsWith(`${family}-`)) continue
+    const nonColor =
+      family === 'bg' ? BG_NON_COLOR_RE : family === 'text' ? TEXT_NON_COLOR_RE : BORDER_NON_COLOR_RE
+    if (nonColor.test(base)) return null
+    const value = base.slice(family.length + 1)
+    if (value.startsWith('[') && !ARBITRARY_COLOR_RE.test(value)) return null
+    return `${family}:color`
+  }
+  return null
+}
+
 // a trailing segment that reads as a value: number (56, 1.5), arbitrary
 // ([2rem]), fraction (1/2), or a scale keyword
 const VALUE_TAIL = /^(\d+(\.\d+)?|\[.*\]|\d+\/\d+|px|full|none|auto|0|screen|fit|min|max)$/
@@ -34,10 +63,23 @@ function splitVariant(cls) {
  * 'max-h-[24rem]' → 'max-h', '-translate-y-6' → '-translate-y',
  * display keywords → 'display', everything else → itself */
 function headOf(base) {
+  const color = colorHead(base)
+  if (color) return color
   if (DISPLAY.has(base)) return 'display'
+  // the transition setup is one property each: `transition-transform` and the
+  // appended `transition-all` style the same transition-property, and every
+  // ease-* keyword is one timing-function — without grouping these, an
+  // interaction's own `transition-all duration ease` DUPLICATED next to the
+  // element's authored setup and the cascade picked arbitrarily (run #6, B7)
+  if (base === 'transition' || base.startsWith('transition-')) return 'transition'
+  if (base.startsWith('ease-')) return 'ease'
   const at = base.lastIndexOf('-')
-  if (at > 0 && VALUE_TAIL.test(base.slice(at + 1))) return base.slice(0, at)
-  return base
+  const head = at > 0 && VALUE_TAIL.test(base.slice(at + 1)) ? base.slice(0, at) : base
+  // signed utilities style the SAME property as their unsigned form —
+  // '-rotate-135' must evict a base 'rotate-45' (and -translate-y-6 a
+  // translate-y-2); keeping the sign in the head made them read as unrelated,
+  // so the cascade picked the winner by stylesheet order (run #6, B1)
+  return head.startsWith('-') ? head.slice(1) : head
 }
 
 /** true when two full class tokens style the same property at the same variant */

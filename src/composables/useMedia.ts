@@ -97,11 +97,11 @@ export function useMedia() {
     return api<MediaUsage>(`/api/media/${id}/usage`)
   }
 
-  async function createFolder(name: string): Promise<MediaFolder> {
+  async function createFolder(name: string, parentId?: string): Promise<MediaFolder> {
     const folder = await api<MediaFolder>('/api/media/folders', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, parentId }),
     })
     folders.value.push(folder)
     return folder
@@ -118,11 +118,27 @@ export function useMedia() {
     return folder
   }
 
+  /** re-parent a folder (null = move to the root); cycle-guarded server-side */
+  async function moveFolder(id: string, parentId: string | null): Promise<MediaFolder> {
+    const folder = await api<MediaFolder>(`/api/media/folders/${id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ parentId }),
+    })
+    const local = folders.value.find((f) => f.id === id)
+    if (local) local.parentId = folder.parentId
+    return folder
+  }
+
   async function removeFolder(id: string): Promise<void> {
-    await api(`/api/media/folders/${id}`, { method: 'DELETE' })
+    const res = await api<{ ok: true; parentId: string | null }>(`/api/media/folders/${id}`, {
+      method: 'DELETE',
+    })
+    // server promotes children one level up (to this folder's parent); mirror it
+    const up = res.parentId ?? undefined
+    for (const f of folders.value) if (f.parentId === id) f.parentId = up
+    for (const a of assets.value) if (a.folderId === id) a.folderId = up
     folders.value = folders.value.filter((f) => f.id !== id)
-    // server moves the assets to root; mirror that locally
-    for (const a of assets.value) if (a.folderId === id) a.folderId = undefined
   }
 
   function patchLocal(updated: MediaAsset) {
@@ -153,6 +169,7 @@ export function useMedia() {
     usage,
     createFolder,
     renameFolder,
+    moveFolder,
     removeFolder,
     assetById,
     assetForSrc,

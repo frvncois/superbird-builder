@@ -2,7 +2,8 @@
 // copy the runtime pieces into this package so the tarball is self-contained:
 //   dist/            the built admin SPA (served at /admin)
 //   runtime/         the bundled MCP runtime (mcp-runtime.mjs; `guano mcp`)
-//   server/          the node server (code files only — NEVER server/data)
+//   server/          the node server (code files only — NEVER server/data),
+//                    including the built motion-runtime.js the exporter ships
 //   src/lib/shared/  plain-JS modules the server imports as ../src/lib/shared
 // The copied layout mirrors the repo exactly, so no import rewriting is
 // needed and the packed server runs identically to the repo one.
@@ -21,6 +22,11 @@ execSync('npm run build', { cwd: REPO, stdio: 'inherit' })
 
 console.log('prepack: building the MCP runtime bundle…')
 execSync('npm run build:mcp-runtime', { cwd: REPO, stdio: 'inherit' })
+
+// the published site's tween runtime — emitted into server/, so it ships with
+// the server copy below
+console.log('prepack: building the motion runtime…')
+execSync('npm run build:motion', { cwd: REPO, stdio: 'inherit' })
 
 for (const dir of ['dist', 'server', 'src']) {
   await rm(join(PKG, dir), { recursive: true, force: true })

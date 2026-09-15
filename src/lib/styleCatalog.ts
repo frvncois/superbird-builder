@@ -588,6 +588,26 @@ export const STYLE_SECTIONS: StyleSection[] = [
         label: 'Scale',
         control: slide('scale', ['0', '50', '75', '90', '95', '100', '105', '110', '125', '150']),
       },
+      {
+        // the anchor a scale/rotate grows from — a reveal that scales up from its
+        // own top-left needs this, and there was no way to express it at all
+        id: 'transform-origin',
+        label: 'Origin',
+        control: {
+          kind: 'select',
+          options: [
+            { label: 'Center', class: 'origin-center' },
+            { label: 'Top', class: 'origin-top' },
+            { label: 'Top right', class: 'origin-top-right' },
+            { label: 'Right', class: 'origin-right' },
+            { label: 'Bottom right', class: 'origin-bottom-right' },
+            { label: 'Bottom', class: 'origin-bottom' },
+            { label: 'Bottom left', class: 'origin-bottom-left' },
+            { label: 'Left', class: 'origin-left' },
+            { label: 'Top left', class: 'origin-top-left' },
+          ],
+        },
+      },
       { id: 'rotate', label: 'Rotate', control: signed('rotate', ['1', '2', '3', '6', '12', '45', '90', '180']) },
       { id: 'translate-x', label: 'Translate X', control: signed('translate-x', ['1', '2', '3', '4', '6', '8']) },
       { id: 'translate-y', label: 'Translate Y', control: signed('translate-y', ['1', '2', '3', '4', '6', '8']) },

@@ -31,6 +31,27 @@ this plan defers to it on every architectural invariant.
 > `mediaUploadFromBuffer` for the in-server agent adapter), `background` in
 > `edit_elements`, and `<mark>` in the shared rich-text subset.
 
+> **Phase 8 (stress-test fixes, 2026-09-12):** driven by an agent session that
+> rebuilt a Vue/Strapi site end to end (~4 min authoring vs ~14 min working
+> around the platform). Full write-up in `PLAN-MCP-FIXES.md`. Headline changes:
+> `get_status` now reports what Main HOLDS (`main` counts + `mainIsEmpty`) and
+> `set_target` refuses a non-empty Main without `acknowledgeMain` — an agent
+> reading the default "Untitled project" name nearly wiped a real site. The
+> `onMaster`+`src` "silent success" turned out to be a RENDERER gap (both
+> renderers fell back to the master for content but not `src`) — fixed in
+> `export.mjs` + `useRenderNode.ts`. `upload_media` gained local `path` /
+> `manifestPath` inputs, rate-limit waiting, and honest partial-success
+> reporting (`saved: uploaded > 0` + `partial`). `get_page` gained the
+> long-documented-but-unimplemented `masterClasses` and new
+> `includeInteractions` (binding ids, without which a binding was unremovable);
+> `list_components {includeNodes}` audits a whole master. `set_page_code` reports
+> `keptWithState`/`inherited` and takes `fresh: true`. New `multi-image`
+> collection field renders galleries via a synthetic list scope
+> (`shared/fields.js`), ending the empty-`<img>` problem. Validator learned
+> fractions + size keywords; `forcePurge` now purges per-locale SEO (the editor's
+> `deleteLocale` had the same gap — shared via `shared/locales.js`); `favicon`
+> exposed.
+
 ## Settled decisions (do not re-litigate)
 
 - **Transport/home (v1):** a `guano mcp` CLI subcommand in `packages/guano`

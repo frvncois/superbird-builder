@@ -1,11 +1,15 @@
 // Media library: uploaded assets stored on disk, referenced by stable id URLs.
 //   GET    /api/media                     🔒 index (assets + folders)
 //   POST   /api/media?name=&folder=       🔒 upload (raw body, Content-Type = mime)
-//   POST   /api/media/:id/replace         🔒 swap bytes, keep id/URL
+//   POST   /api/media/:id/replace         🔒 editor+ — swap bytes, keep id/URL
 //   PATCH  /api/media/:id                 🔒 {name?, alt?, folderId?}
-//   DELETE /api/media/:id                 🔒
+//   DELETE /api/media/:id                 🔒 editor+
 //   GET    /api/media/:id/usage           🔒 reference count across all branch blobs
-//   POST/PATCH/DELETE /api/media/folders  🔒
+//   POST/PATCH/DELETE /api/media/folders  🔒 editor+
+//
+// Role split: contributors browse, upload and re-caption; replacing bytes,
+// deleting assets and restructuring folders are editor+ (they change shared
+// library state every page renders from).
 //   GET    /media/:id, /media/thumb/:id   🌐 bytes only (published site needs them)
 //
 // Layout: server/data/media/{index.json, files/<id>, thumbs/<id>.webp}
@@ -106,15 +110,37 @@ function failTooLarge(req, res) {
   res.once('finish', () => req.destroy())
 }
 
-// light per-user upload rate limit (sliding minute window)
+// light per-user upload rate limit (sliding minute window). It exists to stop a
+// runaway loop, not to size legitimate work — actual disk use is bounded by
+// QUOTA — so the cap is generous enough for a bulk import (an agent migrating a
+// site sends dozens of assets at once) and every refusal says when to retry.
+const UPLOAD_WINDOW_MS = 60_000
+export const UPLOAD_LIMIT_PER_WINDOW = 120
 const uploadTimes = new Map()
+/** { ok: true } or { ok: false, retryAfterSeconds } — seconds until the oldest
+ *  call in the window ages out and a slot frees */
 function uploadAllowed(userId) {
   const now = Date.now()
-  const times = (uploadTimes.get(userId) ?? []).filter((t) => now - t < 60_000)
-  if (times.length >= 30) return false
+  const times = (uploadTimes.get(userId) ?? []).filter((t) => now - t < UPLOAD_WINDOW_MS)
+  if (times.length >= UPLOAD_LIMIT_PER_WINDOW) {
+    uploadTimes.set(userId, times)
+    const freesAt = times[0] + UPLOAD_WINDOW_MS
+    return { ok: false, retryAfterSeconds: Math.max(1, Math.ceil((freesAt - now) / 1000)) }
+  }
   times.push(now)
   uploadTimes.set(userId, times)
-  return true
+  return { ok: true }
+}
+
+/** the 429 payload, shared by the HTTP routes and the agent adapter, so a
+ *  caller never has to guess the cooldown */
+function rateLimited(gate) {
+  return {
+    error: `too many uploads — retry in ${gate.retryAfterSeconds}s ` +
+      `(limit ${UPLOAD_LIMIT_PER_WINDOW} uploads per minute)`,
+    status: 429,
+    retryAfterSeconds: gate.retryAfterSeconds,
+  }
 }
 
 // ---------- content validation (never trust the declared Content-Type) ----------
@@ -241,6 +267,23 @@ const newId = () => randomBytes(8).toString('hex')
 const assetById = (id) => index.assets.find((a) => a.id === id)
 const usedBytes = () => index.assets.reduce((sum, a) => sum + (a.size || 0), 0)
 
+/** ids of every folder nested (transitively) under `rootId` — used to reject a
+ *  re-parent that would form a cycle (moving a folder into its own subtree) */
+function folderDescendants(idx, rootId) {
+  const out = new Set()
+  const stack = [rootId]
+  while (stack.length) {
+    const cur = stack.pop()
+    for (const f of idx.folders) {
+      if (f.parentId === cur && !out.has(f.id)) {
+        out.add(f.id)
+        stack.push(f.id)
+      }
+    }
+  }
+  return out
+}
+
 // ---------- thumbnails ----------
 
 async function makeThumb(id, buf) {
@@ -341,7 +384,8 @@ function addAsset({ name, folderId, buf, mime, kind, userId }) {
 /** upload from an in-memory buffer (agent adapter path — same validation,
  *  rate limit and quota as the HTTP route); returns { error, status } or the asset */
 export async function mediaUploadFromBuffer({ name, folderId, buf, mime, userId }) {
-  if (!uploadAllowed(userId)) return { error: 'too many uploads — slow down', status: 429 }
+  const gate = uploadAllowed(userId)
+  if (!gate.ok) return rateLimited(gate)
   const valid = await validateUploadBuffer(buf, (mime ?? '').split(';')[0].trim().toLowerCase())
   if (valid.error) return valid
   const asset = await addAsset({
@@ -397,12 +441,19 @@ export async function handleMedia(req, res, path, query, user) {
   if (mutating && !originAllowed(req)) return fail(res, 403, 'cross-origin request rejected')
   await loadIndex()
 
+  // contributors may browse (GET), upload their own media (POST /api/media) and
+  // edit metadata (PATCH /api/media/:id) — but NOT replace bytes, delete assets,
+  // or restructure folders: those change shared library state site-wide, so a
+  // semi-trusted user could vandalise every page at once (S5).
+  const isContributor = user.role === 'contributor'
+
   if (path === '/api/media' && req.method === 'GET') {
     return send(res, 200, JSON.stringify(index))
   }
 
   if (path === '/api/media' && req.method === 'POST') {
-    if (!uploadAllowed(user.id)) return fail(res, 429, 'too many uploads — slow down')
+    const gate = uploadAllowed(user.id)
+    if (!gate.ok) return send(res, 429, JSON.stringify(rateLimited(gate)))
     const intake = await intakeUpload(req, res)
     if (!intake) return
     const asset = await addAsset({
@@ -418,51 +469,81 @@ export async function handleMedia(req, res, path, query, user) {
 
   // ----- folders -----
   if (path === '/api/media/folders' && req.method === 'POST') {
+    if (isContributor) return fail(res, 403, 'forbidden')
     const body = await readBodyRaw(req, 4096)
-    let name
+    let name, parentId
     try {
-      ;({ name } = JSON.parse(body?.toString('utf8') ?? ''))
+      ;({ name, parentId } = JSON.parse(body?.toString('utf8') ?? ''))
     } catch {
       return fail(res, 400, 'invalid request')
     }
     name = cleanName(name).slice(0, 64)
     if (!name) return fail(res, 400, 'folder name required')
     return enqueue(async () => {
-      const folder = { id: newId(), name }
+      // a parent must exist, else the folder is created at the root
+      const parent = parentId && index.folders.some((f) => f.id === parentId) ? parentId : undefined
+      const folder = { id: newId(), name, ...(parent ? { parentId: parent } : {}) }
       index.folders.push(folder)
       await writeIndex()
       return send(res, 200, JSON.stringify(folder))
     })
   }
   if (path.startsWith('/api/media/folders/')) {
+    if (isContributor) return fail(res, 403, 'forbidden')
     const id = path.slice('/api/media/folders/'.length)
     if (!ID_RE.test(id)) return fail(res, 404, 'not found')
     if (req.method === 'PATCH') {
       const body = await readBodyRaw(req, 4096)
-      let name
+      let patch
       try {
-        ;({ name } = JSON.parse(body?.toString('utf8') ?? ''))
+        patch = JSON.parse(body?.toString('utf8') ?? '')
       } catch {
         return fail(res, 400, 'invalid request')
       }
-      name = cleanName(name).slice(0, 64)
-      if (!name) return fail(res, 400, 'folder name required')
       return enqueue(async () => {
         const folder = index.folders.find((f) => f.id === id)
         if (!folder) return fail(res, 404, 'not found')
-        folder.name = name
+        if (typeof patch.name === 'string') {
+          const name = cleanName(patch.name).slice(0, 64)
+          if (!name) return fail(res, 400, 'folder name required')
+          folder.name = name
+        }
+        if ('parentId' in patch) {
+          const next = patch.parentId
+          if (next == null) {
+            delete folder.parentId // move to root
+          } else if (
+            typeof next === 'string' &&
+            next !== id &&
+            index.folders.some((f) => f.id === next) &&
+            !folderDescendants(index, id).has(next)
+          ) {
+            folder.parentId = next
+          } else {
+            return fail(res, 400, 'invalid parent folder')
+          }
+        }
         await writeIndex()
         return send(res, 200, JSON.stringify(folder))
       })
     }
     if (req.method === 'DELETE') {
       return enqueue(async () => {
-        if (!index.folders.some((f) => f.id === id)) return fail(res, 404, 'not found')
+        const folder = index.folders.find((f) => f.id === id)
+        if (!folder) return fail(res, 404, 'not found')
+        // non-destructive: promote this folder's child folders and its assets up
+        // one level (to its own parent, or the root) rather than deleting them
+        const up = folder.parentId
+        for (const f of index.folders) {
+          if (f.parentId === id) {
+            if (up) f.parentId = up
+            else delete f.parentId
+          }
+        }
+        for (const a of index.assets) if (a.folderId === id) a.folderId = up
         index.folders = index.folders.filter((f) => f.id !== id)
-        // assets inside move to the root
-        for (const a of index.assets) if (a.folderId === id) a.folderId = undefined
         await writeIndex()
-        return send(res, 200, JSON.stringify({ ok: true }))
+        return send(res, 200, JSON.stringify({ ok: true, parentId: up ?? null }))
       })
     }
     return fail(res, 404, 'not found')
@@ -479,8 +560,10 @@ export async function handleMedia(req, res, path, query, user) {
   }
 
   if (action === 'replace' && req.method === 'POST') {
+    if (isContributor) return fail(res, 403, 'forbidden')
     if (!assetById(id)) return fail(res, 404, 'not found')
-    if (!uploadAllowed(user.id)) return fail(res, 429, 'too many uploads — slow down')
+    const gate = uploadAllowed(user.id)
+    if (!gate.ok) return send(res, 429, JSON.stringify(rateLimited(gate)))
     const intake = await intakeUpload(req, res)
     if (!intake) return
     return enqueue(async () => {
@@ -525,6 +608,7 @@ export async function handleMedia(req, res, path, query, user) {
   }
 
   if (!action && req.method === 'DELETE') {
+    if (isContributor) return fail(res, 403, 'forbidden')
     return enqueue(async () => {
       if (!assetById(id)) return fail(res, 404, 'not found')
       index.assets = index.assets.filter((a) => a.id !== id)

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { Image as ImageIcon, LibraryBig, Upload } from 'lucide-vue-next'
+import { FileText, Image as ImageIcon, LibraryBig, Music, Type, Upload } from 'lucide-vue-next'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import { useMedia, kindOfMime } from '@/composables/useMedia'
 import { useMediaLibrary } from '@/composables/useMediaLibrary'
@@ -8,10 +8,11 @@ import { acceptFor } from '@/lib/media'
 import type { MediaKind } from '@/types/media'
 
 /**
- * The src control for image/video elements: every file flows through the
- * media library (no more inline data-URLs). "Choose" opens the library in
- * select mode; "Upload" adds to the library first, then applies the asset.
- * The model is the node/entry src string — a `/media/<id>` URL.
+ * The file control for anything that points at a library asset — element
+ * image/video src, background media, and webfont files in project settings.
+ * Every file flows through the media library (no more inline data-URLs).
+ * "Choose" opens the library in select mode; "Upload" adds to the library
+ * first, then applies the asset. The model is the `/media/<id>` URL.
  * `kinds` widens the picker (e.g. background media accepts image + video).
  */
 const props = defineProps<{ kind: MediaKind; kinds?: MediaKind[] }>()
@@ -23,6 +24,13 @@ const { openSelect } = useMediaLibrary()
 const pickKinds = computed(() => props.kinds ?? [props.kind])
 const asset = computed(() => assetForSrc(model.value))
 const assetKind = computed(() => (asset.value ? kindOfMime(asset.value.mime) : null))
+
+// non-visual kinds have no thumbnail — show what they ARE instead of an
+// empty media box
+const KIND_ICONS = { font: Type, audio: Music, document: FileText } as const
+const placeholderIcon = computed(
+  () => KIND_ICONS[(assetKind.value ?? props.kind) as keyof typeof KIND_ICONS] ?? ImageIcon,
+)
 
 async function choose() {
   const picked = await openSelect(pickKinds.value)
@@ -59,8 +67,12 @@ async function onFile(e: Event) {
     >
       <span class="flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-md bg-muted/60">
         <img v-if="asset && assetKind === 'image'" :src="thumbUrl(asset)" :alt="asset.name" class="size-full object-cover" />
-        <video v-else-if="asset" :src="mediaUrl(asset)" preload="metadata" muted class="size-full object-cover" />
-        <ImageIcon v-else class="size-4 text-muted-foreground" />
+        <video
+          v-else-if="asset && assetKind === 'video'"
+          :src="mediaUrl(asset)" preload="metadata" muted
+          class="size-full object-cover"
+        />
+        <component v-else :is="placeholderIcon" class="size-4 text-muted-foreground" />
       </span>
       <span class="min-w-0 flex-1">
         <span class="block truncate text-xs">{{ asset?.name ?? 'No file selected' }}</span>

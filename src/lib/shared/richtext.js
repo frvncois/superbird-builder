@@ -10,6 +10,10 @@
 
 import { SAFE_HREF } from './urls.js'
 
+// Inline marks plus the BLOCK tags long-form copy is actually made of.
+// Without p/h2-h4/blockquote, an imported article lost every paragraph break —
+// the text survived but the structure did not, so the usual workaround was
+// <br><br> soup. The `prose` utility (shared/prose.js) styles these.
 const ALLOWED = {
   b: {},
   strong: {},
@@ -17,7 +21,16 @@ const ALLOWED = {
   em: {},
   u: {},
   mark: {},
+  code: {},
+  sup: {},
+  sub: {},
   br: { void: true },
+  hr: { void: true },
+  p: {},
+  h2: {},
+  h3: {},
+  h4: {},
+  blockquote: {},
   ul: {},
   ol: {},
   li: {},
@@ -29,7 +42,41 @@ const escapeAttr = (s) => s.replaceAll('&', '&amp;').replaceAll('"', '&quot;').r
 
 /** true when a string uses any of the allowed rich tags */
 export function isRich(value) {
-  return typeof value === 'string' && /<\/?(b|strong|i|em|u|mark|a|ul|ol|li|br)[\s>/]/i.test(value)
+  return (
+    typeof value === 'string' &&
+    /<\/?(b|strong|i|em|u|mark|code|sup|sub|a|ul|ol|li|br|hr|p|h2|h3|h4|blockquote)[\s>/]/i.test(value)
+  )
+}
+
+/** every `href`/`src` URL appearing in a rich-text fragment. The exporter has to
+ * know about these: a `/media/<id>` link inside body copy only this server can
+ * answer, so it must be extracted and rewritten like any other asset. */
+export function mediaRefsInRich(html) {
+  if (typeof html !== 'string' || !html) return []
+  const out = []
+  for (const m of html.matchAll(/(?:href|src)\s*=\s*(?:"([^"]*)"|'([^']*)')/gi)) {
+    const value = (m[1] ?? m[2] ?? '').trim()
+    if (value) out.push(value)
+  }
+  return out
+}
+
+/**
+ * Rewrite the `href`/`src` URLs in a rich-text fragment through `rewrite`
+ * (media extraction's dataUrl|/media/<id> → hashed path map). Applied AFTER
+ * sanitizeRich, so only already-validated URLs are touched. A rewrite that
+ * returns undefined (a dropped asset) leaves the original in place rather than
+ * emitting `href="undefined"`.
+ */
+export function rewriteRichMedia(html, rewrite) {
+  if (typeof html !== 'string' || !html || typeof rewrite !== 'function') return html
+  return html.replace(
+    /(href|src)(\s*=\s*)"([^"]*)"/gi,
+    (whole, name, eq, value) => {
+      const next = rewrite(value)
+      return typeof next === 'string' && next ? `${name}${eq}"${escapeAttr(next)}"` : whole
+    },
+  )
 }
 
 /** sanitize a rich-text fragment to the allowed subset (idempotent) */

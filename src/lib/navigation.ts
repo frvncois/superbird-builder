@@ -1,5 +1,5 @@
 import type { Collection, CollectionEntry, Page, Project } from '@/types/editor'
-import { entrySlug } from './shared/slug.js'
+import { entrySlug, collectionRouteBase, hasDetailRoutes } from './shared/slug.js'
 
 export type ResolvedRoute =
   | { kind: 'page'; page: Page; locale: string }
@@ -28,14 +28,20 @@ export function resolveSitePath(project: Project, rawPath: string): ResolvedRout
   const page = project.pages.find((p) => p.path === path) ?? null
   if (page) return { kind: 'page', page, locale }
 
-  // collection entry: /<collection>/<slug>
-  if (segments.length === 2) {
-    const collection = project.collections.find((c) => c.name === segments[0]) ?? null
-    const template = collection
-      ? (project.pages.find((p) => p.id === collection.templatePageId) ?? null)
-      : null
-    const entry = collection?.entries.find((e) => entrySlug(e) === segments[1]) ?? null
-    if (collection && template && entry) return { kind: 'entry', page: template, collection, entry, locale }
+  // collection entry: <routeBase>/<slug>, where routeBase defaults to the
+  // collection name and may be '' (root-level entry slugs). Matched by trying
+  // each collection's own base rather than assuming a two-segment path, so a
+  // nested base ('blog/archive') and a root-level one both resolve.
+  for (const collection of project.collections) {
+    if (!hasDetailRoutes(collection)) continue
+    const base = collectionRouteBase(collection)
+    const prefix = base ? `/${base}/` : '/'
+    if (!path.startsWith(prefix)) continue
+    const slug = path.slice(prefix.length)
+    if (!slug || slug.includes('/')) continue
+    const template = project.pages.find((p) => p.id === collection.templatePageId) ?? null
+    const entry = collection.entries.find((e) => entrySlug(e) === slug) ?? null
+    if (template && entry) return { kind: 'entry', page: template, collection, entry, locale }
   }
 
   return { kind: 'notfound', locale }

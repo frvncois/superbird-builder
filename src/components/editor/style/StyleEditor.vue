@@ -38,7 +38,6 @@ import BorderStyleControl from '@/components/editor/style/BorderStyleControl.vue
 import SelectUI from '@/components/ui/SelectUI.vue'
 import SliderUI from '@/components/ui/SliderUI.vue'
 import IconGroupUI from '@/components/ui/IconGroupUI.vue'
-import ColorPickerUI from '@/components/ui/ColorPickerUI.vue'
 import SpacingControl from '@/components/editor/style/SpacingControl.vue'
 import AlignGridControl from '@/components/editor/style/AlignGridControl.vue'
 import GapControl from '@/components/editor/style/GapControl.vue'
@@ -428,7 +427,7 @@ watch(pendingFocus, consumeFocus)
 <template>
   <div class="flex flex-col">
     <div class="flex flex-col gap-1.5 p-3 border-b border-input">
-      <p class="text-xs font-medium text-muted-foreground">Classes</p>
+      <p class="text-[10px] font-medium tracking-wide text-muted-foreground uppercase">Classes</p>
       <ClassInput
         ref="classInput"
         :tokens="tokens"
@@ -572,19 +571,16 @@ watch(pendingFocus, consumeFocus)
               :model-value="classFor(prop) ?? undefined"
               @update:model-value="(v) => v && set(prop, v)"
             />
-            <template v-else-if="prop.control.kind === 'color'">
-              <ColorFieldUI
-                :model-value="colorText(prop)"
-                :tokens="colorTokens"
-                :validate="isColorValue"
-                placeholder="—"
-                @commit="(t) => applyColorText(prop, t)"
-              />
-              <ColorPickerUI
-                :model-value="colorValue(prop)"
-                @update:model-value="(v) => setColor(prop, v)"
-              />
-            </template>
+            <ColorFieldUI
+              v-else-if="prop.control.kind === 'color'"
+              :model-value="colorText(prop)"
+              :tokens="colorTokens"
+              :validate="isColorValue"
+              :swatch="colorValue(prop)"
+              placeholder="—"
+              @commit="(t) => applyColorText(prop, t)"
+              @pick="(v) => setColor(prop, v)"
+            />
             <InputUI
               v-else-if="prop.control.kind === 'input'"
               :placeholder="control(prop, 'input').placeholder"

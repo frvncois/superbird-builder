@@ -8,6 +8,9 @@ import {
   isComponentType,
   serializeNode,
   adoptStructure,
+  cloneForMaster,
+  stripExtractedInstanceState,
+  alignInstanceLines,
 } from '@/lib/components'
 import { findNode, walkNodes } from '@/lib/tree'
 import type { ComponentDef, ElementNode, Page } from '@/types/editor'
@@ -93,13 +96,16 @@ export function useComponents() {
     const inner = def.root.children.flatMap((c) => serializeNode(c, `${indent}\t`))
     const oldInnerLength = end - start - 1
     const rest = [...lines.slice(0, start + 1), ...inner, ...lines.slice(end)]
-    // positional inner map so same-type lines keep their nodes (content!)
+    // signature-aware inner map (exact line, then token type) so an inserted
+    // master node doesn't re-seat every following instance node — and its
+    // content overrides — one line off
+    const align = alignInstanceLines(lines.slice(start + 1, end), inner)
     const map = new Map<number, number>()
     for (let i = 0; i < rest.length; i++) {
       if (i <= start) map.set(i, i)
       else if (i < start + 1 + inner.length) {
-        const innerIndex = i - (start + 1)
-        if (innerIndex < oldInnerLength) map.set(i, start + 1 + innerIndex)
+        const oldInner = align.get(i - (start + 1))
+        if (oldInner !== undefined) map.set(i, start + 1 + oldInner)
       } else {
         map.set(i, i - inner.length + oldInnerLength)
       }
@@ -195,12 +201,13 @@ export function useComponents() {
     if (isComponentType(source.type) || masterFor(source.id)) return null
 
     const name = normalizeComponentName(rawName, components.value.map((c) => c.name))
-    const cloned = JSON.parse(JSON.stringify(source)) as ElementNode
-    walkNodes([cloned], (n) => {
-      n.id = crypto.randomUUID() // master ids are their own id space
-      delete n.line
-      delete n.endLine
-    })
+    // master ids are their own id space; internal binding targetIds are
+    // remapped onto them so a modal/accordion keeps working as a component
+    const { cloned } = cloneForMaster(source)
+    // the master now owns presentation AND content — clear the source nodes so
+    // the instance inherits instead of shadowing (a shadow re-translates shared
+    // chrome per page and can re-seat onto the wrong node on restructure)
+    stripExtractedInstanceState(source)
     // the root is a component-typed container: it maps to the :Name
     // wrapper itself, so the wrapper can carry shared styles too
     const root: ElementNode = { id: crypto.randomUUID(), type: name, content: '', children: [cloned] }

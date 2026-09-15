@@ -165,15 +165,14 @@ async function discardDraft(draft: BranchMeta) {
 
   <!-- empty state -->
   <GroupPopover v-else>
-    <div class="flex flex-col items-center gap-2 py-4 text-center">
-      <span class="flex size-9 items-center justify-center rounded-lg bg-secondary text-secondary-foreground">
-        <GitBranch class="size-4" />
-      </span>
-      <p class="text-xs font-medium">No drafts yet</p>
-      <p class="max-w-52 text-[10px] leading-4 text-muted-foreground">
-        Drafts are private copies of the site. Try a redesign or prepare content, then merge it
-        into Main when it’s ready — publishing puts Main live.
-      </p>
+    <div
+      class="flex aspect-square flex-col items-center justify-center gap-3 mt-1 rounded-xl border border-input p-4 text-center"
+    >
+      <GitBranch class="size-6 text-muted-foreground/50" />
+      <div>
+        <p class="text-xs font-medium text-muted-foreground">No drafts yet</p>
+        <p class="text-[10px] font-medium text-muted-foreground/75">Create one to try changes safely</p>
+      </div>
     </div>
   </GroupPopover>
 

@@ -32,7 +32,7 @@ function pick(cls: string) {
       :key="s.cls"
       v-tooltip="s.label"
       type="button"
-      class="flex h-8 flex-1 items-center justify-center transition-colors"
+      class="flex h-8 flex-1 items-center justify-center transition-colors outline-none focus-visible:bg-accent/30"
       :class="
         current === s.cls
           ? 'bg-accent/30 text-accent-foreground'

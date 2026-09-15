@@ -237,7 +237,9 @@ export function destroySession(token) {
   if (sessions.delete(sha256(token))) persistSessions()
 }
 
-function destroyUserSessions(userId) {
+/** revoke every session a user holds — used on delete, and on a password
+ * change so a stolen 30-day cookie dies with the old password */
+export function destroyUserSessions(userId) {
   let changed = false
   for (const [key, s] of sessions) {
     if (s.userId === userId) {

@@ -1,4 +1,5 @@
 import type {
+  Animation,
   Breakpoint,
   Collection,
   ComponentDef,
@@ -16,12 +17,13 @@ export interface MergeConflict {
   key: string
   label: string
   kind: 'changed' | 'deleted-in-branch' | 'deleted-in-main'
-  /** the branch-side alternative: a page, component, collection, interaction, breakpoint set, locale pack, settings, or null (deletion) */
+  /** the branch-side alternative: a page, component, collection, interaction, animation, breakpoint set, locale pack, settings, or null (deletion) */
   theirs:
     | Page
     | ComponentDef
     | Collection
     | Interaction
+    | Animation
     | Breakpoint[]
     | LocalePack
     | ProjectSettings
@@ -154,11 +156,19 @@ export function computeMerge(base: Project, mine: Project, theirs: Project): Mer
     'interaction:',
     (i) => `Interaction ${i.name}`,
   )
+  const animations = mergeItemList(
+    base.animations ?? [],
+    mine.animations ?? [],
+    theirs.animations ?? [],
+    'animation:',
+    (a) => `Animation ${a.name}`,
+  )
   const conflicts: MergeConflict[] = [
     ...pages.conflicts,
     ...components.conflicts,
     ...collections.conflicts,
     ...interactions.conflicts,
+    ...animations.conflicts,
   ]
 
   let mergedBreakpoints = mine.breakpoints
@@ -217,6 +227,7 @@ export function computeMerge(base: Project, mine: Project, theirs: Project): Mer
     components: components.merged,
     collections: collections.merged,
     interactions: interactions.merged,
+    animations: animations.merged,
     breakpoints: mergedBreakpoints,
     comments: mine.comments,
     locales: mergedLocales.locales,
@@ -274,6 +285,14 @@ export function applyResolutions(
       )
       continue
     }
+    if (conflict.key.startsWith('animation:')) {
+      applyToList(
+        merged.animations,
+        conflict.key.slice('animation:'.length),
+        conflict.theirs as Animation | null,
+      )
+      continue
+    }
     applyToList(merged.pages, conflict.key.slice('page:'.length), conflict.theirs as Page | null)
   }
   return merged
@@ -286,6 +305,7 @@ export interface ChangeSummary {
   components: number
   collections: number
   interactions: number
+  animations: number
   breakpoints: boolean
   locales: boolean
   settings: boolean
@@ -311,6 +331,7 @@ export function summarizeChanges(base: Project, current: Project): ChangeSummary
     components: countListChanges(base.components, current.components),
     collections: countListChanges(base.collections, current.collections),
     interactions: countListChanges(base.interactions ?? [], current.interactions ?? []),
+    animations: countListChanges(base.animations ?? [], current.animations ?? []),
     breakpoints: sig(current.breakpoints) !== sig(base.breakpoints),
     locales: sig(pack(current)) !== sig(pack(base)),
     settings: sig(current.settings) !== sig(base.settings),
@@ -319,7 +340,7 @@ export function summarizeChanges(base: Project, current: Project): ChangeSummary
 
 export function hasChanges(s: ChangeSummary): boolean {
   return (
-    s.pages + s.components + s.collections + s.interactions > 0 ||
+    s.pages + s.components + s.collections + s.interactions + s.animations > 0 ||
     s.breakpoints ||
     s.locales ||
     s.settings
@@ -334,6 +355,7 @@ export function changeSummaryLabel(s: ChangeSummary): string {
     count(s.components, 'component'),
     count(s.collections, 'collection'),
     count(s.interactions, 'interaction'),
+    count(s.animations, 'animation'),
     s.breakpoints ? 'breakpoints' : null,
     s.locales ? 'locales' : null,
     s.settings ? 'settings' : null,

@@ -12,6 +12,7 @@ import { useBranches } from '@/composables/useBranches'
 import { usePersistence, SAVE_STATES } from '@/composables/usePersistence'
 import { useElement } from '@/composables/useElement'
 import { elementIcon } from '@/lib/elementIcons'
+import { useAuth } from '@/composables/useAuth'
 import { usePanel } from '@/composables/usePanel'
 import { usePopover } from '@/composables/usePopover'
 import { useModal } from '@/composables/useModal'
@@ -27,7 +28,7 @@ interface Panel {
   divider?: boolean
 }
 
-const panels: Panel[] = [
+const ALL_PANELS: Panel[] = [
   { id: 'data', label: 'Data', icon: Paperclip },
   { id: 'style', label: 'Style', icon: Palette },
   { id: 'interactions', label: 'Interactions', icon: Zap },
@@ -35,8 +36,18 @@ const panels: Panel[] = [
   { id: 'branches', label: 'Drafts', icon: GitBranch, divider: true },
 ]
 
+const { canBuild } = useAuth()
+
+// The sidebar options are PER ACCOUNT TYPE, not per mode — build roles keep the
+// full inspector in both Build and Preview. Contributors are content-only, so
+// they only get Drafts (they can create/apply drafts and publish); the
+// element-editing / custom-code panels are hidden for them.
+const panels = computed<Panel[]>(() =>
+  canBuild.value ? ALL_PANELS : ALL_PANELS.filter((p) => p.id === 'branches'),
+)
+
 const { activePanelId, togglePanel, closePanel } = usePanel()
-const activePanel = computed(() => panels.find((p) => p.id === activePanelId.value))
+const activePanel = computed(() => panels.value.find((p) => p.id === activePanelId.value))
 const { pickingFor } = useInteraction()
 const { selectedElement, isMultiSelect, requestEditorFocus } = useElement()
 

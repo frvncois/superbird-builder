@@ -4,18 +4,27 @@ import { usePage } from './usePage'
 import { useCollections } from './useCollections'
 import { useInteraction } from './useInteraction'
 import { useComponents } from './useComponents'
+import { useAnimation, animBindingActiveAt, scopedAnimBindings } from './useAnimation'
+import { useMotion } from './useMotion'
+import { appearRootMargin, composeMotionStyle } from '@/lib/motion'
 import { useProject } from './useProject'
 import { FRAME_BREAKPOINT } from '@/components/editor/canvas/frameScope'
 import { entryKey } from '@/components/shared/EntryScope.vue'
-import { refDisplay, resolveBinding, resolveListScope, applyListQuery } from '@/lib/shared/fields.js'
+import { refDisplay, resolveBinding, resolveListScope, applyListQuery, mediaUrls } from '@/lib/shared/fields.js'
 import { isRich, sanitizeRich } from '@/lib/shared/richtext.js'
 import { backgroundRender, backgroundKindFromUrl } from '@/lib/shared/background.js'
 import { conflictingBaseClasses } from '@/lib/shared/interactionClasses.js'
 import { useMedia, kindOfMime } from './useMedia'
-import { sanitizeAttributes } from '@/lib/shared/attributes.js'
+import { sanitizeAttributes, withSafeRel } from '@/lib/shared/attributes.js'
+import { DEFAULT_SCROLL_AT } from '@/lib/shared/interactionKeys.js'
 import { useLocale } from './useLocale'
 import { SAFE_SRC } from '@/lib/shared/urls.js'
-import type { CollectionEntry, ElementNode } from '@/types/editor'
+import type {
+  CollectionEntry,
+  ElementNode,
+  InteractionBinding,
+  InteractionTrigger,
+} from '@/types/editor'
 
 /** a resolved content/src value; `untranslated` marks a default-locale
  * fallback rendered under a non-default locale (the editor dims these) */
@@ -23,6 +32,21 @@ export interface LocalizedDisplay {
   value: string | undefined
   untranslated: boolean
 }
+
+/** child id → parent node for the active page — one shared O(tree) index per
+ * structural change, instead of every rendered node running its own
+ * findParent walk (that made motion ticks O(nodes²) across the canvas) */
+const parentIndex = computed(() => {
+  const map = new Map<string, ElementNode>()
+  const visit = (nodes: ElementNode[], parent: ElementNode | null) => {
+    for (const n of nodes) {
+      if (parent) map.set(n.id, parent)
+      visit(n.children, n)
+    }
+  }
+  visit(usePage().activePage.value.elements, null)
+  return map
+})
 
 /**
  * The rendering core shared VERBATIM by the editor's ElementRenderer and
@@ -44,8 +68,16 @@ export function useRenderNode(
 ) {
   const node = computed(getNode)
 
-  const { fire, unfire, toggle, fireScoped, unfireScoped, toggleScoped, classesFor, scopedClassesFor } =
-    useInteraction()
+  const {
+    applyBinding,
+    bindingStateKey,
+    classesFor,
+    scopedClassesFor,
+    targetStateKeys,
+    scopedTargetStateKeys,
+    registerInteractionEl,
+    unregisterInteractionEl,
+  } = useInteraction()
   const { masterFor } = useComponents()
   const { pages, activePage } = usePage()
   const { liveBreakpointId } = useProject()
@@ -69,8 +101,9 @@ export function useRenderNode(
 
   const scope = inject(entryKey, null)
 
-  // a list arg names a collection (all entries) or a multi-reference field
-  // of the surrounding scope entry (the referenced entries)
+  // a list arg names a collection (all entries), a multi-reference field of
+  // the surrounding scope entry (the referenced entries), or a multi-image
+  // field (one synthetic entry per stored image url)
   const listScope = computed(() =>
     node.value.type === 'collection-list'
       ? resolveListScope(
@@ -78,12 +111,20 @@ export function useRenderNode(
           scope?.collection ?? activeCollection.value,
           scope?.entry ?? activeEntry.value,
           node.value.arg,
+          pages.value,
         )
       : null,
   )
   const listCollection = computed(() => listScope.value?.collection ?? null)
   const listEntries = computed<CollectionEntry[]>(() =>
-    applyListQuery(listScope.value?.entries ?? [], node.value.listQuery),
+    applyListQuery(listScope.value?.entries ?? [], node.value.listQuery, {
+      // for the @pages source the synthetic entry ids ARE page ids, so
+      // excludeCurrent means "every page except this one" for free
+      currentEntryId:
+        listScope.value?.collection.id === '@pages'
+          ? activePage.value.id
+          : (scope?.entry ?? activeEntry.value)?.id,
+    }),
   )
   const itemCollection = computed(() =>
     node.value.type === 'collection-item' && node.value.arg ? collectionByName(node.value.arg) : null,
@@ -118,9 +159,22 @@ export function useRenderNode(
   const boundEntry = computed(() => binding.value?.entry ?? null)
 
   // --- custom attributes (allowlisted; master-aware like style/classes) ---
-  const customAttrs = computed(() =>
-    sanitizeAttributes((mapping.value ? mapping.value.master : node.value).attributes ?? {}),
-  )
+  // withSafeRel mirrors the exporter: target="_blank" always carries a rel, so
+  // the Data panel shows the same attribute set the published page will have
+  const customAttrs = computed(() => {
+    const own = withSafeRel(
+      sanitizeAttributes((mapping.value ? mapping.value.master : node.value).attributes ?? {}),
+    )
+    // attributes the element TYPE implies (:checkbox → type="checkbox"); the
+    // author's own value always wins
+    const attrs: Record<string, string> = { ...(def.value?.attrs ?? {}), ...own }
+    // aria-current marks the link pointing at the page being rendered — the
+    // hook the `current:` variant styles. It has to come from the rendered
+    // route, since a shared component's master cannot know which page its
+    // instance is on. Mirrors ariaCurrentFor in server/export.mjs.
+    if (isCurrentLink.value && !attrs['aria-current']) attrs['aria-current'] = 'page'
+    return attrs
+  })
 
   // --- background media (image → CSS bg, video → layer); master-aware like style ---
   const backgroundInfo = computed(() => {
@@ -150,7 +204,12 @@ export function useRenderNode(
         if (names) return { value: names, untranslated: false }
         return { value: opts?.fieldPlaceholders ? `{${boundField.value.name}}` : '', untranslated: false }
       }
-      const info = boundEntry.value ? entryValue(boundEntry.value, boundField.value.name) : null
+      // a multi-image field holds an array of urls — never text. Bound to a
+      // text element it shows the placeholder, not a stringified array.
+      if (boundField.value.type === 'multi-image') {
+        return { value: opts?.fieldPlaceholders ? `{${boundField.value.name}}` : '', untranslated: false }
+      }
+      const info = boundEntry.value ? entryValue(boundEntry.value, boundField.value) : null
       if (info?.value) return { value: info.value, untranslated: !info.translated }
       return { value: opts?.fieldPlaceholders ? `{${boundField.value.name}}` : '', untranslated: false }
     }
@@ -168,12 +227,24 @@ export function useRenderNode(
   )
 
   const srcInfo = computed<LocalizedDisplay>(() => {
+    // a multi-image field bound straight to one :image (outside a
+    // :collection-list) renders its FIRST url — the cover-image case
+    if (boundField.value?.type === 'multi-image') {
+      const first = boundEntry.value ? mediaUrls(boundEntry.value, boundField.value.name)[0] : undefined
+      if (first) return { value: first, untranslated: false }
+    }
     if (boundField.value?.type === 'image') {
-      const info = boundEntry.value ? entryValue(boundEntry.value, boundField.value.name) : null
+      const info = boundEntry.value ? entryValue(boundEntry.value, boundField.value) : null
       if (info?.value) return { value: info.value, untranslated: !info.translated }
     }
     const own = nodeSrc(node.value)
-    return { value: own.value || undefined, untranslated: !!own.value && !own.translated }
+    if (own.value) return { value: own.value, untranslated: !own.translated }
+    // inside a component instance, fall back to the mapped master's src —
+    // same own-then-master precedence as content, so shared chrome (a logo)
+    // is set once on the master and renders in every instance
+    const master = mapping.value ? nodeSrc(mapping.value.master) : null
+    if (master?.value) return { value: master.value, untranslated: !master.translated }
+    return { value: undefined, untranslated: false }
   })
   const srcAttr = computed(() => {
     const v = srcInfo.value.value
@@ -198,11 +269,23 @@ export function useRenderNode(
     let raw = node.value.link ?? mapping.value?.master.link
     if (raw === '@item') {
       if (!scope?.entry) return null
-      raw = entryPath(scope.collection, scope.entry)
+      // null for a data-only collection (no detail routes) — render unlinked
+      // rather than pointing at a route that was never exported
+      raw = entryPath(scope.collection, scope.entry) ?? undefined
     }
     if (!raw) return null
     if (!/^(\/|#|https?:|mailto:|tel:)/i.test(raw)) return null
     return raw
+  })
+
+  /** does this element's link point at the page currently being rendered? */
+  const isCurrentLink = computed(() => {
+    const raw = linkRaw.value
+    if (!raw || !raw.startsWith('/')) return false
+    const entry = scope?.entry ?? activeEntry.value
+    const collection = scope?.collection ?? activeCollection.value
+    const here = entry && collection ? entryPath(collection, entry) : activePage.value.path
+    return !!here && raw === here
   })
 
   // --- classes (shared core; renderers append their own chrome) ---
@@ -213,10 +296,10 @@ export function useRenderNode(
       ? scopedClassesFor(
           mapping.value.master.id,
           mapping.value.root,
-          mapping.value.instanceId,
+          motionScope.value ?? mapping.value.instanceId,
           renderBreakpointId.value,
         )
-      : classesFor(node.value.id, renderBreakpointId.value)
+      : classesFor(node.value.id, renderBreakpointId.value, motionScope.value)
     // parity with the published runtime (int-fxrm): own classes styling the
     // same property as an active interaction's classes are REMOVED, not
     // outweighed — the cascade would pick an arbitrary winner (hidden+flex)
@@ -234,6 +317,7 @@ export function useRenderNode(
       /^[A-Z]/.test(node.value.type) &&
       !own.trim() &&
       !interactionCls &&
+      !(mapping.value ? mapping.value.master.animations : node.value.animations)?.length &&
       !backgroundInfo.value
     return [
       // the body fills its frame/viewport column
@@ -246,58 +330,238 @@ export function useRenderNode(
     ]
   })
 
+  // --- animations (tween engine) ---
+
+  const { animationFor, animTargetIndex } = useAnimation()
+  const motion = useMotion()
+
+  /** the scope key isolating one component instance's plays from its siblings */
+  /** The scope that isolates one rendering of this node from its siblings:
+   * the component instance AND the collection-list repeat. Without the entry
+   * part, hovering one card fires every repeat and an "appear once" animation
+   * plays for the whole list at once. Mirrors the export's key scope. */
+  const motionScope = computed(() =>
+    [mapping.value?.instanceId, scope?.entry ? `e${scope.entry.id}` : null]
+      .filter(Boolean)
+      .join('~') || undefined,
+  )
+
+  /** animation bindings this node TRIGGERS (master-aware, like ofTrigger) */
+  const animTriggers = computed(
+    () => (mapping.value ? mapping.value.master.animations : node.value.animations) ?? [],
+  )
+
+  /** animation bindings whose animation MOVES this node */
+  const animTargets = computed(() =>
+    mapping.value
+      ? scopedAnimBindings(mapping.value.master.id, mapping.value.root)
+      : (animTargetIndex.value.get(node.value.id) ?? []),
+  )
+
+  /** the node's own animated values (element-moving tracks only) */
+  const ownMotionValues = computed(() =>
+    animTargets.value.length ? motion.valuesForNode(node.value.id, motionScope.value) : undefined,
+  )
+
+  /** values this node inherits as the Nth child of a STAGGERED parent —
+   * only staggered tracks cascade, so one timeline can move the container
+   * and stagger its children at the same time */
+  const inheritedMotionValues = computed(() => {
+    const parent = parentIndex.value.get(node.value.id)
+    if (!parent) return undefined
+    // inside a component instance the play is keyed on the MASTER's parent
+    const parentTargetId = masterFor(parent.id)?.master.id ?? parent.id
+    // gate BEFORE staggerValuesFor: only children of an actually-staggering
+    // parent subscribe to the frame clock — otherwise every node on the page
+    // recomputes (and walked the tree) on every animation frame
+    if (!motion.staggeredTargets.value.has(parentTargetId)) return undefined
+    const index = parent.children.indexOf(node.value)
+    if (index === -1) return undefined
+    return motion.staggerValuesFor(parentTargetId, index, motionScope.value)
+  })
+
+  /** inline style for the frame currently being rendered */
+  const motionStyle = computed(() => {
+    const own = ownMotionValues.value
+    const inherited = inheritedMotionValues.value
+    if (!own && !inherited) return undefined
+    return composeMotionStyle({ ...(inherited ?? {}), ...(own ?? {}) })
+  })
+
+  // Build's breakpoint frames are an EDITING surface: animation bindings never
+  // auto-fire there (no load/appear entrances, no hover/click tweens, no
+  // marquees looping under the editor). They play in Preview and on the
+  // published site; the Animations panel's explicit ▶ preview still works in
+  // Build because it bypasses the triggers (motion.preview renders through
+  // motionStyle regardless).
+  const isCanvasFrame = frameBreakpointId !== null
+
+  const animOf = (trigger: string) =>
+    isCanvasFrame
+      ? []
+      : animTriggers.value.filter(
+          (b) => b.trigger === trigger && animBindingActiveAt(b, renderBreakpointId.value),
+        )
+
+  /** resolves a binding's target node id — null means the trigger itself */
+  const animTargetId = (binding: { targetId: string | null }) =>
+    binding.targetId ?? (mapping.value ? mapping.value.master.id : node.value.id)
+
+  function playAnim(binding: (typeof animTriggers.value)[number], reverse = false) {
+    const animation = animationFor(binding.animationId)
+    if (!animation) return
+    motion.play(binding, animation, animTargetId(binding), {
+      scope: motionScope.value,
+      reverse,
+    })
+  }
+  function toggleAnim(binding: (typeof animTriggers.value)[number]) {
+    const animation = animationFor(binding.animationId)
+    if (!animation) return
+    motion.toggle(binding, animation, animTargetId(binding), motionScope.value)
+  }
+
   // --- interactions ---
 
-  const ofTrigger = (trigger: 'hover' | 'click' | 'appear') =>
+  const ofTrigger = (trigger: InteractionTrigger) =>
     ((mapping.value ? mapping.value.master.interactions : node.value.interactions) ?? []).filter(
       (i) => i.trigger === trigger,
     )
 
-  // mapped nodes fire in their instance's scope so siblings stay still
-  function fireIn(id: string) {
-    if (mapping.value) fireScoped(id, mapping.value.instanceId)
-    else fire(id)
-  }
-  function unfireIn(id: string) {
-    if (mapping.value) unfireScoped(id, mapping.value.instanceId)
-    else unfire(id)
-  }
-  function toggleIn(id: string) {
-    if (mapping.value) toggleScoped(id, mapping.value.instanceId)
-    else toggle(id)
+  /** bindings live on the master inside a component instance, so the state key's
+   * "self target" is the master's id, not this instance node's */
+  const interactionOwnerId = computed(() =>
+    mapping.value ? mapping.value.master.id : node.value.id,
+  )
+
+  /** the component-instance part of the scope only. Exclusive groups key on this
+   * and NOT on the collection-list repeat, so one accordion open at a time holds
+   * across a list's items while two component instances stay independent. */
+  const instanceScope = computed(() => mapping.value?.instanceId)
+
+  /** apply a binding in this node's scope. `on` forces a direction; omitting it
+   * honours the binding's action (toggle / on / off). */
+  function applyIn(binding: InteractionBinding, on?: boolean) {
+    applyBinding(binding, interactionOwnerId.value, motionScope.value, instanceScope.value, on)
   }
 
   // ready-made hover handlers — renderers spread these into their own
   // handlers object; click stays per-renderer (selection/nav differ)
   const hoverHandlers = {
     mouseenter() {
-      for (const interaction of ofTrigger('hover')) fireIn(interaction.id)
+      for (const binding of ofTrigger('hover')) applyIn(binding, true)
+      for (const binding of animOf('hover')) playAnim(binding)
     },
     mouseleave() {
-      for (const interaction of ofTrigger('hover')) unfireIn(interaction.id)
+      for (const binding of ofTrigger('hover')) applyIn(binding, false)
+      // hover-out rewinds rather than cutting, so the element eases back
+      for (const binding of animOf('hover')) motion.reverse(binding, motionScope.value)
     },
   }
   function fireClickInteractions() {
-    for (const interaction of ofTrigger('click')) toggleIn(interaction.id)
+    for (const binding of ofTrigger('click')) applyIn(binding)
+    for (const binding of animOf('click')) toggleAnim(binding)
+  }
+
+  /** a form control's 'change' trigger: on while checked / non-empty, so an
+   * "Other" radio can reveal its text field */
+  function fireChangeInteractions(event: Event) {
+    const target = event.target as HTMLInputElement | HTMLSelectElement | null
+    if (!target) return
+    const on =
+      'checked' in target && (target.type === 'checkbox' || target.type === 'radio')
+        ? target.checked
+        : !!target.value
+    for (const binding of ofTrigger('change')) applyIn(binding, on)
   }
 
   // fire 'appear' interactions the first time the element scrolls into view
   const el = ref<HTMLElement>()
   let observer: IntersectionObserver | null = null
-  onMounted(() => {
-    observer = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) {
-        for (const interaction of ofTrigger('appear')) fireIn(interaction.id)
-      }
-    })
-    if (el.value) observer.observe(el.value)
+  /** appear animations that already played, so 'once' really means once */
+  const appeared = new Set<string>()
+
+  /** every state key this node participates in — the ones it triggers and the
+   * ones whose effect lands on it. Registered so an outside-click dismissal can
+   * tell a pointerdown inside an open menu from one outside it. */
+  const involvedStateKeys = computed(() => {
+    const triggered = (
+      (mapping.value ? mapping.value.master.interactions : node.value.interactions) ?? []
+    ).map((b) => bindingStateKey(b, interactionOwnerId.value, motionScope.value))
+    const targeted = mapping.value
+      ? scopedTargetStateKeys(
+          mapping.value.master.id,
+          mapping.value.root,
+          motionScope.value ?? mapping.value.instanceId,
+        )
+      : targetStateKeys(node.value.id, motionScope.value)
+    return [...new Set([...triggered, ...targeted])]
   })
-  onBeforeUnmount(() => observer?.disconnect())
+
+  /** 'scrolled' bindings: on while the page is scrolled past their threshold.
+   * A window listener, so it reflects real page scroll in Preview and on the
+   * published site; the Build canvas pans instead of scrolling, where this is
+   * inert by nature. */
+  let scrollListener: (() => void) | null = null
+  let registeredKeys: string[] = []
+
+  onMounted(() => {
+    // an appearAt threshold delays firing until the element's top has travelled
+    // that far down the viewport (0.8 ≈ ScrollTrigger's 'top 80%'); the
+    // published runtime uses the same rootMargin
+    const at = animOf('appear').find((b) => b.appearAt)?.appearAt
+    observer = new IntersectionObserver((entries) => {
+      const inView = entries.some((entry) => entry.isIntersecting)
+      if (inView) {
+        // appear fires once and never unfires
+        for (const binding of ofTrigger('appear')) applyIn(binding, true)
+      }
+      for (const binding of animOf('appear')) {
+        if (inView) {
+          // once (default): first entry only. replay: every entry.
+          // reverse: plays in, rewinds out.
+          if (binding.appearMode === undefined && appeared.has(binding.id)) continue
+          appeared.add(binding.id)
+          playAnim(binding)
+        } else if (binding.appearMode === 'reverse') {
+          motion.reverse(binding, motionScope.value)
+        }
+      }
+    }, at ? { rootMargin: appearRootMargin(at) } : undefined)
+    if (el.value) observer.observe(el.value)
+    // 'load' plays as soon as the element exists
+    for (const binding of animOf('load')) playAnim(binding)
+
+    if (el.value && involvedStateKeys.value.length) {
+      registeredKeys = involvedStateKeys.value
+      registerInteractionEl(registeredKeys, el.value)
+    }
+
+    const scrolled = ofTrigger('scrolled')
+    if (scrolled.length) {
+      scrollListener = () => {
+        const y = window.scrollY
+        for (const binding of scrolled) applyIn(binding, y > (binding.scrollAt ?? DEFAULT_SCROLL_AT))
+      }
+      window.addEventListener('scroll', scrollListener, { passive: true })
+      scrollListener()
+    }
+  })
+  onBeforeUnmount(() => {
+    observer?.disconnect()
+    if (scrollListener) window.removeEventListener('scroll', scrollListener)
+    if (registeredKeys.length && el.value) unregisterInteractionEl(registeredKeys, el.value)
+  })
 
   return {
     def,
     mapping,
     scope,
+    motionStyle,
+    animTargets,
+    animOf,
+    playAnim,
+    motionScope,
     classesFor,
     scopedClassesFor,
     listCollection,
@@ -320,11 +584,10 @@ export function useRenderNode(
     linkRaw,
     baseClasses,
     ofTrigger,
-    fireIn,
-    unfireIn,
-    toggleIn,
+    applyIn,
     hoverHandlers,
     fireClickInteractions,
+    fireChangeInteractions,
     el,
   }
 }

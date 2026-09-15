@@ -228,8 +228,8 @@ watch(focusTick, async () => {
     <div ref="worldEl" class="absolute left-0 top-0 origin-top-left" :style="worldStyle">
       <div class="flex w-max items-stretch">
         <template v-for="(bp, i) in breakpoints" :key="bp.id">
-          <div class="group flex w-40 items-center justify-center" @click.stop>
-            <div v-if="canAddBreakpoint(i)" :style="{ transform: `scale(${1 / camera.zoom})` }">
+          <div class="group flex w-40 items-start justify-center" @click.stop>
+            <div v-if="canAddBreakpoint(i)" class="origin-top" :style="{ transform: `scale(${1 / camera.zoom})` }">
               <ButtonUI
                 variant="ghost"
                 size="sm"
@@ -266,6 +266,7 @@ watch(focusTick, async () => {
                 width: `${bp.width}px`,
                 minHeight: `${bp.height}px`,
                 fontFamily: settings.fonts.family || undefined,
+                contain: 'layout',
               }"
               @click.capture="onFrameClick(bp, $event)"
             >

@@ -47,6 +47,7 @@ const {
   hoverHandlers,
   fireClickInteractions,
   el,
+  motionStyle,
 } = useRenderNode(() => props.node, { fieldPlaceholders: true })
 
 const untranslated = computed(
@@ -141,7 +142,7 @@ const { editing, editEl, startEditing, finishEditing, onEditKeydown } = useInlin
     const placeholder =
       !!boundField.value &&
       !!boundEntry.value &&
-      !entryValue(boundEntry.value, boundField.value.name).value
+      !entryValue(boundEntry.value, boundField.value).value
     return placeholder ? '' : (displayContent.value ?? '')
   },
   commit: (text) => {
@@ -222,6 +223,7 @@ const handlers = {
     :id="node.htmlId || undefined"
     :data-node-id="node.id"
     :class="classes"
+    :style="motionStyle"
     draggable="true"
     v-on="handlers"
   >
@@ -261,6 +263,7 @@ const handlers = {
     :id="node.htmlId || undefined"
     :data-node-id="node.id"
     :class="classes"
+    :style="motionStyle"
     draggable="true"
     v-on="handlers"
   >
@@ -285,6 +288,7 @@ const handlers = {
     :src="srcAttr"
     :alt="altAttr"
     :class="classes"
+    :style="motionStyle"
     draggable="true"
     v-on="handlers"
   />
@@ -302,7 +306,7 @@ const handlers = {
       classes,
       editing && 'cursor-text outline outline-2 -outline-offset-2 outline-accent bg-accent/5',
     ]"
-    :style="backgroundInfo?.style || undefined"
+    :style="[backgroundInfo?.style, motionStyle]"
     :draggable="!editing"
     v-on="handlers"
   >

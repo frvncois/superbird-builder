@@ -4,6 +4,9 @@ import { isComponentType } from './components'
 import { walkNodes } from './tree'
 
 // tokens may carry an argument: :h1[title]:, :collection-list[post], :body[post]
+// an arg may start with '@' to name a BUILT-IN source rather than a collection
+// (:collection-list[@pages] iterates the site's own pages) — '@' is only ever
+// read inside the brackets, so it never collides with the '@link' suffix
 // and an optional link suffix: :link:@item, :div@/about, :button:@https://x
 // args allow a dot for one-hop reference bindings: :h1[author.name]:
 // a '(+)' after the arg slot is the styled marker — display-only, derived from
@@ -14,8 +17,8 @@ import { walkNodes } from './tree'
 // identity/classes/content survive reconcile while the arg is being edited
 // a '{+}' after the style marker is the interactions marker — same rules as
 // '(+)' but derived from node.interactions; mid-typing '{', '{+', '{}' tolerated
-const LEAF = /^:([a-zA-Z][a-zA-Z0-9-]*)(?:\[([a-z0-9.+-]*)\]?)?(?:\(\+?\)?)?(?:\{\+?\}?)?:(?:@(\S+))?$/ // :h1: or :Card: (+@link)
-export const OPEN = /^:([a-zA-Z][a-zA-Z0-9-]*)(?:\[([a-z0-9.+-]*)\]?)?(?:\(\+?\)?)?(?:\{\+?\}?)?(?:@(\S+))?$/ // :section or :Card (+@link)
+const LEAF = /^:([a-zA-Z][a-zA-Z0-9-]*)(?:\[([a-z0-9.@+-]*)\]?)?(?:\(\+?\)?)?(?:\{\+?\}?)?:(?:@(\S+))?$/ // :h1: or :Card: (+@link)
+export const OPEN = /^:([a-zA-Z][a-zA-Z0-9-]*)(?:\[([a-z0-9.@+-]*)\]?)?(?:\(\+?\)?)?(?:\{\+?\}?)?(?:@(\S+))?$/ // :section or :Card (+@link)
 export const CLOSE = /^([a-zA-Z][a-zA-Z0-9-]*):$/ // section: or Card:
 
 /** the '@target' suffix a node carries in code → its node.link value
@@ -46,7 +49,7 @@ export function lexLine(text: string): string[] {
         // optional argument: [title] — consumed even while still
         // unclosed, so mid-typing never splits the token across lines
         let k = j + 1
-        while (k < text.length && /[a-z0-9.+-]/.test(text[k]!)) k++
+        while (k < text.length && /[a-z0-9.@+-]/.test(text[k]!)) k++
         j = text[k] === ']' ? k + 1 : k
       }
       if (text[j] === '(') {
@@ -81,7 +84,7 @@ export function lexLine(text: string): string[] {
 // token head (indent + :name + optional [arg]) then the marker slot — the
 // anchor for reading/rewriting a line's styled marker without touching the
 // leaf ':' or '@link' tail
-const TOKEN_HEAD = /^(\s*:[a-zA-Z][a-zA-Z0-9-]*(?:\[[a-z0-9.+-]*\])?)(\(\+?\)?)?/
+const TOKEN_HEAD = /^(\s*:[a-zA-Z][a-zA-Z0-9-]*(?:\[[a-z0-9.@+-]*\])?)(\(\+?\)?)?/
 
 /** the :body wrapper's open line — tolerates an arg and (possibly mid-typing)
  * style/interaction markers: ':body', ':body[post]', ':body(', ':body[post](+){+}'.
@@ -105,7 +108,7 @@ export function hasOpenArgBracket(line: string): boolean {
  * split a CLOSED arg like '[title]' and re-close it mid-word. */
 export function closeArgBracket(line: string): string {
   return line.replace(
-    /^(\s*:[a-zA-Z][a-zA-Z0-9-]*)\[([a-z0-9.+-]*)(?![\]a-z0-9.+-])/,
+    /^(\s*:[a-zA-Z][a-zA-Z0-9-]*)\[([a-z0-9.@+-]*)(?![\]a-z0-9.@+-])/,
     (_, head: string, arg: string) => (arg ? `${head}[${arg}]` : head),
   )
 }
@@ -123,7 +126,7 @@ export function withStyleMarker(line: string, on: boolean): string {
 
 // like TOKEN_HEAD but the head swallows any (possibly incomplete) style
 // marker, so the '{…}' interactions slot anchors right after it
-const INT_HEAD = /^(\s*:[a-zA-Z][a-zA-Z0-9-]*(?:\[[a-z0-9.+-]*\])?(?:\(\+?\)?)?)(\{\+?\}?)?/
+const INT_HEAD = /^(\s*:[a-zA-Z][a-zA-Z0-9-]*(?:\[[a-z0-9.@+-]*\])?(?:\(\+?\)?)?)(\{\+?\}?)?/
 
 /** the interactions marker currently on the line's token: '{+}', or a
  * mid-typing '{', '{+', '{}' */
@@ -143,7 +146,7 @@ export function withInteractionMarker(line: string, on: boolean): string {
 // the '[…]' slot doubles as the data marker: '[+]' means the element carries
 // its own content/media (set via the Data panel or inline editing), while a
 // real '[name]' is a collection-field binding and owns the slot outright
-const DATA_HEAD = /^(\s*:[a-zA-Z][a-zA-Z0-9-]*)(\[[a-z0-9.+-]*\]?)?/
+const DATA_HEAD = /^(\s*:[a-zA-Z][a-zA-Z0-9-]*)(\[[a-z0-9.@+-]*\]?)?/
 
 /** the data marker currently on the line's token — only '[+]' counts; a real
  * arg or a mid-typing '[' is not a marker */
@@ -212,21 +215,30 @@ export function normalizeSyntax(value: string): string {
  */
 export function parseSyntax(
   code: string,
-  adopt?: (line: number, type: string) => ElementNode | null,
+  /** `parent` is the node this one is being appended to (null at the root) —
+   * already adopted or freshly created, so reconcile can tell whether a
+   * candidate is landing under the same parent it had before */
+  adopt?: (line: number, type: string, parent: ElementNode | null) => ElementNode | null,
 ): ElementNode[] {
   const root: ElementNode[] = []
   const stack: ElementNode[] = []
 
+  // children are collected OFF the nodes and only written back at the end,
+  // and only where membership/order actually changed — adopted nodes keep
+  // their children array identity, so reactive consumers (the canvas
+  // renderers) don't re-render untouched subtrees on every reparse
+  const built = new Map<ElementNode, ElementNode[]>()
+
   const append = (node: ElementNode) => {
-    ;(stack[stack.length - 1]?.children ?? root).push(node)
+    const parent = stack[stack.length - 1]
+    ;(parent ? built.get(parent)! : root).push(node)
   }
 
   // reuses the existing node for this source position when the caller
   // can identify one — its children are rebuilt from the code below
   const nodeFor = (line: number, type: string): ElementNode => {
-    const existing = adopt?.(line, type)
-    if (!existing) return createNode(type)
-    existing.children = []
+    const existing = adopt?.(line, type, stack[stack.length - 1] ?? null) ?? createNode(type)
+    built.set(existing, [])
     return existing
   }
 
@@ -273,6 +285,14 @@ export function parseSyntax(
 
   // anything left open stretches to the last line
   for (const node of stack) node.endLine = lines.length - 1
+
+  // write children back, keeping the existing array identity when unchanged
+  for (const [node, kids] of built) {
+    const prev = node.children
+    const same =
+      prev && prev.length === kids.length && kids.every((child, i) => child === prev[i])
+    if (!same) node.children = kids
+  }
 
   return root
 }
@@ -444,6 +464,42 @@ function mapRange(
 export interface ReconcileStats {
   adopted: number
   created: number
+  /** adopted nodes that landed under a DIFFERENT parent than they had, and so
+   * had their carried state dropped (see `guardReparent`). Only nodes that were
+   * actually carrying something are listed — stripping a blank node is a no-op. */
+  reparented?: { id: string; type: string }[]
+}
+
+/** the node-only state a node carries that is NOT derivable from the code.
+ * Shared by the reparent guard and by callers that want a clean slate. */
+export const NODE_STATE_KEYS = [
+  'classes',
+  'content',
+  'src',
+  'background',
+  'htmlId',
+  'attributes',
+  'interactions',
+  'animations',
+  'locales',
+  'listQuery',
+  'entryId',
+] as const
+
+/** true when a node carries state that would be lost (or wrongly inherited) */
+export function hasNodeState(node: ElementNode): boolean {
+  return NODE_STATE_KEYS.some((key) => {
+    const value = (node as unknown as Record<string, unknown>)[key]
+    if (value == null || value === '') return false
+    if (Array.isArray(value)) return value.length > 0
+    if (typeof value === 'object') return Object.keys(value).length > 0
+    return true
+  })
+}
+
+/** drop everything a node carried, leaving the structure the code describes */
+export function stripNodeState(node: ElementNode) {
+  for (const key of NODE_STATE_KEYS) delete (node as unknown as Record<string, unknown>)[key]
 }
 
 export function reconcile(
@@ -452,9 +508,36 @@ export function reconcile(
   previous: ElementNode[],
   map: Map<number, number> = lineMap(oldCode, newCode),
   stats?: ReconcileStats,
+  opts: {
+    /**
+     * Refuse to carry state across a change of PARENT. A line diff can map an
+     * old line onto a new one of the same type in a completely different part of
+     * the tree — replacing one block with a similarly-shaped block silently
+     * re-seated its classes, src and click bindings onto unrelated nodes (a modal
+     * wrapper became a popup's content div, still `fixed inset-0 hidden`).
+     *
+     * The node is still ADOPTED (ids must stay stable for selection and for the
+     * element summary callers get back); only its carried state is dropped, and
+     * it is reported in `stats.reparented`.
+     *
+     * OFF by default, and callers that pass an explicit `map` should leave it off:
+     * drag-reorder, paste, delete and wrap-in-div all re-parent deliberately and
+     * already know the exact mapping.
+     */
+    guardReparent?: boolean
+  } = {},
 ): ElementNode[] {
   // index the existing nodes by the line they live on, in token order
   const byOldLine = new Map<number, ElementNode[]>()
+  // child id → parent id (null at the root), for the reparent guard
+  const parentOf = new Map<string, string | null>()
+  const indexTree = (nodes: ElementNode[], parentId: string | null) => {
+    for (const node of nodes) {
+      parentOf.set(node.id, parentId)
+      indexTree(node.children ?? [], node.id)
+    }
+  }
+  indexTree(previous, null)
   walkNodes(previous, (node) => {
     if (node.line === undefined) return
     const list = byOldLine.get(node.line) ?? []
@@ -466,7 +549,7 @@ export function reconcile(
   // fallback below must never steal their nodes
   const mappedOldLines = new Set(map.values())
 
-  return parseSyntax(newCode, (line, type) => {
+  return parseSyntax(newCode, (line, type, parent) => {
     // in-place edits (chars typed on an element's own line) defeat the
     // text diff, so fall back to the same physical line — but only when
     // that old line wasn't matched elsewhere
@@ -478,9 +561,23 @@ export function reconcile(
       return null
     }
     if (stats) stats.adopted++
-    return candidates!.splice(at, 1)[0]!
+    const node = candidates!.splice(at, 1)[0]!
+    // A newly CREATED parent has an id that was never in `previous`, so a node
+    // landing under one is reparented by definition — which is exactly the case
+    // that used to corrupt silently.
+    if (opts.guardReparent && parentOf.get(node.id) !== (parent?.id ?? null)) {
+      if (hasNodeState(node)) {
+        stats?.reparented?.push({ id: node.id, type: node.type })
+        stripNodeState(node)
+      }
+    }
+    return node
   })
 }
+
+/** list sources that are not collections: `:collection-list[@pages]` repeats
+ * over the site's own published pages (see shared/fields.pagesListScope) */
+export const BUILTIN_LIST_SOURCES = ['@pages']
 
 // --- validation ---
 
@@ -495,8 +592,11 @@ export function validateDocument(
   code: string,
   componentNames: string[] = [],
   collectionNames: string[] = [],
-  /** multi-reference field names — also valid as :collection-list args */
+  /** multi-reference / multi-image field names — also valid as :collection-list args */
   listFieldNames: string[] = [],
+  /** collections with `detailRoutes: false` — they render inside other pages
+   * and own no route, so an `@item` link inside one points nowhere */
+  dataOnlyCollections: string[] = [],
 ): Diagnostic[] {
   const lines = code.split('\n')
   const trimmed = lines.map((l) => l.trim())
@@ -504,7 +604,7 @@ export function validateDocument(
   const end = trimmed.lastIndexOf('body:')
   if (start === -1 || end <= start) return []
 
-  const stack: { type: string; line: number; indent: number }[] = []
+  const stack: { type: string; line: number; indent: number; arg?: string }[] = []
   const diags: Diagnostic[] = []
 
   for (let i = start + 1; i < end; i++) {
@@ -541,19 +641,36 @@ export function validateDocument(
       const name = leaf?.[1] ?? open?.[1]
 
       // collection embeds — the arg must name a real collection (a list may
-      // also name a multi-reference field it iterates)
+      // also name a multi-reference/multi-image field it iterates)
       if (name === 'collection-list' || name === 'collection-item') {
         const arg = leaf?.[2] ?? open?.[2]
         const known =
           !!arg &&
           (collectionNames.includes(arg) ||
+            // built-in list sources ('@pages' — the site's own pages)
+            (name === 'collection-list' && BUILTIN_LIST_SOURCES.includes(arg)) ||
             (name === 'collection-list' && listFieldNames.includes(arg)))
         if (!known) {
           diags.push({ line: i, message: `Unknown collection ':${name}[${arg ?? ''}]'` })
         } else if (open) {
-          stack.push({ type: name, line: i, indent })
+          stack.push({ type: name, line: i, indent, arg })
         }
         continue
+      }
+
+      // `@item` links to the entry's own page — which a data-only collection
+      // does not have. Caught here rather than silently rendering unlinked.
+      if (linkFromToken(leaf?.[3] ?? open?.[3]) === '@item') {
+        const scope = [...stack].reverse().find((s) => s.arg && collectionNames.includes(s.arg))
+        if (scope && dataOnlyCollections.includes(scope.arg!)) {
+          diags.push({
+            line: i,
+            message:
+              `'@item' links to an entry's own page, but the collection '${scope.arg}' has no ` +
+              'detail routes (detailRoutes: false). Remove the link, or give the collection a ' +
+              'template page.',
+          })
+        }
       }
 
       // component instances (capitalized) — must be a known component

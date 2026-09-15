@@ -31,13 +31,26 @@ export const ELEMENTS_DATA = {
   paragraph: { tag: 'p', defaultContent: 'Dolor sit amet' },
   span: { tag: 'span', defaultContent: 'Dolor sit amet' },
   list: { tag: 'ul', suggest: 'list-item' },
-  'list-item': { tag: 'li', defaultContent: 'List item' },
+  // a container (its HTML <li> routinely wraps a tag/title/meta block); put a
+  // :text: (or richer children) inside it rather than text on the row itself
+  'list-item': { tag: 'li', suggest: 'text' },
   image: { tag: 'img', void: true },
   video: { tag: 'video' },
   form: { tag: 'form', suggest: 'input' },
   input: { tag: 'input', void: true },
-  dropdown: { tag: 'select' },
-  select: { tag: 'select' },
+  // a real multi-line control: a tall :input was the only way to express one,
+  // which is visibly not the same element and behaves differently
+  textarea: { tag: 'textarea' },
+  // checkbox/radio are <input type=…>; the type is baked in so an author never
+  // has to remember the attribute, and the `change` interaction trigger reads
+  // their checked state
+  checkbox: { tag: 'input', void: true, attrs: { type: 'checkbox' } },
+  radio: { tag: 'input', void: true, attrs: { type: 'radio' } },
+  fieldset: { tag: 'fieldset', suggest: 'legend' },
+  legend: { tag: 'legend', defaultContent: 'Legend' },
+  dropdown: { tag: 'select', suggest: 'option' },
+  select: { tag: 'select', suggest: 'option' },
+  option: { tag: 'option', defaultContent: 'Option' },
   button: { tag: 'button', defaultContent: 'Button' },
   link: { tag: 'a', defaultContent: 'Link' },
   /** repeats its children once per entry of the collection in its arg */
