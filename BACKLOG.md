@@ -169,22 +169,24 @@ remains:
 
 ## Product gaps from the CHSFD parity plan (rest of it shipped 2026-09-13)
 
-Everything in that plan shipped except these four. They are design work, not
+Everything in that plan shipped except these three. They are design work, not
 patches; each was scoped in the plan and the scoping is reproduced here.
 
-- **P1 — client refs in the DSL (`:div#hero-shape`).** Line addressing counts
-  *expanded* component blocks, so an agent has to hard-code that `:Header:` is
-  62 lines. A `#ref` token parsed into `node.ref` — **code-owned** like
-  `node.arg`, patched by editing the code line, never mutated on the node —
-  fixes that and gives `reconcile` its strongest adoption signal (try refs
-  before the line diff, which also closes a large slice of the re-parent
-  problem). Touches `lexLine`/`LEAF`/`OPEN`/`CLOSE`/`parseSyntax`/
-  `suggestCompletion`; `validateDocument` reports duplicate refs per page;
-  markers (`(+)`/`{+}`/`[+]`) must keep working alongside a ref (fix the slot
-  order once and document it). `edit_elements` then accepts `ref:` as an
-  address alongside `line`/`id`, and `bindInteractions`/`bindAnimations` accept
-  `targetRef`. `ref` emits nothing in the HTML (it is not `htmlId`). Biggest
-  single item; keep it on its own commit.
+- **P1 — SHIPPED 2026-09-15.** Client refs are in the DSL: `:div#hero:` parses
+  into a code-owned `node.ref`, `reconcile` adopts by ref before falling back
+  to the line diff, `validateDocument` enforces uniqueness plus the `:body` and
+  component-block rules, and MCP addresses by `ref` / `setRef` / `targetRef`
+  with `get_page {elements:"refs"}` listing them. Deliberately cut, as small
+  follow-ups rather than blockers:
+  - **ref autocomplete in `suggestCompletion`** — the ghost-text completer
+    doesn't offer existing refs, so an agent or human typing `#` gets no help.
+  - **no ref UI in the editor panels** — refs are typed in code only;
+    `useElement.setElementRef` exists but nothing calls it from a panel.
+  - **move + rename in one edit still mints a new node.** The ref pre-pass
+    needs the ref to be unchanged to match, and the same-line fallback needs
+    the line to be unchanged; an edit doing both defeats each. Rare, and the
+    node's state is lost rather than misassigned, so it is safe — just not
+    free.
 - **P2 — form submissions.** The form *elements* shipped; there is no backend.
   Sketch: `node.form?: { mode: 'store'|'email'|'both'; to?; subject?; redirect?;
   collectionId? }` on `:form`; the export emits

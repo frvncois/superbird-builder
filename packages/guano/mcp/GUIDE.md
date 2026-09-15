@@ -120,8 +120,10 @@ its `pages: [{pageId, version, edits}]` form — one call, one save, per-page ve
 line) in its response — style straight from that, no follow-up `get_page` needed. Read a
 page again only when a human may have changed it. Never count lines by hand (closer lines
 like `section:` make manual counting drift, and a misaddressed edit lands on the wrong
-element). Prefer the
-element **`id`** as the edit address (stable across structural edits); `line` values are
+element). Two good addresses: a **`#ref`** you wrote in the code yourself
+(`:div#hero:` → `ref: "hero"`, see the DSL section — it reads like a selector and
+survives the page being restructured), or the element **`id`** from the summary (stable
+across structural edits). `line` values are the fallback and are
 **0-based** (`numberedCode` is 1-based, for humans). Add `expectType` to edits when
 using lines — with it a misaddressed edit fails loudly and shows up in `failures`
 (pass `verbose: true` if you want every edit's line/id/type echoed back). In the
@@ -254,6 +256,61 @@ scope (a collection template page whose body is `:body[postname]`, or inside a
 `:h1[author.name]:`. Outside an entry scope an `[arg]` binds nothing.
 Do **not** use `[…]` to fake attributes — `[href=...]`, `[src=...]` are invalid syntax.
 Real custom attributes go on the element via `edit_elements` `attributes` (below), not the code.
+
+### `#ref` — stable addresses, in code
+
+A token may carry a **client ref** immediately after the element name, CSS-selector
+style. It is optional, and it is the friendliest way to address an element:
+
+```
+:div#hero                 a block, addressable as "hero"
+:h1#title[headline](+):   ref, then arg, then markers — this is the slot order
+:section#top … section:   close lines never carry a ref
+:Header#nav … Header:     legal: it addresses the instance root
+```
+
+The full slot order on one line is:
+
+```
+: name #ref [arg] (+) {+} :        @link
+  ^     ^    ^     ^   ^  ^          ^
+  |     |    |     |   |  leaf close |
+  |     |    |     |   interactions marker
+  |     |    |     styled marker
+  |     |    collection field binding
+  |     the ref
+  element type
+```
+
+Refs are **page-scope and must be unique** — a duplicate is a validation error, and
+both copies stop being addressable. Charset is the same as an element name:
+`[a-zA-Z][a-zA-Z0-9-]*`.
+
+**A ref emits NOTHING in the HTML.** It is not an id. If you want a real DOM id (an
+anchor target), set `htmlId` through `edit_elements` — that is a separate, unrelated
+field. A ref exists only in the DSL, for addressing.
+
+Two rules:
+
+- **Not on `:body`** — the page root is already addressable.
+- **Not inside a component block.** A component's structure is cloned into every
+  instance on every page, so a ref in there would be duplicated site-wide. Put the ref
+  on the instance's own `:Name` line instead; `create_component` does this for you,
+  hoisting the extracted block's root ref onto the wrapper and dropping the rest.
+
+Once an element has a ref you can use it everywhere an id works:
+
+- `get_page {elements: "refs"}` returns the addresses — `{line, id, type, ref?}`.
+- `edit_elements` takes `ref: "hero"` (no `#`) as the edit address, and `setRef` to
+  set or change one (`""` clears it).
+- `bind_interaction` takes `ref` for the owner and `targetRef` for the target;
+  `bindInteractions` / `bindAnimations` inside `edit_elements` take `targetRef` too.
+  Refs are resolved to ids before anything is stored — a binding always holds a
+  `targetId`.
+
+Write refs on the elements you will come back to (the hero, the nav, a modal, a CTA)
+as you generate the page. Addressing by ref beats counting lines, and it survives the
+page being restructured under you.
 
 ### `@target` — links, in code
 
