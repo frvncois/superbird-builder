@@ -17,9 +17,43 @@ import { walkNodes } from './tree'
 // identity/classes/content survive reconcile while the arg is being edited
 // a '{+}' after the style marker is the interactions marker — same rules as
 // '(+)' but derived from node.interactions; mid-typing '{', '{+', '{}' tolerated
-const LEAF = /^:([a-zA-Z][a-zA-Z0-9-]*)(?:\[([a-z0-9.@+-]*)\]?)?(?:\(\+?\)?)?(?:\{\+?\}?)?:(?:@(\S+))?$/ // :h1: or :Card: (+@link)
-export const OPEN = /^:([a-zA-Z][a-zA-Z0-9-]*)(?:\[([a-z0-9.@+-]*)\]?)?(?:\(\+?\)?)?(?:\{\+?\}?)?(?:@(\S+))?$/ // :section or :Card (+@link)
-export const CLOSE = /^([a-zA-Z][a-zA-Z0-9-]*):$/ // section: or Card:
+// an optional CLIENT REF sits immediately after the element name, CSS-selector
+// style: ':div#hero:', ':h1#title[field](+):', ':section#top' … 'section:'.
+// It is code-owned like the arg (re-read on every parse, never node state) and
+// emits NOTHING in the HTML — that's `htmlId`. Its job is addressing: agents get
+// a stable handle that doesn't drift when lines move, and reconcile gets its
+// strongest adoption signal. The trailing name is optional so the mid-typing
+// form ':div#' stays ONE token, same philosophy as the unclosed '['.
+// ONE definition of the grammar, shared by every head-anchored matcher below.
+const REF = '(?:#(?<ref>[a-zA-Z][a-zA-Z0-9-]*)?)?'
+/** the same slot, uncaptured — for the head regexes, which only need to skip it */
+const REF_SKIP = '(?:#[a-zA-Z0-9-]*)?'
+const NAME = '[a-zA-Z][a-zA-Z0-9-]*'
+const ARG = '(?:\\[(?<arg>[a-z0-9.@+-]*)\\]?)?'
+const MARKERS = '(?:\\(\\+?\\)?)?(?:\\{\\+?\\}?)?'
+const LINK = '(?:@(?<link>\\S+))?'
+
+// Slot order: ':' name '#ref' '[arg]' '(+)' '{+}' ':'(leaf) '@link'.
+// Groups are NAMED — a new slot must never be able to shift an index out from
+// under a consumer (`leaf[2]` silently becoming the ref instead of the arg).
+const LEAF = new RegExp(`^:(?<name>${NAME})${REF}${ARG}${MARKERS}:${LINK}$`) // :h1: or :Card: (+#ref +[arg] +@link)
+export const OPEN = new RegExp(`^:(?<name>${NAME})${REF}${ARG}${MARKERS}${LINK}$`) // :section or :Card (same slots)
+export const CLOSE = /^([a-zA-Z][a-zA-Z0-9-]*):$/ // section: or Card: — close lines never carry a ref
+
+/** the named slots of a LEAF/OPEN match. Every consumer reads the token through
+ * this, so adding a slot is a change in exactly one place. */
+function slots(m: RegExpMatchArray) {
+  const g = m.groups as Record<string, string | undefined>
+  return { name: g.name!, ref: g.ref, arg: g.arg, link: g.link }
+}
+
+/** the '#ref' a line's token carries, or undefined. Reads the code, not a node —
+ * callers patching a line need this before the tree has been re-derived. */
+export function refOf(line: string): string | undefined {
+  const trimmed = line.trim()
+  const m = trimmed.match(LEAF) ?? trimmed.match(OPEN)
+  return m ? slots(m).ref : undefined
+}
 
 /** the '@target' suffix a node carries in code → its node.link value
  * ('item' is the current-entry sentinel, stored as '@item'; else verbatim) */
@@ -45,6 +79,12 @@ export function lexLine(text: string): string[] {
     if (text[j] === ':') {
       j++
       while (j < text.length && /[a-zA-Z0-9-]/.test(text[j]!)) j++
+      if (text[j] === '#') {
+        // client ref '#hero' — consumed even while still just '#', so
+        // mid-typing never splits the token across lines
+        j++
+        while (j < text.length && /[a-zA-Z0-9-]/.test(text[j]!)) j++
+      }
       if (text[j] === '[') {
         // optional argument: [title] — consumed even while still
         // unclosed, so mid-typing never splits the token across lines
@@ -84,12 +124,15 @@ export function lexLine(text: string): string[] {
 // token head (indent + :name + optional [arg]) then the marker slot — the
 // anchor for reading/rewriting a line's styled marker without touching the
 // leaf ':' or '@link' tail
-const TOKEN_HEAD = /^(\s*:[a-zA-Z][a-zA-Z0-9-]*(?:\[[a-z0-9.@+-]*\])?)(\(\+?\)?)?/
+const TOKEN_HEAD = new RegExp(`^(\\s*:${NAME}${REF_SKIP}(?:\\[[a-z0-9.@+-]*\\])?)(\\(\\+?\\)?)?`)
 
 /** the :body wrapper's open line — tolerates an arg and (possibly mid-typing)
  * style/interaction markers: ':body', ':body[post]', ':body(', ':body[post](+){+}'.
  * Every scaffold matcher must use this so a '(' typed on the body line can't
  * make the wrapper look damaged (which would respawn a fresh :body). */
+// deliberately does NOT accept '#': a ref on ':body' is a diagnostic, not
+// grammar. buildDocument/extractBodyArg/extractBodyDecor rebuild this line on
+// every edit and would destroy one, and the body already has a stable identity.
 export const isBodyOpenLine = (trimmed: string) => /^:body(?:$|[[({])/.test(trimmed)
 
 /** the marker currently on the line's token: '(+)', or a mid-typing '(', '(+', '()' */
@@ -99,7 +142,7 @@ export function styleMarkerOf(line: string): string | undefined {
 
 /** the line's token has an unclosed '[' arg — an arg edit in progress */
 export function hasOpenArgBracket(line: string): boolean {
-  return /^\s*:[a-zA-Z][a-zA-Z0-9-]*\[[^\]]*$/.test(line)
+  return new RegExp(`^\\s*:${NAME}${REF_SKIP}\\[[^\\]]*$`).test(line)
 }
 
 /** finalizes an unclosed '[' arg: non-empty → close it (':h1[po' → ':h1[po]'),
@@ -108,7 +151,7 @@ export function hasOpenArgBracket(line: string): boolean {
  * split a CLOSED arg like '[title]' and re-close it mid-word. */
 export function closeArgBracket(line: string): string {
   return line.replace(
-    /^(\s*:[a-zA-Z][a-zA-Z0-9-]*)\[([a-z0-9.@+-]*)(?![\]a-z0-9.@+-])/,
+    new RegExp(`^(\\s*:${NAME}${REF_SKIP})\\[([a-z0-9.@+-]*)(?![\\]a-z0-9.@+-])`),
     (_, head: string, arg: string) => (arg ? `${head}[${arg}]` : head),
   )
 }
@@ -126,7 +169,9 @@ export function withStyleMarker(line: string, on: boolean): string {
 
 // like TOKEN_HEAD but the head swallows any (possibly incomplete) style
 // marker, so the '{…}' interactions slot anchors right after it
-const INT_HEAD = /^(\s*:[a-zA-Z][a-zA-Z0-9-]*(?:\[[a-z0-9.@+-]*\])?(?:\(\+?\)?)?)(\{\+?\}?)?/
+const INT_HEAD = new RegExp(
+  `^(\\s*:${NAME}${REF_SKIP}(?:\\[[a-z0-9.@+-]*\\])?(?:\\(\\+?\\)?)?)(\\{\\+?\\}?)?`,
+)
 
 /** the interactions marker currently on the line's token: '{+}', or a
  * mid-typing '{', '{+', '{}' */
@@ -146,7 +191,7 @@ export function withInteractionMarker(line: string, on: boolean): string {
 // the '[…]' slot doubles as the data marker: '[+]' means the element carries
 // its own content/media (set via the Data panel or inline editing), while a
 // real '[name]' is a collection-field binding and owns the slot outright
-const DATA_HEAD = /^(\s*:[a-zA-Z][a-zA-Z0-9-]*)(\[[a-z0-9.@+-]*\]?)?/
+const DATA_HEAD = new RegExp(`^(\\s*:${NAME}${REF_SKIP})(\\[[a-z0-9.@+-]*\\]?)?`)
 
 /** the data marker currently on the line's token — only '[+]' counts; a real
  * arg or a mid-typing '[' is not a marker */
@@ -196,7 +241,7 @@ export function normalizeSyntax(value: string): string {
       if (close && opensDepth(close[1]!)) depth = Math.max(1, depth - 1)
       out.push(tabs(depth) + token)
       const open = token.match(OPEN)
-      if (open && opensDepth(open[1]!)) depth += 1
+      if (open && opensDepth(slots(open).name)) depth += 1
     }
   }
 
@@ -247,24 +292,30 @@ export function parseSyntax(
     for (const token of lexLine(lines[lineIndex]!.trim())) {
       const leaf = token.match(LEAF)
       if (leaf) {
+        const { name, ref, arg, link } = slots(leaf)
         // known elements and component instances (:Card:) become nodes
-        if (isKnownElement(leaf[1]!) || isComponentType(leaf[1]!)) {
-          const node = nodeFor(lineIndex, leaf[1]!)
+        if (isKnownElement(name) || isComponentType(name)) {
+          const node = nodeFor(lineIndex, name)
           node.line = node.endLine = lineIndex
-          node.arg = leaf[2] && leaf[2] !== '+' ? leaf[2] : undefined
-          node.link = linkFromToken(leaf[3])
+          node.arg = arg && arg !== '+' ? arg : undefined
+          // code-owned, exactly like arg: written unconditionally on every
+          // parse, so deleting the '#ref' really does clear it
+          node.ref = ref
+          node.link = linkFromToken(link)
           append(node)
         }
         continue
       }
       const open = token.match(OPEN)
       if (open) {
+        const { name, ref, arg, link } = slots(open)
         // built-ins and component blocks (:Card … Card:) open nodes
-        if (isKnownElement(open[1]!) || isComponentType(open[1]!)) {
-          const node = nodeFor(lineIndex, open[1]!)
+        if (isKnownElement(name) || isComponentType(name)) {
+          const node = nodeFor(lineIndex, name)
           node.line = node.endLine = lineIndex
-          node.arg = open[2] && open[2] !== '+' ? open[2] : undefined
-          node.link = linkFromToken(open[3])
+          node.arg = arg && arg !== '+' ? arg : undefined
+          node.ref = ref
+          node.link = linkFromToken(link)
           append(node)
           stack.push(node)
         }
@@ -502,11 +553,33 @@ export function stripNodeState(node: ElementNode) {
   for (const key of NODE_STATE_KEYS) delete (node as unknown as Record<string, unknown>)[key]
 }
 
+/**
+ * Every unique `#ref` in the code → the line and element type carrying it.
+ * A ref used TWICE maps to null: an ambiguous ref gets no special treatment
+ * (validateDocument flags it; reconcile just falls back to the line diff).
+ */
+function refLines(code: string): Map<string, { line: number; type: string } | null> {
+  const found = new Map<string, { line: number; type: string } | null>()
+  const lines = code.split('\n')
+  for (let i = 0; i < lines.length; i++) {
+    for (const token of lexLine(lines[i]!.trim())) {
+      const m = token.match(LEAF) ?? token.match(OPEN)
+      if (!m) continue
+      const { name, ref } = slots(m)
+      if (!ref) continue
+      found.set(ref, found.has(ref) ? null : { line: i, type: name })
+    }
+  }
+  return found
+}
+
 export function reconcile(
   oldCode: string,
   newCode: string,
   previous: ElementNode[],
-  map: Map<number, number> = lineMap(oldCode, newCode),
+  /** omit to derive the mapping from a line diff; pass one when you KNOW the
+   * exact line movement (drag-reorder, paste, delete) */
+  map?: Map<number, number>,
   stats?: ReconcileStats,
   opts: {
     /**
@@ -527,6 +600,11 @@ export function reconcile(
     guardReparent?: boolean
   } = {},
 ): ElementNode[] {
+  // an explicit map is the caller's exact knowledge of how lines moved — the
+  // ref pre-pass below only ever extends the DIFF-derived one
+  const derived = map === undefined
+  const lineMapping = map ?? lineMap(oldCode, newCode)
+
   // index the existing nodes by the line they live on, in token order
   const byOldLine = new Map<number, ElementNode[]>()
   // child id → parent id (null at the root), for the reparent guard
@@ -545,15 +623,35 @@ export function reconcile(
     byOldLine.set(node.line, list)
   })
 
-  // old lines already accounted for by the diff — the same-line
-  // fallback below must never steal their nodes
-  const mappedOldLines = new Set(map.values())
+  // REF PRE-PASS — the point of refs. A line diff maps by TEXT, so moving a
+  // ref'd element (especially among identical siblings, where LCS is weakest)
+  // loses its identity. A ref that is unique on both sides and names the same
+  // element type is a far stronger signal than any text alignment, so adopt by
+  // it. Only lines the diff couldn't place are filled in, so a confident text
+  // match is never overridden.
+  if (derived) {
+    const oldRefs = refLines(oldCode)
+    const takenOldLines = new Set(lineMapping.values())
+    for (const [ref, here] of refLines(newCode)) {
+      if (!here || lineMapping.has(here.line)) continue // ambiguous, or already mapped
+      const there = oldRefs.get(ref)
+      // same ref AND same element type — a ref reused for a different element
+      // is a new element, not a moved one
+      if (!there || there.type !== here.type || takenOldLines.has(there.line)) continue
+      lineMapping.set(here.line, there.line)
+      takenOldLines.add(there.line)
+    }
+  }
+
+  // old lines already accounted for — computed AFTER the ref pre-pass so the
+  // same-line fallback below can't steal a node the ref already claimed
+  const mappedOldLines = new Set(lineMapping.values())
 
   return parseSyntax(newCode, (line, type, parent) => {
     // in-place edits (chars typed on an element's own line) defeat the
     // text diff, so fall back to the same physical line — but only when
     // that old line wasn't matched elsewhere
-    const oldLine = map.get(line) ?? (mappedOldLines.has(line) ? undefined : line)
+    const oldLine = lineMapping.get(line) ?? (mappedOldLines.has(line) ? undefined : line)
     const candidates = oldLine === undefined ? undefined : byOldLine.get(oldLine)
     const at = candidates?.findIndex((n) => n.type === type) ?? -1
     if (at === -1) {
@@ -602,10 +700,25 @@ export function validateDocument(
   const trimmed = lines.map((l) => l.trim())
   const start = trimmed.findIndex(isBodyOpenLine)
   const end = trimmed.lastIndexOf('body:')
-  if (start === -1 || end <= start) return []
+
+  const diags: Diagnostic[] = []
+
+  // a ref on ':body' is not grammar — buildDocument rebuilds that line on every
+  // edit and would silently eat it, and the body already has a stable identity.
+  // Checked before the scaffold bail-out below, because ':body#x' is exactly
+  // what makes isBodyOpenLine miss and the whole body look damaged.
+  const bodyRef = trimmed.findIndex((l) => /^:body#/.test(l))
+  if (bodyRef !== -1) {
+    diags.push({
+      line: bodyRef,
+      message: "':body' can't carry a '#ref' — it is the page root and is already addressable",
+    })
+  }
+  if (start === -1 || end <= start) return diags
 
   const stack: { type: string; line: number; indent: number; arg?: string }[] = []
-  const diags: Diagnostic[] = []
+  /** every '#ref' seen so far → the line that claimed it, for the duplicate check */
+  const refAt = new Map<string, number>()
 
   for (let i = start + 1; i < end; i++) {
     const lineTokens = lexLine(trimmed[i]!)
@@ -638,12 +751,42 @@ export function validateDocument(
       const leaf = token.match(LEAF)
       const open = token.match(OPEN)
       const close = token.match(CLOSE)
-      const name = leaf?.[1] ?? open?.[1]
+      const part = leaf ? slots(leaf) : open ? slots(open) : null
+      const name = part?.name
+
+      if (part?.ref) {
+        // refs are page-scope addresses, so a second use makes both ambiguous
+        // (reconcile refuses to adopt by an ambiguous ref, and an agent
+        // addressing by it can't be told which element it meant)
+        const first = refAt.get(part.ref)
+        if (first !== undefined) {
+          diags.push({
+            line: i,
+            message: `'#${part.ref}' is already used on line ${first + 1} — refs must be unique on a page`,
+          })
+        } else {
+          refAt.set(part.ref, i)
+        }
+        // inside a component instance the structure is a CLONE of the master,
+        // rewritten into every instance on every page — a ref there would
+        // duplicate across all of them. The instance's own open line is fine:
+        // that node is a real page node (it isn't on the stack yet here).
+        const inInstance = stack.find((sc) => componentNames.includes(sc.type))
+        if (inInstance) {
+          diags.push({
+            line: i,
+            message:
+              `'#${part.ref}' is inside the ':${inInstance.type}' component block — refs are ` +
+              `page-scope, and a component's structure is copied into every instance. Put the ` +
+              `ref on the ':${inInstance.type}' line instead.`,
+          })
+        }
+      }
 
       // collection embeds — the arg must name a real collection (a list may
       // also name a multi-reference/multi-image field it iterates)
       if (name === 'collection-list' || name === 'collection-item') {
-        const arg = leaf?.[2] ?? open?.[2]
+        const arg = part?.arg
         const known =
           !!arg &&
           (collectionNames.includes(arg) ||
@@ -660,7 +803,7 @@ export function validateDocument(
 
       // `@item` links to the entry's own page — which a data-only collection
       // does not have. Caught here rather than silently rendering unlinked.
-      if (linkFromToken(leaf?.[3] ?? open?.[3]) === '@item') {
+      if (linkFromToken(part?.link) === '@item') {
         const scope = [...stack].reverse().find((s) => s.arg && collectionNames.includes(s.arg))
         if (scope && dataOnlyCollections.includes(scope.arg!)) {
           diags.push({
@@ -736,15 +879,14 @@ function analyze(before: string): Context {
     for (const token of lexLine(raw.trim())) {
       const leaf = token.match(LEAF)
       if (leaf) {
-        last = { kind: 'leaf', type: leaf[1]!, indent }
+        last = { kind: 'leaf', type: slots(leaf).name, indent }
         continue
       }
       const open = token.match(OPEN)
       if (open) {
-        if (isKnownElement(open[1]!) || isComponentType(open[1]!)) {
-          stack.push({ type: open[1]!, indent })
-        }
-        last = { kind: 'open', type: open[1]!, indent }
+        const name = slots(open).name
+        if (isKnownElement(name) || isComponentType(name)) stack.push({ type: name, indent })
+        last = { kind: 'open', type: name, indent }
         continue
       }
       const close = token.match(CLOSE)

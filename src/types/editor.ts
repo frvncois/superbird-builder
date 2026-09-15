@@ -161,6 +161,11 @@ export interface ElementNode {
   link?: string
   /** token argument from the code — field binding or collection name */
   arg?: string
+  /** client ref from the code ('#name') — a stable address for this element.
+   * CODE-OWNED like `arg`: re-read on every parse, never carried by reconcile
+   * as node state, never in NODE_STATE_KEYS or the marker signature. It emits
+   * NOTHING in the HTML — `htmlId` is the separate, node-owned DOM id. */
+  ref?: string
   /** collection-item only: the picked entry */
   entryId?: string
   /** collection-list only: filter → sort → limit applied to the entries it
