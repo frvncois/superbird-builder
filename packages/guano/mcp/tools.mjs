@@ -411,6 +411,14 @@ const DEFAULT_META = { activeId: MAIN_ID, branches: [{ id: MAIN_ID, name: 'Main'
 
 const sha256 = (s) => createHash('sha256').update(s).digest('hex')
 
+/** every stale-version return says the same thing — the agent needs to know a
+ * human's open editor can legitimately advance the version between two calls,
+ * not just its own stale read */
+const STALE_MESSAGE =
+  'the page code changed since your last read/write. If the human has the editor open, ' +
+  'its autosave/marker sync can advance the version between your calls — retrying with ' +
+  'currentVersion is safe when you made the only content edits'
+
 // ---------- session state (this MCP process only) ----------
 
 // null until the human picks; then 'main' or a draft (branch) id
@@ -2553,16 +2561,32 @@ const tools = [
     name: 'delete_page',
     description:
       'Delete a page. The home page (slug "/") can never be deleted, and a collection template ' +
-      'page belongs to its collection — use delete_collection for those. Requires a target.',
+      'page belongs to its collection — use delete_collection for those. Deleting is destructive ' +
+      'and irreversible, so it takes the page\'s `version` from your last read (get_page / ' +
+      'list_pages) — a stale version means somebody edited the page since, and the delete is ' +
+      'refused so you can look again. Requires a target.',
     inputSchema: {
       type: 'object',
-      properties: { pageId: { type: 'string' } },
-      required: ['pageId'],
+      properties: { pageId: { type: 'string' }, version: { type: 'string' } },
+      required: ['pageId', 'version'],
       additionalProperties: false,
     },
     handler: async (args) => {
       const { project } = await loadTargetProject()
       const page = findPage(project, args.pageId)
+      // destructive: a version from before somebody else's edit must not delete
+      // their work — the blob-level guard only covers this one handler's window
+      const current = sha256(page.code)
+      if (args.version !== current) {
+        return {
+          saved: false,
+          reason: 'stale-version',
+          currentVersion: current,
+          message:
+            'the page changed since your last read — re-read it (get_page) and confirm you ' +
+            'still want to delete it',
+        }
+      }
       const home = (project.pages ?? []).find((p) => p.path === '/') ?? project.pages?.[0]
       if (page.id === home?.id) {
         return { saved: false, reason: 'home-page', message: 'the home page can never be deleted' }
@@ -2772,7 +2796,7 @@ const tools = [
       const page = findPage(project, args.pageId)
       const current = sha256(page.code)
       if (args.version !== current) {
-        return { saved: false, reason: 'stale-version', currentVersion: current }
+        return { saved: false, reason: 'stale-version', message: STALE_MESSAGE, currentVersion: current }
       }
       const made = makeComponentFrom(project, page, args.id, args.name)
       if (!made.ok) return { saved: false, reason: made.reason, message: made.message }
@@ -2855,7 +2879,7 @@ const tools = [
         const current = sha256(page.code)
         if (versionFor.get(pageId) !== current) stale.push({ pageId, currentVersion: current })
       }
-      if (stale.length) return { saved: false, reason: 'stale-version', stale }
+      if (stale.length) return { saved: false, reason: 'stale-version', message: STALE_MESSAGE, stale }
 
       const results = []
       const failures = []
@@ -2895,7 +2919,10 @@ const tools = [
       '`created` and any `orphaned` master nodes (id, type, whether they had classes/' +
       'interactions) so a dropped binding is never silent. Every instance block on every page ' +
       'is rewritten to match. Use edit_elements on any instance to style shared elements. ' +
-      'Requires a target.',
+      'A component master is not page code, so there is no `version` to pass: the only ' +
+      'concurrency protection is the whole-project guard (a save is refused if the project ' +
+      'blob changed since this handler loaded it). Re-read with get_component right before ' +
+      'replacing a block you did not just write. Requires a target.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -3007,6 +3034,8 @@ const tools = [
     description:
       'Remove a component from the library. Refused while any page still uses it — remove or ' +
       'inline its instance blocks first (rewrite the pages without the :Name … Name: wrap). ' +
+      'That in-use scan IS the guard here (there is no master `version` to pass), so a ' +
+      'component somebody is still using can never be deleted out from under them. ' +
       'Requires a target.',
     inputSchema: {
       type: 'object',
@@ -3808,10 +3837,6 @@ const tools = [
       }
 
       const jobs = args.pages ?? [{ pageId: args.pageId, version: args.version, edits: args.edits }]
-      const staleMessage =
-        'the page code changed since your last read/write. If the human has the editor open, ' +
-        'its autosave/marker sync can advance the version between your calls — retrying with ' +
-        'currentVersion is safe when you made the only content edits'
       let anyChanged = false
       const pageResults = []
       for (const job of jobs) {
@@ -3839,7 +3864,7 @@ const tools = [
             saved: false,
             reason: 'stale-version',
             currentVersion: current,
-            message: staleMessage,
+            message: STALE_MESSAGE,
           })
           continue
         }
@@ -4674,7 +4699,7 @@ const tools = [
       const page = findPage(project, args.pageId)
       const current = sha256(page.code)
       if (args.version !== current) {
-        return { saved: false, reason: 'stale-version', currentVersion: current }
+        return { saved: false, reason: 'stale-version', message: STALE_MESSAGE, currentVersion: current }
       }
       if (!(project.interactions ?? []).some((it) => it.id === args.interactionId)) {
         throw new Error(`no interaction with id "${args.interactionId}" (use list_interactions)`)
@@ -4724,7 +4749,7 @@ const tools = [
       const page = findPage(project, args.pageId)
       const current = sha256(page.code)
       if (args.version !== current) {
-        return { saved: false, reason: 'stale-version', currentVersion: current }
+        return { saved: false, reason: 'stale-version', message: STALE_MESSAGE, currentVersion: current }
       }
       const { node } = resolveEditNode(page, args)
       const before = node.interactions?.length ?? 0

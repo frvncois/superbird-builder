@@ -105,6 +105,12 @@ write. Setting or clearing content/media the FIRST time toggles a `[+]` code mar
 line — and the FIRST class on an unstyled node toggles `(+)`, the first binding `{+}` —
 which IS code, so the version legitimately advances — pass the returned version on.
 A `stale-version` rejection means someone else edited — re-run `get_page` and retry.
+**Destructive page operations require a fresh `version` too**: `delete_page` takes the
+page's version from your last `get_page`/`list_pages`, so a page edited since your read
+is never deleted on stale information. Re-read, confirm the page is still the one you
+meant to remove, then delete. Component masters are not page code and have no version —
+`update_component`/`delete_component` rely on the whole-project guard and, for delete, the
+in-use scan; re-read with `get_component` before replacing a block you did not just write.
 Writes to **different pages** parallelize freely; writes to the same page are sequential.
 To touch several pages at once (shared chrome, a sweeping restyle), pass `edit_elements`
 its `pages: [{pageId, version, edits}]` form — one call, one save, per-page version checks
@@ -171,7 +177,8 @@ there does NOT localize the page (see Localization for how translations render).
 other key (e.g. `title:`, `description:`) is silently dropped — page SEO
 goes through `set_page_seo` instead, and site-wide defaults (siteName, titleTemplate,
 description) through `update_settings`. Pages are created with `create_page` and removed
-with `delete_page` (the home page and collection template pages are protected).
+with `delete_page` (the home page and collection template pages are protected, and the
+delete takes the page's current `version` — see Versioning).
 
 ### Leaf vs container — the one syntax rule
 

@@ -69,9 +69,14 @@ remains:
 - **Per-tool version checks are uneven.** The blob-level guard closes the
   *clobber* (data loss from a whole-project write). It does not stop an agent
   acting on a stale *understanding* — deleting a page it believes is empty when
-  a human just filled it. `delete_page`, `update_component`, `delete_component`
-  and `set_translations` still take no `version`. Adding one to `delete_page` is
-  the highest-value next step.
+  a human just filled it. `delete_page` now takes a `version` (2026-09-15), and
+  every stale return carries the same explanatory `message`. What remains:
+  `update_component` / `delete_component` have **no master etag** to check — a
+  component master is not code, so there is nothing to hash without inventing a
+  structural signature over its node tree. `delete_component`'s in-use scan and
+  the blob-level guard are the protection today; both tool descriptions now say
+  so. A master signature is future work. `set_translations` needs none — it
+  writes locale overrides, which don't change page versions.
 - **SSRF resolve-then-connect TOCTOU.** `assertPublicUrl` resolves and checks,
   then `fetch` resolves again; a name that changes answers between the two slips
   through. Closing it needs a custom agent that pins the checked address.
