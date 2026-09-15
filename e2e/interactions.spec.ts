@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 // @ts-expect-error untyped server module
 import { exportSite } from '../server/export.mjs'
 
-// PLAN-PARITY §1.1 — interaction STATE is keyed by (interaction, target), not by
+// interaction STATE is keyed by (interaction, target), not by
 // binding. Keyed by binding, an element opened by trigger A could never be closed
 // by trigger B, so every modal became a trap and the to-classes were applied
 // twice. These tests pin the whole contract: shared state, action modes,

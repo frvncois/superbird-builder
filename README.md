@@ -121,4 +121,5 @@ Export project downloads a portable `.zip` you can re-import elsewhere.
 
 ## License
 
-Not yet licensed — see `LAUNCH.md`. Do not redistribute until a license is chosen.
+Not yet licensed — see `BACKLOG.md` → "Launch (pre-publish)". Do not redistribute
+until a license is chosen.

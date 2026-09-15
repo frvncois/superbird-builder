@@ -40,6 +40,7 @@ __screenshots__/
 
 # publish server data
 server/data
+server/data-backup-*
 
 # e2e
 .e2e-data

@@ -1,6 +1,6 @@
 # BACKLOG.md — deferred items (security section verified 2026-09-15; rest as of 2026-09-05)
 
-Carried over from the launch-readiness audit (`FINDINGS.md`, ids kept) after the
+Carried over from the 2026-09-05 launch-readiness audit (its `S*`/`C*`/`D*`/`Q*` ids kept) after the
 launch-prep pass fixed the CRITICAL/HIGH security items (S1, S2, S3+S15, S6, S12 —
 see git log; S9 and S11 fixed later — TRUST_PROXY + per-(ip,email) limiter, see git
 log). Everything here is real but deliberately deferred: none blocks launch.
@@ -10,10 +10,10 @@ log). Everything here is real but deliberately deferred: none blocks launch.
 The 2026-09-15 authorized pen test found no NEW critical or high findings — every
 boundary probe held (unauth 401, cross-origin 403, store-key and static path
 traversal rejected, API tokens barred from session-only surfaces). The
-remediation batch that followed (`PLAN-SECURITY.md`) fixed **S5, S7, S8, S13,
-S14, S16 and the framing half of S10**. A later pass (`PLAN-CONTRIB-AUTHZ.md`)
-closed **S4 and the contributor write/publish boundary**. A subsequent audit of
-the **agent/MCP surface** (`PLAN-MCP-SECURITY.md`) closed a store-key aliasing
+remediation batch that followed fixed **S5, S7, S8, S13, S14, S16 and the
+framing half of S10**. A later pass closed **S4 and the contributor
+write/publish boundary**. A subsequent audit of the **agent/MCP surface**
+closed a store-key aliasing
 bypass, the unguarded `guano-base:*` blobs, request-body-controlled GitHub
 publishing, and the prompt-injection path from a contributor comment to raw
 script on the live site — see "Fixed in the MCP hardening batch" below. What
@@ -28,7 +28,7 @@ remains:
   published site is intentionally left framable and permissive (it legitimately
   runs the user's own custom code).
 
-### Fixed in the MCP hardening batch (`PLAN-MCP-SECURITY.md`, kept for provenance)
+### Fixed in the MCP hardening batch (kept for provenance)
 
 - **Store-key aliasing (was CRITICAL)** — `STORE_KEY_RE` allowed `_` while
   `storeFile` maps `:` → `__`, so `guano-project__main` hit Main's file but
@@ -64,9 +64,29 @@ remains:
   stops a handler's whole-blob write from erasing a human save that landed
   mid-handler.
 
-Residual risk is listed at the foot of `PLAN-MCP-SECURITY.md` (uneven per-tool
-version checks, SSRF resolve-then-connect TOCTOU, regex-based SVG sanitization
-behind a `default-src 'none'` CSP, no per-token scopes/expiry).
+### Residual risk from the MCP hardening batch (known and accepted)
+
+- **Per-tool version checks are uneven.** The blob-level guard closes the
+  *clobber* (data loss from a whole-project write). It does not stop an agent
+  acting on a stale *understanding* — deleting a page it believes is empty when
+  a human just filled it. `delete_page`, `update_component`, `delete_component`
+  and `set_translations` still take no `version`. Adding one to `delete_page` is
+  the highest-value next step.
+- **SSRF resolve-then-connect TOCTOU.** `assertPublicUrl` resolves and checks,
+  then `fetch` resolves again; a name that changes answers between the two slips
+  through. Closing it needs a custom agent that pins the checked address.
+- **SVG sanitization is regex-based** (`server/media.mjs`), imperfect against
+  exotic XML. It is backed by a `default-src 'none'` CSP + `nosniff` on serve,
+  which is what actually stops execution — verified in
+  `e2e/store-agent-security.spec.ts`.
+- **`GUANO_MCP_FILE_ROOT` defaults to unset** (full filesystem reach) to avoid
+  breaking existing workflows; it only warns. Consider defaulting it to the cwd
+  in a future major.
+- **No per-token scopes or expiry.** A token is still its owner's full role
+  until revoked; the agent policy narrows what that role can do over a token,
+  but a read-only or draft-only token would be better. Separate plan.
+- **Editor-role tokens can read `settings.smtp`** — by design (only contributors
+  are redacted), but worth knowing in the agent threat model.
 
 ### Fixed in the 2026-09-15 batch (kept for provenance)
 
@@ -124,15 +144,105 @@ behind a `default-src 'none'` CSP, no per-token scopes/expiry).
   drag/keyboard reorder + ghost animation (self-contained after 1, talks to
   useElement's explicit-map reconcile); (3) the status mini-dropdown + validation
   display into a small child component. Each step type-checks and ships separately.
-- **D4 — some exported symbols are single-file** (drop the `export` keyword):
-  `linkFromToken`, `suggestNextLine` (`src/lib/syntax.ts`), `LocalePack`
-  (`src/lib/merge.ts`), `KIND_MIMES` (`src/lib/media.ts`). Re-grep before applying.
-  (`lexLine` and `isValidClass` were on this list but are now re-exported by
-  `src/lib/mcp-runtime.ts` for the MCP server — no longer single-file.)
-- **Foldering nits:** `components/site/ContentRenderer.vue` and `CommentLayer.vue`
-  are admin-only but live in `site/` (pure move + ~4 import updates);
-  `lib/roles.ts` type-imports `Role` from a composable — move the type to
-  `src/types/editor.ts`.
+- **D4 — some exported symbols are single-file** (drop the `export` keyword).
+  Re-grepped 2026-09-15; the live list is `linkFromToken`, `suggestNextLine`
+  (`src/lib/syntax.ts` — read-only per the reconcile invariant, so left alone),
+  `splitClassVariants` (`src/lib/styles.ts`), `getStep`/`BORDER_STEPS`
+  (`src/lib/tieredBox.ts`), `ACCEPTED_UNITS`/`matchesNamedFormat`
+  (`src/lib/valueClass.ts`), `breakpointMinVariant`/`isBreakpointToken`
+  (`src/lib/responsive.ts`), `MAX_BREAKPOINTS` (`useProject`), `CURRENT_USER`
+  (`useComments`), plus the exported-but-internal `interactionConflict`
+  (`shared/interactionClasses.js`), `isBooleanAttribute`/`BOOLEAN_ATTRS`
+  (`shared/attributes.js`), `fontFamilyValue` (`shared/tokens.js`),
+  `UPLOAD_LIMIT_PER_WINDOW` (`server/media.mjs`) and
+  `adminCount`/`findUserById`/`parseCookies` (`server/auth.mjs` — read-only,
+  security-load-bearing). Also ~20 exported interfaces that no other file
+  imports. Cosmetic; no behaviour rides on it.
+- **Foldering nit:** `components/site/CommentLayer.vue` is admin-only but lives
+  in `site/` (pure move + import updates); `lib/roles.ts` type-imports `Role`
+  from a composable — move the type to `src/types/editor.ts`.
+
+## Product gaps from the CHSFD parity plan (rest of it shipped 2026-09-13)
+
+Everything in that plan shipped except these four. They are design work, not
+patches; each was scoped in the plan and the scoping is reproduced here.
+
+- **P1 — client refs in the DSL (`:div#hero-shape`).** Line addressing counts
+  *expanded* component blocks, so an agent has to hard-code that `:Header:` is
+  62 lines. A `#ref` token parsed into `node.ref` — **code-owned** like
+  `node.arg`, patched by editing the code line, never mutated on the node —
+  fixes that and gives `reconcile` its strongest adoption signal (try refs
+  before the line diff, which also closes a large slice of the re-parent
+  problem). Touches `lexLine`/`LEAF`/`OPEN`/`CLOSE`/`parseSyntax`/
+  `suggestCompletion`; `validateDocument` reports duplicate refs per page;
+  markers (`(+)`/`{+}`/`[+]`) must keep working alongside a ref (fix the slot
+  order once and document it). `edit_elements` then accepts `ref:` as an
+  address alongside `line`/`id`, and `bindInteractions`/`bindAnimations` accept
+  `targetRef`. `ref` emits nothing in the HTML (it is not `htmlId`). Biggest
+  single item; keep it on its own commit.
+- **P2 — form submissions.** The form *elements* shipped; there is no backend.
+  Sketch: `node.form?: { mode: 'store'|'email'|'both'; to?; subject?; redirect?;
+  collectionId? }` on `:form`; the export emits
+  `<form method="post" action="/api/forms/<pageId>/<nodeId>">` + honeypot + a
+  per-site submission token, with a progressive-enhancement handler in
+  `site-runtime.js` that posts via `fetch` and swaps in a success state through
+  an interaction stateKey. `server/forms.mjs` would be **the most exposed
+  endpoint in the product** (unauthenticated), so: origin check, per-IP rate
+  limit (reuse the auth limiter), body cap, honeypot, and a field allowlist
+  derived from the *stored* project's declared inputs — never from posted
+  names. Append to `server/data/forms/<pageId>-<nodeId>.jsonl`. Email goes
+  through `settings.integrations.mailing` with the provider key held
+  server-side in `publish.json` (same pattern as the GitHub token) — do not add
+  nodemailer. Admin gets a Submissions panel (list + CSV), admin/editor only;
+  MCP gets a read-only `list_form_submissions`. **`/security-review` is
+  mandatory before shipping this one.** File upload (multipart) and Stripe
+  Checkout are follow-ups in the same module, not blockers.
+- **P3 — page transitions and smooth scroll.** Both global settings, both off
+  by default, both must respect `prefers-reduced-motion` and `?noanim`.
+  `settings.transitions?: { enter?: animationId; exit?: animationId }` — a small
+  module in `src/motion/runtime.ts` that intercepts same-origin, same-tab,
+  unmodified link clicks, plays the exit timeline, then navigates; plays enter
+  on load and on `pageshow` (bfcache — test Back explicitly); skips downloads,
+  `target=_blank` and hash-only links. `settings.scroll?: { smooth: boolean;
+  lerp?: number }` — a ~60-line lerp scroller (no Lenis dependency) driven from
+  the motion runtime's existing scrub rAF loop so parallax cannot desync;
+  disabled on reduced-motion, on touch, and where `position: sticky` matters.
+  State the accessibility tradeoff plainly in the Settings UI; it ships off.
+- **P4 — marquee ergonomics.** `pauseOn: 'hover'` on an `AnimationBinding`
+  (runtime pauses the timeline while the trigger is hovered) covers the common
+  case. Drag + inertia would be a new `'drag'` trigger on the animation
+  runtime — lowest value on the whole list; do it last or not at all.
+
+Inline SVG / `currentColor` icons was the fifth item; it is tracked as **M6**
+below. The plan's extra detail: a new `icon` element whose `content` holds an
+inline SVG sanitized by a shared `src/lib/shared/svg.js` (lift the existing
+`sanitizeSvg` out of `server/media.mjs` so both surfaces use one
+implementation), rendered as raw inner HTML with `fill`/`stroke` forced to
+`currentColor`, plus an `svg` field on `edit_elements` and a "use inline"
+action on media-library SVGs.
+
+## Launch (pre-publish)
+
+- **License — owner's call, hard blocker.** Both packages carry
+  `"license": "UNLICENSED"` so nothing can be published accidentally. The
+  options as framed at launch prep: **MIT** (maximal adoption, a competitor can
+  fork/close/sell), **AGPL-3.0** (self-hosters unaffected, anyone offering
+  Guano as a service must open their modifications, some companies refuse it
+  outright), **Elastic License 2.0** (source-available, forbids managed-service
+  offerings, not OSI "open source"). Once chosen: a `LICENSE` file at the repo
+  root plus the `license` field in `package.json`,
+  `packages/guano/package.json` and `packages/create-guano/package.json`.
+- **Publish order matters:** `packages/guano` first (`create-guano` depends on
+  it existing in the registry), then `packages/create-guano`. `prepack` builds
+  and stages automatically.
+- **Day-of checklist:** npm names `guano` / `create-guano` still free; license
+  + three `package.json` fields set; `git pull` clean and
+  `rm -rf dist && npm run build && npm run test:e2e` green; fresh-machine test
+  (`npm create guano test && cd test && npm i && npm run dev`); publish in
+  order; `git tag v0.1.0 && git push --tags`; README badges (npm version, node
+  engines) + fix the create-guano npm links; smoke the *published* packages,
+  not the local tarball; point the repo description/homepage at the product,
+  not "builder"; announce and watch npm + issues for 48h.
 
 ## Tooling
 
@@ -144,8 +254,7 @@ behind a `default-src 'none'` CSP, no per-token scopes/expiry).
 
 ## MCP (v1 limits)
 
-The `guano mcp` server (`packages/guano/mcp/`, see `PLAN-MCP.md`) shipped Phases
-0–5. Known, deliberately-deferred limits:
+The `guano mcp` server (`packages/guano/mcp/`) shipped Phases 0–8. Known, deliberately-deferred limits:
 
 - **M1 — no in-server HTTP transport.** v1 is a stdio CLI (`guano mcp`) that
   talks to a running instance over the HTTP API. A streamable-HTTP `/mcp`
