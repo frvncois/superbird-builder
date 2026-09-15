@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT — see LICENSE-EXCEPTIONS.md (embedded in exported sites; deliberately not AGPL)
 // Guano static-site runtime (~4 KB): interactions.
 //
 // Interactions replay the editor's triggers by toggling Tailwind classes.

@@ -1,14 +1,15 @@
 {
   "name": "create-guano",
   "version": "0.1.0",
-  "license": "UNLICENSED",
+  "license": "AGPL-3.0-only",
   "description": "Scaffold a new Guano site project.",
   "type": "module",
   "bin": {
     "create-guano": "index.js"
   },
   "files": [
-    "index.js"
+    "index.js",
+    "LICENSE-EXCEPTIONS.md"
   ],
   "engines": {
     "node": "^22.18.0 || >=24.12.0"

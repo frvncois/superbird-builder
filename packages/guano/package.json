@@ -1,7 +1,7 @@
 {
   "name": "guano",
   "version": "0.1.0",
-  "license": "UNLICENSED",
+  "license": "AGPL-3.0-only",
   "description": "Self-hosted visual website builder: DSL editor, live canvas, CMS collections, static publishing.",
   "type": "module",
   "bin": {
@@ -13,7 +13,8 @@
     "mcp",
     "runtime",
     "server",
-    "src"
+    "src",
+    "LICENSE-EXCEPTIONS.md"
   ],
   "scripts": {
     "prepack": "node scripts/prepack.mjs"

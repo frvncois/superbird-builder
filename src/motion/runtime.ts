@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT — see LICENSE-EXCEPTIONS.md (embedded in exported sites; deliberately not AGPL)
 // Published-site motion runtime, built to server/motion-runtime.js and shipped
 // as /assets/motion.js. The MATH is imported from src/lib/shared/motion.js —
 // the exact module the editor uses — so a published animation is frame-for-frame

@@ -121,5 +121,11 @@ Export project downloads a portable `.zip` you can re-import elsewhere.
 
 ## License
 
-Not yet licensed — see `BACKLOG.md` → "Launch (pre-publish)". Do not redistribute
-until a license is chosen.
+Guano is [AGPL-3.0](LICENSE): self-hosting it — for yourself or for clients — carries
+no obligations; offering a *modified* Guano to others as a network service requires
+sharing your modifications with those users.
+
+**Your exported sites are entirely yours.** The AGPL never touches the sites Guano
+produces, and the small runtime scripts embedded in them (`assets/script.js`,
+`assets/motion.js`) are deliberately MIT-licensed so no copyleft question can ever
+attach to a published site — see [LICENSE-EXCEPTIONS.md](LICENSE-EXCEPTIONS.md).

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT — see LICENSE-EXCEPTIONS.md (embedded in exported sites; deliberately not AGPL)
 // Base-vs-fired class conflict resolution for interactions, shared by the
 // static exporter (which bakes an int-fxrm removal map for the site runtime)
 // and the editor canvas (useRenderNode), so both surfaces toggle identically.

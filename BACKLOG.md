@@ -230,15 +230,15 @@ action on media-library SVGs.
 
 ## Launch (pre-publish)
 
-- **License — owner's call, hard blocker.** Both packages carry
-  `"license": "UNLICENSED"` so nothing can be published accidentally. The
-  options as framed at launch prep: **MIT** (maximal adoption, a competitor can
-  fork/close/sell), **AGPL-3.0** (self-hosters unaffected, anyone offering
-  Guano as a service must open their modifications, some companies refuse it
-  outright), **Elastic License 2.0** (source-available, forbids managed-service
-  offerings, not OSI "open source"). Once chosen: a `LICENSE` file at the repo
-  root plus the `license` field in `package.json`,
-  `packages/guano/package.json` and `packages/create-guano/package.json`.
+- **License — DECIDED 2026-09-15: AGPL-3.0-only, with an MIT carve-out for the
+  exported-site runtimes** (`site-runtime.js`, `motion-runtime.js` and their
+  sources) so no copyleft question can attach to a published site. Shipped:
+  `LICENSE` (AGPL text) + `LICENSE-EXCEPTIONS.md` at the repo root and copied
+  into both packages, `"license": "AGPL-3.0-only"` in all three package.jsons,
+  SPDX headers on the MIT files, README licensing section. Rationale: sole
+  copyright holder keeps the dual-license/hosted-service option open; MIT
+  would give it away, Elastic 2.0 costs the "open source" claim. No longer a
+  blocker.
 - **Publish order matters:** `packages/guano` first (`create-guano` depends on
   it existing in the registry), then `packages/create-guano`. `prepack` builds
   and stages automatically.

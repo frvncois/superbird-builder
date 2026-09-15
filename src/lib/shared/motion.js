@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT — see LICENSE-EXCEPTIONS.md (embedded in exported sites; deliberately not AGPL)
 // The motion engine's pure math, shared VERBATIM by three consumers:
 //   - the editor canvas + preview (via src/lib/motion.ts → useMotion)
 //   - the published-site runtime (src/motion/runtime.ts → assets/motion.js)
