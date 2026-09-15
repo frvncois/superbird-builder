@@ -27,6 +27,7 @@
   --editor-string: #c3e88d;
   --editor-punct: #86e1fc;
   --editor-component: #ffc777;
+  --editor-ref: #fca7ea;
 
   /* state/variant class badges (hover:, focus:…) — keyword hue, new names */
   --state-class: #c099ff;
@@ -56,6 +57,7 @@
   --editor-string: #587f3a;
   --editor-punct: #1e88b0;
   --editor-component: #b8862b;
+  --editor-ref: #a8409a;
 
   --state-class: #8d5bd6;
 }
@@ -90,6 +92,7 @@
   --color-editor-string: var(--editor-string);
   --color-editor-punct: var(--editor-punct);
   --color-editor-component: var(--editor-component);
+  --color-editor-ref: var(--editor-ref);
 
   --color-state-class: var(--state-class);
 }

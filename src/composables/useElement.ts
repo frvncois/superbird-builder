@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue'
 import { usePage } from './usePage'
-import { dataMarkerOf, hasOpenArgBracket, interactionMarkerOf, reconcile, styleMarkerOf, withDataMarker, withInteractionMarker, withStyleMarker } from '@/lib/syntax'
+import { REF_SLOT, dataMarkerOf, hasOpenArgBracket, interactionMarkerOf, reconcile, styleMarkerOf, withDataMarker, withInteractionMarker, withStyleMarker } from '@/lib/syntax'
 import { isKnownElement } from '@/lib/elements'
 import { isComponentType } from '@/lib/components'
 import { deepClone, findNode, walkNodes } from '@/lib/tree'
@@ -139,8 +139,10 @@ export function useElement() {
     const lines = page.code.split('\n')
     const line = lines[node.line]!
     // close-bracket optional so a write mid arg-edit replaces the unclosed
-    // '[' instead of inserting a second bracket (':h1[:' → ':h1[title]:')
-    const pattern = new RegExp(`(:${node.type})(\\[[a-z0-9.+-]*\\]?)?`)
+    // '[' instead of inserting a second bracket (':h1[:' → ':h1[title]:').
+    // The '#ref' sits BETWEEN the name and the arg, so group 1 has to swallow
+    // it — otherwise the arg lands in front of it (':h1[title]#hero').
+    const pattern = new RegExp(`(:${node.type}${REF_SLOT})(\\[[a-z0-9.+-]*\\]?)?`)
     lines[node.line] = line.replace(pattern, arg ? `$1[${arg}]` : '$1')
     page.code = lines.join('\n')
     node.arg = arg || undefined
@@ -197,6 +199,38 @@ export function useElement() {
     }
     visit(page.elements)
     if (changed) page.code = lines.join('\n')
+  }
+
+  /** a valid client ref: same charset as an element name */
+  const REF_RE = /^[a-zA-Z][a-zA-Z0-9-]*$/
+
+  /**
+   * Sets or clears an element's '#ref' — its stable client-side address — by
+   * patching the token line in place. Structure is unchanged (the line count
+   * is the same), so no reconcile, same pattern as setElementArg.
+   *
+   * Refs are page-scope and must be unique, so a collision is refused rather
+   * than silently creating an ambiguous pair. The body has no ref (it is the
+   * page root). Returns whether it wrote.
+   */
+  function setElementRef(id: string, ref: string | null): boolean {
+    const page = activePage.value
+    const node = page ? findNode(page.elements, id) : null
+    if (!page || !node || node.line === undefined || node.type === 'body') return false
+    if (ref !== null && !REF_RE.test(ref)) return false
+    if (ref !== null && ref !== node.ref) {
+      let taken = false
+      walkNodes(page.elements, (n) => {
+        if (n.id !== id && n.ref === ref) taken = true
+      })
+      if (taken) return false
+    }
+    const lines = page.code.split('\n')
+    const pattern = new RegExp(`(:${node.type})${REF_SLOT}`)
+    lines[node.line] = lines[node.line]!.replace(pattern, ref ? `$1#${ref}` : '$1')
+    page.code = lines.join('\n')
+    node.ref = ref || undefined
+    return true
   }
 
   /**
@@ -700,6 +734,7 @@ export function useElement() {
     updateElement,
     changeElementType,
     setElementArg,
+    setElementRef,
     setElementLink,
     syncNodeMarkers,
     removeElement,

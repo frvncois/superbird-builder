@@ -12,7 +12,7 @@ import { expandComponentInstances, isComponentType } from '@/lib/components'
 import { isKnownElement } from '@/lib/elements'
 import { useCollections } from '@/composables/useCollections'
 import { CircleAlert, CircleCheck, ChevronDown, ChevronRight } from 'lucide-vue-next'
-import { closeArgBracket, hasOpenArgBracket, interactionMarkerOf, isBodyOpenLine, reconcile, styleMarkerOf, suggestCompletion, validateDocument, withInteractionMarker, withStyleMarker, OPEN, CLOSE } from '@/lib/syntax'
+import { closeArgBracket, hasOpenArgBracket, interactionMarkerOf, isBodyOpenLine, reconcile, styleMarkerOf, suggestCompletion, validateDocument, withInteractionMarker, withStyleMarker, OPEN, CLOSE, REF_SLOT } from '@/lib/syntax'
 import { enforceDocument, parseSetup, replaceSetup, setSetupLocale, slugify } from '@/lib/document'
 import { useLocale } from '@/composables/useLocale'
 import { collapseCode, computeFold, expandCode, type FoldRange } from '@/lib/folding'
@@ -82,7 +82,9 @@ const entrySetup = computed(() =>
     : null,
 )
 
-const COMPONENT_TOKEN = /^(?::[A-Z][a-zA-Z0-9-]*:?|[A-Z][a-zA-Z0-9-]*:)$/
+// a component instance line, with the optional '#ref' it may carry on its own
+// open/leaf token (refs INSIDE the block are a diagnostic — see validateDocument)
+const COMPONENT_TOKEN = new RegExp(`^(?::[A-Z][a-zA-Z0-9-]*${REF_SLOT}:?|[A-Z][a-zA-Z0-9-]*:)$`)
 
 // --- code folding ---
 // Ids of block open-nodes whose bodies are collapsed. Everything below
@@ -955,7 +957,7 @@ function jumpToLine(real: number) {
 
 // --- syntax coloring (Moonlight palette): scaffold muted, per-token colors ---
 
-type Tone = 'plain' | 'muted' | 'keyword' | 'arg' | 'string' | 'punct' | 'component'
+type Tone = 'plain' | 'muted' | 'keyword' | 'arg' | 'string' | 'punct' | 'component' | 'ref'
 
 interface LinePart {
   text: string
@@ -972,6 +974,7 @@ const TONE_CLASS: Record<Tone, string> = {
   string: 'text-editor-string',
   punct: 'text-editor-punct',
   component: 'text-editor-component',
+  ref: 'text-editor-ref',
 }
 
 // splits `:h1[title]:` into keyword / punct / arg parts; the token regex is
@@ -983,12 +986,15 @@ function tokenizeLine(text: string, dim?: boolean): LinePart[] {
   const parts: LinePart[] = []
   if (indent) parts.push({ text: indent, tone: 'plain', dim })
   if (token) {
-    const t = token.match(/^(:?)([A-Za-z][A-Za-z0-9-]*)(?:(\[)([^\]]*)(\]?))?(\(\+?\)?)?(\{\+?\}?)?(:?)$/)
+    const t = token.match(
+      /^(:?)([A-Za-z][A-Za-z0-9-]*)(#[A-Za-z0-9-]*)?(?:(\[)([^\]]*)(\]?))?(\(\+?\)?)?(\{\+?\}?)?(:?)$/,
+    )
     if (!t) parts.push({ text: token, tone: 'plain', dim })
     else {
-      const [, lead, name, open, arg, close, marker, brace, colon] = t
+      const [, lead, name, ref, open, arg, close, marker, brace, colon] = t
       if (lead) parts.push({ text: lead, tone: 'punct', dim })
       parts.push({ text: name!, tone: 'keyword', dim })
+      if (ref) parts.push({ text: ref, tone: 'ref', dim })
       if (open) parts.push({ text: open, tone: 'punct', dim })
       if (arg) parts.push({ text: arg, tone: 'arg', dim })
       if (close) parts.push({ text: close, tone: 'punct', dim })
@@ -1014,11 +1020,14 @@ const styledLines = computed<LinePart[][]>(() => {
       if (/^[A-Z]/.test(t)) componentDepth = Math.max(0, componentDepth - 1) // Card:
       else if (!t.endsWith(':')) componentDepth++ // :Card (leaf :Card: leaves depth alone)
       const indent = text.match(/^\s*/)![0]
-      const [, lead, name, colon] = t.match(/^(:?)([A-Za-z][A-Za-z0-9-]*)(:?)$/)!
+      const [, lead, name, ref, colon] = t.match(
+        /^(:?)([A-Za-z][A-Za-z0-9-]*)(#[A-Za-z0-9-]*)?(:?)$/,
+      )!
       return [
         ...(indent ? [{ text: indent, tone: 'plain' as Tone }] : []),
         ...(lead ? [{ text: lead, tone: 'punct' as Tone }] : []),
         { text: name!, tone: 'component' },
+        ...(ref ? [{ text: ref, tone: 'ref' as Tone }] : []),
         ...(colon ? [{ text: colon, tone: 'punct' as Tone }] : []),
       ]
     }
@@ -1238,7 +1247,7 @@ function maybeOpenStyleParen(el: HTMLTextAreaElement) {
   const head = value.slice(lineStart, pos).trimStart()
   // closed [arg] required before the paren, so '(' typed inside brackets
   // (or on @setup/close lines) never triggers
-  if (!/^:[a-zA-Z][a-zA-Z0-9-]*(?:\[[a-z0-9.+-]*\])?\($/.test(head)) return
+  if (!new RegExp(`^:[a-zA-Z][a-zA-Z0-9-]*${REF_SLOT}(?:\\[[a-z0-9.+-]*\\])?\\($`).test(head)) return
   const node = panelTargetAt(d2r(value.slice(0, pos).split('\n').length - 1), 'style')
   if (!node) return
   // component instances style their shared master — no per-node marker there
@@ -1256,7 +1265,13 @@ function maybeOpenInteractionBrace(el: HTMLTextAreaElement) {
   if (value[pos] === '+' || value[pos] === '}') return // already a marker
   const lineStart = value.lastIndexOf('\n', pos - 2) + 1
   const head = value.slice(lineStart, pos).trimStart()
-  if (!/^:[a-zA-Z][a-zA-Z0-9-]*(?:\[[a-z0-9.+-]*\])?(?:\(\+\))?\{$/.test(head)) return
+  if (
+    !new RegExp(
+      `^:[a-zA-Z][a-zA-Z0-9-]*${REF_SLOT}(?:\\[[a-z0-9.+-]*\\])?(?:\\(\\+\\))?\\{$`,
+    ).test(head)
+  ) {
+    return
+  }
   const node = panelTargetAt(d2r(value.slice(0, pos).split('\n').length - 1), 'interactions')
   if (!node) return
   // component instances get interactions from their shared master — no
@@ -1274,7 +1289,10 @@ function sealDataMarker(node: ElementNode) {
   const page = activePage.value
   if (!page || node.line === undefined) return
   const lines = page.code.split('\n')
-  const next = lines[node.line]!.replace(/^(\s*:[a-zA-Z][a-zA-Z0-9-]*)\[$/, '$1[+]')
+  const next = lines[node.line]!.replace(
+    new RegExp(`^(\\s*:[a-zA-Z][a-zA-Z0-9-]*${REF_SLOT})\\[$`),
+    '$1[+]',
+  )
   if (next === lines[node.line]) return
   lines[node.line] = next
   page.code = lines.join('\n')
@@ -1288,7 +1306,7 @@ function maybeOpenDataBracket(el: HTMLTextAreaElement) {
   if (value[pos - 1] !== '[') return
   const lineStart = value.lastIndexOf('\n', pos - 2) + 1
   const head = value.slice(lineStart, pos).trimStart()
-  if (!/^:[a-zA-Z][a-zA-Z0-9-]*\[$/.test(head)) return
+  if (!new RegExp(`^:[a-zA-Z][a-zA-Z0-9-]*${REF_SLOT}\\[$`).test(head)) return
   const node = panelTargetAt(d2r(value.slice(0, pos).split('\n').length - 1), 'data')
   if (!node) return
   // component instances allowed — content and args are per-instance
@@ -1304,7 +1322,9 @@ function maybeOpenDataBracket(el: HTMLTextAreaElement) {
 
 const CARET_DWELL_MS = 350
 // the token head's three spans, in source order, possibly mid-typing
-const HEAD_SPANS = /^(\s*:[a-zA-Z][a-zA-Z0-9-]*)(\[[a-z0-9.+-]*\]?)?(\(\+?\)?)?(\{\+?\}?)?/
+const HEAD_SPANS = new RegExp(
+  `^(\\s*:[a-zA-Z][a-zA-Z0-9-]*${REF_SLOT})(\\[[a-z0-9.+-]*\\]?)?(\\(\\+?\\)?)?(\\{\\+?\\}?)?`,
+)
 
 /** which panel span the (collapsed, editor-focused) caret sits inside */
 function caretSpanKind(): PanelKind | null {
@@ -1528,7 +1548,9 @@ function finalizeDataBracket() {
       lines[node.line] = next
       // code is authoritative for the arg: a typed arg the close just sealed
       // becomes node.arg; a removed empty '[' clears it
-      const arg = next.match(/^\s*:[a-zA-Z][a-zA-Z0-9-]*\[([a-z0-9.-]+)\]/)?.[1]
+      const arg = next.match(
+        new RegExp(`^\\s*:[a-zA-Z][a-zA-Z0-9-]*${REF_SLOT}\\[([a-z0-9.-]+)\\]`),
+      )?.[1]
       node.arg = arg ?? undefined
       page.code = lines.join('\n')
     }
@@ -1609,7 +1631,9 @@ watch(
 
 // keeps '(+)' / '{+}' in step with node.classes / node.interactions no matter
 // where they change (panels, canvas, MCP, paste/duplicate — new node ids
-// re-fire it too)
+// re-fire it too). `arg` is in the signature because the data marker depends
+// on whether the arg slot holds a binding; `ref` deliberately is NOT — it is
+// code-owned, not derived from node state, so it can never need a re-sync.
 const markersSig = computed(() => {
   const parts: string[] = []
   const visit = (nodes: ElementNode[]) => {

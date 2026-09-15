@@ -26,8 +26,10 @@ import { walkNodes } from './tree'
 // form ':div#' stays ONE token, same philosophy as the unclosed '['.
 // ONE definition of the grammar, shared by every head-anchored matcher below.
 const REF = '(?:#(?<ref>[a-zA-Z][a-zA-Z0-9-]*)?)?'
-/** the same slot, uncaptured — for the head regexes, which only need to skip it */
-const REF_SKIP = '(?:#[a-zA-Z0-9-]*)?'
+/** the same slot, uncaptured — for head-anchored matchers that only need to
+ * SKIP it. Exported so the code editor's own regexes share this one definition
+ * instead of each re-spelling the ref grammar. */
+export const REF_SLOT = '(?:#[a-zA-Z0-9-]*)?'
 const NAME = '[a-zA-Z][a-zA-Z0-9-]*'
 const ARG = '(?:\\[(?<arg>[a-z0-9.@+-]*)\\]?)?'
 const MARKERS = '(?:\\(\\+?\\)?)?(?:\\{\\+?\\}?)?'
@@ -124,7 +126,7 @@ export function lexLine(text: string): string[] {
 // token head (indent + :name + optional [arg]) then the marker slot — the
 // anchor for reading/rewriting a line's styled marker without touching the
 // leaf ':' or '@link' tail
-const TOKEN_HEAD = new RegExp(`^(\\s*:${NAME}${REF_SKIP}(?:\\[[a-z0-9.@+-]*\\])?)(\\(\\+?\\)?)?`)
+const TOKEN_HEAD = new RegExp(`^(\\s*:${NAME}${REF_SLOT}(?:\\[[a-z0-9.@+-]*\\])?)(\\(\\+?\\)?)?`)
 
 /** the :body wrapper's open line — tolerates an arg and (possibly mid-typing)
  * style/interaction markers: ':body', ':body[post]', ':body(', ':body[post](+){+}'.
@@ -142,7 +144,7 @@ export function styleMarkerOf(line: string): string | undefined {
 
 /** the line's token has an unclosed '[' arg — an arg edit in progress */
 export function hasOpenArgBracket(line: string): boolean {
-  return new RegExp(`^\\s*:${NAME}${REF_SKIP}\\[[^\\]]*$`).test(line)
+  return new RegExp(`^\\s*:${NAME}${REF_SLOT}\\[[^\\]]*$`).test(line)
 }
 
 /** finalizes an unclosed '[' arg: non-empty → close it (':h1[po' → ':h1[po]'),
@@ -151,7 +153,7 @@ export function hasOpenArgBracket(line: string): boolean {
  * split a CLOSED arg like '[title]' and re-close it mid-word. */
 export function closeArgBracket(line: string): string {
   return line.replace(
-    new RegExp(`^(\\s*:${NAME}${REF_SKIP})\\[([a-z0-9.@+-]*)(?![\\]a-z0-9.@+-])`),
+    new RegExp(`^(\\s*:${NAME}${REF_SLOT})\\[([a-z0-9.@+-]*)(?![\\]a-z0-9.@+-])`),
     (_, head: string, arg: string) => (arg ? `${head}[${arg}]` : head),
   )
 }
@@ -170,7 +172,7 @@ export function withStyleMarker(line: string, on: boolean): string {
 // like TOKEN_HEAD but the head swallows any (possibly incomplete) style
 // marker, so the '{…}' interactions slot anchors right after it
 const INT_HEAD = new RegExp(
-  `^(\\s*:${NAME}${REF_SKIP}(?:\\[[a-z0-9.@+-]*\\])?(?:\\(\\+?\\)?)?)(\\{\\+?\\}?)?`,
+  `^(\\s*:${NAME}${REF_SLOT}(?:\\[[a-z0-9.@+-]*\\])?(?:\\(\\+?\\)?)?)(\\{\\+?\\}?)?`,
 )
 
 /** the interactions marker currently on the line's token: '{+}', or a
@@ -191,7 +193,7 @@ export function withInteractionMarker(line: string, on: boolean): string {
 // the '[…]' slot doubles as the data marker: '[+]' means the element carries
 // its own content/media (set via the Data panel or inline editing), while a
 // real '[name]' is a collection-field binding and owns the slot outright
-const DATA_HEAD = new RegExp(`^(\\s*:${NAME}${REF_SKIP})(\\[[a-z0-9.@+-]*\\]?)?`)
+const DATA_HEAD = new RegExp(`^(\\s*:${NAME}${REF_SLOT})(\\[[a-z0-9.@+-]*\\]?)?`)
 
 /** the data marker currently on the line's token — only '[+]' counts; a real
  * arg or a mid-typing '[' is not a marker */
