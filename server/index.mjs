@@ -26,8 +26,6 @@ import {
   handleMediaFile,
   originAllowed,
   resetMediaIndexCache,
-  mediaIndexData,
-  mediaUploadFromBuffer,
 } from './media.mjs'
 import { pushSiteToGitHub } from './github.mjs'
 import { createZip, readZip } from './zip.mjs'

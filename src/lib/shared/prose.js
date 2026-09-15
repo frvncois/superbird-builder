@@ -38,10 +38,6 @@ export const PROSE_CSS = `@layer components{
 .prose :where(code){font-family:var(--font-mono,ui-monospace,monospace);font-size:.9em;}
 }`
 
-/** the classes this stylesheet defines, so the exporter always compiles them
- * even though `prose` reaches the markup as an author-written class */
-export const PROSE_CLASSES = ['prose']
-
 /**
  * Project-defined Tailwind variants, compiled into both surfaces.
  *

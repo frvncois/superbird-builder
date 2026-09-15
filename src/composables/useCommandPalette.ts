@@ -7,9 +7,6 @@ import { expandComponentInstances } from '@/lib/components'
 // runtime editor state: whether the ⌘E insert palette (the canvas dock) is open
 const open = ref(false)
 
-export function openPalette() {
-  open.value = true
-}
 export function closePalette() {
   open.value = false
 }
@@ -35,5 +32,5 @@ export function useCommandPalette() {
     insertElementBlock(block, target.id, 'inside')
   }
 
-  return { open, openPalette, closePalette, togglePalette, insertElement, insertComponent }
+  return { open, closePalette, togglePalette, insertElement, insertComponent }
 }

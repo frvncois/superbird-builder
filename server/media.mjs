@@ -18,7 +18,7 @@
 // on serve always comes from the index, never from sniffing or the request.
 
 import { randomBytes } from 'node:crypto'
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import sharp from 'sharp'
@@ -336,28 +336,8 @@ async function storeFile(id, buf, mime, kind) {
   return { hasThumb: false }
 }
 
-// ---------- programmatic API (in-process agent adapter; no req/res) ----------
-
-/** the library index — same data GET /api/media serves */
-export async function mediaIndexData() {
-  return loadIndex()
-}
-
-/** validate a buffer exactly like intakeUpload, minus the request plumbing;
- *  returns { error, status } or { buf, mime, kind } */
-async function validateUploadBuffer(buf, mime) {
-  const type = ALLOWED[mime]
-  if (!type) return { error: 'unsupported file type', status: 415 }
-  if (!buf.length || buf.length > SIZE_CAPS[type.kind]) return { error: 'file too large', status: 413 }
-  if (!matchesMime(buf, mime)) return { error: 'file content does not match its type', status: 415 }
-  if (mime === 'image/svg+xml') buf = Buffer.from(sanitizeSvg(buf.toString('utf8')), 'utf8')
-  await loadIndex()
-  if (usedBytes() + buf.length > QUOTA) return { error: 'media library is full', status: 507 }
-  return { buf, mime, kind: type.kind }
-}
-
-/** store a validated buffer as a new asset — the shared tail of both the HTTP
- *  upload branch and mediaUploadFromBuffer */
+/** store a validated buffer as a new asset — the shared tail of the HTTP
+ *  upload and replace branches */
 function addAsset({ name, folderId, buf, mime, kind, userId }) {
   return enqueue(async () => {
     const id = newId()
@@ -379,24 +359,6 @@ function addAsset({ name, folderId, buf, mime, kind, userId }) {
     await writeIndex()
     return asset
   })
-}
-
-/** upload from an in-memory buffer (agent adapter path — same validation,
- *  rate limit and quota as the HTTP route); returns { error, status } or the asset */
-export async function mediaUploadFromBuffer({ name, folderId, buf, mime, userId }) {
-  const gate = uploadAllowed(userId)
-  if (!gate.ok) return rateLimited(gate)
-  const valid = await validateUploadBuffer(buf, (mime ?? '').split(';')[0].trim().toLowerCase())
-  if (valid.error) return valid
-  const asset = await addAsset({
-    name: cleanName(name) || 'untitled',
-    folderId,
-    buf: valid.buf,
-    mime: valid.mime,
-    kind: valid.kind,
-    userId,
-  })
-  return asset
 }
 
 // ---------- usage scan ----------

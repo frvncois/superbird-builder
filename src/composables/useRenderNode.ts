@@ -88,7 +88,7 @@ export function useRenderNode(
   const frameBreakpointId = inject(FRAME_BREAKPOINT, null)
   const renderBreakpointId = computed(() => frameBreakpointId ?? liveBreakpointId.value)
   const { collections, collectionByName, activeCollection, activeEntry, entryPath } = useCollections()
-  const { activeLocale, defaultLocale, nodeContent, nodeSrc, entryValue } = useLocale()
+  const { nodeContent, nodeSrc, entryValue } = useLocale()
   const { assetForSrc } = useMedia()
 
   const def = computed(() => ELEMENTS[node.value.type])
@@ -335,7 +335,6 @@ export function useRenderNode(
   const { animationFor, animTargetIndex } = useAnimation()
   const motion = useMotion()
 
-  /** the scope key isolating one component instance's plays from its siblings */
   /** The scope that isolates one rendering of this node from its siblings:
    * the component instance AND the collection-list repeat. Without the entry
    * part, hovering one card fires every repeat and an "appear once" animation
@@ -556,21 +555,13 @@ export function useRenderNode(
   return {
     def,
     mapping,
-    scope,
     motionStyle,
-    animTargets,
-    animOf,
-    playAnim,
-    motionScope,
-    classesFor,
-    scopedClassesFor,
     listCollection,
     listEntries,
     itemCollection,
     itemEntry,
     itemTemplateChildren,
     selfNested,
-    boundCollection,
     boundField,
     boundEntry,
     customAttrs,
@@ -583,8 +574,6 @@ export function useRenderNode(
     altAttr,
     linkRaw,
     baseClasses,
-    ofTrigger,
-    applyIn,
     hoverHandlers,
     fireClickInteractions,
     fireChangeInteractions,

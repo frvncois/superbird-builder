@@ -45,11 +45,6 @@ export function interactionGroupKey(group, instanceScope) {
   return instanceScope ? `${group}@${instanceScope}` : group
 }
 
-/** storage key a `once` binding remembers its state under */
-export function interactionOnceKey(stateKey) {
-  return `guano-int:${stateKey}`
-}
-
 /** what a trigger does to its target's state. `toggle` is the default. */
 export const INTERACTION_ACTIONS = ['toggle', 'on', 'off']
 
