@@ -24,7 +24,7 @@ not the AGPL:
 - `src/lib/shared/motion.js` and `src/lib/shared/interactionClasses.js`
   (shared logic bundled into the runtimes)
 
-MIT License — Copyright (c) 2026 Frvncois (hello@frvncois.com)
+MIT License — Copyright (c) 2026 Francois Lemieux
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
