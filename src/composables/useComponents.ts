@@ -6,6 +6,7 @@ import { reconcile } from '@/lib/syntax'
 import {
   normalizeComponentName,
   isComponentType,
+  hoistBlockRef,
   serializeNode,
   adoptStructure,
   cloneForMaster,
@@ -219,10 +220,13 @@ export function useComponents() {
     const start = source.line
     const end = source.endLine ?? source.line
     const indent = lines[start]!.match(/^\t*/)![0]
+    // a ref on the extracted block's root moves onto the instance wrapper;
+    // refs further in are dropped (they'd be cloned into every instance)
+    const hoisted = hoistBlockRef(lines.slice(start, end + 1))
     const rest = [
       ...lines.slice(0, start),
-      `${indent}:${name}`,
-      ...lines.slice(start, end + 1).map((l) => `\t${l}`),
+      `${indent}:${name}${hoisted.ref ? `#${hoisted.ref}` : ''}`,
+      ...hoisted.lines.map((l) => `\t${l}`),
       `${indent}${name}:`,
       ...lines.slice(end + 1),
     ]

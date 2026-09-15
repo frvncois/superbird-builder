@@ -70,6 +70,9 @@ export function createToolSet({ api, runtime }) {
     dataMarkerOf,
     withDataMarker,
     hasOpenArgBracket,
+    REF_SLOT,
+    refOf,
+    withoutRef,
     isLeafElement,
     isRich,
     sanitizeRich,
@@ -85,6 +88,7 @@ export function createToolSet({ api, runtime }) {
     createPage,
     defaultSettings,
     normalizeComponentName,
+    hoistBlockRef,
     serializeNode,
     expandComponentInstances,
     adoptStructure,
@@ -630,7 +634,7 @@ function elementSummary(project, page, opts = {}) {
     return n
   }
   const summarize = (n) => {
-    if (mode === 'refs') return { line: n.line, id: n.id, type: n.type }
+    if (mode === 'refs') return { line: n.line, id: n.id, type: n.type, ...(n.ref ? { ref: n.ref } : {}) }
     const master = instMap.get(n.id)?.master
     const masterInteractions = master && master !== n ? (master.interactions?.length ?? 0) : 0
     // with includeContent: the element's OWN text (or the master's, for an
@@ -694,6 +698,9 @@ function elementSummary(project, page, opts = {}) {
       // the node's stable id — what bind_interaction's targetId refers to
       id: n.id,
       type: n.type,
+      // the '#ref' its code line carries, when it has one — a human-readable
+      // address you can use instead of `id` in edits and bind targets
+      ...(n.ref ? { ref: n.ref } : {}),
       // empty/zero/false fields are OMITTED — a bare {line, id, type} means
       // unstyled, no interactions, no own content (keeps big pages readable)
       ...(n.classes ? { classes: n.classes } : {}),
@@ -720,7 +727,16 @@ function elementSummary(project, page, opts = {}) {
       // "refs" collapses instances like "own" does — the element tools refuse
       // writes to instance children anyway, so listing them is pure volume
       if ((mode === 'own' || mode === 'refs') && !inComponent && isComponentType(n.type)) {
-        out.push({ line: n.line, id: n.id, type: n.type, component: n.type, childCount: countDescendants(n.children ?? []) })
+        out.push({
+          line: n.line,
+          id: n.id,
+          type: n.type,
+          // a ref on the instance's OWN line is legal (that node is a real page
+          // node) and is the only ref an instance can carry
+          ...(n.ref ? { ref: n.ref } : {}),
+          component: n.type,
+          childCount: countDescendants(n.children ?? []),
+        })
         continue // collapse the whole instance subtree
       }
       out.push(summarize(n))
@@ -769,6 +785,41 @@ function nodeAtLine(page, line) {
  * edits) or 0-based `line`. Same component-instance tracking as nodeAtLine.
  */
 function resolveEditNode(page, edit, project = null) {
+  // a '#ref' typed in the page code is the friendliest address: it survives
+  // lines moving, and unlike `line` it can't drift when a component instance
+  // expands. Resolved first because it is the most specific thing a caller
+  // can have said.
+  if (edit.ref) {
+    const matches = []
+    walkNodes(page.elements ?? [], (n) => {
+      if (n.ref === edit.ref) matches.push(n)
+    })
+    if (!matches.length) {
+      throw new Error(
+        `no element with ref "#${edit.ref}" on this page (get_page elements:"refs" lists them)`,
+      )
+    }
+    if (matches.length > 1) {
+      throw new Error(
+        `"#${edit.ref}" is on ${matches.length} elements — refs must be unique on a page. ` +
+          'Fix the duplicate in the code, or address by `id`.',
+      )
+    }
+    const node = matches[0]
+    let inComponent = false
+    const mark = (nodes, inside) => {
+      for (const n of nodes) {
+        if (n === node) {
+          inComponent = inside
+          return true
+        }
+        if (mark(n.children ?? [], inside || isComponentType(n.type))) return true
+      }
+      return false
+    }
+    mark(page.elements ?? [], false)
+    return { node, inComponent }
+  }
   if (edit.id) {
     let found = null
     let foundInComponent = false
@@ -793,7 +844,7 @@ function resolveEditNode(page, edit, project = null) {
     if (viaMaster) return { node: viaMaster, inComponent: true }
     throw new Error(`no element with id "${edit.id}" (use get_page to see ids)`)
   }
-  if (edit.line === undefined) throw new Error('each edit needs an `id` or a `line`')
+  if (edit.line === undefined) throw new Error('each edit needs a `ref`, an `id` or a `line`')
   return nodeAtLine(page, edit.line)
 }
 
@@ -906,8 +957,28 @@ function buildInstanceMap(project, page) {
  * target must be stored as the MASTER node id (the exporter's scopedTargets
  * matches master ids) and must live in the SAME instance. Returns
  * { targetId } or { error }.
+ *
+ * `rawRef` is the friendlier address: a '#ref' from the page code, resolved to
+ * a node id here so the rest of the rules (in-instance scoping, master
+ * translation) apply unchanged. Refs never enter STORED bindings — `targetId`
+ * remains the only stored form.
  */
-function resolveBindTarget(project, page, ownerNode, inComponent, rawTarget) {
+function resolveBindTarget(project, page, ownerNode, inComponent, rawTarget, rawRef) {
+  if (rawRef) {
+    const matches = []
+    walkNodes(page.elements ?? [], (n) => {
+      if (n.ref === rawRef) matches.push(n)
+    })
+    if (!matches.length) {
+      return { error: `targetRef "#${rawRef}" is not on this page (get_page elements:"refs" lists them)` }
+    }
+    if (matches.length > 1) {
+      return {
+        error: `targetRef "#${rawRef}" is on ${matches.length} elements — refs must be unique on a page`,
+      }
+    }
+    rawTarget = matches[0].id
+  }
   const target = rawTarget === 'null' || rawTarget === '' ? null : (rawTarget ?? null)
   if (target === null) return { targetId: null }
   if (!inComponent) {
@@ -1199,7 +1270,11 @@ function applyPageEdits(project, page, edits, locale, defaultLocale) {
         )
       } else {
         const lines = page.code.split('\n')
-        const head = lines[node.line]?.match(/^(\s*:[a-zA-Z][a-zA-Z0-9-]*)(\[[a-z0-9.@+-]*\])?/)
+        // group 1 swallows the '#ref' — the arg slot sits AFTER it, so without
+        // this the arg would land in front of the ref (':h1[title]#hero')
+        const head = lines[node.line]?.match(
+          new RegExp(`^(\\s*:[a-zA-Z][a-zA-Z0-9-]*${REF_SLOT})(\\[[a-z0-9.@+-]*\\])?`),
+        )
         if (!head) {
           errors.push('arg refused: could not locate the element token on its line')
         } else {
@@ -1211,6 +1286,51 @@ function applyPageEdits(project, page, edits, locale, defaultLocale) {
           page.code = newCode
           node.arg = value || undefined
           applied.push('arg')
+          changed = true
+        }
+      }
+    }
+
+    // --- setRef (the token's '#ref' — CODE-owned like arg, so patch the line
+    //     and reconcile with a same-line identity map; no line count change) ---
+    if (edit.setRef !== undefined) {
+      const value = String(edit.setRef)
+      const dup = []
+      walkNodes(page.elements ?? [], (n) => {
+        if (value && n.ref === value && n.id !== node.id) dup.push(n.id)
+      })
+      if (node.line === undefined || node.type === 'body') {
+        errors.push("setRef refused: ':body' is the page root and carries no ref")
+      } else if (value && !/^[a-zA-Z][a-zA-Z0-9-]*$/.test(value)) {
+        errors.push('setRef refused: a ref starts with a letter, then letters/digits/hyphens')
+      } else if (dup.length) {
+        errors.push(
+          `setRef refused: '#${value}' is already on element ${dup[0]} — refs must be unique on a page`,
+        )
+      } else if (inComponent) {
+        // the block is a clone of the master, rewritten into every instance —
+        // a ref here would be duplicated across instances and pages
+        errors.push(
+          'setRef refused: refs are page-scope and cannot live inside a component instance ' +
+            "block. Put the ref on the instance's own ':Name' line instead.",
+        )
+      } else {
+        const lines = page.code.split('\n')
+        const line = lines[node.line]
+        const head = line?.match(new RegExp(`^(\\s*:[a-zA-Z][a-zA-Z0-9-]*)${REF_SLOT}`))
+        if (!head) {
+          errors.push('setRef refused: could not locate the element token on its line')
+        } else {
+          lines[node.line] = withoutRef(line).replace(
+            new RegExp(`^(\\s*:[a-zA-Z][a-zA-Z0-9-]*)`),
+            value ? `$1#${value}` : '$1',
+          )
+          const newCode = lines.join('\n')
+          const identity = new Map(lines.map((_, i) => [i, i]))
+          page.elements = reconcile(page.code, newCode, page.elements, identity)
+          page.code = newCode
+          node.ref = value || undefined
+          applied.push('setRef')
           changed = true
         }
       }
@@ -1302,7 +1422,7 @@ function applyPageEdits(project, page, edits, locale, defaultLocale) {
             errors.push(`interaction refused: ${shape}`)
             continue
           }
-          const resolved = resolveBindTarget(project, page, node, inComponent, bind.targetId)
+          const resolved = resolveBindTarget(project, page, node, inComponent, bind.targetId, bind.targetRef)
           if (resolved.error) {
             errors.push(resolved.error)
             continue
@@ -1344,7 +1464,7 @@ function applyPageEdits(project, page, edits, locale, defaultLocale) {
             errors.push(`animation refused: ${check.error}`)
             continue
           }
-          const resolved = resolveBindTarget(project, page, node, inComponent, bind.targetId)
+          const resolved = resolveBindTarget(project, page, node, inComponent, bind.targetId, bind.targetRef)
           if (resolved.error) {
             errors.push(resolved.error)
             continue
@@ -1478,10 +1598,14 @@ function makeComponentFrom(project, page, elementId, rawName) {
   const start = source.line
   const end = source.endLine ?? source.line
   const indent = lines[start].match(/^\t*/)[0]
+  // a ref on the extracted block's root moves onto the instance wrapper; refs
+  // further in are dropped (they'd be cloned into every instance) — same
+  // helper the editor's createComponent uses
+  const hoisted = hoistBlockRef(lines.slice(start, end + 1))
   const rest = [
     ...lines.slice(0, start),
-    `${indent}:${name}`,
-    ...lines.slice(start, end + 1).map((l) => `\t${l}`),
+    `${indent}:${name}${hoisted.ref ? `#${hoisted.ref}` : ''}`,
+    ...hoisted.lines.map((l) => `\t${l}`),
     `${indent}${name}:`,
     ...lines.slice(end + 1),
   ]
@@ -2157,7 +2281,9 @@ const tools = [
             'childCount} and reduces master styling to a boolean styledOnMaster — far ' +
             'smaller; "all" expands instance subtrees AND echoes each master\'s ' +
             '`masterClasses`, for per-instance content overrides or restyling an inherited ' +
-            'component; "refs" trims every row to {line, id, type} (addresses only); ' +
+            'component; "refs" trims every row to the ADDRESSES — {line, id, type, ref?} — ' +
+            "where `ref` is the element's '#ref' from the code (':div#hero:' → \"hero\"), " +
+            'the address edit_elements `ref:` and bind `targetRef` take; ' +
             '"none" omits the summary entirely (same modes set_page_code accepts)',
         },
         summaryOnly: { type: 'boolean', description: 'omit the code fields entirely' },
@@ -2296,8 +2422,8 @@ const tools = [
           enum: ['own', 'all', 'refs', 'none'],
           description:
             'shape of the returned per-element summary: "own" (default) or "all" (see ' +
-            'get_page), "refs" for just {line, id, type}, or "none" to omit it entirely — a ' +
-            '300-node page returns 300 rows you may already know, so say so',
+            'get_page), "refs" for just the addresses {line, id, type, ref?}, or "none" to omit ' +
+            'it entirely — a 300-node page returns 300 rows you may already know, so say so',
         },
         fresh: {
           type: 'boolean',
@@ -3586,12 +3712,15 @@ const tools = [
   {
     name: 'edit_elements',
     description:
-      'Batch-edit elements: classes, text content, media src, html id, and ' +
+      'Batch-edit elements: classes, text content, media src, html id, the code-owned ' +
+      "'#ref' address, and " +
       'interaction bindings (bindInteractions/unbindInteractionIds), for MANY elements in ONE ' +
       'call (one save — always prefer this over one call per element). Pass pageId+version+' +
       'edits for one page, or `pages: [{pageId, version, edits}]` to cover SEVERAL pages at ' +
-      'once (shared chrome, sweeping changes). Address each edit by the element `id` from get_page (PREFERRED — stable and ' +
-      'immune to line-counting mistakes) or its 0-based `line`; optionally pass `expectType` ' +
+      "once (shared chrome, sweeping changes). Address each edit by its `ref` (the '#ref' its " +
+      'code line carries, without the "#" — reads like a selector and survives lines moving), ' +
+      'the element `id` from get_page (stable and immune to line-counting mistakes), ' +
+      'or its 0-based `line`; optionally pass `expectType` ' +
       '(e.g. "h1") to make a misaddressed edit fail instead of landing on the wrong element. ' +
       'The response is terse on success ({saved, version, edited, failed, opsApplied, partial}); ' +
       '`failed` counts edits where NOTHING landed, `partial` those where some ops applied next ' +
@@ -3626,6 +3755,22 @@ const tools = [
                   'element id from get_page (preferred address). A component MASTER node id ' +
                   '(from list_components/update_component) also works: it resolves to the ' +
                   'first instance on this page and the write redirects to the master as usual',
+              },
+              ref: {
+                type: 'string',
+                description:
+                  "the element's '#ref' from the page code, without the '#' (':div#hero:' → " +
+                  '"hero"). Address by this when you wrote the refs yourself — it reads like a ' +
+                  'selector and survives lines moving. Takes precedence over id/line. Use `setRef` ' +
+                  'to CHANGE a ref.',
+              },
+              setRef: {
+                type: 'string',
+                description:
+                  "set or clear this element's '#ref' (its stable client-side address in the " +
+                  'code; "" clears it). Page-scope and must be unique — a collision is refused. ' +
+                  'Refs emit nothing in the HTML (that is `htmlId`) and are not allowed inside a ' +
+                  'component instance block.',
               },
               line: { type: 'integer', description: '0-based source line (alternative address)' },
               expectType: { type: 'string', description: 'refuse the edit unless the element is this type' },
@@ -3709,6 +3854,13 @@ const tools = [
                       type: 'string',
                       description: 'element id to animate; omit for the element itself',
                     },
+                    targetRef: {
+                      type: 'string',
+                      description:
+                        "the target's '#ref' from the page code, without the '#' — an " +
+                        'alternative to targetId. Resolved to an id before binding; refs are ' +
+                        'never stored in a binding.',
+                    },
                     ...INTERACTION_BINDING_PROPS,
                   },
                   required: ['interactionId', 'trigger'],
@@ -3730,6 +3882,12 @@ const tools = [
                       enum: ['load', 'appear', 'scrub', 'hover', 'click'],
                     },
                     targetId: { type: 'string', description: 'element id to move; omit for the element itself' },
+                    targetRef: {
+                      type: 'string',
+                      description:
+                        "the target's '#ref' from the page code, without the '#' — an " +
+                        'alternative to targetId, resolved to an id before binding',
+                    },
                     appearMode: {
                       type: 'string',
                       enum: ['replay', 'reverse'],
@@ -4674,9 +4832,10 @@ const tools = [
     name: 'bind_interaction',
     description:
       'Apply ONE library interaction to an element — for several bindings, batch them via ' +
-      'edit_elements.bindInteractions instead (one call, one version). Address by element `id` ' +
-      '(preferred) or 0-based `line`. `targetId` is the node the effect animates — a real ' +
-      'element id in this page, or OMIT it for the element itself. Effect state is shared per ' +
+      'edit_elements.bindInteractions instead (one call, one version). Address by `ref` (the ' +
+      "element's '#ref' in the code, without the '#'), element `id`, or 0-based `line`. " +
+      '`targetId` (or `targetRef`) is the node the effect animates — a real ' +
+      'element in this page, or OMIT it for the element itself. Effect state is shared per ' +
       '(interaction, target), so several triggers drive ONE effect: bind `action: "on"` to an ' +
       'open button and `action: "off"` to a close button and an overlay to build a modal. ' +
       'Pass the `version` from get_page. Elements inside a component instance are refused ' +
@@ -4685,10 +4844,18 @@ const tools = [
       type: 'object',
       properties: {
         pageId: { type: 'string' },
+        ref: {
+          type: 'string',
+          description: "the element's '#ref' from the code, without the '#' (takes precedence over id/line)",
+        },
         id: { type: 'string', description: 'element id from get_page (preferred address)' },
         line: { type: 'integer', description: '0-based source line (alternative address)' },
         interactionId: { type: 'string' },
         targetId: { type: ['string', 'null'] },
+        targetRef: {
+          type: 'string',
+          description: "the target's '#ref', without the '#' — an alternative to targetId",
+        },
         version: { type: 'string' },
         ...INTERACTION_BINDING_PROPS,
       },
@@ -4718,7 +4885,7 @@ const tools = [
       }
       const shape = interactionBindingError(args)
       if (shape) return { saved: false, reason: 'invalid-binding', message: shape }
-      const resolved = resolveBindTarget(project, page, node, inComponent, args.targetId)
+      const resolved = resolveBindTarget(project, page, node, inComponent, args.targetId, args.targetRef)
       if (resolved.error) throw new Error(resolved.error)
       const binding = buildInteractionBinding(args, resolved.targetId)
       bindNode.interactions = bindNode.interactions ?? []

@@ -39,6 +39,9 @@ export {
   dataMarkerOf,
   withDataMarker,
   hasOpenArgBracket,
+  REF_SLOT,
+  refOf,
+  withoutRef,
 } from './syntax'
 export type { Diagnostic } from './syntax'
 
@@ -47,6 +50,7 @@ export type { Diagnostic } from './syntax'
 export {
   isComponentType,
   normalizeComponentName,
+  hoistBlockRef,
   serializeNode,
   expandComponentInstances,
   adoptStructure,

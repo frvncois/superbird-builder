@@ -1,5 +1,6 @@
 import type { ComponentDef, ElementNode } from '@/types/editor'
 import { isLeafElement } from './elements'
+import { refOf, withoutRef } from './syntax'
 import { walkNodes } from './tree'
 
 /**
@@ -23,6 +24,9 @@ export function cloneForMaster(source: ElementNode): {
     n.id = next
     delete n.line
     delete n.endLine
+    // refs are PAGE-scope addresses; a master is cloned into every instance on
+    // every page, so a ref surviving here would be duplicated site-wide
+    delete n.ref
   })
   walkNodes([cloned], (n) => {
     for (const b of n.interactions ?? []) {
@@ -81,6 +85,11 @@ export function normalizeComponentName(raw: string, taken: string[]): string {
  * suffix (dropping them would strip bindings/links from every instance on
  * each structure rewrite) */
 export function serializeNode(node: ElementNode, indent: string): string[] {
+  // `ref` is deliberately NOT emitted. This serializes MASTER nodes, and a
+  // master's structure is cloned into every instance on every page — emitting a
+  // ref would duplicate it site-wide, which is exactly what makes refs inside a
+  // component block a diagnostic. cloneForMaster strips it on the way in; this
+  // is the matching guard on the way out.
   const arg = node.arg ? `[${node.arg}]` : ''
   // node.link stores '@item' for the current-entry sentinel, verbatim otherwise
   const link = node.link ? `@${node.link === '@item' ? 'item' : node.link}` : ''
@@ -95,6 +104,19 @@ export function serializeNode(node: ElementNode, indent: string): string[] {
     ...node.children.flatMap((child) => serializeNode(child, `${indent}\t`)),
     `${indent}${node.type}:`,
   ]
+}
+
+/**
+ * Extraction helper: refs on the lines about to be wrapped in ':Name … Name:'.
+ *
+ * The block ROOT's ref is hoisted onto the wrapper — the instance root is a
+ * real page node, so it keeps its address — and every ref BELOW it is dropped,
+ * because those lines become the master's structure and get rewritten into
+ * every instance. Shared by the editor's createComponent and MCP's
+ * makeComponentFrom so the two can't drift.
+ */
+export function hoistBlockRef(innerLines: string[]): { ref?: string; lines: string[] } {
+  return { ref: refOf(innerLines[0] ?? ''), lines: innerLines.map(withoutRef) }
 }
 
 /** a node's SHALLOW code identity — the DSL its own line encodes: type, the

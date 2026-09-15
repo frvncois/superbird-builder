@@ -57,6 +57,12 @@ export function refOf(line: string): string | undefined {
   return m ? slots(m).ref : undefined
 }
 
+/** the same line with its '#ref' removed. No-ops on close lines and on lines
+ * that never had one. */
+export function withoutRef(line: string): string {
+  return line.replace(new RegExp(`^(\\s*:${NAME})${REF_SLOT}`), '$1')
+}
+
 /** the '@target' suffix a node carries in code → its node.link value
  * ('item' is the current-entry sentinel, stored as '@item'; else verbatim) */
 export function linkFromToken(target: string | undefined): string | undefined {
