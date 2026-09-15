@@ -25,9 +25,10 @@ test('setup, edit content, publish, view live, auth guard', async ({ page, conte
   //    in memory to the published "Brume" coffee site
   await page.goto('/admin?demo')
 
-  // 4. edit the home page's hero heading in the Preview surface
+  // 4. edit the home page's hero heading in the Preview surface. Preview is a
+  //    MODE inside the one editor shell, not a route (/admin/preview redirects
+  //    to /admin) — so the assertion is that the site renders, not the URL.
   await page.getByRole('button', { name: 'Preview' }).click()
-  await page.waitForURL(/\/admin\/preview/, { timeout: 30_000 })
   const hero = page.locator('h1', { hasText: 'Coffee roasted' }).first()
   await expect(hero).toBeVisible({ timeout: 30_000 })
   // dispatch the dblclick directly: a decorative hero layer sits over the h1
@@ -41,8 +42,10 @@ test('setup, edit content, publish, view live, auth guard', async ({ page, conte
   await page.keyboard.press('Escape') // preview inline edit saves on Escape
   await expect(page.locator('h1', { hasText: marker }).first()).toBeVisible()
 
-  // 5. publish (the dialog auto-runs the publish on open)
-  await page.getByRole('button', { name: 'Publish', exact: true }).click()
+  // 5. publish — ⌘P opens PublishDialog, which auto-runs the publish on open.
+  //    (The header Publish button is gone; the rail's save-status button opens
+  //    a popover with its own Publish, and the shortcut is the stable handle.)
+  await page.keyboard.press('ControlOrMeta+p')
   await expect(page.getByText('Published!')).toBeVisible({ timeout: 30_000 })
 
   // 6. the published static route carries the edited text

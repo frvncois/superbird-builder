@@ -12,7 +12,11 @@ const props = withDefaults(
     icon?: Component
     iconPosition?: 'before' | 'after'
     disabled?: boolean
-    /** hover label rendered by the app TooltipHost — use this, never the native title attr */
+    /** hover label rendered by the app TooltipHost — use this, never the native
+     * title attr. On an icon-only button (an `icon` and no slot content) it
+     * also becomes the accessible name, which such a button otherwise has
+     * none of — the tooltip is a hover affordance, invisible to a screen
+     * reader or a by-name query. */
     tooltip?: string
     tooltipSide?: Side
   }>(),
@@ -74,6 +78,7 @@ const classes = computed(() => [
 <template>
   <button
     v-tooltip="tooltip ? { text: tooltip, side: tooltipSide } : undefined"
+    :aria-label="icon && !$slots.default ? tooltip : undefined"
     :class="classes"
     :disabled="disabled"
   >
