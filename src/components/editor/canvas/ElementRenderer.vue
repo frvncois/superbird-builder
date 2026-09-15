@@ -46,6 +46,7 @@ const {
   baseClasses,
   hoverHandlers,
   fireClickInteractions,
+  fireChangeInteractions,
   el,
   motionStyle,
 } = useRenderNode(() => props.node, { fieldPlaceholders: true })
@@ -151,6 +152,10 @@ const handlers = {
     openMenu(e, props.node.id)
   },
   ...hoverHandlers,
+  // both events, mirroring the published runtime: 'input' makes text fields
+  // update live rather than only on blur (server/site-runtime.js)
+  change: fireChangeInteractions,
+  input: fireChangeInteractions,
   dragstart(e: DragEvent) {
     if (props.node.type === 'body') return
     e.stopPropagation()

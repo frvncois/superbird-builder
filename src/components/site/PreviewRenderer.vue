@@ -47,7 +47,7 @@ const {
   boundField, boundEntry, customAttrs, backgroundInfo,
   displayContent, richContent, srcAttr, altAttr, linkRaw, baseClasses,
   editableText, richEditing, inlineInitialText, commitInlineText,
-  hoverHandlers, fireClickInteractions, el,
+  hoverHandlers, fireClickInteractions, fireChangeInteractions, el,
   motionStyle,
 } = useRenderNode(() => props.node)
 
@@ -160,6 +160,10 @@ const handlers = {
     openMenu(e, props.node.id)
   },
   ...hoverHandlers,
+  // both events, mirroring the published runtime: 'input' makes text fields
+  // update live rather than only on blur (server/site-runtime.js)
+  change: fireChangeInteractions,
+  input: fireChangeInteractions,
 }
 </script>
 
