@@ -63,8 +63,12 @@ export function useAuth() {
     applyProfile(await post('/api/auth/login', { email: e, password }))
   }
 
-  async function setup(e: string, password: string) {
-    applyProfile(await post('/api/auth/setup', { email: e, password }))
+  /** first-run bootstrap. `projectName` is the SITE's name — the server seeds
+   * the project blob with it, so a fresh instance is usable before anyone
+   * opens the editor (the localStorage stash in SetupView stays as the
+   * fallback for a server that couldn't seed). */
+  async function setup(e: string, password: string, projectName = '') {
+    applyProfile(await post('/api/auth/setup', { email: e, password, projectName }))
   }
 
   /** update name / email / password (password needs currentPassword) */

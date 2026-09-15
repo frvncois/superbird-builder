@@ -159,8 +159,10 @@ export {
   isSymmetricTrigger,
 } from './shared/interactionKeys.js'
 
-// --- page factory (src/lib/factories.ts) — create_page mirrors the editor
-export { createPage } from './factories'
+// --- project/page factories (src/lib/factories.ts) — create_page mirrors the
+// editor, and createProject lets the SERVER seed a fresh instance's Main blob
+// so a headless install doesn't wait for somebody to open /admin in a browser
+export { createPage, createProject, defaultBreakpoints } from './factories'
 
 // --- shared element/node types (compile-time only; erased at runtime)
 export type { ElementNode } from '@/types/editor'

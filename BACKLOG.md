@@ -324,10 +324,14 @@ full `list_components {includeNodes}` state.
   node-state carry, but an id-addressed follow-up batch written before the call
   goes stale. The expansion could adopt the existing instance subtree when the
   reference is unchanged.
-- **M13 — a fresh install cannot be driven headless (run #2 F9).** The project
-  blob is seeded only when an admin opens `/admin` in a browser; until then
-  every MCP call fails. The server could seed on the first authed API access
-  (same `createProject` path) so `set_target` works from a cold start.
+- **M13 — RESOLVED (2026-09-15).** A fresh install IS drivable headless: the
+  server seeds `guano-project:main` at `POST /api/auth/setup` (with the project
+  name from the form) and, for pre-existing installs, lazily on the first
+  agent-token store request — both through `ensureProjectSeeded` in
+  `server/index.mjs`, which builds the document with `createProject` out of the
+  MCP runtime bundle. The lazy branch is agent-only on purpose: an
+  unconditional one would fire during the browser's boot hydration and suppress
+  the one-time setup-name rename.
 - **M14 — no draft→Main merge over MCP (run #2 F10).** Applying a draft needs a
   human in the editor's Drafts panel. Deliberate for now (merge review is the
   human checkpoint), but a `merge_draft` tool that refuses on conflicts (or

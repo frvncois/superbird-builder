@@ -28,9 +28,11 @@ async function submit() {
   }
   busy.value = true
   try {
-    await setup(email.value.trim(), password.value)
-    // the editor boot applies this to the freshly created project
-    // (a hard reload follows, so it can't be handed over in memory)
+    // the server seeds the project blob with this name as part of setup
+    await setup(email.value.trim(), password.value, projectName.value.trim())
+    // fallback only: if the server couldn't seed (editor-logic bundle missing),
+    // the browser still creates the project and the editor boot applies the
+    // name to it (a hard reload follows, so it can't be handed over in memory)
     localStorage.setItem('guano-setup-name', projectName.value.trim())
     window.location.assign('/admin')
   } catch (e) {

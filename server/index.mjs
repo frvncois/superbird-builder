@@ -294,9 +294,9 @@ async function handleAuth(req, res, path) {
     // bootstrap the first admin — only when no users exist yet
     if (!needsSetup()) return fail(res, 403, 'account already exists')
     const body = await readBody(req)
-    let email, password, name
+    let email, password, name, projectName
     try {
-      ;({ email, password, name } = JSON.parse(body ?? ''))
+      ;({ email, password, name, projectName } = JSON.parse(body ?? ''))
     } catch {
       return fail(res, 400, 'invalid request')
     }
@@ -306,6 +306,11 @@ async function handleAuth(req, res, path) {
     }
     const user = await createFirstAdmin(email, password, typeof name === 'string' ? name : '')
     if (!user) return fail(res, 403, 'account already exists')
+    // seed the project the moment the instance has an owner, so the install is
+    // usable headlessly — the browser no longer has to be the thing that
+    // creates it. `projectName` is the SITE's name (`name` above is the
+    // admin's own). Best-effort: a seed failure must not fail setup.
+    await ensureProjectSeeded(typeof projectName === 'string' ? projectName : '')
     return send(res, 200, JSON.stringify(userProfile(user)), 'application/json', {
       'set-cookie': sessionCookieHeader(createSession(user.id)),
     })
@@ -620,6 +625,65 @@ async function currentProjectName() {
   }
 }
 
+/**
+ * Seed `guano-project:main` when a fresh instance has none.
+ *
+ * Until now the project blob was written only by the browser
+ * (usePersistence.load()), so a brand-new install had NOTHING on Main until an
+ * admin opened /admin — and every out-of-band reader (the MCP agent surface)
+ * died on the missing blob. Seeding server-side makes a headless first run work:
+ * setup → mint a token → set_target {createDraft} → edit, no browser needed.
+ *
+ * Writes ONLY the project key. No branches meta, no merge-base snapshot — MCP
+ * tolerates a missing branches blob (DEFAULT_META) and the editor creates the
+ * rest lazily, so inventing them here would just be another shape to keep in
+ * sync. Returns true if it actually seeded.
+ */
+let seeding = null
+async function ensureProjectSeeded(name) {
+  // one at a time: two agent requests arriving together must not both seed
+  if (seeding) return seeding
+  seeding = (async () => {
+    const file = storeFile(MAIN_PROJECT_KEY)
+    if ((await readFileOrNull(file)) !== null) return false
+    let createProject
+    try {
+      // the DOM-free editor-logic bundle, in either layout: the repo
+      // (packages/guano/runtime/) or the npm package, where prepack copies
+      // server/ in next to runtime/. Imported lazily so startup doesn't pay
+      // for it, and never fatal — a missing bundle means no seed, not a dead
+      // server (the browser still writes the blob as it always did).
+      const mod = await import(new URL('../packages/guano/runtime/mcp-runtime.mjs', import.meta.url)).catch(
+        () => import(new URL('../runtime/mcp-runtime.mjs', import.meta.url)),
+      )
+      ;({ createProject } = mod)
+    } catch (err) {
+      // in the npm package the bundle always ships; in the repo it is
+      // gitignored and built on demand, so a fresh clone lands here
+      console.error(
+        'could not seed the project: the editor-logic bundle is missing — run ' +
+          '`npm run build:mcp-runtime`. The editor still creates the project on first open, ' +
+          'but a headless (MCP-only) first run will fail until it exists. ' +
+          err.message,
+      )
+      return false
+    }
+    const project = createProject(typeof name === 'string' && name.trim() ? name.trim() : 'Untitled project')
+    const body = JSON.stringify(project)
+    await writeAtomic(file, body)
+    storeSize.at = 0 // force a recount rather than guessing at the delta
+    // same broadcast the store PUT sends, so an editor that happens to be open
+    // hydrates the new project instead of sitting on an empty one
+    broadcastStoreEvent(MAIN_PROJECT_KEY, 'human')
+    return true
+  })()
+  try {
+    return await seeding
+  } finally {
+    seeding = null
+  }
+}
+
 /** a store blob as a string, or null when the key has nothing stored */
 async function readFileOrNull(path) {
   try {
@@ -709,6 +773,13 @@ async function handleStore(req, res, path, query) {
   // store — via session cookie OR a `guano_` API-token bearer (the MCP server)
   const user = requestUser(req)
   if (!user) return fail(res, 401, 'unauthorized')
+
+  // Lazy seed for AGENTS ONLY. Setup covers every install created from here on;
+  // this branch is for one that already had users before the seed existed and
+  // is now reached head-first by a token. It must not fire for a browser: the
+  // editor's boot hydration GET would then see a blob and skip the one-time
+  // rename that applies the name captured at setup.
+  if (isAgentRequest(req)) await ensureProjectSeeded('')
 
   if (path === '/api/store' && req.method === 'GET') {
     const keys = (query.get('keys') ?? '').split(',').filter(Boolean)

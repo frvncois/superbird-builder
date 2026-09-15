@@ -443,8 +443,9 @@ async function loadTargetProject() {
   const raw = await storeGetRaw(projectKey(target))
   if (raw === null) {
     throw new Error(
-      `target "${target}" has no stored project — a fresh instance seeds its project only when ` +
-      `an admin opens the editor. Ask the user to open /admin in a browser once, then retry.`,
+      `target "${target}" has no stored project. On a fresh instance the server seeds Main on ` +
+      `first access, so retry once; if the target is a draft, it was deleted — call get_status ` +
+      `and pick another.`,
     )
   }
   loadedKey = projectKey(target)
@@ -1982,8 +1983,8 @@ const tools = [
           ? {}
           : {
               note:
-                'no project exists yet — it is seeded when an admin opens /admin in a browser; ' +
-                'ask the user to do that first, every read/write will fail until then',
+                'no project on Main yet — the server seeds it on first access, so this should ' +
+                'resolve by your next call; retry get_status before reporting it as broken',
             }),
       }
     },
@@ -2034,8 +2035,8 @@ const tools = [
         const mainRaw = await storeGetRaw(projectKey(MAIN_ID))
         if (mainRaw === null) {
           throw new Error(
-            'no Main project to branch from — a fresh instance seeds its project only when an ' +
-            'admin opens the editor. Ask the user to open /admin in a browser once, then retry.',
+            'no Main project to branch from — the server seeds it on first access, so retry ' +
+            'this call once before reporting it as broken.',
           )
         }
         const id = randomUUID()
