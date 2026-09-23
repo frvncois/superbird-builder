@@ -3,7 +3,7 @@ import { useProject } from './useProject'
 import { isEmittableToken, parseFontFaces, stripFontFaces, fontFormatForUrl } from '@/lib/settings'
 import { setColorTokens } from '@/lib/colors'
 import { setStyleTokens } from '@/lib/styles'
-import type { CustomFont, DesignToken } from '@/types/editor'
+import type { CustomFont, DesignToken, ProjectSettings } from '@/types/editor'
 
 let syncStarted = false
 
@@ -32,6 +32,24 @@ export function useSettings() {
   function removeToken(id: string) {
     settings.value.tokens = settings.value.tokens.filter((t) => t.id !== id)
   }
+
+  // --- site-wide motion ---
+  // `settings.motion` is optional (absent = everything off), so materialize it
+  // and its two sub-objects on first read rather than making every control
+  // guard against undefined. Writing them costs nothing: the defaults below are
+  // exactly what an absent key already means.
+
+  const motion = computed<NonNullable<ProjectSettings['motion']>>(
+    () => (settings.value.motion ??= {}),
+  )
+
+  const transitions = computed<NonNullable<NonNullable<ProjectSettings['motion']>['transitions']>>(
+    () => (motion.value.transitions ??= { enabled: false }),
+  )
+
+  const smoothScroll = computed<NonNullable<NonNullable<ProjectSettings['motion']>['scroll']>>(
+    () => (motion.value.scroll ??= { enabled: false }),
+  )
 
   // --- custom webfonts ---
 
@@ -97,6 +115,9 @@ export function useSettings() {
 
   return {
     settings,
+    motion,
+    transitions,
+    smoothScroll,
     validTokens,
     addToken,
     removeToken,

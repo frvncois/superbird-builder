@@ -34,6 +34,17 @@ try {
 const { tools, toolMap } = createToolSet({
   api: { ...api, base: api.BASE },
   runtime,
+  // set_target's consent dialog: put the Main-vs-draft choice in front of the
+  // HUMAN via MCP elicitation instead of trusting an agent-passed boolean.
+  // `server` is declared below, but this closure only runs at tool-call time —
+  // long after connect. Returning null (client never declared the elicitation
+  // capability) tells set_target to fall back to the ask-in-chat attestation
+  // flow.
+  elicit: async (params) => {
+    if (!server.getClientCapabilities()?.elicitation) return null
+    // a human reading a dialog deserves more than the default 60s RPC timeout
+    return server.elicitInput(params, { timeout: 300_000 })
+  },
 })
 
 // ---------- wire up the MCP server ----------

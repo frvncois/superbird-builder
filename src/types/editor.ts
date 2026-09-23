@@ -119,8 +119,8 @@ export interface AnimationBinding {
   trigger: 'load' | 'appear' | 'scrub' | 'hover' | 'click'
   /** node the animation moves; null = the trigger element itself */
   targetId: string | null
-  /** appear only. Omitted = play once on first entry. */
-  appearMode?: 'replay' | 'reverse'
+  /** appear only. Omitted = inherit settings.motion.appearMode (default 'once'). */
+  appearMode?: 'once' | 'replay' | 'reverse'
   /** appear only: the viewport fraction the element's top must cross before
    * firing (0.8 ≈ ScrollTrigger's 'top 80%'). Omitted = fire on first pixel. */
   appearAt?: number
@@ -184,10 +184,38 @@ export interface ElementNode {
      * the "related posts / more from" pattern */
     excludeCurrent?: boolean
   }
+  /** slider only: carousel configuration (node-only state, like listQuery).
+   * Absent = every default; see shared/slider.js */
+  slider?: SliderConfig
   children: ElementNode[]
   /** Source range in the page code (0-based line indexes, open → close) */
   line?: number
   endLine?: number
+}
+
+/** :slider configuration. Every field is optional — an absent config renders a
+ * working carousel on SLIDER_DEFAULTS, and the Data panel prunes back to
+ * absent so an untouched slider stays byte-identical for merge signatures. */
+export interface SliderConfig {
+  /** prev/next chrome, default true */
+  arrows?: boolean
+  /** pagination dots, default true */
+  dots?: boolean
+  /** slides visible at once, keyed 'base' (the widest breakpoint, applying
+   * everywhere) plus breakpoint ids for narrower overrides — the desktop-first
+   * model the class cascade uses. Values 1–8; entries equal to what they'd
+   * inherit are pruned. */
+  perView?: Record<string, number>
+  /** space between slides in px, default 0 */
+  gap?: number
+  /** auto-advance, default false. Never runs under prefers-reduced-motion */
+  autoplay?: boolean
+  /** autoplay interval in ms, default 4000 */
+  delay?: number
+  /** wrap around at the ends, default false */
+  loop?: boolean
+  /** mouse drag (touch swipe is native scrolling either way), default true */
+  drag?: boolean
 }
 
 export interface Breakpoint {
@@ -366,6 +394,36 @@ export interface ProjectSettings {
     leading?: Record<string, string>
     tracking?: Record<string, string>
     radius?: Record<string, string>
+  }
+  /** site-wide motion, all of it optional and off by default. Applies to the
+   * Preview surface and the published site — never the Build canvas, which
+   * pans instead of scrolling and is an editing surface, not a rendering of
+   * the site. Every part of it yields to `prefers-reduced-motion` and ?noanim.
+   * Resolution + validation live in lib/shared/motion.js so the exporter, the
+   * editor and the MCP agree on what a given object means. */
+  motion?: {
+    /** what an appear-triggered animation does on re-entry and exit, for
+     * bindings that don't set their own appearMode. Omitted = 'once'. */
+    appearMode?: 'once' | 'replay' | 'reverse'
+    /** outgoing/incoming animations played on the page body around a
+     * same-origin navigation */
+    transitions?: {
+      enabled: boolean
+      /** a TRANSITION_PRESETS id, or 'custom' to use the two ids below.
+       * Omitted = 'fade'. */
+      preset?: string
+      /** enter duration in ms; exit runs at TRANSITION_DEFAULTS.exitRatio */
+      duration?: number
+      /** key into EASINGS */
+      easing?: string
+      /** 'custom' preset only: timelines from project.animations */
+      exitAnimationId?: string
+      enterAnimationId?: string
+    }
+    /** inertia ("lerped") scrolling. Off on touch and reduced-motion; scrolls
+     * the real scroll position rather than transforming a wrapper, so the
+     * `scrolled` interaction trigger and position:fixed keep working. */
+    scroll?: { enabled: boolean; lerp?: number }
   }
   /** raw HTML injected into exported <head> */
   customCode: { head: string }

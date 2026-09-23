@@ -44,7 +44,14 @@ const GUIDE_HASH = GUIDE
   ? createHash('sha256').update(GUIDE).digest('hex').slice(0, 12)
   : 'none'
 
-export function createToolSet({ api, runtime }) {
+// `elicit` (optional) is the transport's channel for putting a question in
+// front of the HUMAN — for stdio MCP it wraps server.elicitInput(), so the
+// client renders a real dialog. It receives {message, requestedSchema} and
+// resolves to the MCP ElicitResult ({action, content}), or null when the
+// connected client never declared the elicitation capability. Only set_target
+// uses it: with a dialog available the target choice is genuinely the human's,
+// instead of an agent-asserted chosenByUser boolean.
+export function createToolSet({ api, runtime, elicit }) {
   const { whoami, storeGetRaw, storeGetJson, storePutRaw, publish, mediaIndex, mediaUpload } = api
   const {
     validateDocument,
@@ -104,11 +111,18 @@ export function createToolSet({ api, runtime }) {
     compileAnimation,
     validateAnimation,
     validateBinding,
+    validateMotionSettings,
+    TRANSITION_PRESET_IDS,
+    TRANSITION_DEFAULTS,
+    SCROLL_LERP_MIN,
+    SCROLL_LERP_MAX,
     INTERACTION_ACTIONS,
     INTERACTION_CLOSE_ON,
     INTERACTION_ONCE,
     INTERACTION_TRIGGERS,
     isSymmetricTrigger,
+    SLIDER_DEFAULTS,
+    validateSliderConfig,
   } = runtime
 
   // ---------- local-file payloads ----------
@@ -716,6 +730,7 @@ function elementSummary(project, page, opts = {}) {
       ...(n.attributes && Object.keys(n.attributes).length ? { attributes: n.attributes } : {}),
       ...(n.listQuery ? { listQuery: n.listQuery } : {}),
       ...(n.entryId ? { entryId: n.entryId } : {}),
+      ...(n.slider ? { slider: n.slider } : {}),
     }
   }
   const visit = (nodes, inComponent) => {
@@ -884,8 +899,9 @@ function syncMarkersForNode(page, node) {
   let line = lines[node.line]
   if (line === undefined || hasOpenArgBracket(line)) return false
   if (node.type !== 'body' && node.arg === undefined) {
-    // a real [name] binding owns the slot — withDataMarker no-ops on it
-    const want = !!(node.content || node.src)
+    // a real [name] binding owns the slot — withDataMarker no-ops on it.
+    // a slider's config is Data-panel state too, so it earns the marker
+    const want = !!(node.content || node.src || node.slider)
     if (want !== (dataMarkerOf(line) === '[+]')) line = withDataMarker(line, want)
   }
   const style = styleMarkerOf(line)
@@ -1255,18 +1271,24 @@ function applyPageEdits(project, page, edits, locale, defaultLocale) {
       } else if (value && !/^@?[a-z0-9.+-]+$/.test(value)) {
         errors.push('arg refused: lowercase field path ([a-z0-9.-], one dot max for a reference hop)')
       } else if (
-        (node.type === 'collection-list' || node.type === 'collection-item') &&
+        (node.type === 'collection-list' || node.type === 'collection-item' || node.type === 'slider') &&
         (() => {
+          // a slider's source is OPTIONAL — clearing it turns the slider back
+          // into manual mode, where each child block is one slide
+          if (node.type === 'slider' && !value) return false
+          const listLike = node.type === 'collection-list' || node.type === 'slider'
           const { collectionNames, listFieldNames } = knownNames(project)
           return !value || !(collectionNames.includes(value) ||
             // built-in sources ('@pages' — the site's own published pages)
-            (node.type === 'collection-list' && BUILTIN_LIST_SOURCES.includes(value)) ||
-            (node.type === 'collection-list' && listFieldNames.includes(value)))
+            (listLike && BUILTIN_LIST_SOURCES.includes(value)) ||
+            (listLike && listFieldNames.includes(value)))
         })()
       ) {
         errors.push(
           `arg refused: ':${node.type}' needs a real collection name` +
-            (node.type === 'collection-list' ? ` (or a built-in source: ${BUILTIN_LIST_SOURCES.join(', ')})` : ''),
+            (node.type === 'collection-list' || node.type === 'slider'
+              ? ` (or a built-in source: ${BUILTIN_LIST_SOURCES.join(', ')})`
+              : ''),
         )
       } else {
         const lines = page.code.split('\n')
@@ -1336,10 +1358,10 @@ function applyPageEdits(project, page, edits, locale, defaultLocale) {
       }
     }
 
-    // --- listQuery (collection-list only; filter → sort → limit) ---
+    // --- listQuery (collection-list / bound slider; filter → sort → limit) ---
     if (edit.listQuery !== undefined) {
-      if (node.type !== 'collection-list') {
-        errors.push(`listQuery refused: ':${node.type}' is not a collection-list`)
+      if (node.type !== 'collection-list' && node.type !== 'slider') {
+        errors.push(`listQuery refused: ':${node.type}' is not a collection-list or slider`)
       } else {
         const q = edit.listQuery
         const empty = q === null || (typeof q === 'object' && !Object.keys(q).length)
@@ -1390,6 +1412,31 @@ function applyPageEdits(project, page, edits, locale, defaultLocale) {
           node.entryId = edit.entryId
           applied.push('entryId')
           changed = true
+        }
+      }
+    }
+
+    // --- slider (slider only: the carousel's own chrome/timing config) ---
+    if (edit.slider !== undefined) {
+      if (node.type !== 'slider') {
+        errors.push(`slider refused: ':${node.type}' is not a slider`)
+      } else {
+        const config = edit.slider
+        const empty = config === null || (typeof config === 'object' && !Object.keys(config).length)
+        if (empty) {
+          delete node.slider
+          applied.push('slider')
+          changed = true
+        } else {
+          const check = validateSliderConfig(config, {
+            breakpointIds: (project.breakpoints ?? []).map((b) => b.id),
+          })
+          if (!check.ok) errors.push(`slider refused: ${check.error}`)
+          else {
+            node.slider = config
+            applied.push('slider')
+            changed = true
+          }
         }
       }
     }
@@ -2116,15 +2163,20 @@ const tools = [
   {
     name: 'set_target',
     description:
-      'Choose where writes go: Main or a draft. THE HUMAN DECIDES THIS, NOT YOU — before ' +
-      'calling, ask them one question ("Work on Main directly, or in a draft?") unless their ' +
-      'message already named a target. Suggest Main ONLY when get_status reports ' +
-      'mainIsEmpty: true (a draft is overkill on a blank instance); suggest a draft whenever ' +
-      'Main holds anything — those writes can clobber a real site, while drafts are reviewed ' +
-      'and merged in the editor. Pass { target: "main" } or { target: "<draftId>" }, or ' +
-      '{ createDraft: "<name>" } to snapshot Main into a new draft and select it. Targeting a ' +
-      'NON-EMPTY Main additionally requires acknowledgeMain: true — the tool tells you what ' +
-      'Main holds when it refuses, so you can put that in front of the human before retrying.',
+      'Choose where writes go: Main or a draft. THE HUMAN DECIDES THIS, NOT YOU. On clients ' +
+      'that support MCP elicitation (Claude Desktop), calling this ALWAYS opens a dialog the ' +
+      'human answers directly — call it early, pass target/createDraft as your suggestion ' +
+      '(shown in the dialog), and respect the outcome: their dialog choice wins over anything ' +
+      'you passed, and a dismissed dialog means STOP and ask in chat. On clients without ' +
+      'elicitation, ask them one question ("Work on Main directly, or in a draft?") unless ' +
+      'their message already named a target, then pass chosenByUser: true. Suggest Main ONLY ' +
+      'when get_status reports mainIsEmpty: true (a draft is overkill on a blank instance); ' +
+      'suggest a draft whenever Main holds anything — those writes can clobber a real site, ' +
+      'while drafts are reviewed and merged in the editor. Pass { target: "main" } or ' +
+      '{ target: "<draftId>" }, or { createDraft: "<name>" } to snapshot Main into a new ' +
+      'draft and select it. Without elicitation, targeting a NON-EMPTY Main additionally ' +
+      'requires acknowledgeMain: true — the tool tells you what Main holds when it refuses, ' +
+      'so you can put that in front of the human before retrying.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -2133,29 +2185,24 @@ const tools = [
         chosenByUser: {
           type: 'boolean',
           description:
-            'REQUIRED true: attests the human explicitly chose this target (in their request ' +
-            'or in answer to your question). If they have not, ask them — do not guess.',
+            'attests the human explicitly chose this target (in their request or in answer to ' +
+            'your question). Required true on clients WITHOUT elicitation — if they have not ' +
+            'answered, ask them, do not guess. Ignored when the consent dialog is available: ' +
+            'there the human answers directly.',
         },
         acknowledgeMain: {
           type: 'boolean',
           description:
-            'required when targeting Main while it already holds a site: attests the human was ' +
-            'told what is there and still chose Main. Writes to Main are immediate and ' +
-            'overwrite whatever is in the way.',
+            'clients without elicitation only: required when targeting Main while it already ' +
+            'holds a site — attests the human was told what is there and still chose Main. ' +
+            'Writes to Main are immediate and overwrite whatever is in the way.',
         },
       },
-      required: ['chosenByUser'],
       additionalProperties: false,
     },
     handler: async (args) => {
-      if (args.chosenByUser !== true) {
-        throw new Error(
-          'the target is the human\'s call — ask them ("Work on Main directly, or in a draft?") ' +
-          'and pass chosenByUser: true once they have answered',
-        )
-      }
-      if (args.createDraft) {
-        const name = String(args.createDraft).trim() || 'Draft'
+      // one implementation per outcome, shared by both consent paths
+      const createDraftTarget = async (name) => {
         const mainRaw = await storeGetRaw(projectKey(MAIN_ID))
         if (mainRaw === null) {
           throw new Error(
@@ -2178,6 +2225,137 @@ const tools = [
         await storePutRaw(BRANCHES_KEY, JSON.stringify(meta))
         target = id
         return { ok: true, target, name, created: true }
+      }
+      const selectDraft = async (draft) => {
+        target = draft.id
+        // Surface whose draft this is when it isn't the token owner's. There is
+        // no lock here — a shared draft is a legitimate way to collaborate — but
+        // the human should hear "you are about to edit someone else's work"
+        // rather than discover it after the fact.
+        const me = await whoami().catch(() => null)
+        const someoneElses = draft.createdBy && me?.id && draft.createdBy !== me.id
+        return {
+          ok: true,
+          target,
+          draftName: draft.name,
+          ...(someoneElses
+            ? {
+                warning:
+                  `draft "${draft.name}" was created by another user — tell the human whose ` +
+                  'draft you are about to edit before you write to it',
+              }
+            : {}),
+        }
+      }
+
+      // ---- dialog path: the client can put the choice in front of the human,
+      // so the human's answer IS the consent — no agent-asserted booleans. The
+      // agent's own args only seed the suggestion line in the dialog.
+      if (elicit) {
+        const [meta, mainProject, me] = await Promise.all([
+          readBranchesMeta(),
+          storeGetJson(projectKey(MAIN_ID)),
+          whoami().catch(() => null),
+        ])
+        const drafts = meta.branches.filter((b) => b.id !== MAIN_ID)
+        const stats = mainProject ? projectStats(mainProject) : null
+        const projectName = mainProject?.settings?.seo?.siteName || mainProject?.name || '(untitled)'
+        const NEW_DRAFT = '__create-new-draft__'
+        const suggestion = args.createDraft
+          ? `create a new draft named "${String(args.createDraft).trim()}"`
+          : args.target === MAIN_ID
+            ? 'work on Main'
+            : args.target
+              ? `use draft "${drafts.find((d) => d.id === args.target)?.name ?? args.target}"`
+              : null
+        let res
+        try {
+          res = await elicit({
+            message:
+              'The AI agent needs a write target for Guano — where should its changes go? ' +
+              (stats && !stats.isEmpty
+                ? `Main is the live project "${projectName}" (${stats.pages} page(s), ` +
+                  `${stats.entries} entry/entries) and writes to it land immediately; a draft ` +
+                  'is reviewed and merged in the editor. '
+                : 'Main is currently empty. ') +
+              (suggestion ? `The agent suggests: ${suggestion}.` : ''),
+            requestedSchema: {
+              type: 'object',
+              properties: {
+                choice: {
+                  type: 'string',
+                  title: 'Write target',
+                  enum: [MAIN_ID, ...drafts.map((d) => d.id), NEW_DRAFT],
+                  enumNames: [
+                    stats && !stats.isEmpty
+                      ? `Main — live project "${projectName}" (${stats.pages} page(s), writes land immediately)`
+                      : 'Main (empty project)',
+                    ...drafts.map(
+                      (d) =>
+                        `Draft: ${d.name}` +
+                        (d.createdBy && me?.id && d.createdBy !== me.id ? " (another user's)" : ''),
+                    ),
+                    'Create a new draft',
+                  ],
+                },
+                draftName: {
+                  type: 'string',
+                  title: 'New draft name (only used when creating one)',
+                },
+              },
+              required: ['choice'],
+            },
+          })
+        } catch (e) {
+          throw new Error(
+            `the target dialog failed or timed out (${e?.message ?? e}) — ask the human in ` +
+              'chat which target they want, then call set_target again',
+          )
+        }
+        // res === null means the client never declared the elicitation
+        // capability — fall through to the ask-in-chat attestation flow
+        if (res !== null && res !== undefined) {
+          if (res.action !== 'accept' || !res.content?.choice) {
+            return {
+              ok: false,
+              reason: 'declined-by-user',
+              message:
+                'the human dismissed the target dialog without choosing — STOP, make no ' +
+                'writes, and ask them in chat how they want to proceed',
+            }
+          }
+          const choice = String(res.content.choice)
+          if (choice === NEW_DRAFT) {
+            const name =
+              String(res.content.draftName ?? '').trim() ||
+              String(args.createDraft ?? '').trim() ||
+              'Draft'
+            return { ...(await createDraftTarget(name)), chosenVia: 'dialog' }
+          }
+          if (choice === MAIN_ID) {
+            // no acknowledgeMain round here: the dialog already showed what
+            // Main holds, and the click on that labeled option is the consent
+            target = MAIN_ID
+            return { ok: true, target, chosenVia: 'dialog', ...(stats ? { main: stats } : {}) }
+          }
+          const draft = drafts.find((b) => b.id === choice)
+          if (!draft) {
+            throw new Error(`the chosen draft "${choice}" no longer exists — call get_status and retry`)
+          }
+          return { ...(await selectDraft(draft)), chosenVia: 'dialog' }
+        }
+      }
+
+      // ---- attestation path: no dialog channel, so the agent must have asked
+      // the human in chat and carries their answer in chosenByUser
+      if (args.chosenByUser !== true) {
+        throw new Error(
+          'the target is the human\'s call — ask them ("Work on Main directly, or in a draft?") ' +
+          'and pass chosenByUser: true once they have answered',
+        )
+      }
+      if (args.createDraft) {
+        return createDraftTarget(String(args.createDraft).trim() || 'Draft')
       }
       const t = String(args.target ?? '')
       if (t === MAIN_ID) {
@@ -2208,25 +2386,7 @@ const tools = [
       if (!draft) {
         throw new Error(`no draft with id "${t}" (call get_status to list drafts)`)
       }
-      target = t
-      // Surface whose draft this is when it isn't the token owner's. There is
-      // no lock here — a shared draft is a legitimate way to collaborate — but
-      // the human should hear "you are about to edit someone else's work"
-      // rather than discover it after the fact.
-      const me = await whoami().catch(() => null)
-      const someoneElses = draft.createdBy && me?.id && draft.createdBy !== me.id
-      return {
-        ok: true,
-        target,
-        draftName: draft.name,
-        ...(someoneElses
-          ? {
-              warning:
-                `draft "${draft.name}" was created by another user — tell the human whose ` +
-                'draft you are about to edit before you write to it',
-            }
-          : {}),
-      }
+      return selectDraft(draft)
     },
   },
   {
@@ -3211,6 +3371,8 @@ const tools = [
         fonts: s.fonts ?? { family: '' },
         favicon: s.favicon ?? '',
         customCodeHead: s.customCode?.head ?? '',
+        // site-wide motion; absent when the project has never set any of it
+        ...(s.motion ? { motion: s.motion } : {}),
         ...(s.theme ? { theme: s.theme } : {}),
         defaultLocale,
         locales: project.locales ?? [defaultLocale],
@@ -3293,6 +3455,73 @@ const tools = [
             },
             tracking: { type: 'object', additionalProperties: { type: 'string' } },
             radius: { type: 'object', additionalProperties: { type: 'string' } },
+          },
+          additionalProperties: false,
+        },
+        motion: {
+          type: 'object',
+          description:
+            'site-wide motion, applied on the published site and the editor Preview (never ' +
+            'the Build canvas). All of it yields to prefers-reduced-motion and ?noanim. ' +
+            'Merges per sub-object; pass null to clear the lot. These are BIG, opinionated ' +
+            'changes to how every page behaves — turn transitions or smooth scrolling on ' +
+            'because the human asked for that feel, not to decorate a page you were asked ' +
+            'to build.',
+          properties: {
+            appearMode: {
+              type: 'string',
+              enum: ['once', 'replay', 'reverse'],
+              description:
+                'default replay behaviour for appear-triggered animation bindings that do ' +
+                "not set their own appearMode. 'once' (the default) plays on first entry " +
+                "only; 'replay' plays on every entry; 'reverse' rewinds as the element " +
+                'scrolls back out — the way to get "leave" animations without binding one ' +
+                'per element.',
+            },
+            transitions: {
+              type: 'object',
+              description:
+                'an animation over the whole page around a same-origin navigation: the exit ' +
+                'timeline plays before the browser leaves, the enter timeline on arrival.',
+              properties: {
+                enabled: { type: 'boolean' },
+                preset: {
+                  type: 'string',
+                  description:
+                    `one of: ${TRANSITION_PRESET_IDS.join(', ')} — or "custom" to play two of ` +
+                    'the project\'s own animations (exitAnimationId/enterAnimationId) on the ' +
+                    'page body instead. Omitted = fade. Fade is the safe default: every other ' +
+                    'preset transforms the body, which re-anchors position:fixed elements for ' +
+                    'the length of the transition.',
+                },
+                duration: {
+                  type: 'number',
+                  description: `enter duration in ms (0–${TRANSITION_DEFAULTS.maxDuration}); exit runs at ${TRANSITION_DEFAULTS.exitRatio}× that`,
+                },
+                easing: { type: 'string', description: `one of: ${EASING_KEYS.join(', ')}` },
+                exitAnimationId: { type: 'string', description: 'custom preset only' },
+                enterAnimationId: { type: 'string', description: 'custom preset only' },
+              },
+              required: ['enabled'],
+              additionalProperties: false,
+            },
+            scroll: {
+              type: 'object',
+              description:
+                'inertia ("smooth") scrolling: the page glides toward where the visitor ' +
+                'scrolled. It takes the wheel away from the browser, so it is an ' +
+                'accessibility trade — off on touch devices and reduced-motion regardless. ' +
+                'Do not enable it unasked.',
+              properties: {
+                enabled: { type: 'boolean' },
+                lerp: {
+                  type: 'number',
+                  description: `how much of the remaining distance closes per frame, ${SCROLL_LERP_MIN}–${SCROLL_LERP_MAX} (lower = heavier)`,
+                },
+              },
+              required: ['enabled'],
+              additionalProperties: false,
+            },
           },
           additionalProperties: false,
         },
@@ -3574,6 +3803,26 @@ const tools = [
           }
         }
       }
+      if (args.motion !== undefined) {
+        if (args.motion === null) delete s.motion
+        else {
+          // merge per sub-object, so enabling transitions can't silently drop
+          // a smooth-scroll setting the human already made
+          const next = { ...(s.motion ?? {}) }
+          for (const [key, value] of Object.entries(args.motion)) {
+            if (value === null) delete next[key]
+            else if (key === 'appearMode') next[key] = value
+            else next[key] = { ...(next[key] ?? {}), ...value }
+          }
+          const check = validateMotionSettings(next, {
+            animationIds: (project.animations ?? []).map((a) => a.id),
+          })
+          if (!check.ok) {
+            return { saved: false, reason: 'invalid-motion', message: check.error }
+          }
+          s.motion = next
+        }
+      }
       if (args.seo !== undefined) {
         const { locales: incomingLocales, ...rest } = args.seo
         if (rest.ogImage && !SAFE_SRC.test(rest.ogImage)) {
@@ -3803,7 +4052,9 @@ const tools = [
               arg: {
                 type: 'string',
                 description:
-                  'the token\'s […] slot: a field binding (or collection name on collection-list/item); "" clears the binding',
+                  'the token\'s […] slot: a field binding (or collection name on ' +
+                  'collection-list/item/slider); "" clears the binding. On a :slider, clearing it ' +
+                  'switches to manual slides (one per child block).',
               },
               entryId: {
                 type: 'string',
@@ -3814,8 +4065,8 @@ const tools = [
               listQuery: {
                 type: ['object', 'null'],
                 description:
-                  'collection-list only: pick → excludeCurrent → filter → sort → offset → limit ' +
-                  'for the entries it repeats; null or {} clears',
+                  'collection-list or bound slider: pick → excludeCurrent → filter → sort → ' +
+                  'offset → limit for the entries it repeats; null or {} clears',
                 properties: {
                   limit: { type: 'integer', minimum: 1 },
                   offset: { type: 'integer', minimum: 0, description: 'skip the first N after sort, before limit (slot placement)' },
@@ -3840,6 +4091,32 @@ const tools = [
                     items: { type: 'string' },
                     description: 'hand-picked entry ids to include; omit for all entries',
                   },
+                },
+                additionalProperties: false,
+              },
+              slider: {
+                type: ['object', 'null'],
+                description:
+                  'slider only: the carousel config. Every field is optional and an absent one ' +
+                  'means its default, so {} or null clears back to a working default slider ' +
+                  '(arrows + dots, one slide per view, no autoplay). Autoplay never runs for a ' +
+                  'visitor who asks for reduced motion.',
+                properties: {
+                  arrows: { type: 'boolean', description: 'prev/next chrome (default true)' },
+                  dots: { type: 'boolean', description: 'pagination dots (default true)' },
+                  perView: {
+                    type: 'object',
+                    description:
+                      'slides visible at once, 1-8, keyed "base" (the widest breakpoint, applying ' +
+                      'everywhere) plus breakpoint ids for narrower overrides — desktop-first, ' +
+                      'like the class cascade. Use get_project for the breakpoint ids.',
+                    additionalProperties: { type: 'integer', minimum: 1, maximum: 8 },
+                  },
+                  gap: { type: 'number', minimum: 0, maximum: 500, description: 'space between slides in px' },
+                  autoplay: { type: 'boolean', description: 'auto-advance (default false)' },
+                  delay: { type: 'number', minimum: 500, maximum: 60000, description: 'autoplay interval in ms (default 4000)' },
+                  loop: { type: 'boolean', description: 'wrap around at the ends (default false)' },
+                  drag: { type: 'boolean', description: 'mouse drag; touch swipe works regardless (default true)' },
                 },
                 additionalProperties: false,
               },
@@ -3890,8 +4167,10 @@ const tools = [
                     },
                     appearMode: {
                       type: 'string',
-                      enum: ['replay', 'reverse'],
-                      description: "appear only — omit for 'play once on first entry'",
+                      enum: ['once', 'replay', 'reverse'],
+                      description:
+                        'appear only — omit to inherit the site default ' +
+                        "(settings.motion.appearMode, itself defaulting to 'once')",
                     },
                     appearAt: {
                       type: 'number',
@@ -4756,6 +5035,23 @@ const tools = [
           else delete node.animations
         })
       }
+      // a page transition names an animation too, and it is not a binding on
+      // any node — so the walks above leave it pointing at a deleted id. The
+      // runtime tolerates that (no transition plays), but validateMotionSettings
+      // then rejects the WHOLE motion blob on the next update_settings, which
+      // surfaces far from the cause.
+      let clearedTransition = false
+      const transitions = project.settings?.motion?.transitions
+      if (transitions) {
+        if (transitions.exitAnimationId === id) {
+          transitions.exitAnimationId = undefined
+          clearedTransition = true
+        }
+        if (transitions.enterAnimationId === id) {
+          transitions.enterAnimationId = undefined
+          clearedTransition = true
+        }
+      }
       // markers: ONLY the nodes that actually lost a binding lose their {+}.
       // A project-wide sweep also rewrote pages whose markers had merely
       // drifted, silently advancing versions no one had written to (run #6, B5)
@@ -4767,6 +5063,9 @@ const tools = [
       return {
         saved: true,
         unbound,
+        ...(clearedTransition
+          ? { clearedPageTransition: true, note: 'it was also the site page transition — that slot is now empty' }
+          : {}),
         ...(changed.size
           ? { versions: [...changed.values()].map((p) => ({ pageId: p.id, version: sha256(p.code) })) }
           : {}),

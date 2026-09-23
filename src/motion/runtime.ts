@@ -9,8 +9,11 @@
 //   #anim-lib   { [animationId]: Animation }        (only animations in use)
 //   #anim-bp    { [key]: breakpointId[] }           (scoped bindings only)
 //   #int-bp     [{ id, w }]                         (shared with interactions)
+//   #site-fx    { t?: {x?, e?}, s?: {l} }           (settings.motion, site-wide)
 //   data-anim   [{ k, t, a, o? }] on trigger elements
 //   data-atgt   "key key" on animated elements
+// The page-transition timelines in #site-fx.t are ids INTO #anim-lib, so
+// transitions reuse the library wire format rather than adding a second one.
 // Keys are unique per component instance AND per collection-list repeat, so
 // every card owns its own play and its own "already appeared" state.
 import {
@@ -24,11 +27,13 @@ import {
   appearRootMargin,
   scrubProgressRaw,
   MOTION_CSS_PROPS,
+  TRANSITION_DEFAULTS,
   type CompiledAnimation,
   type MotionValues,
   type MotionStyle,
   type StaggerSplit,
 } from '@/lib/motion'
+import { createLerpScroller, wheelDeltaPx, insideNestedScroller } from '@/lib/shared/scroll.js'
 
 interface BindingMeta {
   /** binding key (unique per instance/repeat) */
@@ -70,8 +75,19 @@ const json = <T,>(id: string, fallback: T): T => {
   }
 }
 
+/** site-wide motion: page transitions and smooth scrolling (settings.motion) */
+interface SiteFx {
+  /** transitions: animation ids for the outgoing (x) and incoming (e) page */
+  t?: { x?: string; e?: string }
+  /** smooth scroll: the per-frame lerp factor */
+  s?: { l: number }
+}
+
 const lib = json<Record<string, { id: string; name: string; steps: unknown[] }>>('anim-lib', {})
-if (Object.keys(lib).length) {
+const siteFx = json<SiteFx | null>('site-fx', null)
+// a page with no element animations still needs the runtime when the site has
+// transitions or smooth scroll — those are settings, not per-element bindings
+if (Object.keys(lib).length || siteFx) {
   const bpScope = json<Record<string, string[]>>('anim-bp', {})
   const bps = json<{ id: string; w: number }[]>('int-bp', [])
 
@@ -263,6 +279,125 @@ if (Object.keys(lib).length) {
     if (!still) ensureLoop()
   }
 
+  // ---------- page transitions ----------
+  // An animation over the whole page around a same-origin navigation: the exit
+  // timeline plays on <body> before the browser leaves, the enter timeline
+  // plays on the page that loads. Both are ordinary library animations, so
+  // nothing here knows about presets.
+
+  /** plays a timeline on one element, outside the binding-key machinery (a
+   * transition has no binding and always targets <body>). Returns its length. */
+  function playElement(key: string, el: HTMLElement, animId: string): number {
+    const c = compiled[animId]
+    const split = splits[animId]
+    if (!c || !split) return 0
+    const total = playTotal(el, c, split)
+    const play: Play = { el, compiled: c, split, time: 0, direction: 1, running: !still, total }
+    plays.set(key, play)
+    if (still) play.time = total
+    write(play)
+    if (!still) ensureLoop()
+    return total
+  }
+
+  /**
+   * Drops a finished transition's inline styles. Not cosmetic: a `transform`
+   * left on <body> makes it the containing block for every `position: fixed`
+   * descendant, so a slide transition would permanently re-anchor fixed
+   * headers. Another play still moving this element keeps its own styles.
+   */
+  function clearWhenDone(key: string, el: HTMLElement, total: number) {
+    setTimeout(() => {
+      const play = plays.get(key)
+      if (!play || play.running) return
+      plays.delete(key)
+      let stillAnimated = false
+      plays.forEach((other) => {
+        if (other.el === el) stillAnimated = true
+      })
+      if (!stillAnimated) clear(play)
+    }, total + 60)
+  }
+
+  const transitions = siteFx && siteFx.t
+  if (transitions) {
+    const ENTER_KEY = '__t-enter:0'
+    const EXIT_KEY = '__t-exit:0'
+    // the class the exporter's inline head script sets, holding the incoming
+    // page on its first frame until we can write that frame inline ourselves
+    const ENTER_CLASS = 'gt-enter'
+    const root = document.documentElement
+
+    function playEnter() {
+      const enterId = transitions!.e
+      const split = enterId ? splits[enterId] : null
+      // write the first frame inline BEFORE dropping the class, so there is no
+      // frame where the page paints its natural state and then jumps back
+      if (split && !still) applyStyle(document.body, initialStyle(split.element))
+      root.classList.remove(ENTER_CLASS)
+      if (!enterId || still) return
+      clearWhenDone(ENTER_KEY, document.body, playElement(ENTER_KEY, document.body, enterId))
+    }
+    playEnter()
+
+    let leaving = false
+
+    // Restored from the back/forward cache: the DOM is exactly as we left it,
+    // still wearing the exit animation's inline styles — so the visitor would
+    // come back to a faded-out page. Wipe them and play the entrance again.
+    window.addEventListener('pageshow', (event) => {
+      if (!(event as PageTransitionEvent).persisted) return
+      const exit = plays.get(EXIT_KEY)
+      if (exit) {
+        plays.delete(EXIT_KEY)
+        clear(exit)
+      }
+      leaving = false
+      root.classList.add(ENTER_CLASS)
+      playEnter()
+    })
+
+    if (transitions.x && !still) {
+      // Bubble phase, not capture: a handler that already called
+      // preventDefault() (custom code running its own navigation) has had its
+      // say by the time the click reaches us, and we leave it alone.
+      document.addEventListener('click', (event) => {
+        if (leaving) {
+          // exit is already running toward a destination — a second click
+          // would only stack another navigation on top of it
+          event.preventDefault()
+          return
+        }
+        if (event.defaultPrevented || event.button !== 0) return
+        if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+        const target = event.target as Element | null
+        const anchor = target && target.closest ? target.closest('a[href]') : null
+        if (!(anchor instanceof HTMLAnchorElement)) return
+        const where = anchor.getAttribute('target')
+        if ((where && where !== '_self') || anchor.hasAttribute('download')) return
+        let url: URL
+        try {
+          url = new URL(anchor.href, location.href)
+        } catch {
+          return
+        }
+        // another origin leaves the site; a hash on this very page scrolls
+        // without navigating — neither is ours to animate
+        if (url.origin !== location.origin) return
+        if (url.hash && url.pathname === location.pathname && url.search === location.search) return
+        event.preventDefault()
+        leaving = true
+        const total = playElement(EXIT_KEY, document.body, transitions.x!)
+        // hard cap: a custom exit timeline that is very long, or loops forever,
+        // must never leave the visitor stranded on the page they tried to leave
+        setTimeout(
+          () => location.assign(url.href),
+          Math.min(total + 50, TRANSITION_DEFAULTS.exitTimeoutMs),
+        )
+      })
+    }
+  }
+
   // ---------- collect bindings ----------
 
   const scrubs: { meta: BindingMeta; el: HTMLElement }[] = []
@@ -360,6 +495,10 @@ if (Object.keys(lib).length) {
   // `still` (?noanim / prefers-reduced-motion) means NO movement at all: scrub
   // bindings are skipped entirely, so scrubbed elements hold their natural
   // authored state (a parallax frozen mid-flight would be an arbitrary frame)
+  /** the scrub pass, exposed so the smooth scroller can run it inside its own
+   * frame — parallax that read scroll a frame late would visibly lag the page */
+  let driveScrub: ((now?: number) => void) | null = null
+
   if (scrubs.length && !still) {
     let pending = false
     let lastT = 0
@@ -439,6 +578,66 @@ if (Object.keys(lib).length) {
     window.addEventListener('scroll', onScroll, { passive: true })
     window.addEventListener('resize', onScroll)
     updateScrub()
+    driveScrub = updateScrub
+  }
+
+  // ---------- smooth scrolling ----------
+  // Wheel goes to a lerped target instead of straight to the page. Off for
+  // `still` (?noanim / reduced motion) and off on touch, where the platform's
+  // own momentum scrolling is already what the visitor expects — and where
+  // hijacking the wheel would fight it.
+
+  const scrollFx = siteFx && siteFx.s
+  const coarsePointer =
+    typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches
+  if (scrollFx && !still && !coarsePointer) {
+    const scroller = createLerpScroller({
+      get: () => window.scrollY,
+      // a real scroll position, never a transform — see the note in
+      // lib/shared/scroll.js and server/site-runtime.js's `scrolled` trigger
+      set: (n) => window.scrollTo(0, n),
+      max: () => Math.max(0, document.documentElement.scrollHeight - window.innerHeight),
+      lerp: scrollFx.l,
+    })
+
+    let scrollFrame: number | null = null
+    let lastFrame = 0
+    /** the position we last wrote, to tell our own scrolling from everyone else's */
+    let ownWrite = window.scrollY
+
+    const frameStep = (now: number) => {
+      const dt = lastFrame ? now - lastFrame : 16
+      lastFrame = now
+      const moving = scroller.step(dt)
+      ownWrite = window.scrollY
+      if (driveScrub) driveScrub(now)
+      scrollFrame = moving ? requestAnimationFrame(frameStep) : ((lastFrame = 0), null)
+    }
+
+    window.addEventListener(
+      'wheel',
+      (event) => {
+        if (event.ctrlKey) return // pinch-zoom
+        if (insideNestedScroller(event.target as Element | null, document.body, event.deltaY)) return
+        event.preventDefault()
+        scroller.wheel(wheelDeltaPx(event.deltaY, event.deltaMode, window.innerHeight))
+        if (scrollFrame === null) {
+          lastFrame = 0
+          scrollFrame = requestAnimationFrame(frameStep)
+        }
+      },
+      { passive: false },
+    )
+
+    // anything that moved the page without us — keyboard, scrollbar drag, a
+    // hash jump, a bfcache restore — becomes the new starting point
+    window.addEventListener(
+      'scroll',
+      () => {
+        if (Math.abs(window.scrollY - ownWrite) > 1) scroller.sync()
+      },
+      { passive: true },
+    )
   }
 
   // ---------- breakpoint re-gating ----------

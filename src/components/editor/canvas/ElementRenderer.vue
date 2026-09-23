@@ -10,6 +10,19 @@ import { useInteraction } from '@/composables/useInteraction'
 import { useContextMenu } from '@/composables/useContextMenu'
 import { useRenderNode } from '@/composables/useRenderNode'
 import { useInlineEdit } from '@/composables/useInlineEdit'
+import {
+  perViewForWidth,
+  sliderHostExtraClass,
+  SLIDER_SLIDE_CLASSES,
+  SLIDER_ARROW_CLASSES,
+  SLIDER_PREV_CLASS,
+  SLIDER_NEXT_CLASS,
+  SLIDER_PREV_SVG,
+  SLIDER_NEXT_SVG,
+  SLIDER_DOTS_CLASSES,
+  SLIDER_DOT_CLASSES,
+  SLIDER_DOT_ACTIVE_CLASSES,
+} from '@/lib/shared/slider.js'
 import type { ElementNode } from '@/types/editor'
 
 const props = defineProps<{ node: ElementNode }>()
@@ -49,6 +62,9 @@ const {
   fireChangeInteractions,
   el,
   motionStyle,
+  sliderBound,
+  sliderResolved,
+  sliderTrackClass,
 } = useRenderNode(() => props.node, { fieldPlaceholders: true })
 
 const untranslated = computed(
@@ -71,6 +87,27 @@ const frameWidth = computed(
 const framedClasses = computed(() => {
   const joined = baseClasses.value.filter(Boolean).join(' ')
   return frameWidth.value !== null ? resolveClassesForWidth(joined, frameWidth.value) : joined
+})
+
+// --- slider chrome (static on the canvas; Preview runs the real runtime) ---
+
+const sliderHostClass = computed(() =>
+  props.node.type === 'slider' ? sliderHostExtraClass(props.node.classes) : '',
+)
+/** the canvas paints the dot rail itself, so it needs its own count: one dot
+ * per reachable position at this frame's width */
+const canvasDotCount = computed(() => {
+  if (props.node.type !== 'slider') return 0
+  const slides = sliderBound.value
+    ? Math.max(1, listEntries.value.length)
+    : props.node.children.length
+  const perView = perViewForWidth(
+    props.node.slider,
+    breakpoints.value,
+    frameWidth.value ?? baseBreakpoint.value?.width ?? Number.POSITIVE_INFINITY,
+  )
+  const count = slides - perView + 1
+  return count > 1 ? count : 0
 })
 // selection/highlight outlines only render in the frame being edited, so one
 // selection doesn't light up every breakpoint at once. Always true when the
@@ -101,7 +138,7 @@ const classes = computed(() => [
   // are selectable; containers and chrome stay select-none
   !def.value?.void &&
     !props.node.children.length &&
-    !['body', 'collection-list', 'collection-item'].includes(props.node.type) &&
+    !['body', 'collection-list', 'collection-item', 'slider'].includes(props.node.type) &&
     'select-text',
   // untranslated fallback content renders dimmed under a non-default locale
   untranslated.value && 'opacity-60',
@@ -231,6 +268,96 @@ const handlers = {
     </template>
     <div v-else class="border border-dashed border-input p-2 text-xs text-muted-foreground">
       Unknown collection ({{ node.arg || '?' }})
+    </div>
+  </component>
+
+  <!-- carousel: a scroll-snap track of slides, one per entry when the arg binds
+       a collection, else one per direct child. The chrome is static here —
+       autoplay and drag only run in Preview and on the published site -->
+  <component
+    :is="def?.tag ?? 'div'"
+    v-else-if="node.type === 'slider'"
+    ref="el"
+    v-bind="customAttrs"
+    :id="node.htmlId || undefined"
+    :data-node-id="node.id"
+    :class="[classes, sliderHostClass]"
+    :style="motionStyle"
+    draggable="true"
+    v-on="handlers"
+  >
+    <div data-sl-track :class="sliderTrackClass">
+      <template v-if="sliderBound && listCollection">
+        <div
+          v-for="(entry, i) in listEntries"
+          :key="entry.id"
+          data-sl-slide
+          :class="SLIDER_SLIDE_CLASSES"
+        >
+          <EntryScope
+            :collection="listCollection"
+            :entry="entry"
+            :index="i"
+            :count="listEntries.length"
+          >
+            <ElementRenderer
+              v-for="child in node.children"
+              :key="`${child.id}:${entry.id}`"
+              :node="child"
+            />
+          </EntryScope>
+        </div>
+        <!-- no entries yet: show the slide template once with placeholders -->
+        <div v-if="!listEntries.length" data-sl-slide :class="SLIDER_SLIDE_CLASSES">
+          <EntryScope :collection="listCollection" :entry="null">
+            <ElementRenderer v-for="child in node.children" :key="child.id" :node="child" />
+          </EntryScope>
+        </div>
+      </template>
+      <!-- an arg that names nothing is a mistake worth surfacing; no arg at all
+           is manual mode, where each child is its own slide -->
+      <div
+        v-else-if="node.arg"
+        data-sl-slide
+        :class="[SLIDER_SLIDE_CLASSES, 'border border-dashed border-input p-2 text-xs text-muted-foreground']"
+      >
+        Unknown collection ({{ node.arg }})
+      </div>
+      <template v-else>
+        <div
+          v-for="child in node.children"
+          :key="child.id"
+          data-sl-slide
+          :class="SLIDER_SLIDE_CLASSES"
+        >
+          <ElementRenderer :node="child" />
+        </div>
+      </template>
+    </div>
+    <template v-if="sliderResolved.arrows">
+      <button
+        type="button"
+        data-sl-prev
+        tabindex="-1"
+        aria-label="Previous slide"
+        :class="[SLIDER_ARROW_CLASSES, SLIDER_PREV_CLASS]"
+        v-html="SLIDER_PREV_SVG"
+      />
+      <button
+        type="button"
+        data-sl-next
+        tabindex="-1"
+        aria-label="Next slide"
+        :class="[SLIDER_ARROW_CLASSES, SLIDER_NEXT_CLASS]"
+        v-html="SLIDER_NEXT_SVG"
+      />
+    </template>
+    <div v-if="sliderResolved.dots" data-sl-dots :class="SLIDER_DOTS_CLASSES">
+      <span
+        v-for="i in canvasDotCount"
+        :key="i"
+        :class="i === 1 ? SLIDER_DOT_ACTIVE_CLASSES : SLIDER_DOT_CLASSES"
+      />
     </div>
   </component>
 

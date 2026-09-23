@@ -29,7 +29,30 @@ import {
   interactionGroupKey,
   interactionStateKey,
 } from '../src/lib/shared/interactionKeys.js'
-import { compileAnimation, splitByStagger, initialStyle } from '../src/lib/shared/motion.js'
+import {
+  compileAnimation,
+  splitByStagger,
+  initialStyle,
+  effectiveAppearMode,
+  resolveTransition,
+  resolveScrollLerp,
+  TRANSITION_EXIT_ID,
+  TRANSITION_ENTER_ID,
+} from '../src/lib/shared/motion.js'
+import {
+  resolveSliderConfig,
+  sliderTrackClasses,
+  sliderWireData,
+  sliderHostExtraClass,
+  sliderCandidateClasses,
+  SLIDER_SLIDE_CLASSES,
+  SLIDER_ARROW_CLASSES,
+  SLIDER_PREV_CLASS,
+  SLIDER_NEXT_CLASS,
+  SLIDER_PREV_SVG,
+  SLIDER_NEXT_SVG,
+  SLIDER_DOTS_CLASSES,
+} from '../src/lib/shared/slider.js'
 import { SAFE_HREF, SAFE_SRC } from '../src/lib/shared/urls.js'
 import { slugify, entrySlug, entryRoutePath, collectionRouteBase, hasDetailRoutes } from '../src/lib/shared/slug.js'
 import { walkNodes } from './util.mjs'
@@ -39,6 +62,8 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const RUNTIME = join(ROOT, 'server', 'site-runtime.js')
 // built from src/motion/runtime.ts by `npm run build:motion` (committed)
 const MOTION_RUNTIME = join(ROOT, 'server', 'motion-runtime.js')
+// built from src/slider/runtime.ts by `npm run build:slider` (committed)
+const SLIDER_RUNTIME = join(ROOT, 'server', 'slider-runtime.js')
 
 // SiteView.vue wrapper / PublicRenderer body classes (keep in sync)
 // the published <body> IS the page's body node — its classes are user-owned.
@@ -246,6 +271,9 @@ function collectCandidates(project) {
   }
   const scanNode = (node) => {
     add(node.classes)
+    // a slider's track/slide/chrome classes are emitted by the renderer, not
+    // authored — without this they never reach the compiled stylesheet
+    if (node.type === 'slider') add(sliderCandidateClasses(node.slider, project.breakpoints))
     for (const b of node.interactions ?? []) {
       const a = anim.get(b.interactionId)
       if (!a) continue
@@ -390,6 +418,11 @@ function ariaCurrentFor(href, ctx) {
 
 function linkWrap(html, node, ctx) {
   if (ELEMENTS[node.type]?.tag === 'a') return html
+  // a slider carries its own buttons — wrapping it in an anchor is invalid
+  // HTML (interactive content inside <a>) and would make every arrow click
+  // navigate instead of paging. The Data panel hides the Link field for a
+  // slider; this covers the code's '@target' suffix and the MCP.
+  if (node.type === 'slider') return html
   const href = resolveHref(node, ctx)
   if (!href) return html
   // link-related attributes belong on the ANCHOR, not on the element inside it:
@@ -407,14 +440,16 @@ function linkWrap(html, node, ctx) {
 }
 
 /** `wrapLink: false` for a node rendered without a linkWrap (the <body> tag),
- * so its link attributes are not held back for an anchor that never appears */
-function attrsFor(node, ctx, bg, { wrapLink = true } = {}) {
+ * so its link attributes are not held back for an anchor that never appears.
+ * `extraClass` is renderer-owned chrome (a slider's positioning context) that
+ * belongs on the host but isn't part of the node's authored classes. */
+function attrsFor(node, ctx, bg, { wrapLink = true, extraClass = '' } = {}) {
   const mapping = ctx.mm.get(node.id)
   const def = ELEMENTS[node.type]
   const attrs = []
   if (node.htmlId) attrs.push(`id="${escapeHtml(node.htmlId)}"`)
 
-  const classes = [classFor(node, ctx), bg?.hostClass].filter(Boolean).join(' ')
+  const classes = [classFor(node, ctx), bg?.hostClass, extraClass].filter(Boolean).join(' ')
   if (classes) attrs.push(`class="${escapeHtml(classes)}"`)
   // NOTE: the style attribute is emitted at the END of this function, so a
   // background style and an animation's first frame merge instead of clashing
@@ -554,10 +589,16 @@ function attrsFor(node, ctx, bg, { wrapLink = true } = {}) {
       ctx.animUsed[b.animationId] = animation
       if (b.breakpoints) ctx.animBp[key] = b.breakpoints
       const meta = { k: key, t: b.trigger, a: b.animationId }
+      // the site default resolves HERE, not in the browser: the runtime reads an
+      // absent `m` as "play once", which is exactly what an effective 'once'
+      // means — so inheritance costs the wire format nothing.
+      const mode =
+        b.trigger === 'appear' ? effectiveAppearMode(b.appearMode, ctx.appearDefault) : undefined
+      const carriesMode = mode === 'replay' || mode === 'reverse'
       // only carry options the runtime actually needs, so the payload stays small
-      if (b.appearMode || b.scrub || b.appearAt) {
+      if (carriesMode || b.scrub || b.appearAt) {
         meta.o = {}
-        if (b.appearMode) meta.o.m = b.appearMode
+        if (carriesMode) meta.o.m = mode
         if (b.appearAt) meta.o.at = b.appearAt
         if (b.scrub) meta.o.s = b.scrub
       }
@@ -596,10 +637,7 @@ function attrsFor(node, ctx, bg, { wrapLink = true } = {}) {
 
   // one style attribute: the background's inline style plus the pre-play
   // first frame of any load/appear animation on this node
-  const firstFrameCss = Object.entries(firstFrame)
-    .map(([prop, value]) => `${prop.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}:${value}`)
-    .join(';')
-  const styleText = [bg?.style, firstFrameCss].filter(Boolean).join(';')
+  const styleText = [bg?.style, cssDecls(firstFrame)].filter(Boolean).join(';')
   if (styleText) attrs.push(`style="${escapeHtml(styleText)}"`)
 
   // custom attributes (allowlisted) — never override an attribute the
@@ -668,6 +706,61 @@ function renderNode(node, ctx) {
           .join('')
       : ''
     return linkWrap(`<${tag}${attrsFor(node, ctx)}>${inner}</${tag}>`, node, ctx)
+  }
+
+  // carousel — the same DOM the editor renders (useRenderNode + the two Vue
+  // renderers), driven on the published site by /assets/slider.js. With an arg
+  // it repeats per entry like a :collection-list, one slide each; without one,
+  // each direct child is a slide.
+  if (node.type === 'slider') {
+    const config = resolveSliderConfig(node.slider, ctx.project.breakpoints)
+    const list = node.arg
+      ? resolveListScope(
+          ctx.project.collections,
+          ctx.scope?.collection ?? null,
+          ctx.scope?.entry ?? null,
+          node.arg,
+          ctx.project.pages,
+        )
+      : null
+    const slide = (html) => `<div data-sl-slide class="${escapeHtml(SLIDER_SLIDE_CLASSES)}">${html}</div>`
+    let slides = ''
+    if (list) {
+      const currentEntryId = list.collection.id === '@pages' ? ctx.pageId : ctx.scope?.entry?.id
+      const entries = applyListQuery(list.entries, node.listQuery, { currentEntryId })
+      slides = entries
+        .map((entry, index) => {
+          const inner = {
+            ...ctx,
+            scope: { collection: list.collection, entry, index, count: entries.length },
+          }
+          return slide(node.children.map((child) => renderNode(child, inner)).join(''))
+        })
+        .join('')
+    } else if (!node.arg) {
+      slides = node.children.map((child) => slide(renderNode(child, ctx))).join('')
+    }
+    const track = `<div data-sl-track class="${escapeHtml(sliderTrackClasses(node.slider, ctx.project.breakpoints))}">${slides}</div>`
+    const arrow = (side, cls, svg, label) =>
+      `<button type="button" data-sl-${side} aria-label="${label}" class="${escapeHtml(`${SLIDER_ARROW_CLASSES} ${cls}`)}">${svg}</button>`
+    const arrows = config.arrows
+      ? arrow('prev', SLIDER_PREV_CLASS, SLIDER_PREV_SVG, 'Previous slide') +
+        arrow('next', SLIDER_NEXT_CLASS, SLIDER_NEXT_SVG, 'Next slide')
+      : ''
+    // the runtime fills the dot rail — it alone knows the reachable count
+    const dots = config.dots
+      ? `<div data-sl-dots role="tablist" aria-label="Slides" class="${escapeHtml(SLIDER_DOTS_CLASSES)}"></div>`
+      : ''
+    const wire = JSON.stringify(sliderWireData(node.slider)).replaceAll('</', '<\\/')
+    ctx.sliderIds.add(node.id)
+    const attrs = attrsFor(node, ctx, undefined, {
+      extraClass: sliderHostExtraClass(node.classes),
+    })
+    return linkWrap(
+      `<${tag}${attrs} data-slider="${escapeHtml(wire)}">${track}${arrows}${dots}</${tag}>`,
+      node,
+      ctx,
+    )
   }
 
   if (node.type === 'collection-item') {
@@ -752,13 +845,52 @@ function backgroundFor(node, ctx) {
   return backgroundRender(kind, url, tokens)
 }
 
+/** a motion-engine style object (camelCase keys) as CSS declarations */
+function cssDecls(style) {
+  return Object.entries(style)
+    .map(([prop, value]) => `${prop.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}:${value}`)
+    .join(';')
+}
+
+/**
+ * The no-flash guard for a page-enter transition.
+ *
+ * The incoming page must not paint its natural state before the deferred
+ * /assets/motion.js can write the animation's first frame. Baking that frame
+ * into `<body style>` — the way element entrances are primed — would leave a
+ * visitor without JavaScript staring at a permanently blank page, so the first
+ * frame lives behind a class that an inline script adds and a 4s timer takes
+ * back off. No JS, or a motion.js that never loads: the class is never added
+ * or is removed again, and the page is simply visible.
+ *
+ * The script self-skips on ?noanim and prefers-reduced-motion, mirroring the
+ * runtime's own `still` gate — otherwise it would hide the page from exactly
+ * the visitors who then get no animation to reveal it.
+ */
+function transitionHead(enter) {
+  const first = cssDecls(initialStyle(splitByStagger(compileAnimation(enter)).element))
+  if (!first) return ''
+  return (
+    `<style>html.gt-enter body{${first}}</style>` +
+    `<script>(function(){` +
+    `if(/[?&]noanim\\b/.test(location.search))return;` +
+    `if(window.matchMedia&&matchMedia('(prefers-reduced-motion: reduce)').matches)return;` +
+    `var h=document.documentElement;h.classList.add('gt-enter');` +
+    `setTimeout(function(){h.classList.remove('gt-enter')},4000)})()</script>`
+  )
+}
+
 /** wrap author JS in a <script>, escaping any literal </script so it can't break out */
 function scriptTag(js) {
   return js && js.trim() ? `<script>${js.replace(/<\/script/gi, '<\\/script')}</script>` : ''
 }
 
 /** the shared head + body-open shell for every exported page */
-function renderShell(project, rewrite, { locale, title, description, path, headScript, bodyAttrs }) {
+function renderShell(
+  project,
+  rewrite,
+  { locale, title, description, path, headScript, bodyAttrs, motionHead },
+) {
   const settings = project.settings ?? {}
   const seo = settings.seo ?? {}
   const rawDomain = String(settings.domain ?? '').trim().toLowerCase()
@@ -790,6 +922,9 @@ function renderShell(project, rewrite, { locale, title, description, path, headS
   // the site carries its own fonts and stays portable
   const faces = fontFaceBlock(settings, rewrite)
   if (faces) head += `<style>${faces}</style>`
+  // the page-enter first frame, before the owner's own head code so they can
+  // still override it
+  if (motionHead) head += motionHead
   // owner-authored raw head HTML, last — same trust level as the site itself
   if (settings.customCode?.head) head += settings.customCode.head
   if (headScript) head += headScript // per-page head script
@@ -834,6 +969,8 @@ function renderPage(route, project, media) {
     animUsed: {},
     // animation key → breakpoint ids it's scoped to (absent = all)
     animBp: {},
+    // site-wide default replay mode for appear bindings that don't set one
+    appearDefault: project.settings?.motion?.appearMode,
     // saved-interaction id → animation, for resolving bindings to timing/classes
     anim: new Map((project.interactions ?? []).map((a) => [a.id, a])),
     // state key (interactionId:targetId[@scope]) → the classes it applies
@@ -845,6 +982,9 @@ function renderPage(route, project, media) {
     fxbpAll: new Set(),
     // state key → base classes removed from its target while fired
     fxrm: {},
+    // sliders rendered on this route — a Set so it survives the `{...ctx}`
+    // spread every nested scope makes (same reason fx/animUsed are objects)
+    sliderIds: new Set(),
     rewrite: media.rewrite,
     altFor: media.altFor,
     kindFor: media.kindFor,
@@ -867,6 +1007,29 @@ function renderPage(route, project, media) {
   }
   const hasInteractions = Object.keys(ctx.fx).length > 0
   const needsRuntime = hasInteractions
+
+  // --- site-wide motion (settings.motion): page transitions + smooth scroll ---
+  // Transition timelines join the page's animation library under their own ids
+  // (reserved ones for presets), so they ride the existing #anim-lib wire
+  // format. Registered here, after the body render, but before the tags below
+  // ask whether this route animates at all.
+  const siteMotion = project.settings?.motion
+  const transition = resolveTransition(siteMotion, Object.fromEntries(ctx.animLib))
+  const siteFx = {}
+  if (transition) {
+    siteFx.t = {}
+    if (transition.exit) {
+      ctx.animUsed[transition.exit.id] = transition.exit
+      siteFx.t.x = transition.exit.id
+    }
+    if (transition.enter) {
+      ctx.animUsed[transition.enter.id] = transition.enter
+      siteFx.t.e = transition.enter.id
+    }
+  }
+  const scrollLerp = resolveScrollLerp(siteMotion)
+  if (scrollLerp !== null) siteFx.s = { l: scrollLerp }
+  const hasSiteFx = Object.keys(siteFx).length > 0
   const jsonTag = (id, data) =>
     `<script type="application/json" id="${id}">${JSON.stringify(data).replaceAll('</', '<\\/')}</script>`
   const fxTag = hasInteractions ? jsonTag('int-fx', ctx.fx) : ''
@@ -880,15 +1043,23 @@ function renderPage(route, project, media) {
   const fxbpTag = Object.keys(ctx.fxbp).length ? jsonTag('int-fxbp', ctx.fxbp) : ''
   // only the timelines this route actually plays — an unused library entry
   // never reaches the wire
-  const animTag = hasAnimations
-    ? jsonTag('anim-lib', ctx.animUsed) +
-      (Object.keys(ctx.animBp).length ? jsonTag('anim-bp', ctx.animBp) : '') +
-      '<script src="/assets/motion.js" defer></script>'
-    : ''
+  // smooth scroll alone carries no timelines, and still needs the runtime
+  const animTag =
+    hasAnimations || hasSiteFx
+      ? (hasAnimations
+          ? jsonTag('anim-lib', ctx.animUsed) +
+            (Object.keys(ctx.animBp).length ? jsonTag('anim-bp', ctx.animBp) : '')
+          : '') +
+        (hasSiteFx ? jsonTag('site-fx', siteFx) : '') +
+        '<script src="/assets/motion.js" defer></script>'
+      : ''
+  // the slider runtime ships only on routes that actually carry one
+  const sliderTag = ctx.sliderIds.size ? '<script src="/assets/slider.js" defer></script>' : ''
   const tail =
     (needsRuntime || hasAnimations ? `${fxTag}${rmTag}${bpTag}${fxbpTag}` : '') +
     (needsRuntime ? '<script src="/assets/script.js" defer></script>' : '') +
-    animTag
+    animTag +
+    sliderTag
   // per-locale seo overrides (page + project) apply on non-default routes,
   // falling back field-by-field to the base values
   const localized = locale !== project.defaultLocale
@@ -913,6 +1084,10 @@ function renderPage(route, project, media) {
     path: '/' + (outPath ?? '').replace(/index\.html$/, ''),
     headScript: scriptTag(page.customCode?.head),
     bodyAttrs,
+    // only where /assets/motion.js is also emitted: the guard hides the page
+    // until the runtime reveals it, so a route without the runtime must never
+    // carry it (renderNotFound passes nothing, and navigates natively)
+    motionHead: transition?.enter ? transitionHead(transition.enter) : '',
   })
   // per-page body script runs last, before </body> (DOM + runtime ready)
   return `${shell}${bodyBgLayer}${body}${tail}${scriptTag(page.customCode?.body)}</body></html>`
@@ -988,6 +1163,12 @@ export async function exportSite(project, outDir) {
   } catch {
     // only fatal if a page actually animates — checked below
   }
+  let sliderRuntime = null
+  try {
+    sliderRuntime = await readFile(SLIDER_RUNTIME)
+  } catch {
+    // only fatal if a page actually carries a slider — checked below
+  }
 
   const tmp = `${outDir}.tmp-${Date.now()}`
   await mkdir(tmp, { recursive: true })
@@ -1016,12 +1197,14 @@ export async function exportSite(project, outDir) {
   // render before writing: whether any route plays an animation decides
   // whether the tween runtime ships at all
   let usesMotion = false
+  let usesSlider = false
   const rendered = []
   for (const route of routes) {
     if (written.has(route.outPath)) continue // page paths win over entry collisions
     written.add(route.outPath)
     const html = renderPage(route, project, media)
     if (!usesMotion && html.includes('/assets/motion.js')) usesMotion = true
+    if (!usesSlider && html.includes('/assets/slider.js')) usesSlider = true
     rendered.push([route.outPath, html])
   }
   if (usesMotion) {
@@ -1031,6 +1214,14 @@ export async function exportSite(project, outDir) {
       )
     }
     await write('assets/motion.js', motionRuntime)
+  }
+  if (usesSlider) {
+    if (!sliderRuntime) {
+      throw new Error(
+        'slider runtime missing — run `npm run build:slider` to rebuild server/slider-runtime.js',
+      )
+    }
+    await write('assets/slider.js', sliderRuntime)
   }
   for (const [outPath, html] of rendered) await write(outPath, html)
 

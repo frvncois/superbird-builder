@@ -18,6 +18,8 @@ import { useCommentMode } from '@/composables/useCommentMode'
 import { anchorFromPoint } from '@/lib/commentAnchor'
 import { useAnimation } from '@/composables/useAnimation'
 import { useMotion } from '@/composables/useMotion'
+import { reducedMotion, SCROLL_LERP_DEFAULT } from '@/lib/motion'
+import { createLerpScroller, wheelDeltaPx, insideNestedScroller } from '@/lib/shared/scroll.js'
 import { walkNodes } from '@/lib/tree'
 
 // runtime Tailwind so class strings typed in the editor compile in the preview
@@ -93,15 +95,74 @@ function updateScrub() {
   }
 }
 function onScroll() {
+  // scrolled by anything other than our own lerp (scrollbar, keyboard, a
+  // scrollIntoView)? that position becomes the scroller's new starting point
+  if (scroller && Math.abs((scrollEl.value?.scrollTop ?? 0) - ownWrite) > 1) scroller.sync()
   if (scrubFrame === null) scrubFrame = requestAnimationFrame(updateScrub)
 }
+
+// --- smooth (inertia) scrolling ---
+// The same shared scroller the published site uses, over this pane's own
+// overflow container instead of the window — Preview is where the site's feel
+// gets judged, so it has to feel like the published site. The Build canvas has
+// nothing to apply it to: it pans a transformed world, it never scrolls.
+
+const smoothEnabled = computed(
+  () => !!project.value.settings.motion?.scroll?.enabled && !reducedMotion(),
+)
+let scroller: ReturnType<typeof createLerpScroller> | null = null
+let smoothFrame: number | null = null
+let lastFrame = 0
+let ownWrite = 0
+
+function smoothStep(now: number) {
+  const dt = lastFrame ? now - lastFrame : 16
+  lastFrame = now
+  const moving = scroller!.step(dt)
+  ownWrite = scrollEl.value?.scrollTop ?? 0
+  // scrub in the same frame we scrolled in, so parallax can't lag the page
+  updateScrub()
+  smoothFrame = moving ? requestAnimationFrame(smoothStep) : ((lastFrame = 0), null)
+}
+
+function onWheel(event: WheelEvent) {
+  const root = scrollEl.value
+  if (!smoothEnabled.value || !root || event.ctrlKey) return
+  if (insideNestedScroller(event.target as Element | null, root, event.deltaY)) return
+  event.preventDefault()
+  if (!scroller) {
+    scroller = createLerpScroller({
+      get: () => root.scrollTop,
+      set: (n) => (root.scrollTop = n),
+      max: () => Math.max(0, root.scrollHeight - root.clientHeight),
+      lerp: project.value.settings.motion?.scroll?.lerp ?? SCROLL_LERP_DEFAULT,
+    })
+  }
+  scroller.wheel(wheelDeltaPx(event.deltaY, event.deltaMode, root.clientHeight))
+  if (smoothFrame === null) {
+    lastFrame = 0
+    smoothFrame = requestAnimationFrame(smoothStep)
+  }
+}
+
+// the intensity setting is baked into the scroller, so drop it when it changes
+watch(
+  () => [smoothEnabled.value, project.value.settings.motion?.scroll?.lerp],
+  () => {
+    scroller = null
+  },
+)
+
 onMounted(() => {
   scrollEl.value?.addEventListener('scroll', onScroll, { passive: true })
+  scrollEl.value?.addEventListener('wheel', onWheel, { passive: false })
   void nextTick(updateScrub)
 })
 onBeforeUnmount(() => {
   scrollEl.value?.removeEventListener('scroll', onScroll)
+  scrollEl.value?.removeEventListener('wheel', onWheel)
   if (scrubFrame !== null) cancelAnimationFrame(scrubFrame)
+  if (smoothFrame !== null) cancelAnimationFrame(smoothFrame)
 })
 // a page switch re-seats every scrub binding at its scroll position
 watch(() => activePage.value.id, () => void nextTick(updateScrub))

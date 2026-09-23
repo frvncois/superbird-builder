@@ -6,7 +6,7 @@ import { useInteraction } from './useInteraction'
 import { useComponents } from './useComponents'
 import { useAnimation, animBindingActiveAt, scopedAnimBindings } from './useAnimation'
 import { useMotion } from './useMotion'
-import { appearRootMargin, composeMotionStyle } from '@/lib/motion'
+import { appearRootMargin, composeMotionStyle, effectiveAppearMode } from '@/lib/motion'
 import { useProject } from './useProject'
 import { FRAME_BREAKPOINT } from '@/components/editor/canvas/frameScope'
 import { entryKey } from '@/components/shared/EntryScope.vue'
@@ -14,6 +14,7 @@ import { refDisplay, resolveBinding, resolveListScope, applyListQuery, mediaUrls
 import { isRich, sanitizeRich } from '@/lib/shared/richtext.js'
 import { backgroundRender, backgroundKindFromUrl } from '@/lib/shared/background.js'
 import { conflictingBaseClasses } from '@/lib/shared/interactionClasses.js'
+import { resolveSliderConfig, sliderTrackClasses, sliderWireData } from '@/lib/shared/slider.js'
 import { useMedia, kindOfMime } from './useMedia'
 import { sanitizeAttributes, withSafeRel } from '@/lib/shared/attributes.js'
 import { DEFAULT_SCROLL_AT } from '@/lib/shared/interactionKeys.js'
@@ -80,13 +81,20 @@ export function useRenderNode(
   } = useInteraction()
   const { masterFor } = useComponents()
   const { pages, activePage } = usePage()
-  const { liveBreakpointId } = useProject()
+  const { project, liveBreakpointId } = useProject()
+  /** site-wide default for appear bindings that don't set their own mode */
+  const siteAppearMode = computed(() => project.value.settings?.motion?.appearMode)
 
   // the breakpoint this node is rendered for — the frame's id in the multi-frame
   // canvas, else the live viewport (Preview / published site). Drives which
   // breakpoint-scoped interactions contribute their classes.
   const frameBreakpointId = inject(FRAME_BREAKPOINT, null)
   const renderBreakpointId = computed(() => frameBreakpointId ?? liveBreakpointId.value)
+  /** the fixed width of the canvas frame this node renders in, null outside the
+   * multi-frame canvas (Preview and the published site have a real viewport) */
+  const frameWidth = computed(
+    () => project.value.breakpoints.find((b) => b.id === frameBreakpointId)?.width ?? null,
+  )
   const { collections, collectionByName, activeCollection, activeEntry, entryPath } = useCollections()
   const { nodeContent, nodeSrc, entryValue, setNodeContent, setEntryValue } = useLocale()
   const { assetForSrc } = useMedia()
@@ -103,9 +111,11 @@ export function useRenderNode(
 
   // a list arg names a collection (all entries), a multi-reference field of
   // the surrounding scope entry (the referenced entries), or a multi-image
-  // field (one synthetic entry per stored image url)
+  // field (one synthetic entry per stored image url).
+  // A :slider repeats the same way, but its arg is optional — without one it
+  // resolves to null and each direct child is a slide instead.
   const listScope = computed(() =>
-    node.value.type === 'collection-list'
+    node.value.type === 'collection-list' || node.value.type === 'slider'
       ? resolveListScope(
           collections.value,
           scope?.collection ?? activeCollection.value,
@@ -126,6 +136,26 @@ export function useRenderNode(
           : (scope?.entry ?? activeEntry.value)?.id,
     }),
   )
+  // --- slider (carousel) ---
+
+  const isSlider = computed(() => node.value.type === 'slider')
+  /** the slider's own config — per-instance node state, like listQuery, so it
+   * is read off the node itself and never redirected to a component master */
+  const sliderConfig = computed(() => (isSlider.value ? node.value.slider : undefined))
+  /** true when the arg binds a real source, so slides come from entries */
+  const sliderBound = computed(() => isSlider.value && !!listCollection.value)
+  const sliderTrackClass = computed(() =>
+    sliderTrackClasses(sliderConfig.value, project.value.breakpoints, {
+      // canvas frames are fixed-width elements, so real max-width media
+      // queries can't fire in them — resolve the cascade to a flat value
+      ...(frameWidth.value !== null ? { width: frameWidth.value } : {}),
+    }),
+  )
+  const sliderResolved = computed(() =>
+    resolveSliderConfig(sliderConfig.value, project.value.breakpoints),
+  )
+  const sliderWire = computed(() => sliderWireData(sliderConfig.value))
+
   const itemCollection = computed(() =>
     node.value.type === 'collection-item' && node.value.arg ? collectionByName(node.value.arg) : null,
   )
@@ -555,13 +585,16 @@ export function useRenderNode(
         for (const binding of ofTrigger('appear')) applyIn(binding, true)
       }
       for (const binding of animOf('appear')) {
+        // a binding without its own mode inherits the site default
+        // (settings.motion.appearMode); the exporter resolves the same way
+        const mode = effectiveAppearMode(binding.appearMode, siteAppearMode.value)
         if (inView) {
-          // once (default): first entry only. replay: every entry.
+          // once: first entry only. replay: every entry.
           // reverse: plays in, rewinds out.
-          if (binding.appearMode === undefined && appeared.has(binding.id)) continue
+          if (mode === 'once' && appeared.has(binding.id)) continue
           appeared.add(binding.id)
           playAnim(binding)
-        } else if (binding.appearMode === 'reverse') {
+        } else if (mode === 'reverse') {
           motion.reverse(binding, motionScope.value)
         }
       }
@@ -597,6 +630,12 @@ export function useRenderNode(
     motionStyle,
     listCollection,
     listEntries,
+    isSlider,
+    sliderBound,
+    sliderConfig,
+    sliderResolved,
+    sliderTrackClass,
+    sliderWire,
     itemCollection,
     itemEntry,
     itemTemplateChildren,

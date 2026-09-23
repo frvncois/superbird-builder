@@ -15,6 +15,7 @@
     "build-only": "vite build",
     "build:mcp-runtime": "vite build --config vite.mcp.config.ts",
     "build:motion": "vite build --config vite.motion.config.ts",
+    "build:slider": "vite build --config vite.slider.config.ts",
     "type-check": "vue-tsc --build",
     "test:e2e": "playwright test"
   },

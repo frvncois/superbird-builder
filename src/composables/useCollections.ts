@@ -238,10 +238,24 @@ export function useCollections() {
     entry.updatedBy = actor()
   }
 
-  /** open the collection's template with this entry loaded for editing */
-  function openEntry(collection: Collection, entryId: string) {
-    setActivePage(collection.templatePageId)
+  /**
+   * Open the collection's template with this entry loaded for editing.
+   *
+   * A DATA-ONLY collection (`detailRoutes: false`) stores `templatePageId: ''`
+   * — there is no page to navigate to, and `setActivePage('')` would silently
+   * land on `pages[0]` (usePage's activePage falls back to the first page), so
+   * clicking such an entry used to jump the canvas to an unrelated page with
+   * `activeEntryId` set while `activeEntry` stayed null. Bail instead, and
+   * leave `activeEntryId` alone: `activeEntry` resolves null either way, and
+   * setting it would make useHeaderNav claim entry context and blank out every
+   * page row. Returns whether the canvas actually moved.
+   */
+  function openEntry(collection: Collection, entryId: string): boolean {
+    const template = project.value.pages.find((p) => p.id === collection.templatePageId)
+    if (!template) return false
+    setActivePage(template.id)
     activeEntryId.value = entryId
+    return true
   }
 
   /** field of a collection matched by an element's arg */

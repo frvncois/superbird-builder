@@ -14,46 +14,44 @@ const emit = defineEmits<{ 'toggle-drawer': []; 'close-drawer': [] }>()
 const { openLibrary } = useMediaLibrary()
 const { openModal } = useModal()
 const { canBuild, logout } = useAuth()
-const { isPreview, setMode } = useViewMode()
+const { isPreview, isBuild, codeOpen, showCode, setMode, toggleCode, showApp } = useViewMode()
 
 // switching surface closes the pages drawer so it doesn't linger over the mode
-function showBuild() {
-  setMode('build')
+function onApp() {
+  showApp()
   emit('close-drawer')
 }
-function showPreview() {
+function onCode() {
+  toggleCode()
+  emit('close-drawer')
+}
+function onPreview() {
   setMode('preview')
   emit('close-drawer')
 }
 </script>
 
 <template>
-  <aside class="relative z-[60] flex h-full w-12 flex-col items-center gap-1 py-2 border-r border-input bg-background">
-    <div class="flex py-2 w-7 items-center justify-center text-foreground">
+  <aside class="relative z-[60] flex h-full w-12 flex-col items-center gap-1 py-2 bg-background">
+    <!-- App: the default surface — Build canvas, no code column. Contributors
+         are pinned to Preview, so for them it stays a plain mark. -->
+    <ButtonUI
+      v-if="canBuild"
+      variant="ghost"
+      aria-label="App"
+      tooltip="App"
+      tooltip-side="right"
+      class="w-7"
+      :class="isBuild && !codeOpen ? 'text-accent-foreground' : 'text-foreground'"
+      @click="onApp"
+    >
+      <MainLogo class="size-4" />
+    </ButtonUI>
+    <div v-else class="flex py-2 w-7 items-center justify-center text-foreground">
       <MainLogo class="size-4" />
     </div>
     <div class="my-1 h-px w-full bg-input" />
 
-    <!-- Build (code) — contributors are content-only, so they don't get it -->
-    <ButtonUI
-      v-if="canBuild"
-      variant="ghost"
-      :icon="Code"
-      tooltip="Code editor"
-      tooltip-side="right"
-      class="w-7"
-      :class="isPreview ? 'text-muted-foreground' : 'text-accent-foreground'"
-      @click="showBuild"
-    />
-    <ButtonUI
-      variant="ghost"
-      :icon="Feather"
-      tooltip="Preview"
-      tooltip-side="right"
-      class="w-7"
-      :class="isPreview ? 'text-accent-foreground' : 'text-muted-foreground'"
-      @click="showPreview"
-    />
     <ButtonUI
       variant="ghost"
       :icon="Files"
@@ -62,6 +60,28 @@ function showPreview() {
       class="w-7"
       :class="drawerOpen ? 'text-accent-foreground' : 'text-muted-foreground'"
       @click="emit('toggle-drawer')"
+    />
+
+    <!-- Code column toggle on the Build surface — contributors are
+         content-only, so they don't get it -->
+    <ButtonUI
+      v-if="canBuild"
+      variant="ghost"
+      :icon="Code"
+      tooltip="Code editor"
+      tooltip-side="right"
+      class="w-7"
+      :class="showCode ? 'text-accent-foreground' : 'text-muted-foreground'"
+      @click="onCode"
+    />
+    <ButtonUI
+      variant="ghost"
+      :icon="Feather"
+      tooltip="Preview"
+      tooltip-side="right"
+      class="w-7"
+      :class="isPreview ? 'text-accent-foreground' : 'text-muted-foreground'"
+      @click="onPreview"
     />
     <ButtonUI
       variant="ghost"

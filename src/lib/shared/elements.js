@@ -57,4 +57,8 @@ export const ELEMENTS_DATA = {
   'collection-list': { tag: 'div', suggest: 'div' },
   /** renders one picked entry through its collection's template */
   'collection-item': { tag: 'div', defaultContent: '' },
+  /** carousel. With an arg it repeats its children per entry like a
+   * :collection-list (one slide each); without one, each direct child is a
+   * slide. Arrows/dots are built-in chrome — see shared/slider.js */
+  slider: { tag: 'div', suggest: 'div' },
 }

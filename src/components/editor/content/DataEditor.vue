@@ -18,10 +18,13 @@ import { usePage } from '@/composables/usePage'
 import { useCollections } from '@/composables/useCollections'
 import { useLocale } from '@/composables/useLocale'
 import { resolveBinding, refIds, mediaUrls } from '@/lib/shared/fields.js'
+import { resolveSliderConfig, SLIDER_DEFAULTS } from '@/lib/shared/slider.js'
+import { useProject } from '@/composables/useProject'
 import type { CollectionEntry, CollectionField } from '@/types/editor'
 
 const { selectedElement, changeElementType, setElementArg, setElementLink } = useElement()
 const { activePage } = usePage()
+const { breakpoints } = useProject()
 const {
   collections,
   collectionById,
@@ -37,6 +40,10 @@ const { isDefault, editNodeContent, setNodeContent, editNodeSrc, setNodeSrc, edi
 const isBody = computed(() => selectedElement.value?.type === 'body')
 const isCollectionList = computed(() => selectedElement.value?.type === 'collection-list')
 const isCollectionItem = computed(() => selectedElement.value?.type === 'collection-item')
+const isSlider = computed(() => selectedElement.value?.type === 'slider')
+/** both elements that repeat a child template per entry — they share the whole
+ * source / order / filter / hand-pick UI. A slider's source is optional. */
+const isList = computed(() => isCollectionList.value || isSlider.value)
 
 // --- tag ---
 
@@ -81,7 +88,12 @@ watch(pendingFocus, consumeFocus)
 const canLink = computed(() => {
   const el = selectedElement.value
   return (
-    !!el && el.line !== undefined && !isBody.value && !isCollectionItem.value && !isCollectionList.value
+    !!el &&
+    el.line !== undefined &&
+    !isBody.value &&
+    !isCollectionItem.value &&
+    !isCollectionList.value &&
+    !isSlider.value
   )
 })
 const link = computed({
@@ -97,7 +109,11 @@ const canLinkEntry = computed(() => {
   const el = selectedElement.value
   if (!el || !canLink.value) return false
   if (activePage.value.collectionId) return true
-  return hasAncestorOfType(activePage.value.elements, el.id, 'collection-list')
+  return (
+    hasAncestorOfType(activePage.value.elements, el.id, 'collection-list') ||
+    // a bound slider is an entry scope too — its slides repeat per entry
+    hasAncestorOfType(activePage.value.elements, el.id, 'slider')
+  )
 })
 
 const linkToEntry = computed({
@@ -115,6 +131,7 @@ const canBind = computed(
     !isBody.value &&
     !isCollectionItem.value &&
     !isCollectionList.value &&
+    !isSlider.value &&
     selectedElement.value?.line !== undefined,
 )
 
@@ -162,6 +179,8 @@ function setTail(tail: string | null) {
 
 const listOptions = computed(() => {
   const options = collections.value.map((c) => ({ label: c.name, value: c.name }))
+  // a slider works with no source at all — then each child block is one slide
+  if (isSlider.value) options.unshift({ label: 'None (manual slides)', value: '' })
   for (const f of activeCollection.value?.fields ?? []) {
     // a gallery field repeats over its images, exactly like a multi-reference
     // field repeats over the entries it points to
@@ -229,7 +248,7 @@ function attrInvalid(name: string): boolean {
 
 /** the collection this list repeats (null when the source is a multi-ref field) */
 const sourceCollection = computed(() =>
-  isCollectionList.value ? (collectionByName(listSource.value) ?? null) : null,
+  isList.value ? (collectionByName(listSource.value) ?? null) : null,
 )
 const listFields = computed(() => sourceCollection.value?.fields ?? [])
 
@@ -247,6 +266,85 @@ function patchListQuery(partial: Record<string, unknown>) {
   if (next.filter && !(next.filter as { field?: string }).field) delete next.filter
   if (Object.keys(next).length) el.listQuery = next as typeof el.listQuery
   else delete el.listQuery
+}
+
+// --- slider (carousel) config ---
+
+/** breakpoints widest → narrowest: the widest is the base that applies
+ * everywhere, the rest are narrower overrides (same cascade as classes) */
+const sliderBreakpoints = computed(() => [...breakpoints.value].sort((a, b) => b.width - a.width))
+
+const sl = computed(() => selectedElement.value?.slider ?? {})
+const slResolved = computed(() => resolveSliderConfig(sl.value, breakpoints.value))
+
+/** merge a partial into node.slider, pruning anything back to its default so an
+ * untouched slider stays byte-identical (same discipline as patchListQuery) */
+function patchSlider(partial: Record<string, unknown>) {
+  const el = selectedElement.value
+  if (!el) return
+  const next: Record<string, unknown> = { ...(el.slider ?? {}), ...partial }
+  for (const key of Object.keys(next)) {
+    const value = next[key]
+    if (value == null || value === '') delete next[key]
+    else if (key !== 'perView' && value === SLIDER_DEFAULTS[key as keyof typeof SLIDER_DEFAULTS]) {
+      delete next[key]
+    }
+  }
+  const perView = next.perView as Record<string, number> | undefined
+  if (perView) {
+    // drop the base when it says what an absent config already says, and drop
+    // a key for a breakpoint that no longer exists — the MCP validates against
+    // the live breakpoint list and would refuse a config carrying a stale one
+    const live = new Set(breakpoints.value.map((b) => b.id))
+    for (const key of Object.keys(perView)) {
+      if (key === 'base') {
+        if (perView[key] === 1) delete perView[key]
+      } else if (!live.has(key)) delete perView[key]
+    }
+    if (!Object.keys(perView).length) delete next.perView
+  }
+  // the delay only means anything with autoplay on
+  if (!next.autoplay) delete next.delay
+  if (Object.keys(next).length) el.slider = next as typeof el.slider
+  else delete el.slider
+}
+
+/** the per-view value stored for a breakpoint, '' when it inherits */
+function perViewOf(id: string) {
+  const stored = sl.value.perView?.[id]
+  return stored === undefined ? '' : String(stored)
+}
+
+/** what a breakpoint shows when it stores nothing: the nearest wider value */
+function perViewPlaceholder(id: string) {
+  const list = sliderBreakpoints.value
+  const index = list.findIndex((b) => b.id === id)
+  for (let i = index - 1; i >= 0; i--) {
+    const wider = sl.value.perView?.[list[i]!.id]
+    if (wider !== undefined) return String(wider)
+  }
+  return String(sl.value.perView?.base ?? 1)
+}
+
+function setPerView(id: string, raw: string) {
+  const next = { ...(sl.value.perView ?? {}) }
+  const n = parseInt(raw, 10)
+  // a blank narrower row means inherit; the base falls back to one slide
+  if (Number.isFinite(n) && n > 0) next[id] = Math.min(8, n)
+  else delete next[id]
+  patchSlider({ perView: next })
+}
+
+const gapText = computed(() => (sl.value.gap ? String(sl.value.gap) : ''))
+function setGap(raw: string) {
+  const n = parseInt(raw, 10)
+  patchSlider({ gap: Number.isFinite(n) && n > 0 ? Math.min(500, n) : undefined })
+}
+
+const delayText = computed(() => (sl.value.delay ? String(sl.value.delay) : ''))
+function setDelay(raw: string) {
+  const n = parseInt(raw, 10)
+  patchSlider({ delay: Number.isFinite(n) && n >= 500 ? Math.min(60000, n) : undefined })
 }
 
 const orderOptions = computed(() => [
@@ -390,6 +488,13 @@ const boundIsRef = computed(() => !!boundField.value && isRefType(boundField.val
 const pickRefTarget = computed(() =>
   headField.value?.refCollectionId ? collectionById(headField.value.refCollectionId) : null,
 )
+
+// NOTE: the reference/gallery writers below are a SECOND copy of the ones in
+// useEntryField.ts (the canonical set, used by the Pages drawer's entry
+// editor). They are kept here because these are wired to the element-arg
+// binding (headField + activeEntry) rather than an explicit field. Keep the
+// two in step — especially "an emptied list deletes the key" and "clearing a
+// gallery slot splices it out" — or migrate these call sites to the composable.
 
 // single reference: which entry this entry points to (base values only —
 // references are never locale-overridden)
@@ -658,60 +763,123 @@ const src = computed({
       </p>
     </GroupPopover>
 
-    <GroupPopover v-if="isCollectionList" label="Source">
+    <GroupPopover v-if="isSlider" label="Slider">
+      <RowUI label="Arrows">
+        <ToggleUI
+          :model-value="slResolved.arrows"
+          @update:model-value="(v) => patchSlider({ arrows: v })"
+        />
+      </RowUI>
+      <RowUI label="Dots">
+        <ToggleUI :model-value="slResolved.dots" @update:model-value="(v) => patchSlider({ dots: v })" />
+      </RowUI>
+      <RowUI label="Gap">
+        <InputUI :model-value="gapText" type="number" placeholder="0" @update:model-value="setGap" />
+      </RowUI>
+      <RowUI
+        v-for="(bp, i) in sliderBreakpoints"
+        :key="bp.id"
+        :label="i === 0 ? 'Per view' : bp.name"
+      >
+        <InputUI
+          :model-value="i === 0 ? String(sl.perView?.base ?? '') : perViewOf(bp.id)"
+          type="number"
+          :placeholder="i === 0 ? '1' : perViewPlaceholder(bp.id)"
+          @update:model-value="(v) => setPerView(i === 0 ? 'base' : bp.id, v)"
+        />
+      </RowUI>
+      <p v-if="sliderBreakpoints.length > 1" class="text-[10px] text-muted-foreground">
+        How many slides are visible at once. A blank breakpoint inherits the next wider one.
+      </p>
+      <RowUI label="Autoplay">
+        <ToggleUI
+          :model-value="slResolved.autoplay"
+          @update:model-value="(v) => patchSlider({ autoplay: v })"
+        />
+      </RowUI>
+      <RowUI v-if="slResolved.autoplay" label="Every">
+        <InputUI
+          :model-value="delayText"
+          type="number"
+          placeholder="4000"
+          @update:model-value="setDelay"
+        />
+      </RowUI>
+      <p v-if="slResolved.autoplay" class="text-[10px] text-muted-foreground">
+        Milliseconds between slides. Autoplay never runs for a visitor who asks for reduced motion.
+      </p>
+      <RowUI label="Loop">
+        <ToggleUI :model-value="slResolved.loop" @update:model-value="(v) => patchSlider({ loop: v })" />
+      </RowUI>
+      <RowUI label="Drag">
+        <ToggleUI :model-value="slResolved.drag" @update:model-value="(v) => patchSlider({ drag: v })" />
+      </RowUI>
+      <p class="text-[10px] text-muted-foreground">
+        Arrows, dots and dragging run in Preview and on the published site.
+      </p>
+    </GroupPopover>
+
+    <GroupPopover v-if="isList" label="Source">
       <SelectUI :options="listOptions" v-model="listSource" />
       <p class="text-[10px] text-muted-foreground">
-        A collection repeats all entries; a multi-reference field repeats the entries it points to.
+        {{
+          isSlider
+            ? 'With a source each entry becomes a slide; with none, each block inside is one slide.'
+            : 'A collection repeats all entries; a multi-reference field repeats the entries it points to.'
+        }}
       </p>
-      <RowUI label="Order by">
-        <SelectUI
-          :options="orderOptions"
-          :model-value="lq.sortField ?? ''"
-          @update:model-value="(v) => patchListQuery({ sortField: v ?? '' })"
-        />
-      </RowUI>
-      <RowUI v-if="lq.sortField" label="Direction">
-        <SelectUI
-          :options="dirOptions"
-          :model-value="lq.sortDir ?? 'asc'"
-          @update:model-value="(v) => patchListQuery({ sortDir: v })"
-        />
-      </RowUI>
-      <RowUI label="Limit">
-        <InputUI :model-value="limitText" type="number" placeholder="All" @update:model-value="setLimit" />
-      </RowUI>
-      <RowUI label="Skip">
-        <InputUI :model-value="offsetText" type="number" placeholder="0" @update:model-value="setOffset" />
-      </RowUI>
-      <RowUI v-if="onTemplatePage" label="Exclude current">
-        <ToggleUI :model-value="excludeCurrent" @update:model-value="setExcludeCurrent" />
-      </RowUI>
-      <RowUI label="Filter">
-        <SelectUI
-          :options="filterFieldOptions"
-          :model-value="lq.filter?.field ?? ''"
-          @update:model-value="(v) => setFilterField(v ?? '')"
-        />
-      </RowUI>
-      <template v-if="lq.filter?.field">
-        <RowUI label="Where">
+      <!-- the order/filter/limit controls only mean something with a source -->
+      <template v-if="!isSlider || listSource">
+        <RowUI label="Order by">
           <SelectUI
-            :options="filterModeOptions"
-            :model-value="filterMode"
-            @update:model-value="(v) => v && setFilterMode(v)"
+            :options="orderOptions"
+            :model-value="lq.sortField ?? ''"
+            @update:model-value="(v) => patchListQuery({ sortField: v ?? '' })"
           />
         </RowUI>
-        <RowUI v-if="filterMode === 'equals'" label="Value">
-          <InputUI
-            :model-value="lq.filter?.equals ?? ''"
-            class="font-mono"
-            @update:model-value="setFilterValue"
+        <RowUI v-if="lq.sortField" label="Direction">
+          <SelectUI
+            :options="dirOptions"
+            :model-value="lq.sortDir ?? 'asc'"
+            @update:model-value="(v) => patchListQuery({ sortDir: v })"
           />
         </RowUI>
+        <RowUI label="Limit">
+          <InputUI :model-value="limitText" type="number" placeholder="All" @update:model-value="setLimit" />
+        </RowUI>
+        <RowUI label="Skip">
+          <InputUI :model-value="offsetText" type="number" placeholder="0" @update:model-value="setOffset" />
+        </RowUI>
+        <RowUI v-if="onTemplatePage" label="Exclude current">
+          <ToggleUI :model-value="excludeCurrent" @update:model-value="setExcludeCurrent" />
+        </RowUI>
+        <RowUI label="Filter">
+          <SelectUI
+            :options="filterFieldOptions"
+            :model-value="lq.filter?.field ?? ''"
+            @update:model-value="(v) => setFilterField(v ?? '')"
+          />
+        </RowUI>
+        <template v-if="lq.filter?.field">
+          <RowUI label="Where">
+            <SelectUI
+              :options="filterModeOptions"
+              :model-value="filterMode"
+              @update:model-value="(v) => v && setFilterMode(v)"
+            />
+          </RowUI>
+          <RowUI v-if="filterMode === 'equals'" label="Value">
+            <InputUI
+              :model-value="lq.filter?.equals ?? ''"
+              class="font-mono"
+              @update:model-value="setFilterValue"
+            />
+          </RowUI>
+        </template>
       </template>
     </GroupPopover>
 
-    <GroupPopover v-if="isCollectionList && sourceCollection" label="Entries">
+    <GroupPopover v-if="isList && sourceCollection" label="Entries">
       <p v-if="!sourceCollection.entries.length" class="text-[10px] text-muted-foreground">
         No entries in this collection yet.
       </p>

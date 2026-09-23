@@ -19,7 +19,7 @@ function cancelPendingNav() {
 // change), with double-click inline editing of text and image/video src.
 // Built on the shared rendering core (useRenderNode); editing is layered on
 // top. Links follow on single click; double-click edits a link's text.
-import { computed, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, watch } from 'vue'
 import EntryScope from '@/components/shared/EntryScope.vue'
 import { useLocale } from '@/composables/useLocale'
 import { useRenderNode } from '@/composables/useRenderNode'
@@ -30,7 +30,20 @@ import { usePage } from '@/composables/usePage'
 import { useCollections } from '@/composables/useCollections'
 import { useMedia } from '@/composables/useMedia'
 import { useMediaLibrary } from '@/composables/useMediaLibrary'
+import { usePageTransition } from '@/composables/usePageTransition'
 import { resolveSitePath } from '@/lib/navigation'
+import { reducedMotion } from '@/lib/motion'
+import {
+  initSlider,
+  sliderHostExtraClass,
+  SLIDER_SLIDE_CLASSES,
+  SLIDER_ARROW_CLASSES,
+  SLIDER_PREV_CLASS,
+  SLIDER_NEXT_CLASS,
+  SLIDER_PREV_SVG,
+  SLIDER_NEXT_SVG,
+  SLIDER_DOTS_CLASSES,
+} from '@/lib/shared/slider.js'
 import type { ElementNode } from '@/types/editor'
 
 const props = defineProps<{ node: ElementNode }>()
@@ -40,6 +53,7 @@ const { setActivePage } = usePage()
 const { openEntry, activeEntryId } = useCollections()
 const { setNodeSrc, setEntryValue, setActiveLocale } = useLocale()
 const { openMenu, editRequest, consumeEditRequest } = usePreviewEditing()
+const pageTransition = usePageTransition()
 
 const {
   def,
@@ -49,9 +63,57 @@ const {
   editableText, richEditing, inlineInitialText, commitInlineText,
   hoverHandlers, fireClickInteractions, fireChangeInteractions, el,
   motionStyle,
+  sliderBound, sliderResolved, sliderTrackClass, sliderWire,
 } = useRenderNode(() => props.node)
 
 const classes = computed(() => [baseClasses.value])
+
+// --- slider: the published runtime, running live in Preview ---
+
+const sliderHostClass = computed(() =>
+  props.node.type === 'slider' ? sliderHostExtraClass(props.node.classes) : '',
+)
+
+let destroySlider: (() => void) | null = null
+// two runs of the watcher can straddle the `await` below (the template ref
+// lands mid-flush, re-queueing it). Without a generation token the second run
+// would find `destroySlider` still null, destroy nothing, and leave the first
+// instance alive forever — its autoplay interval would keep advancing the
+// track at double rate, even after the node unmounts.
+let sliderGeneration = 0
+
+if (props.node.type === 'slider') {
+  watch(
+    // re-init when the element mounts, when anything the runtime MEASURES
+    // changes (the track classes carry gap and slides-per-view), or when the
+    // number of slides does. `listEntries` itself is a fresh array on every
+    // recompute, so only its length is a source — otherwise editing any entry
+    // in Preview would tear down every slider on the page.
+    [
+      el,
+      () => JSON.stringify(sliderWire.value),
+      sliderTrackClass,
+      () => (sliderBound.value ? listEntries.value.length : props.node.children.length),
+    ],
+    async () => {
+      const generation = ++sliderGeneration
+      destroySlider?.()
+      destroySlider = null
+      await nextTick()
+      // a newer run started while we awaited — it owns the instance now
+      if (generation !== sliderGeneration) return
+      const host = el.value
+      if (!host) return
+      destroySlider = initSlider(host, sliderWire.value, { still: reducedMotion() })
+    },
+    { immediate: true },
+  )
+  onBeforeUnmount(() => {
+    sliderGeneration++
+    destroySlider?.()
+    destroySlider = null
+  })
+}
 
 const isMedia = computed(() => props.node.type === 'image' || props.node.type === 'video')
 
@@ -130,6 +192,15 @@ function navigate(raw: string) {
   }
 }
 
+/** navigate with the site's page transition around it, when one is configured.
+ * `enter` runs synchronously after the switch — the new tree hasn't rendered
+ * yet, so its first frame is in place before it paints. */
+async function followLink(raw: string) {
+  await pageTransition.leave()
+  navigate(raw)
+  pageTransition.enter()
+}
+
 const handlers = {
   // single click follows links; double click edits. A dblclick always fires a
   // click first, so link navigation is deferred one beat and cancelled by any
@@ -144,7 +215,7 @@ const handlers = {
       cancelPendingNav()
       pendingNav = window.setTimeout(() => {
         pendingNav = null
-        navigate(raw)
+        void followLink(raw)
       }, NAV_DELAY_MS)
     }
   },
@@ -195,6 +266,78 @@ const handlers = {
         />
       </EntryScope>
     </template>
+  </component>
+
+  <!-- carousel — the same DOM the published site gets, driven by the same
+       initSlider from shared/slider.js, so Preview and the live site match -->
+  <component
+    :is="def?.tag ?? 'div'"
+    v-else-if="node.type === 'slider'"
+    ref="el"
+    v-bind="customAttrs"
+    :id="node.htmlId || undefined"
+    :data-node-id="node.id"
+    :class="[classes, sliderHostClass]"
+    :style="motionStyle"
+    v-on="handlers"
+  >
+    <div data-sl-track :class="sliderTrackClass">
+      <template v-if="sliderBound && listCollection">
+        <div
+          v-for="(entry, i) in listEntries"
+          :key="entry.id"
+          data-sl-slide
+          :class="SLIDER_SLIDE_CLASSES"
+        >
+          <EntryScope
+            :collection="listCollection"
+            :entry="entry"
+            :index="i"
+            :count="listEntries.length"
+          >
+            <PreviewRenderer
+              v-for="child in node.children"
+              :key="`${child.id}:${entry.id}`"
+              :node="child"
+            />
+          </EntryScope>
+        </div>
+      </template>
+      <template v-else-if="!node.arg">
+        <div
+          v-for="child in node.children"
+          :key="child.id"
+          data-sl-slide
+          :class="SLIDER_SLIDE_CLASSES"
+        >
+          <PreviewRenderer :node="child" />
+        </div>
+      </template>
+    </div>
+    <template v-if="sliderResolved.arrows">
+      <button
+        type="button"
+        data-sl-prev
+        aria-label="Previous slide"
+        :class="[SLIDER_ARROW_CLASSES, SLIDER_PREV_CLASS]"
+        v-html="SLIDER_PREV_SVG"
+      />
+      <button
+        type="button"
+        data-sl-next
+        aria-label="Next slide"
+        :class="[SLIDER_ARROW_CLASSES, SLIDER_NEXT_CLASS]"
+        v-html="SLIDER_NEXT_SVG"
+      />
+    </template>
+    <!-- the runtime fills the dot rail, so it knows the real reachable count -->
+    <div
+      v-if="sliderResolved.dots"
+      data-sl-dots
+      role="tablist"
+      aria-label="Slides"
+      :class="SLIDER_DOTS_CLASSES"
+    />
   </component>
 
   <component

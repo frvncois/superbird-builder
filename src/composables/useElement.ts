@@ -19,6 +19,7 @@ interface NodeProps {
   interactions?: InteractionBinding[]
   animations?: AnimationBinding[]
   attributes?: Record<string, string>
+  slider?: ElementNode['slider']
 }
 
 /** a copied element: its dedented code lines + every node's settings */
@@ -40,6 +41,7 @@ function captureProps(n: ElementNode): NodeProps {
     interactions: n.interactions ? deepClone(n.interactions) : undefined,
     animations: n.animations ? deepClone(n.animations) : undefined,
     attributes: n.attributes ? deepClone(n.attributes) : undefined,
+    slider: n.slider ? deepClone(n.slider) : undefined,
   }
 }
 
@@ -175,7 +177,9 @@ export function useElement() {
             // its slot is page-owned (collection template binding).
             if (node.type !== 'body' && node.arg === undefined) {
               const data = dataMarkerOf(line)
-              const want = !!node.content || !!node.src
+              // a slider's carousel config lives in the Data panel too, so it
+              // earns the same marker as own content/media
+              const want = !!node.content || !!node.src || !!node.slider
               if (want !== (data === '[+]')) line = withDataMarker(line, want)
             }
             const style = styleMarkerOf(line)
@@ -363,6 +367,7 @@ export function useElement() {
           }))
         }
         if (p.attributes) n.attributes = deepClone(p.attributes)
+        if (p.slider) n.slider = deepClone(p.slider)
       })
       selectionAnchorId.value = firstRootId ?? lastRootId
       selectedElementId.value = lastRootId ?? firstRootId

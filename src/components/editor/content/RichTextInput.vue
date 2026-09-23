@@ -7,7 +7,15 @@ import { Bold, Italic, Link2, List } from 'lucide-vue-next'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import { sanitizeRich } from '@/lib/shared/richtext.js'
 
-const props = defineProps<{ modelValue: string; placeholder?: string }>()
+const props = defineProps<{
+  modelValue: string
+  placeholder?: string
+  /** short box — stacked several deep in the 256px Pages drawer, the default
+   *  13rem height is unusable */
+  compact?: boolean
+  /** read-only: a localize:false field under a non-default locale */
+  disabled?: boolean
+}>()
 const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
 
 const editor = ref<HTMLElement>()
@@ -22,8 +30,24 @@ function syncIn() {
 onMounted(syncIn)
 watch(() => props.modelValue, syncIn)
 
+// A contenteditable emptied by the user is almost never "" — browsers leave a
+// stray <br> (or <p><br></p>, or &nbsp;) behind. That markup survives
+// sanitizeRich, so it would be stored as a real value: a cleared locale
+// override would never be PRUNED, the default-locale fallback would never come
+// back, and the entry/node would stop being byte-identical to one that was
+// never touched (which is what keeps branch-merge signatures quiet). Normalize
+// those carcasses to "". <hr> is the one tag that means something without text.
+function isBlank(html: string): boolean {
+  if (/<hr\b/i.test(html)) return false
+  return !html
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .trim()
+}
+
 function emitOut() {
-  emit('update:modelValue', sanitizeRich(editor.value?.innerHTML ?? ''))
+  const html = sanitizeRich(editor.value?.innerHTML ?? '')
+  emit('update:modelValue', isBlank(html) ? '' : html)
 }
 
 // execCommand is deprecated but universally supported — fine for this subset
@@ -50,7 +74,7 @@ defineExpose({ focus: () => editor.value?.focus() })
 
 <template>
   <div class="flex flex-col gap-2">
-    <div class="flex gap-1">
+    <div v-if="!disabled" class="flex gap-1">
       <ButtonUI variant="ghost" size="xs" :icon="Bold" tooltip="Bold (⌘B)" @click="exec('bold')" />
       <ButtonUI variant="ghost" size="xs" :icon="Italic" tooltip="Italic (⌘I)" @click="exec('italic')" />
       <ButtonUI variant="ghost" size="xs" :icon="Link2" tooltip="Link" @click="makeLink" />
@@ -58,8 +82,9 @@ defineExpose({ focus: () => editor.value?.focus() })
     </div>
     <div
       ref="editor"
-      contenteditable="true"
-      class="min-h-52 w-full rounded-lg border border-accent bg-transparent px-2 py-1.5 text-xs outline-none focus:ring-2 focus:ring-accent/25 [&_a]:underline [&_li]:ml-4 [&_ul]:list-disc [&_ol]:list-decimal"
+      :contenteditable="!disabled"
+      class="w-full rounded-lg border border-accent bg-transparent px-2 py-1.5 text-xs outline-none focus:ring-2 focus:ring-accent/25 [&_a]:underline [&_li]:ml-4 [&_ul]:list-disc [&_ol]:list-decimal"
+      :class="[compact ? 'min-h-20' : 'min-h-52', disabled && 'opacity-50']"
       :data-placeholder="placeholder"
       @focus="focused = true"
       @blur="((focused = false), emitOut())"

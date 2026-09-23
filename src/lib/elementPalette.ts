@@ -20,6 +20,7 @@ import {
   MousePointerClick,
   List,
   Link,
+  GalleryHorizontalEnd,
 } from 'lucide-vue-next'
 
 export interface PaletteItem {
@@ -75,6 +76,7 @@ export const ELEMENT_GROUPS: { title: string; items: PaletteItem[] }[] = [
     items: [
       { type: 'list', label: 'List', icon: List },
       { type: 'link', label: 'Link', icon: Link },
+      { type: 'slider', label: 'Slider', icon: GalleryHorizontalEnd },
     ],
   },
 ]

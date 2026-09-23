@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch, type Component } from 'vue'
 import {
-  Palette, Zap, GitBranch, Sun, Moon, Code, Paperclip,
+  Palette, Zap, GitBranch, Sun, Moon, Paperclip,
   MessageCircle, CircleCheck, CircleAlert, CircleX, Rocket,
 } from 'lucide-vue-next'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
@@ -17,6 +17,7 @@ import { usePanel } from '@/composables/usePanel'
 import { usePopover } from '@/composables/usePopover'
 import { useModal } from '@/composables/useModal'
 import { useInteraction } from '@/composables/useInteraction'
+import { useEffectDetail } from '@/composables/useEffectDetail'
 import { isEditable } from '@/composables/useShortcut'
 import { useTheme } from '@/composables/useTheme'
 import { onBeforeUnmount, onMounted } from 'vue'
@@ -32,7 +33,6 @@ const ALL_PANELS: Panel[] = [
   { id: 'data', label: 'Data', icon: Paperclip },
   { id: 'style', label: 'Style', icon: Palette },
   { id: 'interactions', label: 'Interactions', icon: Zap },
-  { id: 'custom-code', label: 'Custom code', icon: Code, divider: true },
   { id: 'branches', label: 'Drafts', icon: GitBranch, divider: true },
 ]
 
@@ -41,7 +41,9 @@ const { canBuild } = useAuth()
 // The sidebar options are PER ACCOUNT TYPE, not per mode — build roles keep the
 // full inspector in both Build and Preview. Contributors are content-only, so
 // they only get Drafts (they can create/apply drafts and publish); the
-// element-editing / custom-code panels are hidden for them.
+// element-editing panels are hidden for them. Per-page custom code is NOT here
+// — it is page metadata, so it lives in the page's own settings view
+// (PageSettingsEditor, from the Pages drawer).
 const panels = computed<Panel[]>(() =>
   canBuild.value ? ALL_PANELS : ALL_PANELS.filter((p) => p.id === 'branches'),
 )
@@ -49,6 +51,7 @@ const panels = computed<Panel[]>(() =>
 const { activePanelId, togglePanel, closePanel } = usePanel()
 const activePanel = computed(() => panels.value.find((p) => p.id === activePanelId.value))
 const { pickingFor } = useInteraction()
+const { detail } = useEffectDetail()
 const { selectedElement, isMultiSelect, requestEditorFocus } = useElement()
 
 // Escape always returns to the code editor with the caret on the current
@@ -129,11 +132,24 @@ function onTabClick(id: string) {
   togglePanel(id)
 }
 const headerIcon = computed(() => {
+  // the focused effect editor is project-level — the selected element's icon
+  // would claim it belongs to that element
+  if (detail.value) return activePanel.value?.icon
   if (activePanel.value && ELEMENT_PANELS.includes(activePanel.value.id) && selectedElement.value) {
     return elementIcon(selectedElement.value.type)
   }
   return activePanel.value?.icon
 })
+
+/** the popover title: the panel's label, or what the focused effect editor is
+ * doing. `title` is passed as a getter, so this stays live without reopening. */
+function panelTitle(): string {
+  if (detail.value) {
+    const noun = detail.value.kind === 'interaction' ? 'interaction' : 'animation'
+    return detail.value.created ? `New ${noun}` : `Edit ${noun}`
+  }
+  return activePanel.value?.label ?? ''
+}
 
 // --- the panel popover lives in the app PopoverHost, anchored to the rail
 // button that opened it (so it sits vertically vis-à-vis its trigger, like the
@@ -161,7 +177,7 @@ watch(activePanel, (panel) => {
       anchor,
       placement: 'left-start',
       offset: RAIL_POPOVER_OFFSET,
-      title: () => activePanel.value?.label ?? '',
+      title: panelTitle,
       icon: headerIcon,
       closeOnEscape: false,
       onClose: () => closePanel(),

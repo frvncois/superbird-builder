@@ -212,3 +212,74 @@ test('GUANO_MCP_FILE_ROOT confines path arguments', async () => {
     delete process.env.GUANO_MCP_FILE_ROOT
   }
 })
+
+// set_target consent: with an elicitation channel the HUMAN's dialog answer is
+// the decision — the agent's own args are only a suggestion. Without one, the
+// old chosenByUser/acknowledgeMain attestation flow still gates everything.
+test('set_target: the dialog answer overrides the agent args', async () => {
+  const { api } = fixture()
+  const runtime = await runtimePromise
+  test.skip(!runtime, 'runtime bundle missing')
+
+  // agent pushes hard for Main; the human picks "create a new draft" instead
+  const elicit = async () => ({
+    action: 'accept',
+    content: { choice: '__create-new-draft__', draftName: 'Human draft' },
+  })
+  const set = createToolSet({ api, runtime, elicit })
+  const res = await set.toolMap
+    .get('set_target')!
+    .handler({ target: 'main', chosenByUser: true, acknowledgeMain: true })
+  expect(res.ok).toBe(true)
+  expect(res.chosenVia).toBe('dialog')
+  expect(res.name).toBe('Human draft')
+  expect(set.getTarget()).not.toBe('main')
+})
+
+test('set_target: a human dialog pick of Main needs no acknowledge round', async () => {
+  const { api } = fixture()
+  const runtime = await runtimePromise
+  test.skip(!runtime, 'runtime bundle missing')
+
+  const elicit = async () => ({ action: 'accept', content: { choice: 'main' } })
+  const set = createToolSet({ api, runtime, elicit })
+  // Main is non-empty in the fixture; the dialog label said so, the click is consent
+  const res = await set.toolMap.get('set_target')!.handler({})
+  expect(res.ok).toBe(true)
+  expect(res.chosenVia).toBe('dialog')
+  expect(set.getTarget()).toBe('main')
+})
+
+test('set_target: a dismissed dialog sets nothing and tells the agent to stop', async () => {
+  const { api } = fixture()
+  const runtime = await runtimePromise
+  test.skip(!runtime, 'runtime bundle missing')
+
+  const elicit = async () => ({ action: 'cancel' })
+  const set = createToolSet({ api, runtime, elicit })
+  const res = await set.toolMap.get('set_target')!.handler({ target: 'main', chosenByUser: true })
+  expect(res.ok).toBe(false)
+  expect(res.reason).toBe('declined-by-user')
+  expect(set.getTarget()).toBe(null)
+})
+
+test('set_target: no elicitation capability falls back to the attestation gates', async () => {
+  const { api } = fixture()
+  const runtime = await runtimePromise
+  test.skip(!runtime, 'runtime bundle missing')
+
+  // elicit wired but the client never declared the capability → returns null
+  const set = createToolSet({ api, runtime, elicit: async () => null })
+  const call = (args: Record<string, unknown>) => set.toolMap.get('set_target')!.handler(args)
+  // no chosenByUser → refused outright
+  await expect(call({ target: 'main' })).rejects.toThrow(/human/)
+  // chosenByUser but Main is non-empty and unacknowledged → refuse-once with the facts
+  const refused = await call({ target: 'main', chosenByUser: true })
+  expect(refused.ok).toBe(false)
+  expect(refused.reason).toBe('main-not-empty')
+  expect(set.getTarget()).toBe(null)
+  // acknowledged → lands
+  const okRes = await call({ target: 'main', chosenByUser: true, acknowledgeMain: true })
+  expect(okRes.ok).toBe(true)
+  expect(set.getTarget()).toBe('main')
+})

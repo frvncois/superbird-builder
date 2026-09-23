@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import {
   Archive, Check, Code2, Copy, Globe, KeyRound, LogOut, Palette, Plug,
   Plus, Rocket, ScanSearch, Search, Settings2, Trash2, Type, UserRound, Users,
+  Waypoints,
 } from 'lucide-vue-next'
 import ModalHost from '@/components/modal/ModalHost.vue'
 import TabsUI from '@/components/tabs/TabsUI.vue'
@@ -28,6 +29,7 @@ import { useModal } from '@/composables/useModal'
 import { useApiTokens } from '@/composables/useApiTokens'
 import type { CustomFont } from '@/types/editor'
 import UsersSettings from '@/components/shared/UsersSettings.vue'
+import InteractionsSettings from '@/components/shared/InteractionsSettings.vue'
 import MediaPickerControl from '@/components/editor/content/MediaPickerControl.vue'
 import {
   FONT_STACKS,
@@ -74,17 +76,16 @@ const active = ref(props.initialSection ?? 'general')
 // group is hidden entirely for non-admins ---
 
 const NAV = computed(() => {
-  const groups = [
-    {
-      label: 'Project',
-      items: [
-        { id: 'general', label: 'General', icon: Settings2 },
-        { id: 'seo', label: 'SEO', icon: ScanSearch },
-        { id: 'fonts', label: 'Fonts', icon: Type },
-        { id: 'design', label: 'Design', icon: Palette },
-      ],
-    },
+  const project = [
+    { id: 'general', label: 'General', icon: Settings2 },
+    { id: 'seo', label: 'SEO', icon: ScanSearch },
+    { id: 'fonts', label: 'Fonts', icon: Type },
+    { id: 'design', label: 'Design', icon: Palette },
   ]
+  // site-wide motion is structure, not content: the server drops a
+  // contributor's settings writes, so don't offer them a dead control
+  if (canBuild.value) project.push({ id: 'interactions', label: 'Interactions', icon: Waypoints })
+  const groups = [{ label: 'Project', items: project }]
   if (canBuild.value) {
     const site = [
       { id: 'domain', label: 'Domain', icon: Globe },
@@ -752,6 +753,10 @@ async function onImportFile(e: Event) {
               </RowUI>
               <TextareaUI v-model="pageSeoDescription" placeholder="Page description" :rows="2" />
             </SettingsGroup>
+          </TabPanelUI>
+
+          <TabPanelUI v-if="canBuild" class="gap-9" id="interactions">
+            <InteractionsSettings />
           </TabPanelUI>
 
           <TabPanelUI class="gap-9" id="design">

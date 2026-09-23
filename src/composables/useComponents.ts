@@ -34,6 +34,7 @@ export interface MasterMapping {
 // usePage() only wire computeds over singleton refs — safe to call here.
 const { project } = useProject()
 const { activePage } = usePage()
+const { selectedElement } = useElement()
 
 const components = computed(() => project.value.components)
 
@@ -69,6 +70,21 @@ const masterMap = computed(() => {
 function masterFor(nodeId: string): MasterMapping | null {
   return masterMap.value.get(nodeId) ?? null
 }
+
+/**
+ * The node a panel should WRITE to for the current selection.
+ *
+ * Style, interactions and animations are shared across a component's
+ * instances, so editing them inside an instance must land on the master —
+ * otherwise the structural sync watcher overwrites the edit on the next
+ * structural change, silently. Content stays per-instance and does NOT go
+ * through this.
+ */
+const editTarget = computed(() => {
+  const selected = selectedElement.value
+  if (!selected) return null
+  return masterFor(selected.id)?.master ?? selected
+})
 
 export function useComponents() {
   const { selectElement, changeElementType } = useElement()
@@ -302,6 +318,7 @@ export function useComponents() {
     components,
     findComponent,
     masterFor,
+    editTarget,
     findMasterNode,
     createComponent,
     detachComponent,

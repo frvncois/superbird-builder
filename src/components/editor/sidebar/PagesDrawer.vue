@@ -39,7 +39,7 @@ const {
   addingLocale, newLocale, newLocaleInput,
   startAddLocale, confirmAddLocale,
 } = useLocaleQuickAdd()
-const { openModal, confirm } = useModal()
+const { openModal, confirm, stack } = useModal()
 
 // when set, the drawer swaps its list for the page/item settings panel
 const settingsTarget = ref<SettingsTarget | null>(null)
@@ -108,6 +108,23 @@ const isDraft = (status?: string) => status === 'draft'
 function go(fn: () => void) {
   fn()
   emit('close')
+}
+
+// Clicking an entry opens it in place: the drawer swaps to the item editor and,
+// when the collection has a template page, the canvas follows so the design
+// updates live behind the panel. Unlike page navigation this does NOT close the
+// drawer — editing an item's fields IS the drawer's job now.
+function openEntryDetail(collection: Collection, entryId: string) {
+  openEntry(collection, entryId) // no-ops for a data-only collection
+  settingsTarget.value = { kind: 'entry', collectionId: collection.id, entryId }
+}
+
+// a new item lands straight in the editor, where it gets named and filled,
+// instead of dropping the user on a template page with a placeholder row
+function addItem(collection: Collection) {
+  const entry = newEntry(collection)
+  expanded.value[collection.id] = true // so Back reveals the new row
+  settingsTarget.value = { kind: 'entry', collectionId: collection.id, entryId: entry.id }
 }
 
 // --- locale detail: human name + translation coverage per locale ---
@@ -212,6 +229,10 @@ function onKeydownCapture(e: KeyboardEvent) {
   if (!props.open || e.key !== 'Escape') return
   // an open row kebab owns Escape first — let it bubble to MenuUI's own handler
   if (panel.value?.querySelector('[data-open]')) return
+  // a modal opened from inside the drawer (the media library) owns Escape:
+  // ModalStackHost listens in BUBBLE phase, so without this the capture
+  // handler here would peel the detail view and leave the modal up
+  if (stack.value.length) return
   e.stopPropagation()
   // peel back one layer at a time: filter → settings view → the drawer itself
   if (searching.value) query.value = ''
@@ -232,9 +253,15 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydownCapture, tr
   <div
     v-if="open"
     ref="panel"
-    class="fixed top-0 left-12 z-50 flex h-full w-64 flex-col border-r border-input bg-background"
+    class="fixed top-0 left-12 z-50 flex h-full w-64 flex-col border-l border-input bg-background"
   >
-    <div v-if="settingsTarget" class="flex-1 overflow-y-auto">
+    <!-- Navigating and editing are two layers of one surface, so they swap with
+         a transform-only push rather than a hard cut. Both panes are absolutely
+         positioned inside this box: nothing reflows mid-transition, and the two
+         states already share a header height so the swap moves no pixels. -->
+    <div class="relative min-h-0 flex-1 overflow-hidden">
+    <Transition name="drawer-push">
+    <div v-if="settingsTarget" class="pane pane-settings overflow-y-auto">
       <PageSettingsEditor
         :target="settingsTarget"
         @back="settingsTarget = null"
@@ -242,7 +269,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydownCapture, tr
       />
     </div>
 
-    <template v-else>
+    <div v-else class="pane pane-list flex flex-col">
     <!-- search -->
     <div class="relative shrink-0 p-1.5">
       <Search class="pointer-events-none absolute top-1/2 left-4 size-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -345,7 +372,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydownCapture, tr
           <ButtonUI
             variant="icon" size="xs" :icon="Plus" tooltip="Add item"
             class="w-5 shrink-0 text-muted-foreground opacity-0 group-hover/row:opacity-100"
-            @click.stop="go(() => newEntry(collection))"
+            @click.stop="addItem(collection)"
           />
           <MenuUI
             width="w-44"
@@ -353,7 +380,12 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydownCapture, tr
             trigger-class="flex size-6 items-center justify-center rounded-lg text-muted-foreground outline-none hover:bg-accent/30 focus-visible:ring-2 focus-visible:ring-accent"
           >
             <template #default="{ close }">
-              <button type="button" class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs outline-none hover:bg-accent/30 focus-visible:bg-accent/30" @click="(close(), go(() => openPage(collection.templatePageId)))">
+              <!-- a data-only collection has no template page (templatePageId: '') -->
+              <button
+                v-if="collection.templatePageId"
+                type="button" class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs outline-none hover:bg-accent/30 focus-visible:bg-accent/30"
+                @click="(close(), go(() => openPage(collection.templatePageId)))"
+              >
                 <Layers class="size-3.5" /> Edit template
               </button>
               <button type="button" class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs outline-none hover:bg-accent/30 focus-visible:bg-accent/30" @click="(duplicateCollection(collection), close())">
@@ -380,7 +412,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydownCapture, tr
             <button
               type="button"
               class="flex h-full min-w-0 flex-1 items-center gap-1.5 text-left outline-none"
-              @click="go(() => openEntry(collection, entry.id))"
+              @click="openEntryDetail(collection, entry.id)"
             >
               <span
                 class="truncate text-xs"
@@ -421,8 +453,14 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydownCapture, tr
         No results for “{{ query.trim() }}”.
       </p>
     </div>
+    </div>
+    </Transition>
+    </div>
 
-    <!-- locale switcher: pinned, opens upward -->
+    <!-- locale switcher: pinned, opens upward. Outside the swapping panes on
+         purpose — the item editor's text fields are locale-scoped and show
+         fallbacks, so hiding the switcher behind Back would strand a
+         translator. Keep it out of the Transition. -->
     <div class="shrink-0 border-t border-input p-1">
       <MenuUI
         side="top"
@@ -479,7 +517,6 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydownCapture, tr
         </template>
       </MenuUI>
     </div>
-    </template>
   </div>
   </Transition>
 </template>
@@ -501,5 +538,37 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydownCapture, tr
 .drawer-backdrop-enter-from,
 .drawer-backdrop-leave-to {
   opacity: 0;
+}
+
+/* the two swap layers stack rather than displace each other */
+.pane {
+  position: absolute;
+  inset: 0;
+}
+.drawer-push-enter-active,
+.drawer-push-leave-active {
+  transition:
+    transform 0.18s ease-out,
+    opacity 0.18s ease-out;
+}
+/* settings is the deeper layer: it arrives from and leaves to the right */
+.pane-settings.drawer-push-enter-from,
+.pane-settings.drawer-push-leave-to {
+  transform: translateX(0.75rem);
+  opacity: 0;
+}
+.pane-list.drawer-push-enter-from,
+.pane-list.drawer-push-leave-to {
+  transform: translateX(-0.75rem);
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .drawer-panel-enter-active,
+  .drawer-panel-leave-active,
+  .drawer-push-enter-active,
+  .drawer-push-leave-active {
+    transition-duration: 0.01ms;
+  }
 }
 </style>

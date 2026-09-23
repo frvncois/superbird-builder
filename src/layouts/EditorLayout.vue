@@ -1,7 +1,12 @@
 <script setup lang="ts">
-// `left` toggles the 16rem code/left column: Build shows it, full-site Preview
-// drops it so the center gets the width.
-withDefaults(defineProps<{ left?: boolean }>(), { left: true })
+// `left` toggles the 16rem code column — it is now a toggle on the Build
+// surface rather than the surface itself, so it is independent of `framed`.
+// `framed` gives the centre the Build canvas chrome (inset rounded card);
+// full-site Preview wants a plain full-bleed pane.
+withDefaults(defineProps<{ left?: boolean; framed?: boolean }>(), {
+  left: true,
+  framed: true,
+})
 </script>
 
 <template>
@@ -13,15 +18,16 @@ withDefaults(defineProps<{ left?: boolean }>(), { left: true })
       <slot name="rail" />
     </aside>
 
-    <!-- relative so the pages drawer can overlay this pane -->
-    <aside v-if="left" class="relative overflow-y-auto">
+    <!-- relative so the pages drawer can overlay this pane. The rail draws no
+         right border — whatever opens beside it owns the divider instead. -->
+    <aside v-if="left" class="relative overflow-y-auto border-l border-input">
       <slot name="left" />
     </aside>
 
     <!-- Build gets the framed canvas surface; Preview is a plain full-bleed pane -->
     <main
       class="overflow-y-auto"
-      :class="left ? 'bg-muted/25 rounded-2xl my-2 border border-accent/50' : ''"
+      :class="framed ? 'bg-muted/25 rounded-2xl my-2 border border-accent/50' : ''"
     >
       <slot />
     </main>

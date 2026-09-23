@@ -161,6 +161,13 @@ var ELEMENTS = {
 	"collection-item": {
 		tag: "div",
 		defaultContent: ""
+	},
+	/** carousel. With an arg it repeats its children per entry like a
+	* :collection-list (one slide each); without one, each direct child is a
+	* slide. Arrows/dots are built-in chrome — see shared/slider.js */
+	slider: {
+		tag: "div",
+		suggest: "div"
 	}
 };
 function isKnownElement(type) {
@@ -894,7 +901,8 @@ var NODE_STATE_KEYS = [
 	"animations",
 	"locales",
 	"listQuery",
-	"entryId"
+	"entryId",
+	"slider"
 ];
 /** true when a node carries state that would be lost (or wrongly inherited) */
 function hasNodeState(node) {
@@ -1040,6 +1048,24 @@ function validateDocument(code, componentNames = [], collectionNames = [], listF
 				if (!(!!arg && (collectionNames.includes(arg) || name === "collection-list" && BUILTIN_LIST_SOURCES.includes(arg) || name === "collection-list" && listFieldNames.includes(arg)))) diags.push({
 					line: i,
 					message: `Unknown collection ':${name}[${arg ?? ""}]'`
+				});
+				else if (open) stack.push({
+					type: name,
+					line: i,
+					indent,
+					arg
+				});
+				continue;
+			}
+			if (name === "slider") {
+				const arg = part?.arg;
+				if (arg && !collectionNames.includes(arg) && !BUILTIN_LIST_SOURCES.includes(arg) && !listFieldNames.includes(arg)) diags.push({
+					line: i,
+					message: `Unknown collection ':slider[${arg}]'`
+				});
+				else if (leaf) diags.push({
+					line: i,
+					message: "':slider:' is a container — open it as ':slider … slider:'"
 				});
 				else if (open) stack.push({
 					type: name,
@@ -4059,9 +4085,15 @@ var TRIGGERS = [
 	"hover",
 	"click"
 ];
-var APPEAR_MODES = ["replay", "reverse"];
+/** `once` is explicit; a binding that omits appearMode inherits the site
+* default (settings.motion.appearMode) — see effectiveAppearMode */
+var APPEAR_MODES = [
+	"once",
+	"replay",
+	"reverse"
+];
 var SELECTOR_RE = /^[\w\s.#>~*:+\-[\]="',()]{1,120}$/;
-var fail = (error) => ({
+var fail$1 = (error) => ({
 	ok: false,
 	error
 });
@@ -4070,38 +4102,38 @@ var fail = (error) => ({
 * @returns {{ok: true} | {ok: false, error: string}}
 */
 function validateAnimation(animation) {
-	if (!animation || typeof animation !== "object") return fail("animation must be an object");
-	if (typeof animation.name !== "string" || !animation.name.trim()) return fail("animation needs a name");
-	if (!Array.isArray(animation.steps) || !animation.steps.length) return fail("animation needs at least one step");
+	if (!animation || typeof animation !== "object") return fail$1("animation must be an object");
+	if (typeof animation.name !== "string" || !animation.name.trim()) return fail$1("animation needs a name");
+	if (!Array.isArray(animation.steps) || !animation.steps.length) return fail$1("animation needs at least one step");
 	for (let i = 0; i < animation.steps.length; i++) {
 		const step = animation.steps[i];
 		const at = `step ${i + 1}`;
-		if (!step || typeof step !== "object") return fail(`${at} must be an object`);
-		if (!Array.isArray(step.tracks) || !step.tracks.length) return fail(`${at} needs at least one property`);
-		if (typeof step.duration !== "number" || !isFinite(step.duration) || step.duration < 0) return fail(`${at} duration must be a non-negative number of milliseconds`);
-		if (typeof step.easing !== "string" || !EASINGS[step.easing]) return fail(`${at} easing must be one of: ${EASING_KEYS.join(", ")}`);
-		if (step.repeat !== void 0 && (typeof step.repeat !== "number" || step.repeat < -1)) return fail(`${at} repeat must be a number (-1 for infinite)`);
-		if (step.stagger !== void 0 && (typeof step.stagger !== "number" || step.stagger < 0)) return fail(`${at} stagger must be a non-negative number of milliseconds`);
+		if (!step || typeof step !== "object") return fail$1(`${at} must be an object`);
+		if (!Array.isArray(step.tracks) || !step.tracks.length) return fail$1(`${at} needs at least one property`);
+		if (typeof step.duration !== "number" || !isFinite(step.duration) || step.duration < 0) return fail$1(`${at} duration must be a non-negative number of milliseconds`);
+		if (typeof step.easing !== "string" || !EASINGS[step.easing]) return fail$1(`${at} easing must be one of: ${EASING_KEYS.join(", ")}`);
+		if (step.repeat !== void 0 && (typeof step.repeat !== "number" || step.repeat < -1)) return fail$1(`${at} repeat must be a number (-1 for infinite)`);
+		if (step.stagger !== void 0 && (typeof step.stagger !== "number" || step.stagger < 0)) return fail$1(`${at} stagger must be a non-negative number of milliseconds`);
 		if (step.staggerSelector !== void 0) {
-			if (typeof step.staggerSelector !== "string" || !SELECTOR_RE.test(step.staggerSelector)) return fail(`${at} staggerSelector must be a simple CSS selector (max 120 chars)`);
-			if (!step.stagger) return fail(`${at} has a staggerSelector but no stagger`);
+			if (typeof step.staggerSelector !== "string" || !SELECTOR_RE.test(step.staggerSelector)) return fail$1(`${at} staggerSelector must be a simple CSS selector (max 120 chars)`);
+			if (!step.stagger) return fail$1(`${at} has a staggerSelector but no stagger`);
 		}
 		for (const track of step.tracks) {
-			if (!track || !MOTION_PROPS[track.prop]) return fail(`${at} has an unknown property "${track && track.prop}" — use one of: ${Object.keys(MOTION_PROPS).join(", ")}`);
+			if (!track || !MOTION_PROPS[track.prop]) return fail$1(`${at} has an unknown property "${track && track.prop}" — use one of: ${Object.keys(MOTION_PROPS).join(", ")}`);
 			const meta = MOTION_PROPS[track.prop];
-			if (track.to === void 0 || track.to === null || track.to === "") return fail(`${at} property "${track.prop}" needs a "to" value`);
+			if (track.to === void 0 || track.to === null || track.to === "") return fail$1(`${at} property "${track.prop}" needs a "to" value`);
 			if (meta.kind === "color") {
-				if (!parseColor(track.to)) return fail(`${at} property "${track.prop}" needs a hex color`);
-				if (track.from !== void 0 && !parseColor(track.from)) return fail(`${at} property "${track.prop}" "from" must be a hex color`);
+				if (!parseColor(track.to)) return fail$1(`${at} property "${track.prop}" needs a hex color`);
+				if (track.from !== void 0 && !parseColor(track.from)) return fail$1(`${at} property "${track.prop}" "from" must be a hex color`);
 				continue;
 			}
 			const units = meta.units.length ? ` (units: ${meta.units.join(", ")})` : " (no unit)";
 			const to = parseTrackValue(track.to, track.prop);
-			if (!to) return fail(`${at} property "${track.prop}" has an invalid "to" value${units}`);
+			if (!to) return fail$1(`${at} property "${track.prop}" has an invalid "to" value${units}`);
 			if (track.from !== void 0 && track.from !== null) {
 				const from = parseTrackValue(track.from, track.prop);
-				if (!from) return fail(`${at} property "${track.prop}" has an invalid "from" value${units}`);
-				if (typeof track.from === "string" && typeof track.to === "string" && from.unit !== to.unit) return fail(`${at} property "${track.prop}" mixes units ("${from.unit}" → "${to.unit}") — use the same unit on both sides`);
+				if (!from) return fail$1(`${at} property "${track.prop}" has an invalid "from" value${units}`);
+				if (typeof track.from === "string" && typeof track.to === "string" && from.unit !== to.unit) return fail$1(`${at} property "${track.prop}" mixes units ("${from.unit}" → "${to.unit}") — use the same unit on both sides`);
 			}
 		}
 	}
@@ -4113,23 +4145,219 @@ function validateAnimation(animation) {
 * @returns {{ok: true} | {ok: false, error: string}}
 */
 function validateBinding(binding, ctx) {
-	if (!binding || typeof binding !== "object") return fail("binding must be an object");
-	if (typeof binding.animationId !== "string" || !binding.animationId) return fail("binding needs an animationId");
+	if (!binding || typeof binding !== "object") return fail$1("binding must be an object");
+	if (typeof binding.animationId !== "string" || !binding.animationId) return fail$1("binding needs an animationId");
 	const known = ctx && ctx.animationIds;
-	if (known && known.indexOf(binding.animationId) === -1) return fail(`no animation "${binding.animationId}" in the library`);
-	if (TRIGGERS.indexOf(binding.trigger) === -1) return fail(`trigger must be one of: ${TRIGGERS.join(", ")}`);
-	if (binding.appearMode !== void 0 && APPEAR_MODES.indexOf(binding.appearMode) === -1) return fail(`appearMode must be one of: ${APPEAR_MODES.join(", ")}`);
+	if (known && known.indexOf(binding.animationId) === -1) return fail$1(`no animation "${binding.animationId}" in the library`);
+	if (TRIGGERS.indexOf(binding.trigger) === -1) return fail$1(`trigger must be one of: ${TRIGGERS.join(", ")}`);
+	if (binding.appearMode !== void 0 && APPEAR_MODES.indexOf(binding.appearMode) === -1) return fail$1(`appearMode must be one of: ${APPEAR_MODES.join(", ")}`);
 	if (binding.appearAt !== void 0) {
-		if (typeof binding.appearAt !== "number" || binding.appearAt < 0 || binding.appearAt > 1) return fail("appearAt must be a number between 0 and 1 (viewport fraction)");
+		if (typeof binding.appearAt !== "number" || binding.appearAt < 0 || binding.appearAt > 1) return fail$1("appearAt must be a number between 0 and 1 (viewport fraction)");
 	}
 	if (binding.scrub !== void 0) {
-		if (typeof binding.scrub !== "object" || binding.scrub === null) return fail("scrub must be an object with start/end");
+		if (typeof binding.scrub !== "object" || binding.scrub === null) return fail$1("scrub must be an object with start/end");
 		for (const k of ["start", "end"]) {
 			const v = binding.scrub[k];
-			if (v !== void 0 && (typeof v !== "number" || !isFinite(v))) return fail(`scrub.${k} must be a number`);
+			if (v !== void 0 && (typeof v !== "number" || !isFinite(v))) return fail$1(`scrub.${k} must be a number`);
 		}
 		const smooth = binding.scrub.smooth;
-		if (smooth !== void 0 && (typeof smooth !== "number" || !isFinite(smooth) || smooth < 0 || smooth > 3)) return fail("scrub.smooth must be a number of seconds between 0 and 3");
+		if (smooth !== void 0 && (typeof smooth !== "number" || !isFinite(smooth) || smooth < 0 || smooth > 3)) return fail$1("scrub.smooth must be a number of seconds between 0 and 3");
+	}
+	return { ok: true };
+}
+/** shared constants — never re-spell these as literals in a consumer */
+var TRANSITION_DEFAULTS = {
+	preset: "fade",
+	/** enter duration, ms */
+	duration: 500,
+	easing: "ease-out",
+	/** leaving should feel quicker than arriving */
+	exitRatio: .75,
+	/** hard cap on how long a click may wait for the exit timeline: a broken or
+	* infinite custom animation must never strand the visitor on the old page */
+	exitTimeoutMs: 1500,
+	maxDuration: 5e3
+};
+/**
+* The built-in exit/enter track pairs, played on the page `body`.
+* Offsets are deliberately small: any transform or filter on body makes it the
+* containing block for `position: fixed` descendants, so a fixed header rides
+* along for the duration of the transition. `fade` avoids that entirely and is
+* the default for exactly that reason.
+*/
+var TRANSITION_PRESETS = {
+	fade: {
+		label: "Fade",
+		exit: [{
+			prop: "opacity",
+			from: 1,
+			to: 0
+		}],
+		enter: [{
+			prop: "opacity",
+			from: 0,
+			to: 1
+		}]
+	},
+	"slide-up": {
+		label: "Slide up",
+		exit: [{
+			prop: "y",
+			from: 0,
+			to: -32
+		}, {
+			prop: "opacity",
+			from: 1,
+			to: 0
+		}],
+		enter: [{
+			prop: "y",
+			from: 32,
+			to: 0
+		}, {
+			prop: "opacity",
+			from: 0,
+			to: 1
+		}]
+	},
+	"slide-down": {
+		label: "Slide down",
+		exit: [{
+			prop: "y",
+			from: 0,
+			to: 32
+		}, {
+			prop: "opacity",
+			from: 1,
+			to: 0
+		}],
+		enter: [{
+			prop: "y",
+			from: -32,
+			to: 0
+		}, {
+			prop: "opacity",
+			from: 0,
+			to: 1
+		}]
+	},
+	"slide-left": {
+		label: "Slide left",
+		exit: [{
+			prop: "x",
+			from: 0,
+			to: -48
+		}, {
+			prop: "opacity",
+			from: 1,
+			to: 0
+		}],
+		enter: [{
+			prop: "x",
+			from: 48,
+			to: 0
+		}, {
+			prop: "opacity",
+			from: 0,
+			to: 1
+		}]
+	},
+	"slide-right": {
+		label: "Slide right",
+		exit: [{
+			prop: "x",
+			from: 0,
+			to: 48
+		}, {
+			prop: "opacity",
+			from: 1,
+			to: 0
+		}],
+		enter: [{
+			prop: "x",
+			from: -48,
+			to: 0
+		}, {
+			prop: "opacity",
+			from: 0,
+			to: 1
+		}]
+	},
+	zoom: {
+		label: "Zoom",
+		exit: [{
+			prop: "scale",
+			from: 1,
+			to: .97
+		}, {
+			prop: "opacity",
+			from: 1,
+			to: 0
+		}],
+		enter: [{
+			prop: "scale",
+			from: 1.03,
+			to: 1
+		}, {
+			prop: "opacity",
+			from: 0,
+			to: 1
+		}]
+	},
+	blur: {
+		label: "Blur",
+		exit: [{
+			prop: "blur",
+			from: 0,
+			to: 8
+		}, {
+			prop: "opacity",
+			from: 1,
+			to: 0
+		}],
+		enter: [{
+			prop: "blur",
+			from: 8,
+			to: 0
+		}, {
+			prop: "opacity",
+			from: 0,
+			to: 1
+		}]
+	}
+};
+var TRANSITION_PRESET_IDS = Object.keys(TRANSITION_PRESETS);
+var SCROLL_LERP_MIN = .02;
+var SCROLL_LERP_MAX = .4;
+/**
+* @param {any} motion — a candidate settings.motion
+* @param {{animationIds?: string[]}} [ctx]
+* @returns {{ok: true} | {ok: false, error: string}}
+*/
+function validateMotionSettings(motion, ctx) {
+	if (motion === void 0 || motion === null) return { ok: true };
+	if (typeof motion !== "object" || Array.isArray(motion)) return fail$1("motion must be an object");
+	if (motion.appearMode !== void 0 && APPEAR_MODES.indexOf(motion.appearMode) === -1) return fail$1(`motion.appearMode must be one of: ${APPEAR_MODES.join(", ")}`);
+	const t = motion.transitions;
+	if (t !== void 0 && t !== null) {
+		if (typeof t !== "object" || Array.isArray(t)) return fail$1("motion.transitions must be an object");
+		if (typeof t.enabled !== "boolean") return fail$1("motion.transitions.enabled must be a boolean");
+		if (t.preset !== void 0 && t.preset !== "custom" && !TRANSITION_PRESETS[t.preset]) return fail$1(`motion.transitions.preset must be "custom" or one of: ${TRANSITION_PRESET_IDS.join(", ")}`);
+		if (t.duration !== void 0 && (typeof t.duration !== "number" || !isFinite(t.duration) || t.duration < 0 || t.duration > TRANSITION_DEFAULTS.maxDuration)) return fail$1(`motion.transitions.duration must be between 0 and ${TRANSITION_DEFAULTS.maxDuration} ms`);
+		if (t.easing !== void 0 && !EASINGS[t.easing]) return fail$1(`motion.transitions.easing must be one of: ${EASING_KEYS.join(", ")}`);
+		const known = ctx && ctx.animationIds;
+		for (const key of ["exitAnimationId", "enterAnimationId"]) {
+			const id = t[key];
+			if (id === void 0 || id === null) continue;
+			if (typeof id !== "string" || !id) return fail$1(`motion.transitions.${key} must be an animation id`);
+			if (known && known.indexOf(id) === -1) return fail$1(`no animation "${id}" in the library`);
+		}
+	}
+	const s = motion.scroll;
+	if (s !== void 0 && s !== null) {
+		if (typeof s !== "object" || Array.isArray(s)) return fail$1("motion.scroll must be an object");
+		if (typeof s.enabled !== "boolean") return fail$1("motion.scroll.enabled must be a boolean");
+		if (s.lerp !== void 0 && (typeof s.lerp !== "number" || !isFinite(s.lerp) || s.lerp < .02 || s.lerp > .4)) return fail$1(`motion.scroll.lerp must be between ${SCROLL_LERP_MIN} and ${SCROLL_LERP_MAX}`);
 	}
 	return { ok: true };
 }
@@ -4172,6 +4400,102 @@ function defaultSettings() {
 		}
 	};
 }
+//#endregion
+//#region src/lib/shared/slider.js
+/** slides visible at once is capped so a typo can't emit a 10000-column track */
+var PER_VIEW_MIN = 1;
+var PER_VIEW_MAX = 8;
+var GAP_MAX = 500;
+var DELAY_MIN = 500;
+var DELAY_MAX = 6e4;
+var SLIDER_DEFAULTS = {
+	arrows: true,
+	dots: true,
+	gap: 0,
+	autoplay: false,
+	delay: 4e3,
+	loop: false,
+	drag: true
+};
+/** the perView key for the widest breakpoint — the value that applies everywhere
+* until a narrower breakpoint overrides it (desktop-first, like the class cascade) */
+var PER_VIEW_BASE = "base";
+var SLIDER_KEYS = [
+	"arrows",
+	"dots",
+	"perView",
+	"gap",
+	"autoplay",
+	"delay",
+	"loop",
+	"drag"
+];
+var fail = (error) => ({
+	ok: false,
+	error
+});
+var isBool = (v) => typeof v === "boolean";
+var isNum = (v) => typeof v === "number" && isFinite(v);
+/**
+* @param {any} config
+* @param {{breakpointIds?: string[]}} [ctx] when given, perView keys are checked
+*   against the project's real breakpoints (the MCP path — the editor only ever
+*   writes keys it just read off the project)
+* @returns {{ok: true} | {ok: false, error: string}}
+*/
+function validateSliderConfig(config, ctx = {}) {
+	if (!config || typeof config !== "object" || Array.isArray(config)) return fail("slider must be an object");
+	for (const key of Object.keys(config)) if (!SLIDER_KEYS.includes(key)) return fail(`unknown slider option '${key}' — use one of: ${SLIDER_KEYS.join(", ")}`);
+	for (const key of [
+		"arrows",
+		"dots",
+		"autoplay",
+		"loop",
+		"drag"
+	]) if (config[key] !== void 0 && !isBool(config[key])) return fail(`slider ${key} must be true or false`);
+	if (config.gap !== void 0 && (!isNum(config.gap) || config.gap < 0 || config.gap > GAP_MAX)) return fail(`slider gap must be a number of pixels between 0 and ${GAP_MAX}`);
+	if (config.delay !== void 0 && (!isNum(config.delay) || config.delay < DELAY_MIN || config.delay > DELAY_MAX)) return fail(`slider delay must be a number of milliseconds between ${DELAY_MIN} and ${DELAY_MAX}`);
+	if (config.perView !== void 0) {
+		const pv = config.perView;
+		if (!pv || typeof pv !== "object" || Array.isArray(pv)) return fail(`slider perView must be an object keyed by '${PER_VIEW_BASE}' and breakpoint ids`);
+		for (const [key, value] of Object.entries(pv)) {
+			if (key !== "base" && ctx.breakpointIds && !ctx.breakpointIds.includes(key)) return fail(`slider perView key '${key}' is not a breakpoint — use '${PER_VIEW_BASE}'` + (ctx.breakpointIds.length ? ` or one of: ${ctx.breakpointIds.join(", ")}` : ""));
+			if (!isNum(value) || !Number.isInteger(value) || value < PER_VIEW_MIN || value > PER_VIEW_MAX) return fail(`slider perView '${key}' must be a whole number of slides between ${PER_VIEW_MIN} and ${PER_VIEW_MAX}`);
+		}
+	}
+	return { ok: true };
+}
+/**
+* A fully-defaulted config. Deliberately TOLERANT where the validator is
+* strict: a perView key for a breakpoint the user has since deleted is dropped
+* rather than failing, so a stale config never breaks a render.
+*
+* @param {any} config node.slider, possibly undefined
+* @param {{id: string, width: number}[]} [breakpoints] project.breakpoints
+*/
+function resolveSliderConfig(config, breakpoints = []) {
+	const c = config && typeof config === "object" ? config : {};
+	const known = new Set(breakpoints.map((b) => b.id));
+	const perView = {};
+	for (const [key, value] of Object.entries(c.perView ?? {})) {
+		if (key !== "base" && !known.has(key)) continue;
+		if (!isNum(value)) continue;
+		perView[key] = Math.min(PER_VIEW_MAX, Math.max(PER_VIEW_MIN, Math.round(value)));
+	}
+	return {
+		arrows: isBool(c.arrows) ? c.arrows : SLIDER_DEFAULTS.arrows,
+		dots: isBool(c.dots) ? c.dots : SLIDER_DEFAULTS.dots,
+		gap: isNum(c.gap) ? Math.max(0, Math.min(GAP_MAX, c.gap)) : SLIDER_DEFAULTS.gap,
+		autoplay: isBool(c.autoplay) ? c.autoplay : SLIDER_DEFAULTS.autoplay,
+		delay: isNum(c.delay) ? Math.max(DELAY_MIN, Math.min(DELAY_MAX, c.delay)) : SLIDER_DEFAULTS.delay,
+		loop: isBool(c.loop) ? c.loop : SLIDER_DEFAULTS.loop,
+		drag: isBool(c.drag) ? c.drag : SLIDER_DEFAULTS.drag,
+		perView
+	};
+}
+var SLIDER_DOT_BASE = "size-2 rounded-full transition-colors";
+`${SLIDER_DOT_BASE}`;
+`${SLIDER_DOT_BASE}`;
 //#endregion
 //#region src/lib/shared/interactionKeys.js
 /**
@@ -4295,4 +4619,4 @@ function createProject(name) {
 	};
 }
 //#endregion
-export { BUILTIN_LIST_SOURCES, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MOTION_PROPS, NODE_STATE_KEYS, REF_SLOT, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, STYLE_SECTIONS, TOKEN_NAME_RE, adoptStructure, alignInstanceLines, applyClass, buildDocument, cloneForMaster, compileAnimation, countLocaleSeo, createNode, createPage, createProject, dataMarkerOf, deepClone, defaultBreakpoints, defaultSettings, elementBlockLines, enforceDocument, expandComponentInstances, extractBodyArg, extractBodyDecor, extractBodyLines, findNode, findParent, fontError, fontFormatForUrl, hasAncestorOfType, hasNodeState, hasOpenArgBracket, hoistBlockRef, interactionGroupKey, interactionMarkerOf, interactionStateKey, isAllowedAttribute, isBodyOpenLine, isComponentType, isEmittableToken, isKnownElement, isLeafElement, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isValidClass, isValidToken, lexLine, matchClass, normalizeComponentName, normalizeSyntax, parseSetup, parseSyntax, purgeLocaleSeo, reconcile, refOf, replaceSetup, sameProperty, sanitizeAttributes, sanitizeRich, serializeNode, setSetupLocale, setStyleTokens, slugify, stripExtractedInstanceState, stripNodeState, styleMarkerOf, tokenError, typeOptionsFor, validateAnimation, validateBinding, validateDocument, walkNodes, withDataMarker, withInteractionMarker, withStyleMarker, withoutRef };
+export { APPEAR_MODES, BUILTIN_LIST_SOURCES, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MOTION_PROPS, NODE_STATE_KEYS, REF_SLOT, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, SCROLL_LERP_MAX, SCROLL_LERP_MIN, SLIDER_DEFAULTS, STYLE_SECTIONS, TOKEN_NAME_RE, TRANSITION_DEFAULTS, TRANSITION_PRESET_IDS, adoptStructure, alignInstanceLines, applyClass, buildDocument, cloneForMaster, compileAnimation, countLocaleSeo, createNode, createPage, createProject, dataMarkerOf, deepClone, defaultBreakpoints, defaultSettings, elementBlockLines, enforceDocument, expandComponentInstances, extractBodyArg, extractBodyDecor, extractBodyLines, findNode, findParent, fontError, fontFormatForUrl, hasAncestorOfType, hasNodeState, hasOpenArgBracket, hoistBlockRef, interactionGroupKey, interactionMarkerOf, interactionStateKey, isAllowedAttribute, isBodyOpenLine, isComponentType, isEmittableToken, isKnownElement, isLeafElement, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isValidClass, isValidToken, lexLine, matchClass, normalizeComponentName, normalizeSyntax, parseSetup, parseSyntax, purgeLocaleSeo, reconcile, refOf, replaceSetup, resolveSliderConfig, sameProperty, sanitizeAttributes, sanitizeRich, serializeNode, setSetupLocale, setStyleTokens, slugify, stripExtractedInstanceState, stripNodeState, styleMarkerOf, tokenError, typeOptionsFor, validateAnimation, validateBinding, validateDocument, validateMotionSettings, validateSliderConfig, walkNodes, withDataMarker, withInteractionMarker, withStyleMarker, withoutRef };

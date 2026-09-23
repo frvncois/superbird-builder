@@ -2,7 +2,7 @@ import { computed } from 'vue'
 import { File, FileText, Layers } from 'lucide-vue-next'
 import { usePage } from './usePage'
 import { useCollections } from './useCollections'
-import type { Collection } from '@/types/editor'
+import type { Collection, CollectionEntry } from '@/types/editor'
 
 /**
  * Page/collection navigation for the app header's page dropdown.
@@ -35,9 +35,12 @@ export function useHeaderNav() {
     openPage(page.id) // redirect to the new page
   }
 
-  function newEntry(collection: Collection) {
+  /** create an entry and load it — returns it so callers can open it in a panel.
+   *  openEntry no-ops for a data-only collection (no template page to show). */
+  function newEntry(collection: Collection): CollectionEntry {
     const entry = addEntry(collection)
     openEntry(collection, entry.id)
+    return entry
   }
 
   return { regularPages, activeIcon, isActivePage, openPage, createPage, newEntry }

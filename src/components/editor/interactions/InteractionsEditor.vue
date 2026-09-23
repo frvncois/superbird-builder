@@ -1,4 +1,11 @@
 <script setup lang="ts">
+// The class-toggle half of the Interactions panel: the interactions applied to
+// the selected element — WHEN each one fires — plus the project library.
+//
+// What an interaction DOES (its name, classes, timing) is shared by every
+// element using it, so it lives in the focused InteractionDetail view instead;
+// editing it here among per-element controls made a change that retimed the
+// whole site look like a change to this one element.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { usePanel } from '@/composables/usePanel'
 import {
@@ -7,28 +14,28 @@ import {
   MousePointer2,
   MousePointerClick,
   MoveVertical,
+  Pencil,
   Plus,
   ToggleLeft,
-  Trash2,
   X,
 } from 'lucide-vue-next'
 import GroupPopover from '@/components/popover/GroupPopover.vue'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import InputUI from '@/components/ui/InputUI.vue'
 import RowUI from '@/components/ui/RowUI.vue'
-import SliderUI from '@/components/ui/SliderUI.vue'
 import IconGroupUI from '@/components/ui/IconGroupUI.vue'
-import ClassFieldInput from '@/components/editor/style/ClassFieldInput.vue'
 import AnimationEditor from '@/components/editor/interactions/AnimationEditor.vue'
+import EffectLibraryList from '@/components/editor/interactions/EffectLibraryList.vue'
 import SelectUI from '@/components/ui/SelectUI.vue'
 import { useElement } from '@/composables/useElement'
 import { useInteraction } from '@/composables/useInteraction'
 import { useProject } from '@/composables/useProject'
 import { useShortcut } from '@/composables/useShortcut'
 import { useComponents } from '@/composables/useComponents'
-import type { Interaction, InteractionBinding } from '@/types/editor'
+import { useEffectDetail } from '@/composables/useEffectDetail'
+import type { InteractionBinding } from '@/types/editor'
 
-const { selectedElement, getElement, highlightElement } = useElement()
+const { getElement, highlightElement, isMultiSelect } = useElement()
 const {
   pickingFor,
   library,
@@ -39,15 +46,12 @@ const {
   applyTo,
   removeBinding,
 } = useInteraction()
-const { masterFor, findMasterNode } = useComponents()
+const { editTarget, findMasterNode } = useComponents()
 const { breakpoints } = useProject()
+const { openDetail } = useEffectDetail()
 
 // inside a component instance, interaction edits land on the shared master
-const target = computed(() =>
-  selectedElement.value
-    ? (masterFor(selectedElement.value.id)?.master ?? selectedElement.value)
-    : null,
-)
+const target = editTarget
 
 // Esc cancels a pending target pick
 useShortcut('Escape', { onDown: () => (pickingFor.value = null) })
@@ -91,64 +95,50 @@ function toggleDismiss(binding: InteractionBinding, mode: 'outside' | 'escape') 
   binding.closeOn = next.size ? [...next] : undefined
 }
 
-const DURATION_STOPS = ['75', '100', '150', '200', '300', '500', '700', '1000']
-
-function durationIndex(animation: Interaction): number {
-  const i = DURATION_STOPS.indexOf(animation.duration.replace('duration-', ''))
-  return i === -1 ? DURATION_STOPS.indexOf('300') : i
-}
-function setDuration(animation: Interaction, index: number) {
-  animation.duration = `duration-${DURATION_STOPS[index] ?? '300'}`
-}
-
-const EASINGS = [
-  { label: 'Linear', value: 'ease-linear' },
-  { label: 'Ease in', value: 'ease-in' },
-  { label: 'Ease out', value: 'ease-out' },
-  { label: 'Ease in-out', value: 'ease-in-out' },
-]
-
 // --- applied to the selected element ---
 
-const bindings = computed(() => target.value?.interactions ?? [])
+/** the per-element half needs exactly one element; the libraries below don't */
+const canEditElement = computed(() => !!target.value && !isMultiSelect.value)
+
+const bindings = computed(() => (canEditElement.value ? (target.value?.interactions ?? []) : []))
 
 function animName(binding: InteractionBinding): string {
   return animationFor(binding.interactionId)?.name ?? 'Missing interaction'
 }
+
+// --- library ---
+
+const libraryItems = computed(() => library.value.map((i) => ({ id: i.id, name: i.name })))
 
 function isApplied(interactionId: string): boolean {
   return bindings.value.some((b) => b.interactionId === interactionId)
 }
 
 function apply(interactionId: string) {
-  if (target.value && !isApplied(interactionId)) applyTo(target.value, interactionId)
+  if (canEditElement.value && !isApplied(interactionId)) applyTo(target.value!, interactionId)
 }
 
+/** creating always adds to the library and opens the editor; applying to the
+ * selection is the bonus when there IS one */
 function createAndApply() {
-  if (!target.value) return
-  apply(createInteraction().id)
+  const interaction = createInteraction()
+  if (canEditElement.value) applyTo(target.value!, interaction.id)
+  openDetail('interaction', interaction.id, true)
 }
 
 function unapply(binding: InteractionBinding) {
   if (target.value) removeBinding(target.value, binding.id)
 }
 
-// --- library delete (two-step inline confirm) ---
-
-const pendingDelete = ref<string | null>(null)
-function confirmDelete(interactionId: string) {
-  deleteInteraction(interactionId)
-  pendingDelete.value = null
-}
-
-// +I in the code editor focuses the first applied interaction's To field
+// `+I` in the code editor: the panel's primary action, so Enter creates. Its
+// old target (the first binding's "To" field) now lives in the detail view.
 const { pendingFocus } = usePanel()
-const toFields = ref<InstanceType<typeof ClassFieldInput>[]>([])
+const newButton = ref<InstanceType<typeof ButtonUI>>()
 
 function consumeFocus() {
   if (pendingFocus.value !== 'interactions') return
   pendingFocus.value = null
-  nextTick(() => toFields.value[0]?.focus())
+  nextTick(() => newButton.value?.$el?.focus?.())
 }
 onMounted(consumeFocus)
 watch(pendingFocus, consumeFocus)
@@ -204,6 +194,18 @@ function toggleBreakpoint(binding: InteractionBinding, id: string) {
 </script>
 
 <template>
+  <!-- the libraries below still work without a selection — only applying and
+       the per-element cards need exactly one element -->
+  <GroupPopover v-if="!canEditElement">
+    <p class="text-xs text-muted-foreground">
+      {{
+        isMultiSelect
+          ? 'Select a single element to give it interactions.'
+          : 'Select an element to give it interactions, or edit your saved ones below.'
+      }}
+    </p>
+  </GroupPopover>
+
   <!-- tween animations (timeline engine) come first: the richer system.
        GroupPopover borders already separate the two halves. -->
   <AnimationEditor />
@@ -215,20 +217,23 @@ function toggleBreakpoint(binding: InteractionBinding, id: string) {
     :label="animName(binding)"
   >
     <template v-if="animationFor(binding.interactionId)">
-      <RowUI label="Name">
-        <InputUI :model-value="animationFor(binding.interactionId)!.name"
-          @update:model-value="(v) => (animationFor(binding.interactionId)!.name = v)" />
-        <template #end>
-          <ButtonUI
-            variant="icon"
-            size="sm"
-            :icon="X"
-            tooltip="Remove from this element"
-            class="w-6 shrink-0 text-muted-foreground"
-            @click="unapply(binding)"
-          />
-        </template>
-      </RowUI>
+      <div class="flex items-center gap-1">
+        <ButtonUI
+          variant="outline" size="xs" :icon="Pencil"
+          class="min-w-0 flex-1 !justify-start"
+          @click="openDetail('interaction', binding.interactionId)"
+        >
+          Edit interaction
+        </ButtonUI>
+        <ButtonUI
+          variant="icon"
+          size="sm"
+          :icon="X"
+          tooltip="Remove from this element"
+          class="w-6 shrink-0 text-muted-foreground"
+          @click="unapply(binding)"
+        />
+      </div>
 
       <RowUI label="Trigger">
         <IconGroupUI
@@ -257,6 +262,10 @@ function toggleBreakpoint(binding: InteractionBinding, id: string) {
         <span class="w-6 shrink-0 text-right text-xs text-muted-foreground">px</span>
       </RowUI>
 
+      <!-- Dismiss-on and Exclusive group are stored per binding, but the
+           runtime folds them per EFFECT and target (useInteraction effectOptions):
+           two bindings of this interaction on the same target resolve to ONE
+           set of options, whichever the fold reaches first. -->
       <RowUI v-if="isDiscrete(binding)" label="Dismiss on">
         <div class="flex flex-1 justify-end gap-1">
           <ButtonUI
@@ -310,26 +319,6 @@ function toggleBreakpoint(binding: InteractionBinding, id: string) {
         </div>
       </RowUI>
 
-      <RowUI label="Easing">
-        <SelectUI
-          :model-value="animationFor(binding.interactionId)!.easing"
-          :options="EASINGS"
-          @update:model-value="(v) => v && (animationFor(binding.interactionId)!.easing = v)"
-        />
-      </RowUI>
-
-      <RowUI label="Duration">
-        <SliderUI
-          :min="0"
-          :max="DURATION_STOPS.length - 1"
-          :model-value="durationIndex(animationFor(binding.interactionId)!)"
-          @update:model-value="(v) => setDuration(animationFor(binding.interactionId)!, v)"
-        />
-        <span class="w-12 shrink-0 text-right font-mono text-xs text-muted-foreground">
-          {{ animationFor(binding.interactionId)!.duration.replace('duration-', '') }}ms
-        </span>
-      </RowUI>
-
       <RowUI label="Target">
         <ButtonUI
           variant="outline"
@@ -356,16 +345,6 @@ function toggleBreakpoint(binding: InteractionBinding, id: string) {
         />
       </RowUI>
 
-      <RowUI label="To">
-        <ClassFieldInput
-          ref="toFields"
-          :model-value="animationFor(binding.interactionId)!.toClasses"
-          :prerequisites="false"
-          class="font-mono"
-          @update:model-value="(v) => (animationFor(binding.interactionId)!.toClasses = v)"
-        />
-      </RowUI>
-
       <p class="px-1 text-[10px] text-muted-foreground">
         Shared · used on {{ usageCount(binding.interactionId) }}
         element{{ usageCount(binding.interactionId) === 1 ? '' : 's' }}
@@ -373,52 +352,22 @@ function toggleBreakpoint(binding: InteractionBinding, id: string) {
     </template>
   </GroupPopover>
 
-  <!-- project library: the list, then this half's action — grouped together
-       so "New interaction" reads as part of this section, not a panel footer -->
-  <GroupPopover label="Interaction library">
-    <p v-if="!library.length" class="text-xs text-muted-foreground">
-      No saved interactions yet.
-    </p>
-    <div
-      v-for="animation in library"
-      :key="animation.id"
-      class="flex flex-col gap-1"
-    >
-      <div class="flex items-center gap-1.5">
-        <span class="min-w-0 flex-1 truncate text-xs">{{ animation.name }}</span>
-        <ButtonUI
-          variant="outline"
-          size="xs"
-          :disabled="isApplied(animation.id)"
-          @click="apply(animation.id)"
-        >
-          {{ isApplied(animation.id) ? 'Applied' : 'Apply' }}
-        </ButtonUI>
-        <ButtonUI
-          variant="ghost"
-          size="xs"
-          :icon="Trash2"
-          tooltip="Delete interaction"
-          class="text-muted-foreground"
-          @click="pendingDelete = animation.id"
-        />
-      </div>
-      <div
-        v-if="pendingDelete === animation.id"
-        class="flex items-center gap-1.5 pl-1 text-[10px] text-muted-foreground"
-      >
-        <span class="flex-1">Delete from {{ usageCount(animation.id) }} element{{ usageCount(animation.id) === 1 ? '' : 's' }}?</span>
-        <ButtonUI variant="ghost" size="xs" @click="pendingDelete = null">Cancel</ButtonUI>
-        <ButtonUI variant="outline" size="xs" class="text-danger" @click="confirmDelete(animation.id)">
-          Delete
-        </ButtonUI>
-      </div>
-    </div>
-
-    <div class="pt-1">
-      <ButtonUI variant="outline" size="sm" :icon="Plus" class="w-full" @click="createAndApply">
+  <EffectLibraryList
+    label="Interaction library"
+    :items="libraryItems"
+    empty-text="No saved interactions yet."
+    noun="interaction"
+    :is-applied="isApplied"
+    :usage-count="usageCount"
+    :can-apply="canEditElement"
+    @open="(id) => openDetail('interaction', id)"
+    @apply="apply"
+    @remove="deleteInteraction"
+  >
+    <template #actions>
+      <ButtonUI ref="newButton" variant="outline" size="sm" :icon="Plus" class="w-full" @click="createAndApply">
         New interaction
       </ButtonUI>
-    </div>
-  </GroupPopover>
+    </template>
+  </EffectLibraryList>
 </template>

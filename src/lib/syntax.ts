@@ -543,6 +543,7 @@ export const NODE_STATE_KEYS = [
   'locales',
   'listQuery',
   'entryId',
+  'slider',
 ] as const
 
 /** true when a node carries state that would be lost (or wrongly inherited) */
@@ -809,6 +810,26 @@ export function validateDocument(
         continue
       }
 
+      // a slider's arg is OPTIONAL — with one it repeats per entry like a
+      // :collection-list, without one each direct child is a slide. It pushes
+      // its arg so `@item` diagnostics work inside a bound slider.
+      if (name === 'slider') {
+        const arg = part?.arg
+        if (
+          arg &&
+          !collectionNames.includes(arg) &&
+          !BUILTIN_LIST_SOURCES.includes(arg) &&
+          !listFieldNames.includes(arg)
+        ) {
+          diags.push({ line: i, message: `Unknown collection ':slider[${arg}]'` })
+        } else if (leaf) {
+          diags.push({ line: i, message: "':slider:' is a container — open it as ':slider … slider:'" })
+        } else if (open) {
+          stack.push({ type: name, line: i, indent, arg })
+        }
+        continue
+      }
+
       // `@item` links to the entry's own page — which a data-only collection
       // does not have. Caught here rather than silently rendering unlinked.
       if (linkFromToken(part?.link) === '@item') {
@@ -874,7 +895,7 @@ export function validateDocument(
 // --- suggestions ---
 
 interface Context {
-  stack: { type: string; indent: number }[]
+  stack: { type: string; indent: number; arg?: string }[]
   last: { kind: 'open' | 'close' | 'leaf'; type: string; indent: number } | null
 }
 
@@ -892,8 +913,8 @@ function analyze(before: string): Context {
       }
       const open = token.match(OPEN)
       if (open) {
-        const name = slots(open).name
-        if (isKnownElement(name) || isComponentType(name)) stack.push({ type: name, indent })
+        const { name, arg } = slots(open)
+        if (isKnownElement(name) || isComponentType(name)) stack.push({ type: name, indent, arg })
         last = { kind: 'open', type: name, indent }
         continue
       }
@@ -984,7 +1005,10 @@ export function suggestCompletion(
     // prefix must be a complete leaf (:x:) or open (:x) token
     if (LEAF.test(prefix) || OPEN.test(prefix)) {
       const inEntryScope =
-        !!opts.onTemplate || analyze(before).stack.some((s) => s.type === 'collection-list')
+        !!opts.onTemplate ||
+        analyze(before).stack.some(
+          (s) => s.type === 'collection-list' || (s.type === 'slider' && !!s.arg),
+        )
       const targets = [
         ...(inEntryScope ? ['item'] : []),
         ...(opts.pages ?? []),

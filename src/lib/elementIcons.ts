@@ -26,6 +26,7 @@ import {
   Component as ComponentIcon,
   Layers,
   FileText,
+  GalleryHorizontalEnd,
 } from 'lucide-vue-next'
 import { isComponentType } from './components'
 
@@ -69,6 +70,7 @@ const ICONS: Record<string, Component> = {
   link: Link,
   'collection-list': Layers,
   'collection-item': FileText,
+  slider: GalleryHorizontalEnd,
 }
 
 /** the palette/header icon for an element type (components → the component glyph) */

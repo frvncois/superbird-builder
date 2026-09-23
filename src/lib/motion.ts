@@ -1,7 +1,7 @@
 // Typed surface over the shared motion engine. The math lives in
 // src/lib/shared/motion.js (plain JS, shared with the exporter, the published
 // site runtime and the MCP); this file gives the client the types.
-import type { AnimProp, Animation, AnimationBinding } from '@/types/editor'
+import type { AnimProp, Animation, AnimationBinding, ProjectSettings } from '@/types/editor'
 import {
   MOTION_PROPS as MOTION_PROPS_DATA,
   EASINGS as EASINGS_DATA,
@@ -28,6 +28,19 @@ import {
   MOTION_CSS_PROPS,
   SCRUB_DEFAULTS,
   APPEAR_AT_DEFAULT,
+  APPEAR_MODES,
+  effectiveAppearMode as effectiveAppearModeRaw,
+  resolveTransition as resolveTransitionRaw,
+  resolveScrollLerp as resolveScrollLerpRaw,
+  validateMotionSettings as validateMotionSettingsRaw,
+  TRANSITION_PRESETS,
+  TRANSITION_PRESET_IDS,
+  TRANSITION_DEFAULTS,
+  TRANSITION_EXIT_ID,
+  TRANSITION_ENTER_ID,
+  SCROLL_LERP_DEFAULT,
+  SCROLL_LERP_MIN,
+  SCROLL_LERP_MAX,
 } from './shared/motion.js'
 
 export interface MotionPropDef {
@@ -131,6 +144,32 @@ export const parseTrackValue = parseTrackValueRaw as (
   prop: AnimProp,
 ) => { n: number; unit: string } | null
 
+export type AppearMode = 'once' | 'replay' | 'reverse'
+export type SiteMotion = NonNullable<ProjectSettings['motion']>
+
+/** a binding's own mode wins; omitted inherits the site default */
+export const effectiveAppearMode = effectiveAppearModeRaw as (
+  bindingMode: AppearMode | undefined,
+  siteDefault: AppearMode | undefined,
+) => AppearMode
+/** the two timelines a page transition plays, preset-built or from the library */
+export const resolveTransition = resolveTransitionRaw as (
+  motion: SiteMotion | undefined,
+  animationsById?: Record<string, Animation>,
+) => { exit: Animation | null; enter: Animation | null } | null
+/** the clamped lerp factor, or null when smooth scroll is off */
+export const resolveScrollLerp = resolveScrollLerpRaw as (
+  motion: SiteMotion | undefined,
+) => number | null
+export const validateMotionSettings = validateMotionSettingsRaw as (
+  motion: unknown,
+  ctx?: { animationIds?: string[] },
+) => ValidationResult
+/** the built-in transitions as ready-made select options, in declaration order */
+export const TRANSITION_PRESET_OPTIONS: { label: string; value: string }[] = Object.entries(
+  TRANSITION_PRESETS as Record<string, { label: string }>,
+).map(([value, preset]) => ({ label: preset.label, value }))
+
 export {
   animationBindingKey,
   appearRootMargin,
@@ -140,6 +179,14 @@ export {
   MOTION_CSS_PROPS,
   SCRUB_DEFAULTS,
   APPEAR_AT_DEFAULT,
+  APPEAR_MODES,
+  TRANSITION_PRESET_IDS,
+  TRANSITION_DEFAULTS,
+  TRANSITION_EXIT_ID,
+  TRANSITION_ENTER_ID,
+  SCROLL_LERP_DEFAULT,
+  SCROLL_LERP_MIN,
+  SCROLL_LERP_MAX,
 }
 
 /** honours the OS "reduce motion" setting; safe in Node (no matchMedia) */

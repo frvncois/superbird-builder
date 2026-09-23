@@ -1639,7 +1639,7 @@ const markersSig = computed(() => {
   const visit = (nodes: ElementNode[]) => {
     for (const n of nodes) {
       parts.push(
-        `${n.id}:${n.classes ?? ''}:${n.interactions?.length ?? 0}:${n.animations?.length ?? 0}:${n.arg ?? ''}:${n.content ? 1 : 0}:${n.src ? 1 : 0}`,
+        `${n.id}:${n.classes ?? ''}:${n.interactions?.length ?? 0}:${n.animations?.length ?? 0}:${n.arg ?? ''}:${n.content ? 1 : 0}:${n.src ? 1 : 0}:${n.slider ? 1 : 0}`,
       )
       if (!isComponentType(n.type)) visit(n.children)
     }
@@ -1647,7 +1647,11 @@ const markersSig = computed(() => {
   visit(activePage.value.elements)
   return parts.join('|')
 })
-watch(markersSig, () => syncNodeMarkers())
+// `immediate` because the code column is a toggle now (off by default): any
+// styling/interaction done on the canvas while this editor was unmounted has
+// to be reconciled into the code on mount, or the markers read stale. The sync
+// derives entirely from node state and no-ops when nothing differs.
+watch(markersSig, () => syncNodeMarkers(), { immediate: true })
 
 function onInput() {
   dismissed.value = false

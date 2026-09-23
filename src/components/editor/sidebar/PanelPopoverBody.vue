@@ -5,14 +5,20 @@
 import GroupPopover from '@/components/popover/GroupPopover.vue'
 import StyleEditor from '@/components/editor/style/StyleEditor.vue'
 import InteractionsEditor from '@/components/editor/interactions/InteractionsEditor.vue'
-import CustomCodeEditor from '@/components/editor/code/CustomCodeEditor.vue'
+import InteractionDetail from '@/components/editor/interactions/InteractionDetail.vue'
+import AnimationDetail from '@/components/editor/interactions/AnimationDetail.vue'
+import SiteMotionPopover from '@/components/editor/interactions/SiteMotionPopover.vue'
 import BranchesEditor from '@/components/editor/drafts/BranchesEditor.vue'
 import DataEditor from '@/components/editor/content/DataEditor.vue'
 import { usePanel } from '@/composables/usePanel'
 import { useElement } from '@/composables/useElement'
+import { useAuth } from '@/composables/useAuth'
+import { useEffectDetail } from '@/composables/useEffectDetail'
 
 const { activePanelId } = usePanel()
 const { selectedElement, isMultiSelect } = useElement()
+const { canBuild } = useAuth()
+const { detail } = useEffectDetail()
 </script>
 
 <template>
@@ -31,13 +37,25 @@ const { selectedElement, isMultiSelect } = useElement()
   </template>
 
   <template v-else-if="activePanelId === 'interactions'">
-    <InteractionsEditor v-if="selectedElement && !isMultiSelect" />
-    <GroupPopover v-else>
-      <p class="text-xs text-muted-foreground">Select a single element to add interactions.</p>
-    </GroupPopover>
+    <!-- creating or editing an effect takes over the whole panel: it is a
+         project-level thing, and showing it among per-element cards made it
+         read as per-element -->
+    <template v-if="detail">
+      <InteractionDetail
+        v-if="detail.kind === 'interaction'"
+        :key="detail.id"
+        :id="detail.id"
+        :created="detail.created"
+      />
+      <AnimationDetail v-else :key="detail.id" :id="detail.id" :created="detail.created" />
+    </template>
+    <template v-else>
+      <!-- the libraries are project-level, so this renders with no selection
+           too; only the per-element cards and Apply need one -->
+      <InteractionsEditor />
+      <SiteMotionPopover v-if="canBuild" />
+    </template>
   </template>
-
-  <CustomCodeEditor v-else-if="activePanelId === 'custom-code'" />
 
   <BranchesEditor v-else-if="activePanelId === 'branches'" />
 

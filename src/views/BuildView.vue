@@ -1,7 +1,9 @@
 <script setup lang="ts">
 // The single editing shell. A rail toggle switches the surface between Build
-// (code editor + breakpoint canvas + full inspector) and Preview (full-site
-// render, no code, restricted sidebar). Contributors are pinned to Preview.
+// (breakpoint canvas + full inspector) and Preview (full-site render,
+// restricted sidebar). The code editor is a separate column Build opens
+// beside the canvas — off by default, toggled by the rail's Code button.
+// Contributors are pinned to Preview.
 import { ref } from 'vue'
 import EditorLayout from '@/layouts/EditorLayout.vue'
 import AppRail from '@/components/editor/sidebar/AppRail.vue'
@@ -22,7 +24,7 @@ import { useViewMode } from '@/composables/useViewMode'
 useEditorShortcuts()
 
 const { ready, bootError, reloadPage } = useEditorBoot()
-const { isBuild } = useViewMode()
+const { isBuild, showCode } = useViewMode()
 
 // pages drawer overlays the shell (both modes); opened from the left rail
 const pagesDrawerOpen = ref(false)
@@ -38,7 +40,7 @@ const pagesDrawerOpen = ref(false)
   </div>
 
   <template v-else-if="ready">
-    <EditorLayout :left="isBuild">
+    <EditorLayout :left="showCode" :framed="isBuild">
       <template #rail>
         <AppRail
           :drawer-open="pagesDrawerOpen"
@@ -47,7 +49,7 @@ const pagesDrawerOpen = ref(false)
         />
       </template>
 
-      <template v-if="isBuild" #left>
+      <template v-if="showCode" #left>
         <div class="h-full">
           <CodeEditor />
         </div>

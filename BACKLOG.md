@@ -204,17 +204,45 @@ patches; each was scoped in the plan and the scoping is reproduced here.
   MCP gets a read-only `list_form_submissions`. **`/security-review` is
   mandatory before shipping this one.** File upload (multipart) and Stripe
   Checkout are follow-ups in the same module, not blockers.
-- **P3 — page transitions and smooth scroll.** Both global settings, both off
-  by default, both must respect `prefers-reduced-motion` and `?noanim`.
-  `settings.transitions?: { enter?: animationId; exit?: animationId }` — a small
-  module in `src/motion/runtime.ts` that intercepts same-origin, same-tab,
-  unmodified link clicks, plays the exit timeline, then navigates; plays enter
-  on load and on `pageshow` (bfcache — test Back explicitly); skips downloads,
-  `target=_blank` and hash-only links. `settings.scroll?: { smooth: boolean;
-  lerp?: number }` — a ~60-line lerp scroller (no Lenis dependency) driven from
-  the motion runtime's existing scrub rAF loop so parallax cannot desync;
-  disabled on reduced-motion, on touch, and where `position: sticky` matters.
-  State the accessibility tradeoff plainly in the Settings UI; it ships off.
+- ~~**P3 — page transitions and smooth scroll.**~~ **Shipped**, as one
+  `settings.motion` key (not the two the plan named) carrying `appearMode`,
+  `transitions` and `scroll`; Settings → Interactions plus a summary section in
+  the Interactions side panel. Residue: the `scrolled` interaction trigger
+  still reads `window.scrollY` (`useRenderNode.ts`), so it is inert on the
+  Preview surface, whose scroll container is not the window — a one-line fix
+  (listen on the site scroll container) worth doing next time that file is
+  open. Also unbuilt: a Preview story for `position: sticky` under the lerp
+  scroller, which the original plan flagged.
+- **Sliders — SHIPPED.** `:slider` is a first-class container (arg = repeat per
+  entry like `:collection-list`, no arg = one slide per child), configured in
+  the Data panel through node-owned `node.slider`, with `src/lib/shared/slider.js`
+  as the one engine for both renderers, the exporter and the published
+  `/assets/slider.js`. Deliberate v1 cuts, none of them blockers:
+  - **arrows and dots are built-in chrome, not DSL elements** — position and
+    colour are fixed (the host's `relative` plus the constants in `slider.js`).
+    Arrows-outside-the-track layouts and custom dot markup need either real
+    `:slider-arrow` tokens or a `chrome` style hook.
+  - **contributors can't edit slider config.** `server/contributor-merge.mjs`
+    overlays only the content allowlist, so `node.slider` written by a build
+    role survives a contributor's autosave but a contributor's own change to it
+    is silently dropped. Deliberate (it is structure, not content); if a
+    contributor ever needs to flip autoplay, it needs an explicit overlay line.
+  - **no vertical sliders, no per-slide alignment, no free-scroll mode.**
+  - **the runtime measures perView from the DOM** rather than shipping the
+    breakpoint table, which assumes uniform slide widths. True by construction
+    today; a future per-slide width feature would break it.
+  - **a bound `:slider[post]` shows no `[+]` marker.** The data marker lives in
+    the `[…]` slot, which the arg owns — same rule as everywhere else, and the
+    editor and MCP agree, so nothing drifts. It just means the sliders most
+    likely to be configured are the ones whose code line doesn't advertise it.
+  - **extracting a configured slider into a component** leaves the original
+    instance configured and gives every other instance defaults, because
+    `node.slider` is per-instance state that `adoptStructure` doesn't copy.
+    Parity with `listQuery`/`entryId`, but more surprising here since the whole
+    carousel behaviour lives in that field.
+  - **`sliderHostExtraClass` only looks for bare positioning tokens**, so a host
+    styled `max-[390px]:absolute` still gets `relative` appended and the winner
+    below 390px comes down to stylesheet order.
 - **P4 — marquee ergonomics.** `pauseOn: 'hover'` on an `AnimationBinding`
   (runtime pauses the timeline while the trigger is hovered) covers the common
   case. Drag + inertia would be a new `'drag'` trigger on the animation
@@ -253,6 +281,16 @@ action on media-library SVGs.
 
 ## Tooling
 
+- **C6 — `pickingFor` holds the binding OBJECT, not its address.**
+  `useInteraction.ts` keeps `pickingFor` as the binding itself so it resolves
+  even for bindings on component masters outside the page tree. But undo,
+  a branch switch and `?demo` replace the whole `project` ref with a deep
+  clone, so a pick started before a ⌘Z points at a detached binding and
+  `pickTarget` writes `targetId` into an object nothing renders — silently. The
+  right shape is `{nodeId, bindingId}` resolved at pick time, but it touches
+  `ElementRenderer`, both editors and four `pickingFor === binding` identity
+  comparisons, so it wants its own pass. Low frequency (pick, then undo,
+  then click) and no data loss, just a no-op pick.
 - **C7 — `npm run test:e2e` silently requires a prior `npm run build`** (the e2e
   server serves `dist/`). Now stated in CLAUDE.md's Commands section; a real
   pre-step (or a `pretest:e2e` script) would still be better than a note.

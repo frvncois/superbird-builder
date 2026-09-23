@@ -46,7 +46,7 @@ import SizeControl from '@/components/editor/style/SizeControl.vue'
 import { borderWidthScheme } from '@/lib/tieredBox'
 
 const { selectedElement } = useElement()
-const { masterFor } = useComponents()
+const { masterFor, editTarget } = useComponents()
 const { activePage } = usePage()
 const { activeBreakpoint, baseBreakpoint, breakpoints } = useProject()
 
@@ -70,11 +70,7 @@ const nextLargerWidth = computed(() => {
 })
 
 // inside a component instance, style edits land on the shared master
-const styleTarget = computed(() =>
-  selectedElement.value
-    ? (masterFor(selectedElement.value.id)?.master ?? selectedElement.value)
-    : null,
-)
+const styleTarget = editTarget
 
 // the element's class string is the single source of truth. Controls edit one
 // breakpoint at a time: they see/write the "effective view" for the active

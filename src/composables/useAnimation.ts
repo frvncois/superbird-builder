@@ -1,6 +1,7 @@
 import { computed } from 'vue'
 import { usePage } from './usePage'
 import { useProject } from './useProject'
+import { useInteraction } from './useInteraction'
 import { walkNodes } from '@/lib/tree'
 import { validateAnimation } from '@/lib/motion'
 import { MOTION_PRESETS, type MotionPresetId } from '@/lib/motionPresets'
@@ -14,6 +15,9 @@ import type { Animation, AnimationBinding, ElementNode } from '@/types/editor'
 // computed each — so N renderer nodes don't each build a tree-walking computed.
 const { activePage } = usePage()
 const { project } = useProject()
+// the target picker is shared by both motion systems and lives in useInteraction
+// (one-way edge: useInteraction takes only the AnimationBinding *type* from here)
+const { pickingFor } = useInteraction()
 
 /** animation id → the saved timeline */
 const animationIndex = computed(() => {
@@ -132,6 +136,13 @@ export function useAnimation() {
         else delete node.animations // keep untouched nodes byte-identical
       })
     }
+    // a page transition can name an animation too, and it is not a binding on
+    // any node — so the walk above would leave it pointing at a deleted id
+    const transitions = project.value.settings?.motion?.transitions
+    if (transitions) {
+      if (transitions.exitAnimationId === animationId) transitions.exitAnimationId = undefined
+      if (transitions.enterAnimationId === animationId) transitions.enterAnimationId = undefined
+    }
   }
 
   /** binds an animation to a node; appear is the sane default trigger */
@@ -148,6 +159,9 @@ export function useAnimation() {
   }
 
   function removeBinding(node: ElementNode, bindingId: string) {
+    // a pick in flight for this binding would land its targetId on a binding
+    // that no longer exists (useInteraction.removeBinding does the same)
+    if (pickingFor.value?.id === bindingId) pickingFor.value = null
     const kept = (node.animations ?? []).filter((b) => b.id !== bindingId)
     if (kept.length) node.animations = kept
     else delete node.animations

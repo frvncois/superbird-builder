@@ -445,7 +445,9 @@ export const MOTION_CSS_PROPS = [
 // ---------- validation (shared by the editor and the MCP) ----------
 
 const TRIGGERS = ['load', 'appear', 'scrub', 'hover', 'click']
-const APPEAR_MODES = ['replay', 'reverse']
+/** `once` is explicit; a binding that omits appearMode inherits the site
+ * default (settings.motion.appearMode) — see effectiveAppearMode */
+export const APPEAR_MODES = ['once', 'replay', 'reverse']
 // conservative: enough for tag/class/id/descendant/attribute selectors, no
 // commas-with-parens tricks, and capped so a pathological selector can't ship
 const SELECTOR_RE = /^[\w\s.#>~*:+\-[\]="',()]{1,120}$/
@@ -609,4 +611,244 @@ export function scrubProgressRaw(top, vh, scrub) {
   const end = (scrub && typeof scrub.end === 'number' ? scrub.end : SCRUB_DEFAULTS.end) * vh
   if (start === end) return top <= end ? 1 : 0
   return (start - top) / (start - end)
+}
+
+// ---------- site-wide motion (settings.motion) ----------
+// Three project-level knobs, all optional and all off by default: the default
+// appear replay mode, page enter/exit transitions, and inertia smooth scroll.
+// Resolution lives here so the exporter, the editor preview and the MCP
+// validators can't disagree about what a given settings object means.
+
+/**
+ * A binding's own appearMode wins; omitted means "inherit the site default".
+ * Everything unrecognised settles on 'once' — the behaviour before the site
+ * default existed.
+ * @param {string|undefined} bindingMode
+ * @param {string|undefined} siteDefault
+ * @returns {'once'|'replay'|'reverse'}
+ */
+export function effectiveAppearMode(bindingMode, siteDefault) {
+  const mode = bindingMode || siteDefault
+  return APPEAR_MODES.indexOf(mode) === -1 ? 'once' : mode
+}
+
+/** shared constants — never re-spell these as literals in a consumer */
+export const TRANSITION_DEFAULTS = {
+  preset: 'fade',
+  /** enter duration, ms */
+  duration: 500,
+  easing: 'ease-out',
+  /** leaving should feel quicker than arriving */
+  exitRatio: 0.75,
+  /** hard cap on how long a click may wait for the exit timeline: a broken or
+   * infinite custom animation must never strand the visitor on the old page */
+  exitTimeoutMs: 1500,
+  maxDuration: 5000,
+}
+
+/** reserved ids the exporter registers preset timelines under, inside the
+ * existing #anim-lib tag — so transitions need no second wire format */
+export const TRANSITION_EXIT_ID = '__t-exit'
+export const TRANSITION_ENTER_ID = '__t-enter'
+
+/**
+ * The built-in exit/enter track pairs, played on the page `body`.
+ * Offsets are deliberately small: any transform or filter on body makes it the
+ * containing block for `position: fixed` descendants, so a fixed header rides
+ * along for the duration of the transition. `fade` avoids that entirely and is
+ * the default for exactly that reason.
+ */
+export const TRANSITION_PRESETS = {
+  fade: {
+    label: 'Fade',
+    exit: [{ prop: 'opacity', from: 1, to: 0 }],
+    enter: [{ prop: 'opacity', from: 0, to: 1 }],
+  },
+  'slide-up': {
+    label: 'Slide up',
+    exit: [
+      { prop: 'y', from: 0, to: -32 },
+      { prop: 'opacity', from: 1, to: 0 },
+    ],
+    enter: [
+      { prop: 'y', from: 32, to: 0 },
+      { prop: 'opacity', from: 0, to: 1 },
+    ],
+  },
+  'slide-down': {
+    label: 'Slide down',
+    exit: [
+      { prop: 'y', from: 0, to: 32 },
+      { prop: 'opacity', from: 1, to: 0 },
+    ],
+    enter: [
+      { prop: 'y', from: -32, to: 0 },
+      { prop: 'opacity', from: 0, to: 1 },
+    ],
+  },
+  'slide-left': {
+    label: 'Slide left',
+    exit: [
+      { prop: 'x', from: 0, to: -48 },
+      { prop: 'opacity', from: 1, to: 0 },
+    ],
+    enter: [
+      { prop: 'x', from: 48, to: 0 },
+      { prop: 'opacity', from: 0, to: 1 },
+    ],
+  },
+  'slide-right': {
+    label: 'Slide right',
+    exit: [
+      { prop: 'x', from: 0, to: 48 },
+      { prop: 'opacity', from: 1, to: 0 },
+    ],
+    enter: [
+      { prop: 'x', from: -48, to: 0 },
+      { prop: 'opacity', from: 0, to: 1 },
+    ],
+  },
+  zoom: {
+    label: 'Zoom',
+    exit: [
+      { prop: 'scale', from: 1, to: 0.97 },
+      { prop: 'opacity', from: 1, to: 0 },
+    ],
+    enter: [
+      { prop: 'scale', from: 1.03, to: 1 },
+      { prop: 'opacity', from: 0, to: 1 },
+    ],
+  },
+  blur: {
+    label: 'Blur',
+    exit: [
+      { prop: 'blur', from: 0, to: 8 },
+      { prop: 'opacity', from: 1, to: 0 },
+    ],
+    enter: [
+      { prop: 'blur', from: 8, to: 0 },
+      { prop: 'opacity', from: 0, to: 1 },
+    ],
+  },
+}
+
+export const TRANSITION_PRESET_IDS = Object.keys(TRANSITION_PRESETS)
+
+/** smooth scroll: how far the viewport closes on its target each 60fps frame */
+export const SCROLL_LERP_DEFAULT = 0.1
+export const SCROLL_LERP_MIN = 0.02
+export const SCROLL_LERP_MAX = 0.4
+
+const clampNum = (v, lo, hi, fallback) =>
+  typeof v === 'number' && isFinite(v) ? Math.max(lo, Math.min(hi, v)) : fallback
+
+/**
+ * Builds one side of a preset transition as a real Animation, so it flows
+ * through compileAnimation/sampleValues like any library timeline.
+ * @returns {{id: string, name: string, steps: any[]}|null}
+ */
+export function buildTransitionAnimation(presetId, dir, duration, easing) {
+  const preset = TRANSITION_PRESETS[presetId]
+  if (!preset || (dir !== 'exit' && dir !== 'enter')) return null
+  const ms = Math.round(dir === 'exit' ? duration * TRANSITION_DEFAULTS.exitRatio : duration)
+  return {
+    id: dir === 'exit' ? TRANSITION_EXIT_ID : TRANSITION_ENTER_ID,
+    name: `${preset.label} ${dir}`,
+    steps: [
+      {
+        id: `${dir}-1`,
+        tracks: preset[dir].map((t) => ({ prop: t.prop, from: t.from, to: t.to })),
+        duration: ms,
+        easing: EASINGS[easing] ? easing : TRANSITION_DEFAULTS.easing,
+      },
+    ],
+  }
+}
+
+/**
+ * Resolves settings.motion.transitions into the two timelines to play, whether
+ * they come from a preset or the project's animation library.
+ * @param {any} motion — settings.motion
+ * @param {Record<string, any>} [animationsById] — the project animation library
+ * @returns {{exit: any|null, enter: any|null}|null} null when disabled/empty
+ */
+export function resolveTransition(motion, animationsById) {
+  const t = motion && motion.transitions
+  if (!t || !t.enabled) return null
+  const preset = t.preset || TRANSITION_DEFAULTS.preset
+  if (preset === 'custom') {
+    const lib = animationsById || {}
+    const exit = (t.exitAnimationId && lib[t.exitAnimationId]) || null
+    const enter = (t.enterAnimationId && lib[t.enterAnimationId]) || null
+    return exit || enter ? { exit, enter } : null
+  }
+  if (!TRANSITION_PRESETS[preset]) return null
+  const duration = clampNum(t.duration, 0, TRANSITION_DEFAULTS.maxDuration, TRANSITION_DEFAULTS.duration)
+  const easing = t.easing || TRANSITION_DEFAULTS.easing
+  return {
+    exit: buildTransitionAnimation(preset, 'exit', duration, easing),
+    enter: buildTransitionAnimation(preset, 'enter', duration, easing),
+  }
+}
+
+/** the lerp factor to actually scroll with, clamped; null when disabled */
+export function resolveScrollLerp(motion) {
+  const s = motion && motion.scroll
+  if (!s || !s.enabled) return null
+  return clampNum(s.lerp, SCROLL_LERP_MIN, SCROLL_LERP_MAX, SCROLL_LERP_DEFAULT)
+}
+
+/**
+ * @param {any} motion — a candidate settings.motion
+ * @param {{animationIds?: string[]}} [ctx]
+ * @returns {{ok: true} | {ok: false, error: string}}
+ */
+export function validateMotionSettings(motion, ctx) {
+  if (motion === undefined || motion === null) return { ok: true }
+  if (typeof motion !== 'object' || Array.isArray(motion)) return fail('motion must be an object')
+  if (motion.appearMode !== undefined && APPEAR_MODES.indexOf(motion.appearMode) === -1) {
+    return fail(`motion.appearMode must be one of: ${APPEAR_MODES.join(', ')}`)
+  }
+  const t = motion.transitions
+  if (t !== undefined && t !== null) {
+    if (typeof t !== 'object' || Array.isArray(t)) return fail('motion.transitions must be an object')
+    if (typeof t.enabled !== 'boolean') return fail('motion.transitions.enabled must be a boolean')
+    if (t.preset !== undefined && t.preset !== 'custom' && !TRANSITION_PRESETS[t.preset]) {
+      return fail(`motion.transitions.preset must be "custom" or one of: ${TRANSITION_PRESET_IDS.join(', ')}`)
+    }
+    if (
+      t.duration !== undefined &&
+      (typeof t.duration !== 'number' ||
+        !isFinite(t.duration) ||
+        t.duration < 0 ||
+        t.duration > TRANSITION_DEFAULTS.maxDuration)
+    ) {
+      return fail(`motion.transitions.duration must be between 0 and ${TRANSITION_DEFAULTS.maxDuration} ms`)
+    }
+    if (t.easing !== undefined && !EASINGS[t.easing]) {
+      return fail(`motion.transitions.easing must be one of: ${EASING_KEYS.join(', ')}`)
+    }
+    const known = ctx && ctx.animationIds
+    for (const key of ['exitAnimationId', 'enterAnimationId']) {
+      const id = t[key]
+      if (id === undefined || id === null) continue
+      if (typeof id !== 'string' || !id) return fail(`motion.transitions.${key} must be an animation id`)
+      if (known && known.indexOf(id) === -1) return fail(`no animation "${id}" in the library`)
+    }
+  }
+  const s = motion.scroll
+  if (s !== undefined && s !== null) {
+    if (typeof s !== 'object' || Array.isArray(s)) return fail('motion.scroll must be an object')
+    if (typeof s.enabled !== 'boolean') return fail('motion.scroll.enabled must be a boolean')
+    if (
+      s.lerp !== undefined &&
+      (typeof s.lerp !== 'number' ||
+        !isFinite(s.lerp) ||
+        s.lerp < SCROLL_LERP_MIN ||
+        s.lerp > SCROLL_LERP_MAX)
+    ) {
+      return fail(`motion.scroll.lerp must be between ${SCROLL_LERP_MIN} and ${SCROLL_LERP_MAX}`)
+    }
+  }
+  return { ok: true }
 }

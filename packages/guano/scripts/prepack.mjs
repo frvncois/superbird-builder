@@ -28,6 +28,10 @@ execSync('npm run build:mcp-runtime', { cwd: REPO, stdio: 'inherit' })
 console.log('prepack: building the motion runtime…')
 execSync('npm run build:motion', { cwd: REPO, stdio: 'inherit' })
 
+// the published site's carousel runtime — same deal, emitted into server/
+console.log('prepack: building the slider runtime…')
+execSync('npm run build:slider', { cwd: REPO, stdio: 'inherit' })
+
 for (const dir of ['dist', 'server', 'src']) {
   await rm(join(PKG, dir), { recursive: true, force: true })
 }
