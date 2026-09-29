@@ -7,14 +7,14 @@ import {
   normalizeComponentName,
   isComponentType,
   hoistBlockRef,
-  serializeNode,
   adoptStructure,
   cloneForMaster,
   stripExtractedInstanceState,
-  alignInstanceLines,
 } from '@/lib/components'
 import {
   componentUsage,
+  isClosedBlock,
+  rewriteInstanceBlock,
   deleteComponent as deleteComponentFromProject,
   detachInstance,
   duplicateComponent as duplicateComponentInProject,
@@ -111,46 +111,6 @@ export function useComponents() {
   // adoptStructure (signature-LCS identity carry) is shared with the MCP
   // server — imported from @/lib/components so both surfaces reshape masters
   // identically.
-
-  /** regenerate a stale instance's inner code lines from the master */
-  function rewriteInstanceBlock(page: Page, node: ElementNode, def: ComponentDef) {
-    if (node.line === undefined) return
-    const lines = page.code.split('\n')
-    const start = node.line
-    const end = node.endLine ?? node.line
-    if (end <= start) return
-    const indent = lines[start]!.match(/^\t*/)![0]
-    const inner = def.root.children.flatMap((c) => serializeNode(c, `${indent}\t`))
-    const oldInnerLength = end - start - 1
-    const rest = [...lines.slice(0, start + 1), ...inner, ...lines.slice(end)]
-    // signature-aware inner map (exact line, then token type) so an inserted
-    // master node doesn't re-seat every following instance node — and its
-    // content overrides — one line off
-    const align = alignInstanceLines(lines.slice(start + 1, end), inner)
-    const map = new Map<number, number>()
-    for (let i = 0; i < rest.length; i++) {
-      if (i <= start) map.set(i, i)
-      else if (i < start + 1 + inner.length) {
-        const oldInner = align.get(i - (start + 1))
-        if (oldInner !== undefined) map.set(i, start + 1 + oldInner)
-      } else {
-        map.set(i, i - inner.length + oldInnerLength)
-      }
-    }
-    const before = page.code
-    page.code = rest.join('\n')
-    page.elements = reconcile(before, page.code, page.elements, map)
-  }
-
-  /** a block only counts once its close line exists — while the user is
-   * mid-typing ':Hero', the parser sees an unclosed block that swallows
-   * whatever follows, and syncing from that would corrupt the master */
-  function isClosedBlock(page: Page, node: ElementNode, name: string): boolean {
-    if (node.line === undefined || node.endLine === undefined || node.endLine <= node.line) {
-      return false
-    }
-    return page.code.split('\n')[node.endLine]?.trim() === `${name}:`
-  }
 
   /**
    * After any code change: a properly closed instance whose structure

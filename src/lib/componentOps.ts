@@ -1,7 +1,15 @@
 import type { ComponentDef, ElementNode, Page, Project } from '@/types/editor'
 import { applyNodeMarkers, reconcile, refOf } from './syntax'
-import { cloneForMaster, expandComponentInstances, normalizeComponentName } from './components'
-import { deepClone, findNode, walkNodes } from './tree'
+import {
+  alignInstanceLines,
+  cloneForMaster,
+  expandComponentInstances,
+  isComponentType,
+  normalizeComponentName,
+  serializeNode,
+} from './components'
+import { createNode, isLeafElement } from './elements'
+import { deepClone, findNode, findParent, walkNodes } from './tree'
 
 /**
  * Whole-project operations on components — rename, duplicate, categorize,
@@ -326,6 +334,288 @@ export function detachInstance(project: Project, page: Page, instanceId: string)
   const marked = applyNodeMarkers(page.code, page.elements)
   if (marked !== page.code) page.code = marked
   return true
+}
+
+// --- master structure --------------------------------------------------
+//
+// A component master is a plain ElementNode tree: no code, no line numbers.
+// So these mutate it directly and then PUSH the new shape out to every
+// instance, which is the reverse of `syncStructure`'s instance-first flow.
+//
+// The push must be synchronous and complete: `syncStructure` watches page code
+// and adopts a divergent instance back into the master, so a half-pushed edit
+// would be reverted by the first instance still carrying the old shape.
+
+export type DropPosition = 'before' | 'after' | 'inside'
+
+/** Can this master node hold children? Registry-driven, NOT child-count based:
+ *  a childless `:div` is still a container, while `serializeNode` emits a leaf
+ *  in leaf form and would silently drop anything put inside it. */
+export function masterAcceptsChildren(node: ElementNode): boolean {
+  return !isLeafElement(node.type)
+}
+
+/** the wrapper node is the component itself — it is renamed, never restructured */
+const isRoot = (def: ComponentDef, node: ElementNode) => node.id === def.root.id
+
+function masterParentOf(def: ComponentDef, id: string): ElementNode | null {
+  return findParent([def.root], id)
+}
+
+/** where an insert/move lands: the parent list plus the index within it */
+function resolveSlot(
+  def: ComponentDef,
+  targetId: string | null,
+  position: DropPosition,
+): { parent: ElementNode; index: number } | null {
+  if (!targetId) return { parent: def.root, index: def.root.children.length }
+  const target = findNode([def.root], targetId)
+  if (!target) return null
+  // the root only ever takes children; so does any before/after on it, since
+  // it has no siblings
+  if (isRoot(def, target) || position === 'inside') {
+    if (!masterAcceptsChildren(target)) {
+      // a leaf can't hold it — fall back to "after the leaf", as the page's
+      // insertElementBlock coerces
+      const parent = masterParentOf(def, target.id)
+      if (!parent) return null
+      return { parent, index: parent.children.indexOf(target) + 1 }
+    }
+    return { parent: target, index: target.children.length }
+  }
+  const parent = masterParentOf(def, target.id)
+  if (!parent) return null
+  const at = parent.children.indexOf(target)
+  return { parent, index: position === 'before' ? at : at + 1 }
+}
+
+/** ids whose subtree contains `id` — a node may never be moved into itself */
+function isWithin(root: ElementNode, ancestorId: string, id: string): boolean {
+  const ancestor = findNode([root], ancestorId)
+  return !!ancestor && ancestor.id !== id && !!findNode(ancestor.children, id)
+}
+
+export function canDropInMaster(
+  def: ComponentDef,
+  ids: string[],
+  targetId: string,
+  position: DropPosition,
+): boolean {
+  const target = findNode([def.root], targetId)
+  if (!target) return false
+  if (position === 'inside' && !masterAcceptsChildren(target)) return false
+  if (isRoot(def, target) && position !== 'inside') return false
+  for (const id of ids) {
+    if (id === targetId) return false
+    if (isRoot(def, findNode([def.root], id) ?? target)) return false
+    if (isWithin(def.root, id, targetId)) return false // into its own subtree
+  }
+  return true
+}
+
+/** Inserts a fresh element. Component payloads are refused — components
+ *  cannot nest — so this only ever takes a built-in element type. */
+export function insertInMaster(
+  def: ComponentDef,
+  type: string,
+  targetId: string | null,
+  position: DropPosition,
+): ElementNode | null {
+  if (isComponentType(type)) return null
+  const slot = resolveSlot(def, targetId, position)
+  if (!slot) return null
+  const node = createNode(type)
+  slot.parent.children.splice(slot.index, 0, node)
+  return node
+}
+
+/** Detaches nodes from the tree and returns them, deepest-first so indices
+ *  stay valid while splicing. */
+function detachNodes(def: ComponentDef, ids: string[]): ElementNode[] {
+  const taken: ElementNode[] = []
+  for (const id of ids) {
+    const node = findNode([def.root], id)
+    if (!node || isRoot(def, node)) continue
+    const parent = masterParentOf(def, id)
+    if (!parent) continue
+    const at = parent.children.indexOf(node)
+    if (at === -1) continue
+    parent.children.splice(at, 1)
+    taken.push(node)
+  }
+  return taken
+}
+
+/** Interaction/animation bindings anywhere in the master that pointed into a
+ *  removed subtree would dangle, so drop them. */
+function clearBindingsTo(def: ComponentDef, removed: ElementNode[]) {
+  const gone = new Set<string>()
+  for (const node of removed) walkNodes([node], (n) => gone.add(n.id))
+  if (!gone.size) return
+  walkNodes([def.root], (n) => {
+    if (n.interactions?.length) {
+      n.interactions = n.interactions.filter((b) => !b.targetId || !gone.has(b.targetId))
+      if (!n.interactions.length) delete n.interactions
+    }
+    if (n.animations?.length) {
+      n.animations = n.animations.filter((b) => !b.targetId || !gone.has(b.targetId))
+      if (!n.animations.length) delete n.animations
+    }
+  })
+}
+
+export function removeFromMaster(def: ComponentDef, ids: string[]): boolean {
+  const removed = detachNodes(def, ids)
+  if (!removed.length) return false
+  clearBindingsTo(def, removed)
+  return true
+}
+
+export function moveInMaster(
+  def: ComponentDef,
+  ids: string[],
+  targetId: string,
+  position: DropPosition,
+): boolean {
+  if (!canDropInMaster(def, ids, targetId, position)) return false
+  // resolve the slot BEFORE detaching: pulling the nodes out shifts the
+  // indices the target sits at
+  const slot = resolveSlot(def, targetId, position)
+  if (!slot) return false
+  const anchor = slot.parent.children[slot.index] ?? null
+  const moved = detachNodes(def, ids)
+  if (!moved.length) return false
+  const at = anchor ? slot.parent.children.indexOf(anchor) : slot.parent.children.length
+  slot.parent.children.splice(at === -1 ? slot.parent.children.length : at, 0, ...moved)
+  return true
+}
+
+export function duplicateInMaster(def: ComponentDef, ids: string[]): ElementNode[] {
+  const made: ElementNode[] = []
+  for (const id of ids) {
+    const node = findNode([def.root], id)
+    if (!node || isRoot(def, node)) continue
+    const parent = masterParentOf(def, id)
+    if (!parent) continue
+    // fresh ids and internal targetIds remapped, exactly as a component copy
+    const { cloned } = cloneForMaster(node)
+    parent.children.splice(parent.children.indexOf(node) + 1, 0, cloned)
+    made.push(cloned)
+  }
+  return made
+}
+
+/** Wraps a contiguous run of siblings in a new `:div`. */
+export function wrapInMaster(def: ComponentDef, ids: string[]): ElementNode | null {
+  const nodes = ids
+    .map((id) => findNode([def.root], id))
+    .filter((n): n is ElementNode => !!n && !isRoot(def, n))
+  if (!nodes.length) return null
+  const parent = masterParentOf(def, nodes[0]!.id)
+  if (!parent || nodes.some((n) => masterParentOf(def, n.id) !== parent)) return null
+  const at = parent.children.indexOf(nodes[0]!)
+  const wrapper = createNode('div')
+  for (const node of nodes) parent.children.splice(parent.children.indexOf(node), 1)
+  wrapper.children = nodes
+  parent.children.splice(at, 0, wrapper)
+  return wrapper
+}
+
+export function retypeInMaster(def: ComponentDef, id: string, type: string): boolean {
+  const node = findNode([def.root], id)
+  if (!node || isRoot(def, node) || isComponentType(type)) return false
+  // changing a container into a leaf would orphan its children
+  if (node.children.length && isLeafElement(type)) return false
+  node.type = type
+  return true
+}
+
+/**
+ * Pushes a master's current structure out to every instance of it, on every
+ * page. Returns how many instance blocks were rewritten.
+ *
+ * Every CLOSED instance is rewritten unconditionally — deliberately NOT gated
+ * on a structure signature the way `syncStructure` is, because that signature
+ * is type-only: an arg or link change leaves it identical and would never
+ * reach the instances.
+ */
+export function pushMasterStructure(project: Project, def: ComponentDef): number {
+  // a library preview is not in the project; instances match by NAME, so
+  // pushing one would rewrite blocks belonging to a real component of the
+  // same name
+  if (!project.components.some((c) => c.id === def.id)) return 0
+  let rewritten = 0
+  for (const page of project.pages) {
+    // legacy `:Card:` leaves carry no block to rewrite — materialize them
+    // first so they follow the master like everything else
+    expandLeafInstances(page, def)
+    const ids: string[] = []
+    walkNodes(page.elements, (n) => {
+      if (n.type === def.name) ids.push(n.id)
+    })
+    // bottom-up: rewriting a block shifts the lines of everything after it
+    const ordered = ids
+      .map((id) => findNode(page.elements, id))
+      .filter((n): n is ElementNode => !!n && n.line !== undefined)
+      .sort((a, b) => b.line! - a.line!)
+      .map((n) => n.id)
+    for (const id of ordered) {
+      const node = findNode(page.elements, id)
+      if (node && isClosedBlock(page, node, def.name) && rewriteInstanceBlock(page, node, def)) {
+        rewritten++
+      }
+    }
+    const marked = applyNodeMarkers(page.code, page.elements)
+    if (marked !== page.code) page.code = marked
+  }
+  return rewritten
+}
+
+/**
+ * Regenerates one instance's inner code lines from its master.
+ *
+ * Lifted out of `useComponents` so the master-first operations above can reuse
+ * it; it closed over nothing. (`packages/guano/mcp/tools.mjs` keeps its own
+ * copy for the agent path — the two must stay in step.)
+ */
+export function rewriteInstanceBlock(page: Page, node: ElementNode, def: ComponentDef): boolean {
+  if (node.line === undefined) return false
+  const lines = page.code.split('\n')
+  const start = node.line
+  const end = node.endLine ?? node.line
+  if (end <= start) return false
+  const indent = indentOf(lines[start]!)
+  const inner = def.root.children.flatMap((c) => serializeNode(c, `${indent}\t`))
+  const oldInnerLength = end - start - 1
+  const rest = [...lines.slice(0, start + 1), ...inner, ...lines.slice(end)]
+  // signature-aware inner map (exact line, then token type) so an inserted
+  // master node doesn't re-seat every following instance node — and its
+  // content overrides — one line off
+  const align = alignInstanceLines(lines.slice(start + 1, end), inner)
+  const map = new Map<number, number>()
+  for (let i = 0; i < rest.length; i++) {
+    if (i <= start) map.set(i, i)
+    else if (i < start + 1 + inner.length) {
+      const oldInner = align.get(i - (start + 1))
+      if (oldInner !== undefined) map.set(i, start + 1 + oldInner)
+    } else {
+      map.set(i, i - inner.length + oldInnerLength)
+    }
+  }
+  const before = page.code
+  page.code = rest.join('\n')
+  page.elements = reconcile(before, page.code, page.elements, map)
+  return true
+}
+
+/** a block only counts once its close line exists — while an edit is mid-flight
+ * the parser sees an unclosed block that swallows whatever follows, and syncing
+ * from that would corrupt the master */
+export function isClosedBlock(page: Page, node: ElementNode, name: string): boolean {
+  if (node.line === undefined || node.endLine === undefined || node.endLine <= node.line) {
+    return false
+  }
+  return page.code.split('\n')[node.endLine]?.trim() === `${name}:`
 }
 
 /**
