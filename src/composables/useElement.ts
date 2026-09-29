@@ -1,4 +1,4 @@
-import { computed, ref } from 'vue'
+import { computed, ref, shallowRef } from 'vue'
 import { usePage } from './usePage'
 import { REF_SLOT, applyNodeMarkers, reconcile } from '@/lib/syntax'
 import { isKnownElement } from '@/lib/elements'
@@ -47,6 +47,20 @@ function captureProps(n: ElementNode): NodeProps {
 
 const selectedElementId = ref<string | null>(null)
 
+// The trees a selection resolves against. Normally the active page; the
+// components board swaps in the component masters while it is on the canvas,
+// so the panels edit a master node exactly as they edit a page node. A getter
+// (not a list) so the computeds below track whatever it reads.
+const selectionScope = shallowRef<(() => ElementNode[]) | null>(null)
+
+/** point selection at other trees (null = back to the active page) */
+export function setSelectionScope(roots: (() => ElementNode[]) | null) {
+  selectionScope.value = roots
+  selectedElementId.value = null
+  selectionAnchorId.value = null
+  highlightedElementId.value = null
+}
+
 // the fixed end of a multi-selection; the focus (selectedElementId) moves with
 // Cmd+Shift+↑/↓. Together they define a contiguous run of siblings.
 const selectionAnchorId = ref<string | null>(null)
@@ -70,7 +84,9 @@ const dropTarget = ref<{ id: string; position: DropPosition } | null>(null)
 export function useElement() {
   const { activePage } = usePage()
 
-  const elements = computed(() => activePage.value?.elements ?? [])
+  const elements = computed(() =>
+    selectionScope.value ? selectionScope.value() : (activePage.value?.elements ?? []),
+  )
 
   const bodyElement = computed(() => elements.value.find((n) => n.type === 'body') ?? null)
 

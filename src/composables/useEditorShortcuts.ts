@@ -23,11 +23,13 @@ export function useEditorShortcuts() {
   } = useContextMenu()
   const { undo, redo, saveNow } = usePersistence()
   const { openModal, stack } = useModal()
-  const { isBuild } = useViewMode()
+  const { isBuild, showComponents } = useViewMode()
 
-  // structural ops target the canvas selection — inert outside Build mode
+  // structural ops target the page canvas selection — inert outside Build
+  // mode, and while the components board holds the canvas (its selection is a
+  // component master, whose structure is not editable there)
   const buildOnly = (fn: () => void) => () => {
-    if (isBuild.value) fn()
+    if (isBuild.value && !showComponents.value) fn()
   }
 
   // ⌘P opens Publish (all roles — contributors can publish too) — dedupe so

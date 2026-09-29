@@ -3299,6 +3299,13 @@ var DISPLAY_CLASSES = /* @__PURE__ */ new Set([
 	"contents",
 	"flow-root"
 ]);
+/** does the class list already set a display, at any variant? Wider than
+* matching the Style panel's Display property, whose catalog omits the
+* inline-* forms: `inline-flex` IS a display, and treating it as absent makes
+* callers add a second one beside it. */
+function hasDisplayClass(tokens) {
+	return tokens.some((t) => DISPLAY_CLASSES.has(splitVariant(t).base));
+}
 /** bg-* utilities that are NOT background-color (size/position/repeat/…) —
 * everything else groups as one color property so `bg-paper` replaces
 * `bg-[#f5f3edee]` and vice versa (arbitrary values are outside the catalog,
@@ -3453,7 +3460,7 @@ function prerequisiteFor(cls, tokens) {
 	const { variant, base } = splitVariant(cls);
 	const r = propForBase(base)?.relevance;
 	if (!r || r.when !== "display") return void 0;
-	if (tokens.some((t) => DISPLAY_CLASSES.has(splitVariant(t).base))) return void 0;
+	if (hasDisplayClass(tokens)) return void 0;
 	return `${variant}${r.values.includes("flex") ? "flex" : r.values[0]}`;
 }
 /** true when two bare classes control the same CSS property (e.g. `flex-row`

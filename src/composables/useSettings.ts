@@ -1,4 +1,4 @@
-import { computed, watchEffect } from 'vue'
+import { computed, effectScope, ref, watchEffect } from 'vue'
 import { useProject } from './useProject'
 import {
   isEmittableToken,
@@ -13,19 +13,41 @@ import type { CustomFont, DesignToken, ProjectSettings } from '@/types/editor'
 
 let syncStarted = false
 
+// Tokens that exist for display only — never on the project. The components
+// board shows library entries that haven't been added yet, and they are styled
+// with tokens the project may not define; without these the previews would
+// render unstyled. A project token of the same name always wins.
+const previewTokens = ref<DesignToken[]>([])
+
+export function setPreviewTokens(tokens: DesignToken[]) {
+  previewTokens.value = tokens
+}
+
 export function useSettings() {
   const { project } = useProject()
 
   const settings = computed(() => project.value.settings)
   const validTokens = computed(() => settings.value.tokens.filter(isEmittableToken))
+  /** what the editor renders and validates against: the project's tokens plus
+   *  any display-only preview tokens it doesn't already define */
+  const effectiveTokens = computed(() => {
+    const own = new Set(validTokens.value.map((t) => t.name))
+    return [
+      ...validTokens.value,
+      ...previewTokens.value.filter((t) => !own.has(t.name) && isEmittableToken(t)),
+    ]
+  })
 
   // keep the (non-reactive) style/color vocabularies aware of tokens so
   // bg-brand suggests, validates, and resolves to its hex everywhere
   if (!syncStarted) {
     syncStarted = true
-    watchEffect(() => {
-      setColorTokens(Object.fromEntries(validTokens.value.map((t) => [t.name, t.value])))
-      setStyleTokens(validTokens.value.map((t) => t.name))
+    // detached, so it outlives whichever component happened to call first
+    effectScope(true).run(() => {
+      watchEffect(() => {
+        setColorTokens(Object.fromEntries(effectiveTokens.value.map((t) => [t.name, t.value])))
+        setStyleTokens(effectiveTokens.value.map((t) => t.name))
+      })
     })
   }
 
@@ -140,6 +162,7 @@ export function useSettings() {
     transitions,
     smoothScroll,
     validTokens,
+    effectiveTokens,
     addToken,
     removeToken,
     ensureTokens,

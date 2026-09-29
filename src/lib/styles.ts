@@ -482,6 +482,14 @@ const DISPLAY_CLASSES = new Set([
   'hidden', 'contents', 'flow-root',
 ])
 
+/** does the class list already set a display, at any variant? Wider than
+ * matching the Style panel's Display property, whose catalog omits the
+ * inline-* forms: `inline-flex` IS a display, and treating it as absent makes
+ * callers add a second one beside it. */
+export function hasDisplayClass(tokens: string[]): boolean {
+  return tokens.some((t) => DISPLAY_CLASSES.has(splitVariant(t).base))
+}
+
 /** bg-* utilities that are NOT background-color (size/position/repeat/…) —
  * everything else groups as one color property so `bg-paper` replaces
  * `bg-[#f5f3edee]` and vice versa (arbitrary values are outside the catalog,
@@ -669,7 +677,7 @@ function prerequisiteFor(cls: string, tokens: string[]): string | undefined {
   // display: bare `grid` satisfies `md:grid-cols-2`, `md:flex` satisfies
   // `items-center`, and `hidden` + `md:flex` is a deliberate responsive
   // pattern an auto-added base `flex` would silently fight
-  if (tokens.some((t) => DISPLAY_CLASSES.has(splitVariant(t).base))) return undefined
+  if (hasDisplayClass(tokens)) return undefined
   const preferred = r.values.includes('flex') ? 'flex' : r.values[0]!
   return `${variant}${preferred}`
 }

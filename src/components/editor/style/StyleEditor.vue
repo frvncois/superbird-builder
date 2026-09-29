@@ -11,6 +11,7 @@ import {
   sliderPrefix,
   sliderAllowNegative,
   isPropertyRelevant,
+  hasDisplayClass,
 } from '@/lib/styles'
 import { classToText, textToClass, nearestStepIndex, sizeClassToText, namedTextToClass } from '@/lib/valueClass'
 import { isPaletteColor } from '@/lib/colors'
@@ -201,7 +202,10 @@ watch(
     // user just removed on this breakpoint
     const own = tokens.value.filter((t) => !inheritedTokens.value.includes(t))
     const needsDisplay = allProps.some((p) => p.needsDisplay && matchClass(p, own))
-    if (needsDisplay && !matchClass(displayProp, tokens.value)) {
+    // hasDisplayClass, not a match on the Display property: its catalog has
+    // no inline-* forms, so an `inline-flex` element read as having no display
+    // and got a `flex` written beside it just for being opened in this panel
+    if (needsDisplay && !hasDisplayClass(tokens.value)) {
       setTokens(['flex', ...tokens.value])
     }
   },

@@ -8,9 +8,11 @@ import { useElement } from '@/composables/useElement'
 import { useInsertDrag, type InsertPayload } from '@/composables/useInsertDrag'
 import { ELEMENT_GROUPS } from '@/lib/elementPalette'
 import { fuzzyScore } from '@/lib/fuzzy'
+import { CATALOG } from '@/lib/catalog'
 
 const { components } = useComponents()
-const { open, closePalette, togglePalette, insertElement, insertComponent } = useCommandPalette()
+const { open, closePalette, togglePalette, insertElement, insertComponent, insertCatalog } =
+  useCommandPalette()
 const { requestEditorFocus } = useElement()
 const { startInsertDrag } = useInsertDrag()
 
@@ -63,6 +65,24 @@ const allGroups = computed<{ title: string; items: DockItem[] }[]>(() => {
         accent: true,
         payload: { kind: 'component', name: c.name },
         run: () => insertComponent(c.name),
+      })),
+    })
+  }
+  // every library entry is available without an "add" step: inserting one
+  // copies it into the project, after which it lists under Components
+  const added = new Set(components.value.map((c) => c.source).filter(Boolean))
+  const library = CATALOG.filter((e) => !added.has(e.key))
+  if (library.length) {
+    base.push({
+      title: 'Library',
+      items: library.map((e) => ({
+        key: `catalog:${e.key}`,
+        label: e.name,
+        keywords: [e.category, e.key],
+        icon: Component,
+        accent: true,
+        payload: { kind: 'catalog', key: e.key, name: e.name },
+        run: () => insertCatalog(e.key),
       })),
     })
   }
@@ -270,6 +290,7 @@ function onKeydown(e: KeyboardEvent) {
                 :key="item.key"
                 type="button"
                 :data-idx="index"
+                :data-dock-item="item.key"
                 :data-active="index === active"
                 class="flex aspect-square w-16 shrink-0 cursor-grab touch-none flex-col items-center justify-center gap-1.5 rounded-xl border p-2 transition-colors select-none active:cursor-grabbing"
                 :class="

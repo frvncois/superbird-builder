@@ -10,6 +10,8 @@ import type { ElementNode } from '@/types/editor'
 export type InsertPayload =
   | { kind: 'element'; type: string; label: string; icon: Component }
   | { kind: 'component'; name: string }
+  /** a library entry the project hasn't added yet — using it adds it */
+  | { kind: 'catalog'; key: string; name: string }
 
 /** the floating chip's content; null = no drag in flight */
 const payload = ref<InsertPayload | null>(null)
@@ -27,7 +29,7 @@ const DRAG_THRESHOLD = 4
 
 export function useInsertDrag() {
   const { dropTarget, getElement, bodyElement, insertElementBlock } = useElement()
-  const { components, findComponent, masterFor } = useComponents()
+  const { components, findComponent, masterFor, addFromCatalog } = useComponents()
 
   function canvasTarget(
     node: ElementNode,
@@ -84,9 +86,11 @@ export function useInsertDrag() {
       insertElementBlock(elementBlockLines(p.type), target.id, target.position)
       return
     }
+    // a library entry is copied into the project by being used
+    const name = p.kind === 'catalog' ? addFromCatalog(p.key)?.def.name : p.name
     // component removed mid-drag → nothing sane to insert
-    if (!findComponent(p.name)) return
-    const block = expandComponentInstances(`:${p.name}:`, components.value).split('\n')
+    if (!name || !findComponent(name)) return
+    const block = expandComponentInstances(`:${name}:`, components.value).split('\n')
     insertElementBlock(block, target.id, target.position)
   }
 

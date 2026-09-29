@@ -16,7 +16,7 @@ export function togglePalette() {
 
 export function useCommandPalette() {
   const { selectedElement, insertElementBlock } = useElement()
-  const { components, findComponent } = useComponents()
+  const { components, findComponent, addFromCatalog } = useComponents()
 
   // insert at the current selection with smart position: insertElementBlock
   // coerces 'inside' → body appends / container last-child / leaf → after.
@@ -32,5 +32,12 @@ export function useCommandPalette() {
     insertElementBlock(block, target.id, 'inside')
   }
 
-  return { open, closePalette, togglePalette, insertElement, insertComponent }
+  /** insert a library entry the project hasn't added yet: using it adds it */
+  function insertCatalog(key: string) {
+    if (!selectedElement.value) return
+    const made = addFromCatalog(key)
+    if (made) insertComponent(made.def.name)
+  }
+
+  return { open, closePalette, togglePalette, insertElement, insertComponent, insertCatalog }
 }

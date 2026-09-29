@@ -1,8 +1,8 @@
 import { test, expect, type Page } from '@playwright/test'
 
-// The Components column: the shared-slot rail behaviour, and the bundled
-// library's round trip — add an entry, insert it, publish, and check the real
-// exported page.
+// The Components column: the shared-slot rail behaviour, the components board
+// it puts on the canvas, and the bundled library's round trip — use an entry on
+// a page, publish, and check the real exported page.
 //
 // The interactive entries are the reason this spec exists. Tabs and Dialog are
 // built out of class-toggle interactions with groups and forced on/off states,
@@ -50,14 +50,14 @@ const rail = (page: Page, name: string) => page.getByRole('button', { name, exac
 const libraryRow = (page: Page, key: string) => page.locator(`[data-catalog="${key}"]`)
 const projectRow = (page: Page, name: string) => page.locator(`[data-component="${name}"]`)
 
-/** open the drawer, add a library entry, then insert it on the home page */
-async function addAndInsert(page: Page, key: string, name: string) {
-  await rail(page, 'Components').click()
-  const row = libraryRow(page, key)
-  await row.hover()
-  await row.getByRole('button', { name: 'Add to project' }).click()
-  // it now appears under Project; clicking the row inserts at the selection
-  await projectRow(page, name).getByRole('button').first().click()
+const boardCard = (page: Page, key: string) => page.locator(`[data-board-card="${key}"]`)
+
+/** insert a library entry on the home page from the ⌘E dock. There is no
+ *  separate "add" step — using an entry is what copies it into the project */
+async function insertFromLibrary(page: Page, key: string) {
+  await page.keyboard.press('ControlOrMeta+e')
+  await page.locator(`[data-dock-item="catalog:${key}"]`).click()
+  await page.keyboard.press('Escape')
 }
 
 test('the three left columns share one slot', async ({ page }) => {
@@ -81,11 +81,63 @@ test('the three left columns share one slot', async ({ page }) => {
   await expect(page.getByPlaceholder('Search components…')).toBeHidden()
 })
 
+test('the board shows every component, and editing a library one adds it', async ({ page }) => {
+  await openEditor(page)
+  await rail(page, 'Components').click()
+
+  // library entries are on the board without having been added
+  const card = boardCard(page, 'catalog:card')
+  await expect(boardCard(page, 'catalog:button')).toBeVisible()
+  await expect(projectRow(page, 'Card')).toHaveCount(0)
+
+  // a drawer row moves the camera to its card — the board is an infinite
+  // canvas, so anything off-screen is reached this way (or by panning)
+  await libraryRow(page, 'tabs').getByRole('button').first().click()
+  await expect(boardCard(page, 'catalog:tabs')).toBeInViewport()
+  await libraryRow(page, 'button').getByRole('button').first().click()
+  await expect(boardCard(page, 'catalog:button')).toBeInViewport()
+
+  // looking is not editing: selecting an element and opening the Style panel
+  // must leave a library entry out of the project. (It used to add it — the
+  // panel wrote a stray `flex` beside `inline-flex` just for being opened.)
+  const button = boardCard(page, 'catalog:button')
+  await button.locator('button').click() // the rendered element, not the card label
+  await page.locator('aside').last().getByRole('button').nth(2).click() // Style
+  await expect(page.getByText('CLASSES')).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(button).toHaveCount(1)
+  await expect(projectRow(page, 'Button')).toHaveCount(0)
+
+  // editing it in place is what copies it into the project
+  await libraryRow(page, 'card').getByRole('button').first().click()
+  await expect(card).toBeInViewport()
+  const title = card.getByText('Card title')
+  await title.dblclick()
+  await page.keyboard.press('ControlOrMeta+a')
+  await page.keyboard.type('Edited on the board')
+  await page.keyboard.press('Enter')
+
+  await expect(projectRow(page, 'Card')).toHaveCount(1)
+  await expect(boardCard(page, 'catalog:card')).toHaveCount(0)
+  await expect(page.getByText('Edited on the board')).toBeVisible()
+
+  // and the edit is the component's: an instance on a page carries it
+  await page.getByRole('button', { name: 'App', exact: true }).click()
+  await page.keyboard.press('ControlOrMeta+e')
+  await page.locator('[data-dock-item^="component:"]', { hasText: 'Card' }).click()
+  await page.keyboard.press('Escape')
+  await publish(page)
+  await page.goto('/')
+  await expect(page.getByText('Edited on the board')).toBeVisible()
+})
+
 test('a library button reaches the published page, styled by a created token', async ({ page }) => {
   await openEditor(page)
-  await addAndInsert(page, 'button', 'Button')
+  await insertFromLibrary(page, 'button')
 
-  // the Library row flips to "already in this project"
+  // using it added it: it is a project component now
+  await rail(page, 'Components').click()
+  await expect(projectRow(page, 'Button')).toHaveCount(1)
   await expect(libraryRow(page, 'button').getByRole('button', { name: 'Add to project' })).toHaveCount(0)
 
   await publish(page)
@@ -105,7 +157,7 @@ test('a library button reaches the published page, styled by a created token', a
 
 test('Tabs: clicking a tab swaps the panel, and tab one restores the default', async ({ page }) => {
   await openEditor(page)
-  await addAndInsert(page, 'tabs', 'Tabs')
+  await insertFromLibrary(page, 'tabs')
   await publish(page)
   await page.goto('/')
 
@@ -141,7 +193,7 @@ test('Tabs: clicking a tab swaps the panel, and tab one restores the default', a
 
 test('Dialog: opens, dismisses from the overlay, and from Escape', async ({ page }) => {
   await openEditor(page)
-  await addAndInsert(page, 'dialog', 'Dialog')
+  await insertFromLibrary(page, 'dialog')
   await publish(page)
   await page.goto('/')
 
@@ -163,9 +215,9 @@ test('Dialog: opens, dismisses from the overlay, and from Escape', async ({ page
 
 test('renaming a component keeps every instance rendering', async ({ page }) => {
   await openEditor(page)
-  await addAndInsert(page, 'card', 'Card')
+  await insertFromLibrary(page, 'card')
 
-  // addAndInsert left the drawer open — clicking the rail again would close it
+  await rail(page, 'Components').click()
   const row = projectRow(page, 'Card')
   await row.hover()
   await row.getByRole('button').last().click() // the row kebab

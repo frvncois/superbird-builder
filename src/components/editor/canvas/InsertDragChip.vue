@@ -17,7 +17,7 @@ const { payload, pointer } = useInsertDrag()
       <component
         :is="payload.kind === 'element' ? payload.icon : ComponentIcon"
         class="size-3.5 shrink-0"
-        :class="payload.kind === 'component' ? 'text-success' : 'text-muted-foreground'"
+        :class="payload.kind === 'element' ? 'text-muted-foreground' : 'text-success'"
       />
       <span>{{ payload.kind === 'element' ? payload.label : payload.name }}</span>
     </div>

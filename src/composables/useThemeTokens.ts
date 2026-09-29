@@ -1,6 +1,6 @@
-import { computed, watch } from 'vue'
+import { computed, effectScope, watch } from 'vue'
 import { useSettings } from './useSettings'
-import { themeBlock, isEmittableToken, isThemeValue, fontFaceBlock } from '@/lib/settings'
+import { themeBlock, isThemeValue, fontFaceBlock } from '@/lib/settings'
 import { PROSE_CSS, CUSTOM_VARIANTS } from '@/lib/shared/prose.js'
 
 // --color-* names owned by the editor chrome — keep in sync with the
@@ -41,11 +41,20 @@ let timer: ReturnType<typeof setTimeout> | null = null
 export function useThemeTokens() {
   if (started) return
   started = true
+  // Detached: this runs once for the whole app, but it is CALLED from a
+  // component's setup, and watchers created there die with that component.
+  // The page canvas unmounts whenever the components board or the Preview
+  // takes the centre — and with it went every theme update until a reload.
+  effectScope(true).run(start)
+}
 
-  const { settings } = useSettings()
+function start() {
+  const { settings, effectiveTokens } = useSettings()
   const block = computed(() => {
-    const tokens = settings.value.tokens.filter(isEmittableToken)
-    const theme = themeBlock(settings.value)
+    // effective, not just the project's: the components board previews library
+    // entries styled with tokens the project may not define yet
+    const tokens = effectiveTokens.value
+    const theme = themeBlock({ ...settings.value, tokens })
     const reassert = CHROME_COLOR_VARS.map((n) => `  --color-${n}: var(--${n});`).join('\n')
     const scoped = tokens.map((t) => `  --color-${t.name}: ${t.value};`).join('\n')
     // The project's root font-size is applied to the SITE SCOPE here, not to

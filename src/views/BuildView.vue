@@ -4,13 +4,16 @@
 // restricted sidebar). The code editor is a separate column Build opens
 // beside the canvas — off by default, toggled by the rail's Code button. The
 // pages and components drawers are columns of the same kind; all three share
-// one slot, so opening any closes the others.
+// one slot, so opening any closes the others. Components is also a canvas
+// mode: while its column is open the centre shows the components board
+// instead of the page.
 // Contributors are pinned to Preview.
 import EditorLayout from '@/layouts/EditorLayout.vue'
 import AppRail from '@/components/editor/sidebar/AppRail.vue'
 import PagesDrawer from '@/components/editor/sidebar/PagesDrawer.vue'
 import ComponentsDrawer from '@/components/editor/sidebar/ComponentsDrawer.vue'
 import CanvasEditor from '@/components/editor/canvas/CanvasEditor.vue'
+import ComponentsBoard from '@/components/editor/canvas/ComponentsBoard.vue'
 import CodeEditor from '@/components/editor/code/CodeEditor.vue'
 import SettingsEditor from '@/components/editor/sidebar/SettingsEditor.vue'
 import ContextMenu from '@/components/editor/canvas/ContextMenu.vue'
@@ -26,7 +29,7 @@ import { useViewMode } from '@/composables/useViewMode'
 useEditorShortcuts()
 
 const { ready, bootError, reloadPage } = useEditorBoot()
-const { isBuild, visibleColumn } = useViewMode()
+const { isBuild, visibleColumn, showComponents } = useViewMode()
 </script>
 
 <template>
@@ -61,7 +64,8 @@ const { isBuild, visibleColumn } = useViewMode()
       <!-- center: Build canvas or full-site preview -->
       <template v-if="isBuild">
         <div class="relative h-full">
-          <CanvasEditor />
+          <ComponentsBoard v-if="showComponents" />
+          <CanvasEditor v-else />
         </div>
         <ContextMenu />
         <InsertDragChip />

@@ -8,9 +8,10 @@ const expanded = ref<Record<string, boolean>>({})
 
 <script setup lang="ts">
 // Components navigator toggled from the left rail — a docked column sharing
-// the one track beside the rail with Pages and the code editor. It lists the
-// project's own components, grouped by category: click a row to insert it at
-// the selection, drag it onto the canvas, or open its settings from the kebab.
+// the one track beside the rail with Pages and the code editor. While it is
+// open the canvas shows the components board, and this column is its index:
+// clicking a row brings that component's card into view and selects it.
+// Inserting into a page happens on the page, from the ⌘E dock.
 import { computed, onBeforeUnmount } from 'vue'
 import {
   Check, ChevronRight, Component as ComponentIcon, Copy, Plus, Search, Settings, Trash2,
@@ -20,17 +21,12 @@ import MenuUI from '@/components/ui/MenuUI.vue'
 import ComponentSettingsEditor from './ComponentSettingsEditor.vue'
 import { catalogCategories } from '@/lib/catalog'
 import { useComponents } from '@/composables/useComponents'
-import { useCommandPalette } from '@/composables/useCommandPalette'
-import { useInsertDrag } from '@/composables/useInsertDrag'
-import { useElement } from '@/composables/useElement'
+import { catalogCardKey, focusCard } from '@/composables/useComponentBoard'
 import { useDrawerEscape } from '@/composables/useDrawerEscape'
 import { useModal } from '@/composables/useModal'
 import type { ComponentDef } from '@/types/editor'
 
 const { components, addFromCatalog, duplicateComponent, usageOf, deleteComponent } = useComponents()
-const { insertComponent } = useCommandPalette()
-const { startInsertDrag } = useInsertDrag()
-const { requestEditorFocus } = useElement()
 const { confirm } = useModal()
 
 /** when set, the drawer swaps its list for that component's settings */
@@ -109,12 +105,6 @@ const toggleGroup = (name: string) => {
 }
 
 // --- row actions ---
-/** click inserts at the current selection, like the ⌘E dock's cards */
-function onInsert(name: string) {
-  insertComponent(name)
-  requestEditorFocus()
-}
-
 async function confirmDelete(def: ComponentDef) {
   const used = usageOf(def.name)
   const ok = await confirm({
@@ -200,14 +190,10 @@ useDrawerEscape(panel, {
                   :data-component="def.name"
                   class="group/row mr-1 flex h-7 items-center rounded-lg pr-0.5 pl-1.5 hover:bg-accent/15"
                 >
-                  <!-- click inserts, drag drops onto the canvas: the same two
-                       affordances the ⌘E dock's cards carry, so touch-action
-                       has to be off for the pointer capture to work -->
                   <button
                     type="button"
-                    class="flex h-full min-w-0 flex-1 cursor-grab touch-none items-center gap-1.5 text-left outline-none select-none active:cursor-grabbing"
-                    @click="onInsert(def.name)"
-                    @pointerdown.left="startInsertDrag({ kind: 'component', name: def.name }, $event)"
+                    class="flex h-full min-w-0 flex-1 items-center gap-1.5 text-left outline-none"
+                    @click="focusCard(def.id)"
                   >
                     <ComponentIcon class="size-3 shrink-0 text-muted-foreground" />
                     <span class="truncate text-xs text-muted-foreground">{{ def.name }}</span>
@@ -268,13 +254,15 @@ useDrawerEscape(panel, {
                   :data-catalog="entry.key"
                   class="group/row mr-1 flex h-7 items-center rounded-lg pr-0.5 pl-1.5 hover:bg-accent/15"
                 >
-                  <span
+                  <button
                     v-tooltip="{ text: entry.description, side: 'right' }"
-                    class="flex h-full min-w-0 flex-1 items-center gap-1.5"
+                    type="button"
+                    class="flex h-full min-w-0 flex-1 items-center gap-1.5 text-left outline-none"
+                    @click="focusCard(catalogCardKey(entry.key))"
                   >
                     <ComponentIcon class="size-3 shrink-0 text-muted-foreground" />
                     <span class="truncate text-xs text-muted-foreground">{{ entry.name }}</span>
-                  </span>
+                  </button>
                   <span
                     v-if="added.has(entry.key)"
                     v-tooltip="'Already in this project'"
