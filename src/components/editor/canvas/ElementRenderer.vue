@@ -195,6 +195,7 @@ const handlers = {
   input: fireChangeInteractions,
   dragstart(e: DragEvent) {
     if (props.node.type === 'body') return
+    if (!backend.value.can(props.node, 'move')) return
     e.stopPropagation()
     draggingId.value = props.node.id
     e.dataTransfer?.setData('text/plain', props.node.id)

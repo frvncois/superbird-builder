@@ -1,7 +1,8 @@
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useProject } from './useProject'
 import { setPreviewTokens, useSettings } from './useSettings'
-import { setSelectionScope } from './useElement'
+import { setSelectionScope, useElement } from './useElement'
+import { findNode } from '@/lib/tree'
 import { CATALOG, CATALOG_TOKENS, materializeCatalogEntry } from '@/lib/catalog'
 import type { CatalogEntry, MaterializedEntry } from '@/lib/catalog'
 import { normalizeComponentName } from '@/lib/components'
@@ -40,14 +41,26 @@ const previews = new Map<string, { made: MaterializedEntry; pristine: string }>(
 /** the drawer asks the board to bring a card into view */
 const focusRequest = ref<{ key: string; tick: number } | null>(null)
 
+/** the card the user is working in — set by focusing one, and by selecting
+ *  any element inside one */
+const focusedKey = ref<string | null>(null)
+
+/** true while the board is on the canvas. What decides that structural edits
+ *  target a component master rather than the page — derived from the session
+ *  actually being mounted, not from the view mode, so there is no render where
+ *  the two disagree. */
+const boardActive = ref(false)
+
 export function focusCard(key: string) {
   focusRequest.value = { key, tick: (focusRequest.value?.tick ?? 0) + 1 }
+  focusedKey.value = key
 }
 
 const signature = (def: ComponentDef) => JSON.stringify(def.root)
 
 export function useComponentBoard() {
   const { project } = useProject()
+  const { selectedElement } = useElement()
 
   function previewFor(entry: CatalogEntry): MaterializedEntry {
     const cached = previews.get(entry.key)
@@ -121,7 +134,28 @@ export function useComponentBoard() {
     project.value.components.push(def)
   }
 
-  return { cards, groups, focusRequest, promote }
+  /** the component being edited: whichever card owns the selection, else the
+   *  focused one */
+  const activeCard = computed<BoardCard | null>(() => {
+    const selected = selectedElement.value
+    if (selected) {
+      const owner = cards.value.find((c) => !!findNode([c.def.root], selected.id))
+      if (owner) return owner
+    }
+    return cards.value.find((c) => c.key === focusedKey.value) ?? null
+  })
+
+  /**
+   * A library preview is a real ComponentDef that simply isn't in the project.
+   * Editing one is what adds it — and a structural edit has to add it BEFORE
+   * the instance push, which skips defs the project doesn't own.
+   */
+  function promoteIfPreview(def: ComponentDef) {
+    const card = cards.value.find((c) => c.def.id === def.id)
+    if (card?.preview) promote(card.preview)
+  }
+
+  return { cards, groups, focusRequest, focusedKey, activeCard, boardActive, promote, promoteIfPreview }
 }
 
 /**
@@ -130,6 +164,7 @@ export function useComponentBoard() {
  */
 export function useComponentBoardSession() {
   const { cards, promote } = useComponentBoard()
+  boardActive.value = true
 
   // selection resolves against the component masters instead of the page, so
   // Style / Data / Interactions edit a master node like any page node
@@ -156,6 +191,8 @@ export function useComponentBoardSession() {
 
   onBeforeUnmount(() => {
     stop()
+    boardActive.value = false
+    focusedKey.value = null
     setPreviewTokens([])
     setSelectionScope(null)
   })

@@ -34,11 +34,31 @@ async function openEditor(page: Page) {
   await page.waitForURL(/\/admin(\?.*)?$/, { timeout: 30_000 })
   await page.goto('/admin?demo')
   await expect(preview).toBeVisible({ timeout: 30_000 })
+  // `ready` flips BEFORE ?demo is fetched, so the shell is interactive while
+  // the real project is still in flight — and resetTo would wipe anything
+  // edited in that window. Wait for demo content to actually be on the canvas.
+  await expect(page.getByText('Tuesday is roast day.').first()).toBeVisible({ timeout: 30_000 })
 }
 
+/**
+ * Publish, waiting out the server's rate limit if the suite has hit it.
+ *
+ * A publish is a full Tailwind compile plus a static export, so the server
+ * allows 12 a minute per user — plenty for a person, and less than a suite
+ * that publishes in a dozen specs back to back. The limit is a real guard
+ * against a runaway loop, so the test waits rather than the product relaxing.
+ */
 async function publish(page: Page) {
-  await page.keyboard.press('ControlOrMeta+p')
-  await expect(page.getByText('Published!')).toBeVisible({ timeout: 30_000 })
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await page.keyboard.press('ControlOrMeta+p')
+    const done = page.getByText('Published!')
+    const failed = page.getByText('Publish failed')
+    await expect(done.or(failed).first()).toBeVisible({ timeout: 60_000 })
+    if (await done.isVisible()) return
+    await page.keyboard.press('Escape')
+    await page.waitForTimeout(20_000) // the window is 60s; three tries covers it
+  }
+  await expect(page.getByText('Published!')).toBeVisible({ timeout: 60_000 })
 }
 
 const rail = (page: Page, name: string) => page.getByRole('button', { name, exact: true })
@@ -165,6 +185,58 @@ test('S, D and I open the panels for the selected row', async ({ page }) => {
   await expect(page.getByText('CLASSES')).toBeHidden()
   await page.keyboard.press('d')
   await expect(page.getByText('CLASSES')).toBeHidden()
+})
+
+test('a component gains an element on the board, and its page instance follows', async ({
+  page,
+}) => {
+  await openEditor(page)
+  await openLayers(page)
+
+  // put a Card on the page: an instance for the master edit to reach
+  await rows(page).first().click()
+  await insertFromDock(page, 'catalog:card')
+  const pageRows = await rows(page).count()
+
+  // edit the COMPONENT on the board. Structure there is the master's — and
+  // the master is pushed to every instance on every page.
+  await rail(page, 'Components').click()
+  await page.locator('[data-board-card]').filter({ hasText: 'Card title' }).first()
+    .getByText('Card title').click()
+  await rail(page, 'Layers').click()
+  // the tree follows the canvas: it shows the component, not the page
+  await expect(rows(page).first()).toContainText('Card')
+  const masterRows = await rows(page).count()
+
+  await rows(page).nth(1).click()
+  await insertFromDock(page, 'paragraph')
+  await expect(rows(page)).toHaveCount(masterRows + 1)
+
+  // back on the page, the instance grew the same element
+  await rail(page, 'App').click()
+  await rail(page, 'Layers').click()
+  await expect(rows(page)).toHaveCount(pageRows + 1)
+})
+
+test('removing an element from a component removes it from the page instance', async ({
+  page,
+}) => {
+  await openEditor(page)
+  await openLayers(page)
+  await rows(page).first().click()
+  await insertFromDock(page, 'catalog:alert')
+
+  // delete the heading on the board — the instance on the page loses it too
+  await rail(page, 'Components').click()
+  await page.locator('[data-board-card]').filter({ hasText: 'Heads up' }).first()
+    .getByText('Heads up').click()
+  await page.keyboard.press('Backspace')
+
+  await publish(page)
+  await page.goto('/')
+  await expect(page.getByText('Heads up')).toHaveCount(0)
+  // the rest of the component survived
+  await expect(page.getByText('Something worth knowing before you carry on.')).toBeVisible()
 })
 
 test('the columns share one slot, and Layers works on either canvas', async ({ page }) => {

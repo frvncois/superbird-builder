@@ -5,12 +5,13 @@
 // panels edit the component's master. Same infinite canvas as the pages
 // (CanvasViewport): scroll to pan, ⌘+scroll or pinch to zoom, space+drag.
 //
-// Browsing and editing only. Structure is not editable here (no insert, no
-// reorder, no delete), and inserting a component into a page happens on the
-// page, from the ⌘E dock.
+// Structure is editable too: an edit mutates the component's master and is
+// pushed to every instance on every page. Inserting a component INTO a page
+// still happens on the page, from the ⌘E dock.
 import { computed, nextTick, ref, watch } from 'vue'
 import CanvasViewport from '@/components/editor/canvas/CanvasViewport.vue'
 import ElementRenderer from '@/components/editor/canvas/ElementRenderer.vue'
+import InsertDock from '@/components/editor/canvas/InsertDock.vue'
 import { useComponentBoard, useComponentBoardSession } from '@/composables/useComponentBoard'
 import type { BoardCard } from '@/composables/useComponentBoard'
 import { useElement } from '@/composables/useElement'
@@ -21,7 +22,7 @@ void import('@tailwindcss/browser')
 useThemeTokens()
 useComponentBoardSession()
 
-const { groups, focusRequest } = useComponentBoard()
+const { groups, focusRequest, focusedKey } = useComponentBoard()
 const { selectElement } = useElement()
 const { settings } = useSettings()
 
@@ -37,7 +38,6 @@ const isWide = (card: BoardCard) => WIDE_TYPES.includes(card.def.root.children[0
 
 // --- focus: a drawer row brings its card into view and selects it ---
 const canvas = ref<InstanceType<typeof CanvasViewport>>()
-const focusedKey = ref<string | null>(null)
 const allCards = computed(() => groups.value.flatMap((g) => g.cards))
 
 watch(
@@ -63,15 +63,7 @@ function onBoardClick() {
 </script>
 
 <template>
-  <!-- capture-phase guards: the renderer's own handlers would open the page
-       context menu and start a reorder drag, and both act on page structure -->
-  <CanvasViewport
-    ref="canvas"
-    :initial="INITIAL_CAMERA"
-    @click="onBoardClick"
-    @contextmenu.capture.prevent.stop
-    @dragstart.capture.prevent.stop
-  >
+  <CanvasViewport ref="canvas" :initial="INITIAL_CAMERA" @click="onBoardClick">
     <template #default="{ zoom }">
       <!-- one row per category: an infinite canvas has no edge to wrap at -->
       <div class="flex w-max flex-col gap-24">
@@ -107,6 +99,7 @@ function onBoardClick() {
                    rather than the whole editor -->
               <div
                 data-site-scope
+                data-board-card-surface
                 class="bg-white text-black shadow-lg"
                 :class="isWide(card) ? '' : 'p-6'"
                 :style="{
@@ -122,6 +115,10 @@ function onBoardClick() {
           </div>
         </section>
       </div>
+    </template>
+
+    <template #overlay>
+      <InsertDock />
     </template>
   </CanvasViewport>
 </template>

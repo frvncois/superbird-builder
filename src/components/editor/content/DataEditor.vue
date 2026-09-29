@@ -63,9 +63,14 @@ const tagOptions = computed(() =>
   typeOptionsFor(selectedElement.value?.type ?? '').map((t) => ({ label: capitalize(t), value: t })),
 )
 
-/** the tag can only be changed on a real page element with alternatives */
+/** an element with alternatives, that the current backend lets us retype.
+ *  (This used to test `line !== undefined`, which is false for every component
+ *  master node — so the whole panel was inert on the board.) */
 const canEditTag = computed(
-  () => tagOptions.value.length > 0 && selectedElement.value?.line !== undefined,
+  () =>
+    tagOptions.value.length > 0 &&
+    !!selectedElement.value &&
+    backend.value.can(selectedElement.value, 'retype'),
 )
 
 // --- id ---
@@ -99,7 +104,7 @@ const canLink = computed(() => {
   const el = selectedElement.value
   return (
     !!el &&
-    el.line !== undefined &&
+    backend.value.can(el, 'link') &&
     !isBody.value &&
     !isCollectionItem.value &&
     !isCollectionList.value &&
@@ -142,7 +147,8 @@ const canBind = computed(
     !isCollectionItem.value &&
     !isCollectionList.value &&
     !isSlider.value &&
-    selectedElement.value?.line !== undefined,
+    !!selectedElement.value &&
+    backend.value.can(selectedElement.value, 'arg'),
 )
 
 const bindHead = computed(() => selectedElement.value?.arg?.split('.')[0] ?? '')
@@ -214,9 +220,8 @@ const def = computed(() => (selectedElement.value ? ELEMENTS[selectedElement.val
 
 // --- custom attributes (allowlisted; node-only state like classes) ---
 
-const canAttrs = computed(
-  () => !!selectedElement.value && selectedElement.value.line !== undefined && !isBody.value,
-)
+// attributes are node state; a master's are what every instance renders
+const canAttrs = computed(() => !!selectedElement.value && !isBody.value)
 
 // editable buffer: rows may hold half-typed/invalid names; only the valid,
 // allowlisted subset is written back to the node (sanitizeAttributes)

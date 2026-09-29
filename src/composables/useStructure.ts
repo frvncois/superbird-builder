@@ -2,9 +2,23 @@ import { computed, ref, type ComputedRef } from 'vue'
 import { useElement, type DropPosition, type ElementBlock } from './useElement'
 import { useComponents } from './useComponents'
 import { useReorderAnimation } from './useReorderAnimation'
+import { useComponentBoard } from './useComponentBoard'
+import { useProject } from './useProject'
 import { elementBlockLines } from '@/lib/syntax'
 import { expandComponentInstances, isComponentType } from '@/lib/components'
-import type { ElementNode } from '@/types/editor'
+import {
+  canDropInMaster,
+  duplicateInMaster,
+  insertInMaster,
+  masterAcceptsChildren,
+  moveInMaster,
+  pushMasterStructure,
+  removeFromMaster,
+  retypeInMaster,
+  wrapInMaster,
+} from '@/lib/componentOps'
+import { findNode, findParent } from '@/lib/tree'
+import type { ComponentDef, ElementNode } from '@/types/editor'
 
 /**
  * The one way to change structure, whatever is being edited.
@@ -71,8 +85,10 @@ const clipboard = ref<ElementBlock | null>(null)
 
 export function useStructure() {
   const el = useElement()
+  const { project } = useProject()
   const { components, findComponent, masterFor, addFromCatalog } = useComponents()
   const { canvasReorder } = useReorderAnimation()
+  const { activeCard, boardActive, promoteIfPreview } = useComponentBoard()
 
   // --- shared helpers ---
 
@@ -255,8 +271,135 @@ export function useStructure() {
     return go(n.id, 'after')
   }
 
+  // --- the master backend: the component on the board ---
+
+  const activeDef = computed<ComponentDef | null>(() => activeCard.value?.def ?? null)
+
+  /**
+   * Runs a structural change on the master, then pushes the new shape to every
+   * instance — in ONE synchronous tick, because `syncStructure` watches page
+   * code and adopts a divergent instance back into the master. A half-pushed
+   * edit would be reverted by the first instance still carrying the old shape.
+   */
+  function onMaster(fn: (def: ComponentDef) => boolean): boolean {
+    const def = activeDef.value
+    if (!def) return false
+    if (!fn(def)) return false
+    // a library preview has to enter the project BEFORE the push, which skips
+    // defs the project doesn't own
+    promoteIfPreview(def)
+    pushMasterStructure(project.value, def)
+    return true
+  }
+
+  const masterRoot = () => activeDef.value?.root ?? null
+  const isMasterRoot = (node: ElementNode) => node.id === masterRoot()?.id
+
+  const master: StructureBackend = {
+    kind: 'master',
+    roots: computed(() => (masterRoot() ? [masterRoot()!] : [])),
+    isContainer: masterAcceptsChildren,
+
+    can(node, action) {
+      // the wrapper IS the component: it is renamed, never restructured, and
+      // it carries no ref (a master's nodes never reach a page's ref space)
+      if (isMasterRoot(node)) return false
+      return action !== 'ref'
+    },
+
+    canDrop(ids, targetId, position) {
+      const def = activeDef.value
+      return !!def && canDropInMaster(def, ids, targetId, position)
+    },
+
+    insert(payload, targetId, position) {
+      // components cannot nest, so only built-in elements land here
+      if (payload.kind !== 'element') return null
+      let made: ElementNode | null = null
+      onMaster((def) => {
+        made = insertInMaster(def, payload.type, targetId ?? el.selectedElement.value?.id ?? null, position)
+        return !!made
+      })
+      if (made) el.selectElement((made as ElementNode).id)
+      return made
+    },
+
+    move(ids, targetId, position) {
+      onMaster((def) => moveInMaster(def, ids, targetId, position))
+    },
+
+    nudge(dir) {
+      const def = activeDef.value
+      const node = el.selectedElement.value
+      if (!def || !node || isMasterRoot(node)) return false
+      const parent = findParent([def.root], node.id)
+      if (!parent) return false
+      const at = parent.children.indexOf(node)
+      const sibling = parent.children[dir === 'up' ? at - 1 : at + 1]
+      if (sibling) {
+        // descend into an adjacent container, else swap past it
+        if (masterAcceptsChildren(sibling) && sibling.children.length) {
+          const inner = dir === 'up' ? sibling.children[sibling.children.length - 1]! : sibling.children[0]!
+          return onMaster((d) => moveInMaster(d, [node.id], inner.id, dir === 'up' ? 'after' : 'before'))
+        }
+        if (masterAcceptsChildren(sibling)) {
+          return onMaster((d) => moveInMaster(d, [node.id], sibling.id, 'inside'))
+        }
+        return onMaster((d) => moveInMaster(d, [node.id], sibling.id, dir === 'up' ? 'before' : 'after'))
+      }
+      // at a boundary: escape the parent
+      if (isMasterRoot(parent)) return false
+      return onMaster((d) => moveInMaster(d, [node.id], parent.id, dir === 'up' ? 'before' : 'after'))
+    },
+
+    remove(ids) {
+      onMaster((def) => removeFromMaster(def, ids))
+    },
+
+    duplicate(ids) {
+      onMaster((def) => duplicateInMaster(def, ids).length > 0)
+    },
+
+    wrap(ids) {
+      onMaster((def) => !!wrapInMaster(def, ids))
+    },
+
+    retype(id, type) {
+      onMaster((def) => retypeInMaster(def, id, type))
+    },
+
+    setArg(id, arg) {
+      onMaster((def) => {
+        const node = findNode([def.root], id)
+        if (!node) return false
+        if (arg) node.arg = arg
+        else delete node.arg
+        return true
+      })
+    },
+
+    setLink(id, link) {
+      onMaster((def) => {
+        const node = findNode([def.root], id)
+        if (!node) return false
+        if (link) node.link = link
+        else delete node.link
+        return true
+      })
+    },
+
+    // a master node has no page to be unique on, and serializeNode never emits
+    // a ref into an instance block
+    setRef: () => false,
+
+    copy(ids) {
+      void ids // the element clipboard is page code; crossing over is a v2 job
+    },
+    paste() {},
+  }
+
   /** the backend for whatever is being edited right now */
-  const backend = computed<StructureBackend>(() => page)
+  const backend = computed<StructureBackend>(() => (boardActive.value ? master : page))
 
   return { backend, clipboard }
 }

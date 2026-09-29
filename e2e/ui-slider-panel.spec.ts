@@ -40,9 +40,25 @@ async function openEditor(page: Page) {
   await expect(preview).toBeVisible({ timeout: 30_000 })
 }
 
+/**
+ * Publish, waiting out the server's rate limit if the suite has hit it.
+ *
+ * A publish is a full Tailwind compile plus a static export, so the server
+ * allows 12 a minute per user — plenty for a person, and less than a suite
+ * that publishes in a dozen specs back to back. The limit is a real guard
+ * against a runaway loop, so the test waits rather than the product relaxing.
+ */
 async function publish(page: Page) {
-  await page.keyboard.press('ControlOrMeta+p')
-  await expect(page.getByText('Published!')).toBeVisible({ timeout: 30_000 })
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await page.keyboard.press('ControlOrMeta+p')
+    const done = page.getByText('Published!')
+    const failed = page.getByText('Publish failed')
+    await expect(done.or(failed).first()).toBeVisible({ timeout: 60_000 })
+    if (await done.isVisible()) return
+    await page.keyboard.press('Escape')
+    await page.waitForTimeout(20_000) // the window is 60s; three tries covers it
+  }
+  await expect(page.getByText('Published!')).toBeVisible({ timeout: 60_000 })
 }
 
 /** insert one element from the ⌘E dock at the current selection */

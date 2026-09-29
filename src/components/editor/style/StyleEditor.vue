@@ -46,7 +46,7 @@ import InsetControl from '@/components/editor/style/InsetControl.vue'
 import SizeControl from '@/components/editor/style/SizeControl.vue'
 import { borderWidthScheme } from '@/lib/tieredBox'
 
-const { selectedElement } = useElement()
+const { selectedElement, elements } = useElement()
 const { masterFor, editTarget } = useComponents()
 const { activePage } = usePage()
 const { activeBreakpoint, baseBreakpoint, breakpoints } = useProject()
@@ -218,7 +218,8 @@ watch(
 const parentDisplay = computed(() => {
   const id = selectedElement.value?.id
   if (!id) return undefined
-  const parent = findParent(activePage.value.elements, id)
+  // scope-aware: on the components board this resolves inside the master
+  const parent = findParent(elements.value, id)
   if (!parent) return undefined
   // a component-mapped parent carries its style on the shared master
   const parentClasses = (masterFor(parent.id)?.master ?? parent).classes ?? ''

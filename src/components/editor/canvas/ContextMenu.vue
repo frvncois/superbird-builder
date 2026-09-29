@@ -3,12 +3,14 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { Copy, ClipboardPaste, CopyPlus, Trash2, Palette, Zap, Component, Unlink, Group, type LucideIcon } from 'lucide-vue-next'
 import { isComponentType } from '@/lib/components'
 import { useComponents } from '@/composables/useComponents'
+import { useStructure } from '@/composables/useStructure'
 import { useModal } from '@/composables/useModal'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import CreateComponentModal from '@/components/editor/canvas/CreateComponentModal.vue'
 import { useContextMenu } from '@/composables/useContextMenu'
 
 const { masterFor, detachComponent } = useComponents()
+const { backend } = useStructure()
 const { openModal } = useModal()
 
 const componentInstanceId = computed(() =>
@@ -61,6 +63,7 @@ const items = computed<Item[]>(() => [
       if (targetId) void openModal(CreateComponentModal, { targetId })
     },
     disabled:
+      backend.value.kind !== 'page' ||
       targetIsBody.value ||
       isComponentType(target.value?.type ?? '') ||
       !!componentInstanceId.value,
@@ -70,7 +73,7 @@ const items = computed<Item[]>(() => [
     label: 'Detach from component',
     icon: Unlink,
     run: () => componentInstanceId.value && detachComponent(componentInstanceId.value),
-    disabled: !componentInstanceId.value,
+    disabled: backend.value.kind !== 'page' || !componentInstanceId.value,
   },
 ])
 

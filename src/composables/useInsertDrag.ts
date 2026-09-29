@@ -79,6 +79,10 @@ export function useInsertDrag() {
       const body = bodyElement.value
       return body ? { id: body.id, position: 'inside' } : null
     }
+    if (el.closest('[data-board-card-surface]')) {
+      const root = backend.value.roots.value[0]
+      return root ? { id: root.id, position: 'inside' } : null
+    }
     return null
   }
 

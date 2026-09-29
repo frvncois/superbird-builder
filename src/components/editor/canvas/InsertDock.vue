@@ -5,6 +5,7 @@ import InputUI from '@/components/ui/InputUI.vue'
 import { useComponents } from '@/composables/useComponents'
 import { useCommandPalette } from '@/composables/useCommandPalette'
 import { useElement } from '@/composables/useElement'
+import { useStructure } from '@/composables/useStructure'
 import { useInsertDrag, type InsertPayload } from '@/composables/useInsertDrag'
 import { ELEMENT_GROUPS } from '@/lib/elementPalette'
 import { fuzzyScore } from '@/lib/fuzzy'
@@ -14,6 +15,7 @@ const { components } = useComponents()
 const { open, closePalette, togglePalette, insertElement, insertComponent, insertCatalog } =
   useCommandPalette()
 const { requestEditorFocus } = useElement()
+const { backend } = useStructure()
 const { startInsertDrag } = useInsertDrag()
 
 const query = ref('')
@@ -54,7 +56,8 @@ const allGroups = computed<{ title: string; items: DockItem[] }[]>(() => {
       run: () => insertElement(item.type),
     })),
   }))
-  if (components.value.length) {
+  // components cannot nest, so a master gets built-in elements only
+  if (backend.value.kind === 'page' && components.value.length) {
     base.push({
       title: 'Components',
       items: components.value.map((c) => ({
@@ -71,7 +74,7 @@ const allGroups = computed<{ title: string; items: DockItem[] }[]>(() => {
   // every library entry is available without an "add" step: inserting one
   // copies it into the project, after which it lists under Components
   const added = new Set(components.value.map((c) => c.source).filter(Boolean))
-  const library = CATALOG.filter((e) => !added.has(e.key))
+  const library = backend.value.kind === 'page' ? CATALOG.filter((e) => !added.has(e.key)) : []
   if (library.length) {
     base.push({
       title: 'Library',
@@ -248,7 +251,14 @@ function onKeydown(e: KeyboardEvent) {
 </script>
 
 <template>
-  <div ref="dockRoot" class="absolute bottom-1 left-1 z-40 flex max-w-[calc(100%-2rem)] flex-col-reverse items-start gap-2">
+  <!-- the dock floats INSIDE the canvas viewport, so its clicks must not reach
+       the canvas underneath — there, a click on empty space deselects (and in
+       comment mode, drops a comment) -->
+  <div
+    ref="dockRoot"
+    class="absolute bottom-1 left-1 z-40 flex max-w-[calc(100%-2rem)] flex-col-reverse items-start gap-2"
+    @click.stop
+  >
     <!-- the + button is the anchor the panel grows out of -->
     <button
       v-tooltip.right="'Insert elements (⌘E)'"

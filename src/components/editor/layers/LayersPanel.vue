@@ -13,6 +13,7 @@ import { usePage } from '@/composables/usePage'
 import { useProject } from '@/composables/useProject'
 import { useCollections } from '@/composables/useCollections'
 import { useComponents } from '@/composables/useComponents'
+import { useComponentBoard } from '@/composables/useComponentBoard'
 import { useStructure } from '@/composables/useStructure'
 import { useInsertDrag } from '@/composables/useInsertDrag'
 import { usePanel } from '@/composables/usePanel'
@@ -27,6 +28,7 @@ const { activePage } = usePage()
 const { project } = useProject()
 const { collections } = useCollections()
 const { components } = useComponents()
+const { activeCard } = useComponentBoard()
 const {
   selectedElement, selectedElementIds, selectElement, extendSelection,
   draggingId, dropTarget, getElement, elementAtLine,
@@ -37,8 +39,11 @@ const { togglePanel } = usePanel()
 const { reveal, isCollapsed, setCollapsed, toggle, editingRefId } = useLayerState()
 
 const roots = computed(() => backend.value.roots.value)
-const title = computed(() => activePage.value?.name ?? 'Layers')
 const isPage = computed(() => backend.value.kind === 'page')
+// the tree follows the canvas: the open page, or the component being edited
+const title = computed(() =>
+  isPage.value ? (activePage.value?.name ?? 'Layers') : (activeCard.value?.def.name ?? 'Components'),
+)
 
 const panel = ref<HTMLElement>()
 const scroller = ref<HTMLElement>()
@@ -294,7 +299,7 @@ useDrawerEscape(panel, {
         @row-pointerdown="onRowPointerDown"
       />
       <p v-if="!roots.length" class="px-2 py-6 text-center text-xs text-muted-foreground">
-        Nothing here yet.
+        {{ isPage ? 'Nothing here yet.' : 'Select a component on the board.' }}
       </p>
     </div>
 
