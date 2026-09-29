@@ -2,9 +2,10 @@
 // The single editing shell. A rail toggle switches the surface between Build
 // (breakpoint canvas + full inspector) and Preview (full-site render,
 // restricted sidebar). The code editor is a separate column Build opens
-// beside the canvas — off by default, toggled by the rail's Code button.
+// beside the canvas — off by default, toggled by the rail's Code button. The
+// pages drawer is a column of the same kind, available on both surfaces; the
+// two share one slot, so opening either closes the other.
 // Contributors are pinned to Preview.
-import { ref } from 'vue'
 import EditorLayout from '@/layouts/EditorLayout.vue'
 import AppRail from '@/components/editor/sidebar/AppRail.vue'
 import PagesDrawer from '@/components/editor/sidebar/PagesDrawer.vue'
@@ -24,10 +25,7 @@ import { useViewMode } from '@/composables/useViewMode'
 useEditorShortcuts()
 
 const { ready, bootError, reloadPage } = useEditorBoot()
-const { isBuild, showCode } = useViewMode()
-
-// pages drawer overlays the shell (both modes); opened from the left rail
-const pagesDrawerOpen = ref(false)
+const { isBuild, showCode, pagesOpen } = useViewMode()
 </script>
 
 <template>
@@ -40,13 +38,13 @@ const pagesDrawerOpen = ref(false)
   </div>
 
   <template v-else-if="ready">
-    <EditorLayout :left="showCode" :framed="isBuild">
+    <EditorLayout :left="showCode" :pages="pagesOpen" :framed="isBuild">
       <template #rail>
-        <AppRail
-          :drawer-open="pagesDrawerOpen"
-          @toggle-drawer="pagesDrawerOpen = !pagesDrawerOpen"
-          @close-drawer="pagesDrawerOpen = false"
-        />
+        <AppRail />
+      </template>
+
+      <template v-if="pagesOpen" #pages>
+        <PagesDrawer />
       </template>
 
       <template v-if="showCode" #left>
@@ -69,9 +67,6 @@ const pagesDrawerOpen = ref(false)
         <SettingsEditor />
       </template>
     </EditorLayout>
-
-    <!-- shell-level overlay so Pages works in both modes -->
-    <PagesDrawer :open="pagesDrawerOpen" @close="pagesDrawerOpen = false" />
   </template>
 
   <div v-else class="flex min-h-screen items-center justify-center bg-background">

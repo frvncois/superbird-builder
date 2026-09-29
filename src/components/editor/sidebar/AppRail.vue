@@ -8,27 +8,13 @@ import { useModal } from '@/composables/useModal'
 import { useAuth } from '@/composables/useAuth'
 import { useViewMode } from '@/composables/useViewMode'
 
-defineProps<{ drawerOpen: boolean }>()
-const emit = defineEmits<{ 'toggle-drawer': []; 'close-drawer': [] }>()
-
 const { openLibrary } = useMediaLibrary()
 const { openModal } = useModal()
 const { canBuild, logout } = useAuth()
-const { isPreview, isBuild, codeOpen, showCode, setMode, toggleCode, showApp } = useViewMode()
-
-// switching surface closes the pages drawer so it doesn't linger over the mode
-function onApp() {
-  showApp()
-  emit('close-drawer')
-}
-function onCode() {
-  toggleCode()
-  emit('close-drawer')
-}
-function onPreview() {
-  setMode('preview')
-  emit('close-drawer')
-}
+const {
+  isPreview, isBuild, codeOpen, showCode, pagesOpen,
+  setMode, toggleCode, togglePages, showApp,
+} = useViewMode()
 </script>
 
 <template>
@@ -42,8 +28,8 @@ function onPreview() {
       tooltip="App"
       tooltip-side="right"
       class="w-7"
-      :class="isBuild && !codeOpen ? 'text-accent-foreground' : 'text-foreground'"
-      @click="onApp"
+      :class="isBuild && !codeOpen && !pagesOpen ? 'text-accent-foreground' : 'text-foreground'"
+      @click="showApp"
     >
       <MainLogo class="size-4" />
     </ButtonUI>
@@ -58,8 +44,8 @@ function onPreview() {
       tooltip="Pages"
       tooltip-side="right"
       class="w-7"
-      :class="drawerOpen ? 'text-accent-foreground' : 'text-muted-foreground'"
-      @click="emit('toggle-drawer')"
+      :class="pagesOpen ? 'text-accent-foreground' : 'text-muted-foreground'"
+      @click="togglePages"
     />
 
     <!-- Code column toggle on the Build surface — contributors are
@@ -72,7 +58,7 @@ function onPreview() {
       tooltip-side="right"
       class="w-7"
       :class="showCode ? 'text-accent-foreground' : 'text-muted-foreground'"
-      @click="onCode"
+      @click="toggleCode"
     />
     <ButtonUI
       variant="ghost"
@@ -81,7 +67,7 @@ function onPreview() {
       tooltip-side="right"
       class="w-7"
       :class="isPreview ? 'text-accent-foreground' : 'text-muted-foreground'"
-      @click="onPreview"
+      @click="setMode('preview')"
     />
     <ButtonUI
       variant="ghost"

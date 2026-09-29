@@ -1,9 +1,19 @@
+<script lang="ts">
+import { ref } from 'vue'
+
+// per-collection expand state — module-level because the column unmounts when
+// it is toggled off, and the tree should come back as the user left it
+const expanded = ref<Record<string, boolean>>({})
+</script>
+
 <script setup lang="ts">
-// Pages/collections navigator opened from the left rail — an overlay panel
-// covering the CodeEditor pane. Three zones: a search field, the scrollable
-// Pages + Collections tree, and the locale switcher pinned at the bottom.
-// Row overflow actions (settings/duplicate/delete) live in a per-row kebab.
-import { computed, ref, watch, onBeforeUnmount, onMounted } from 'vue'
+// Pages/collections navigator toggled from the left rail — a docked column
+// beside the rail, like the code editor's: it takes its own 16rem track, stays
+// open while you navigate, and only the rail button closes it. Three zones: a
+// search field, the scrollable Pages + Collections tree, and the locale
+// switcher pinned at the bottom. Row overflow actions
+// (settings/duplicate/delete) live in a per-row kebab.
+import { computed, onBeforeUnmount, onMounted } from 'vue'
 import {
   Plus, Copy, Trash2, Settings, Languages, ChevronDown, ChevronRight, Check,
   House, Search, Layers,
@@ -21,11 +31,6 @@ import { useLocaleQuickAdd } from '@/composables/useLocaleQuickAdd'
 import { useModal } from '@/composables/useModal'
 import { walkNodes } from '@/lib/tree'
 import type { Collection, CollectionEntry, ElementNode, Page } from '@/types/editor'
-
-// kept mounted by the parent; `open` drives the slide/fade transitions so the
-// leave animation can play out (a parent v-if would unmount before it runs)
-const props = defineProps<{ open: boolean }>()
-const emit = defineEmits<{ close: [] }>()
 
 const { homePage, duplicatePage, removePage } = usePage()
 const {
@@ -45,27 +50,17 @@ const { openModal, confirm, stack } = useModal()
 const settingsTarget = ref<SettingsTarget | null>(null)
 // name filter across pages, collections and entries
 const query = ref('')
-// per-collection expand state — the drawer stays mounted between opens, so a
-// plain ref keeps the tree as the user left it for the session
-const expanded = ref<Record<string, boolean>>({})
 
-watch(
-  () => props.open,
-  (o) => {
-    if (!o) {
-      // closing discards the settings view and the filter so it reopens clean
-      settingsTarget.value = null
-      query.value = ''
-      return
-    }
-    // reveal the entry being edited rather than making the user hunt for it
-    if (!activeEntryId.value) return
-    const owner = collections.value.find((c) =>
-      c.entries.some((e) => e.id === activeEntryId.value),
-    )
-    if (owner) expanded.value[owner.id] = true
-  },
-)
+// on open, reveal the entry being edited rather than making the user hunt for
+// it. (The settings view and the filter are plain refs, so toggling the column
+// off discards them and it reopens clean.)
+onMounted(() => {
+  if (!activeEntryId.value) return
+  const owner = collections.value.find((c) =>
+    c.entries.some((e) => e.id === activeEntryId.value),
+  )
+  if (owner) expanded.value[owner.id] = true
+})
 
 // --- filtering ---
 const needle = computed(() => query.value.trim().toLowerCase())
@@ -105,15 +100,9 @@ const toggleCollection = (id: string) => {
 
 const isDraft = (status?: string) => status === 'draft'
 
-function go(fn: () => void) {
-  fn()
-  emit('close')
-}
-
 // Clicking an entry opens it in place: the drawer swaps to the item editor and,
 // when the collection has a template page, the canvas follows so the design
-// updates live behind the panel. Unlike page navigation this does NOT close the
-// drawer — editing an item's fields IS the drawer's job now.
+// updates live beside the panel.
 function openEntryDetail(collection: Collection, entryId: string) {
   openEntry(collection, entryId) // no-ops for a data-only collection
   settingsTarget.value = { kind: 'entry', collectionId: collection.id, entryId }
@@ -223,38 +212,48 @@ async function confirmDeleteLocale(loc: string) {
 
 const panel = ref<HTMLElement>()
 
-// Capture-phase Escape so the drawer closes before SettingsEditor's
-// window handler (bubble phase) pulls focus back to the code editor.
+// The column is persistent, so it may only claim Escape while the user is
+// actually working in it — otherwise it would swallow the key from the canvas,
+// the code editor and the right panel for as long as it is open. "Working in
+// it" is the last press or focus having landed inside: focus alone isn't
+// enough, because clicking a row that swaps the pane drops focus to <body>.
+let engaged = false
+function onEngage(e: Event) {
+  engaged = !!panel.value?.contains(e.target as Node)
+}
+
+// Capture-phase Escape so a layer peels before SettingsEditor's window
+// handler (bubble phase) pulls focus back to the code editor.
 function onKeydownCapture(e: KeyboardEvent) {
-  if (!props.open || e.key !== 'Escape') return
+  if (!engaged || e.key !== 'Escape') return
   // an open row kebab owns Escape first — let it bubble to MenuUI's own handler
   if (panel.value?.querySelector('[data-open]')) return
   // a modal opened from inside the drawer (the media library) owns Escape:
   // ModalStackHost listens in BUBBLE phase, so without this the capture
   // handler here would peel the detail view and leave the modal up
   if (stack.value.length) return
+  // nothing to peel: the key belongs to whoever else wants it. Escape never
+  // closes the column itself — like the code editor, only the rail does.
+  if (!searching.value && !settingsTarget.value) return
   e.stopPropagation()
-  // peel back one layer at a time: filter → settings view → the drawer itself
+  // peel back one layer at a time: filter → settings view
   if (searching.value) query.value = ''
-  else if (settingsTarget.value) settingsTarget.value = null
-  else emit('close')
+  else settingsTarget.value = null
 }
-onMounted(() => window.addEventListener('keydown', onKeydownCapture, true))
-onBeforeUnmount(() => window.removeEventListener('keydown', onKeydownCapture, true))
+onMounted(() => {
+  window.addEventListener('keydown', onKeydownCapture, true)
+  window.addEventListener('pointerdown', onEngage, true)
+  window.addEventListener('focusin', onEngage, true)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKeydownCapture, true)
+  window.removeEventListener('pointerdown', onEngage, true)
+  window.removeEventListener('focusin', onEngage, true)
+})
 </script>
 
 <template>
-  <!-- backdrop: outside click closes -->
-  <Transition name="drawer-backdrop">
-    <div v-if="open" class="fixed inset-0 z-40" @click="emit('close')" @contextmenu.prevent="emit('close')" />
-  </Transition>
-
-  <Transition name="drawer-panel">
-  <div
-    v-if="open"
-    ref="panel"
-    class="fixed top-0 left-12 z-50 flex h-full w-64 flex-col border-l border-input bg-background"
-  >
+  <div ref="panel" class="flex h-full flex-col bg-background">
     <!-- Navigating and editing are two layers of one surface, so they swap with
          a transform-only push rather than a hard cut. Both panes are absolutely
          positioned inside this box: nothing reflows mid-transition, and the two
@@ -265,7 +264,6 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydownCapture, tr
       <PageSettingsEditor
         :target="settingsTarget"
         @back="settingsTarget = null"
-        @close="emit('close')"
       />
     </div>
 
@@ -293,7 +291,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydownCapture, tr
           variant="icon" size="xs" :icon="Plus"
           tooltip="New page" tooltip-side="right"
           class="w-5 text-muted-foreground"
-          @click.stop="go(createPage)"
+          @click.stop="createPage"
         />
       </div>
       <div
@@ -304,7 +302,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydownCapture, tr
         <button
           type="button"
           class="flex h-full min-w-0 flex-1 items-center gap-1.5 text-left outline-none"
-          @click="go(() => openPage(page.id))"
+          @click="openPage(page.id)"
         >
           <House v-if="page.id === homePage.id" class="size-3 shrink-0 text-muted-foreground" />
           <span
@@ -348,7 +346,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydownCapture, tr
           variant="icon" size="xs" :icon="Plus"
           tooltip="New collection" tooltip-side="right"
           class="w-5 text-muted-foreground"
-          @click.stop="go(() => openModal(CreateCollectionModal))"
+          @click.stop="openModal(CreateCollectionModal)"
         />
       </div>
       <p v-if="!collections.length" class="px-2.5 py-1 text-[10px] text-muted-foreground">
@@ -384,7 +382,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydownCapture, tr
               <button
                 v-if="collection.templatePageId"
                 type="button" class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs outline-none hover:bg-accent/30 focus-visible:bg-accent/30"
-                @click="(close(), go(() => openPage(collection.templatePageId)))"
+                @click="(openPage(collection.templatePageId), close())"
               >
                 <Layers class="size-3.5" /> Edit template
               </button>
@@ -518,28 +516,9 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydownCapture, tr
       </MenuUI>
     </div>
   </div>
-  </Transition>
 </template>
 
 <style scoped>
-.drawer-panel-enter-active,
-.drawer-panel-leave-active {
-  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-}
-.drawer-panel-enter-from,
-.drawer-panel-leave-to {
-  transform: translateX(-100%);
-}
-
-.drawer-backdrop-enter-active,
-.drawer-backdrop-leave-active {
-  transition: opacity 0.25s ease;
-}
-.drawer-backdrop-enter-from,
-.drawer-backdrop-leave-to {
-  opacity: 0;
-}
-
 /* the two swap layers stack rather than displace each other */
 .pane {
   position: absolute;
@@ -564,8 +543,6 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydownCapture, tr
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .drawer-panel-enter-active,
-  .drawer-panel-leave-active,
   .drawer-push-enter-active,
   .drawer-push-leave-active {
     transition-duration: 0.01ms;

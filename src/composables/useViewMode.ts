@@ -13,6 +13,12 @@ const mode = ref<'build' | 'preview'>('build')
 // Build opens on the bare canvas and the rail's Code button reveals the
 // editor beside it. Off by default, runtime-only like `mode`.
 const codeOpen = ref(false)
+// The pages column works the same way — a docked column the rail's Pages
+// button toggles — but it belongs to the shell rather than to Build: it works
+// on both surfaces, and contributors get it too. The two columns share ONE
+// slot beside the rail: opening either closes the other, so `codeOpen` and
+// `pagesOpen` are never both true.
+const pagesOpen = ref(false)
 let pinStarted = false
 
 export function useViewMode() {
@@ -50,14 +56,24 @@ export function useViewMode() {
     if (mode.value !== 'build') {
       setMode('build')
       codeOpen.value = true
-      return
+    } else {
+      codeOpen.value = !codeOpen.value
     }
-    codeOpen.value = !codeOpen.value
+    if (codeOpen.value) pagesOpen.value = false
   }
 
-  /** The rail's App/logo button: the default surface — Build canvas, no code. */
+  /** The rail's Pages button: flips the pages column, on either surface —
+   *  taking the slot from the code column when it opens. */
+  function togglePages() {
+    pagesOpen.value = !pagesOpen.value
+    if (pagesOpen.value) codeOpen.value = false
+  }
+
+  /** The rail's App/logo button: the default surface — the bare Build canvas,
+   *  neither column open. */
   function showApp() {
     codeOpen.value = false
+    pagesOpen.value = false
     setMode('build')
   }
 
@@ -66,5 +82,8 @@ export function useViewMode() {
   /** the code column renders only on Build, and only when toggled on */
   const showCode = computed(() => mode.value === 'build' && codeOpen.value)
 
-  return { mode, isPreview, isBuild, codeOpen, showCode, setMode, toggleCode, showApp }
+  return {
+    mode, isPreview, isBuild, codeOpen, showCode, pagesOpen,
+    setMode, toggleCode, togglePages, showApp,
+  }
 }
