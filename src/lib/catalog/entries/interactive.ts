@@ -21,6 +21,22 @@ const FOCUS = 'focus-visible:ring-2 focus-visible:ring-ring'
 const MENU_ITEM =
   'rounded-md px-2 py-1.5 text-sm text-card-foreground transition-colors hover:bg-accent hover:text-accent-foreground'
 const SURFACE = 'rounded-lg border border-border bg-card p-1 shadow-md'
+const NAVBAR_LINK = 'text-sm text-muted-foreground transition-colors hover:text-foreground'
+const MOBILE_LINK =
+  'rounded-md px-2 py-1.5 text-sm text-foreground transition-colors hover:bg-accent hover:text-accent-foreground'
+
+/** `button` and `link` are containers — their words live in a `:span:` child,
+ *  which is what leaves room for an icon beside the label. The `key` (an
+ *  interaction target) stays on the element that fires or receives, never on
+ *  the span. */
+const words = (content: string): CatalogNode[] => [{ type: 'span', content }]
+
+const menuLink = (content: string, link: string, classes: string): CatalogNode => ({
+  type: 'link',
+  link,
+  classes,
+  children: words(content),
+})
 
 /** one accordion row: a full-width trigger over a panel that starts hidden */
 const accordionItem = (key: string, question: string, answer: string): CatalogNode => ({
@@ -29,7 +45,7 @@ const accordionItem = (key: string, question: string, answer: string): CatalogNo
   children: [
     {
       type: 'button',
-      content: question,
+      children: words(question),
       classes: `flex w-full items-center justify-between py-4 text-left text-sm font-medium text-foreground outline-none ${FOCUS}`,
       // the group makes it exclusive — and is scoped per component instance by
       // the runtime, so two accordions on a page never fight
@@ -80,7 +96,7 @@ const tabsRoot = (): CatalogNode => {
     return {
       type: 'button',
       key,
-      content: label,
+      children: words(label),
       classes: first
         ? `${TAB_BASE} bg-background text-foreground`
         : `${TAB_BASE} text-muted-foreground`,
@@ -160,7 +176,7 @@ export const INTERACTIVE: CatalogEntry[] = [
       children: [
         {
           type: 'button',
-          content: 'Open dialog',
+          children: words('Open dialog'),
           classes: `inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors outline-none hover:opacity-90 ${FOCUS}`,
           interactions: [
             { interaction: 'open', trigger: 'click', target: 'dialog', action: 'on' },
@@ -198,7 +214,7 @@ export const INTERACTIVE: CatalogEntry[] = [
                   children: [
                     {
                       type: 'button',
-                      content: 'Cancel',
+                      children: words('Cancel'),
                       classes: `inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-input bg-background px-4 text-sm font-medium text-foreground transition-colors outline-none hover:bg-accent hover:text-accent-foreground ${FOCUS}`,
                       // closeOn applies to the EFFECT, not this one trigger, so
                       // it reads best on the button that says "cancel"
@@ -214,7 +230,7 @@ export const INTERACTIVE: CatalogEntry[] = [
                     },
                     {
                       type: 'button',
-                      content: 'Confirm',
+                      children: words('Confirm'),
                       classes: `inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-destructive px-4 text-sm font-medium text-destructive-foreground transition-colors outline-none hover:opacity-90 ${FOCUS}`,
                       interactions: [
                         { interaction: 'open', trigger: 'click', target: 'dialog', action: 'off' },
@@ -244,7 +260,7 @@ export const INTERACTIVE: CatalogEntry[] = [
       children: [
         {
           type: 'button',
-          content: 'Options',
+          children: words('Options'),
           classes: `inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-input bg-background px-4 text-sm font-medium text-foreground transition-colors outline-none hover:bg-accent hover:text-accent-foreground ${FOCUS}`,
           interactions: [
             {
@@ -260,9 +276,9 @@ export const INTERACTIVE: CatalogEntry[] = [
           key: 'menu',
           classes: `hidden absolute left-0 top-[100%] z-50 mt-2 w-44 flex-col ${SURFACE}`,
           children: [
-            { type: 'link', content: 'Profile', link: '/', classes: MENU_ITEM },
-            { type: 'link', content: 'Settings', link: '/', classes: MENU_ITEM },
-            { type: 'link', content: 'Sign out', link: '/', classes: MENU_ITEM },
+            menuLink('Profile', '/', MENU_ITEM),
+            menuLink('Settings', '/', MENU_ITEM),
+            menuLink('Sign out', '/', MENU_ITEM),
           ],
         },
       ],
@@ -281,24 +297,19 @@ export const INTERACTIVE: CatalogEntry[] = [
       classes:
         'sticky top-0 z-50 flex items-center justify-between border-b border-border bg-background px-6 py-3',
       children: [
-        {
-          type: 'link',
-          content: 'Acme',
-          link: '/',
-          classes: 'text-base font-semibold text-foreground',
-        },
+        menuLink('Acme', '/', 'text-base font-semibold text-foreground'),
         {
           type: 'nav',
           classes: 'hidden items-center gap-6 md:flex',
           children: [
-            { type: 'link', content: 'Home', link: '/', classes: 'text-sm text-muted-foreground transition-colors hover:text-foreground' },
-            { type: 'link', content: 'Features', link: '/features', classes: 'text-sm text-muted-foreground transition-colors hover:text-foreground' },
-            { type: 'link', content: 'Pricing', link: '/pricing', classes: 'text-sm text-muted-foreground transition-colors hover:text-foreground' },
+            menuLink('Home', '/', NAVBAR_LINK),
+            menuLink('Features', '/features', NAVBAR_LINK),
+            menuLink('Pricing', '/pricing', NAVBAR_LINK),
           ],
         },
         {
           type: 'button',
-          content: 'Menu',
+          children: words('Menu'),
           classes: `inline-flex h-9 items-center justify-center rounded-lg border border-input px-3 text-sm font-medium text-foreground outline-none md:hidden ${FOCUS}`,
           // deliberately NOT breakpoint-scoped: the binding's breakpoints gate
           // by the PROJECT's widths while `md:hidden` gates by Tailwind's, and
@@ -319,9 +330,9 @@ export const INTERACTIVE: CatalogEntry[] = [
           classes:
             'hidden absolute left-0 top-[100%] z-50 w-full flex-col gap-1 border-b border-border bg-background p-4 md:hidden',
           children: [
-            { type: 'link', content: 'Home', link: '/', classes: 'rounded-md px-2 py-1.5 text-sm text-foreground transition-colors hover:bg-accent hover:text-accent-foreground' },
-            { type: 'link', content: 'Features', link: '/features', classes: 'rounded-md px-2 py-1.5 text-sm text-foreground transition-colors hover:bg-accent hover:text-accent-foreground' },
-            { type: 'link', content: 'Pricing', link: '/pricing', classes: 'rounded-md px-2 py-1.5 text-sm text-foreground transition-colors hover:bg-accent hover:text-accent-foreground' },
+            menuLink('Home', '/', MOBILE_LINK),
+            menuLink('Features', '/features', MOBILE_LINK),
+            menuLink('Pricing', '/pricing', MOBILE_LINK),
           ],
         },
       ],

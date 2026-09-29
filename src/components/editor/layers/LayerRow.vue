@@ -10,6 +10,7 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { ChevronRight, Palette, Paperclip, Zap } from 'lucide-vue-next'
 import { elementIcon } from '@/lib/elementIcons'
+import { ELEMENTS } from '@/lib/elements'
 import { isComponentType } from '@/lib/components'
 import { useElement } from '@/composables/useElement'
 import { useComponents } from '@/composables/useComponents'
@@ -45,13 +46,26 @@ const isInstance = computed(() => isComponentType(props.node.type))
  * showed for a node until now — makes a page of `div` / `div` / `div`, so
  * prefer whatever the author actually wrote: its ref, its text, its binding.
  */
+/** the words of a seeded container (a button, a link) live in its child, so
+ *  the row would otherwise read `button` — which says nothing on a page of them */
+function seedText(node: ElementNode): string {
+  if (!ELEMENTS[node.type]?.seed) return ''
+  for (const child of node.children) {
+    const own = child.content || masterFor(child.id)?.master.content || ''
+    if (own) return own
+  }
+  return ''
+}
+
 const label = computed(() => {
   const n = props.node
   if (n.ref) return `#${n.ref}`
   if (isInstance.value) return n.type
   // inside an instance the node's own content is empty by design — the master
   // holds it, and the master is what renders
-  const text = (n.content || masterFor(n.id)?.master.content || '').replace(/<[^>]*>/g, ' ').trim()
+  const text = (n.content || masterFor(n.id)?.master.content || seedText(n) || '')
+    .replace(/<[^>]*>/g, ' ')
+    .trim()
   if (text) return text.length > 28 ? `${text.slice(0, 28)}…` : text
   if (n.arg) return `[${n.arg}]`
   // the TYPE, not the tag: `heading` and `text` say more than `h2` and `div`

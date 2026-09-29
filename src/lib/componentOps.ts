@@ -8,7 +8,7 @@ import {
   normalizeComponentName,
   serializeNode,
 } from './components'
-import { createNode, isLeafElement } from './elements'
+import { createNode, isLeafElement, seedChildFor } from './elements'
 import { deepClone, findNode, findParent, walkNodes } from './tree'
 
 /**
@@ -425,6 +425,10 @@ export function insertInMaster(
   const slot = resolveSlot(def, targetId, position)
   if (!slot) return null
   const node = createNode(type)
+  // a seeded container (button, link) is born holding its words, exactly as
+  // the page backend's `elementBlockLines` + `applySeedContent` pair does
+  const seed = seedChildFor(type)
+  if (seed) node.children.push(seed)
   slot.parent.children.splice(slot.index, 0, node)
   return node
 }

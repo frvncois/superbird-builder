@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
+import { loadFixture } from './fixtures/project'
 
 // The Layers tree — the surface that replaced the code editor.
 //
@@ -32,11 +33,9 @@ async function openEditor(page: Page) {
     await page.getByRole('button', { name: 'Sign in' }).click()
   }
   await page.waitForURL(/\/admin(\?.*)?$/, { timeout: 30_000 })
-  await page.goto('/admin?demo')
+  await loadFixture(page)
   await expect(preview).toBeVisible({ timeout: 30_000 })
-  // `ready` flips BEFORE ?demo is fetched, so the shell is interactive while
-  // the real project is still in flight — and resetTo would wipe anything
-  // edited in that window. Wait for demo content to actually be on the canvas.
+  // wait for the fixture's content to actually be on the canvas
   await expect(page.getByText('Tuesday is roast day.').first()).toBeVisible({ timeout: 30_000 })
 }
 
@@ -99,6 +98,12 @@ async function dragRow(page: Page, from: string, to: string, zone: 'before' | 'a
   await page.mouse.up()
 }
 
+/** expand a library card's layers in the Components drawer */
+async function insertOnBoardSetup(page: Page) {
+  await page.locator('[data-catalog="alert"] [data-row-toggle]').click()
+  await expect(rows(page).first()).toBeVisible()
+}
+
 /** the node id of the row at `index` */
 const idAt = async (page: Page, index: number) =>
   (await rows(page).nth(index).getAttribute('data-layer-row'))!
@@ -111,9 +116,12 @@ test('the layers column lists the page and follows the canvas selection', async 
   await expect(rows(page).first()).toContainText('body')
   expect(await rows(page).count()).toBeGreaterThan(5)
 
-  // selecting on the canvas reveals and highlights the row
-  await page.locator('[data-node-id]').nth(6).click()
-  const id = await page.locator('[data-node-id]').nth(6).getAttribute('data-node-id')
+  // selecting on the canvas reveals and highlights the row. A LEAF, so the
+  // click can only land on the element itself: a link is a container, and
+  // clicking one selects the span holding its words.
+  const leaf = page.locator('nav span[data-node-id]').first()
+  await leaf.click()
+  const id = await leaf.getAttribute('data-node-id')
   await expect(page.locator(`[data-layer-row="${id}"]`)).toHaveClass(/bg-accent\/30/)
 })
 
@@ -201,6 +209,31 @@ test('S, D and I open the panels for the selected row', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Interactions', exact: true })).toHaveClass(
     /text-accent-foreground/,
   )
+})
+
+test('a button lands holding its words, on a page and in a component', async ({ page }) => {
+  await openEditor(page)
+  await openLayers(page)
+
+  // on a PAGE: a button is a container, so an insert that landed it empty
+  // would put a zero-size box on the canvas. It arrives with a span instead.
+  await rows(page).first().click()
+  const before = await rows(page).count()
+  await insertFromDock(page, 'button')
+  await expect(rows(page)).toHaveCount(before + 2) // the button and its span
+  await publish(page)
+  const live = await page.request.get('/')
+  expect(await live.text()).toMatch(/<button[^>]*><span[^>]*>Button<\/span><\/button>/)
+  await page.keyboard.press('Escape') // the publish dialog
+
+  // in a COMPONENT: the master has no code to carry the child, so its backend
+  // has to build the same pair itself
+  await rail(page, 'Components').click()
+  await insertOnBoardSetup(page)
+  const masterRows = await rows(page).count()
+  await rows(page).first().click()
+  await insertFromDock(page, 'button')
+  await expect(rows(page)).toHaveCount(masterRows + 2)
 })
 
 test('a component gains an element on the board, and its page instance follows', async ({

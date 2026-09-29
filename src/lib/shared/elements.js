@@ -6,6 +6,10 @@
 // tag: HTML tag rendered. defaultContent: placeholder text (marks a leaf).
 // void: self-closing, no children/text. suggest: the natural first child of
 // this block (it also marks a content-less type as a container, not a leaf).
+// seed: the child a brand-new element of this type is created with. A button
+// or a link is a CONTAINER (an icon, a badge and a label routinely sit inside
+// one), so its words live in a child — and without a seed every insert would
+// land an empty box the author has to fill before they can see anything.
 export const ELEMENTS_DATA = {
   /** page root wrap — selectable but never added, removed, or reordered */
   body: { tag: 'div', suggest: 'section' },
@@ -27,7 +31,7 @@ export const ELEMENTS_DATA = {
   h5: { tag: 'h5', defaultContent: 'Lorem ipsum' },
   h6: { tag: 'h6', defaultContent: 'Lorem ipsum' },
   heading: { tag: 'h2', defaultContent: 'Lorem ipsum' },
-  label: { tag: 'label', defaultContent: 'Label' },
+  label: { tag: 'label', suggest: 'span', seed: { type: 'span', content: 'Label' } },
   paragraph: { tag: 'p', defaultContent: 'Dolor sit amet' },
   span: { tag: 'span', defaultContent: 'Dolor sit amet' },
   list: { tag: 'ul', suggest: 'list-item' },
@@ -51,8 +55,14 @@ export const ELEMENTS_DATA = {
   dropdown: { tag: 'select', suggest: 'option' },
   select: { tag: 'select', suggest: 'option' },
   option: { tag: 'option', defaultContent: 'Option' },
-  button: { tag: 'button', defaultContent: 'Button' },
-  link: { tag: 'a', defaultContent: 'Link' },
+  button: { tag: 'button', suggest: 'span', seed: { type: 'span', content: 'Button' } },
+  link: { tag: 'a', suggest: 'span', seed: { type: 'span', content: 'Link' } },
+  table: { tag: 'table', suggest: 'thead' },
+  thead: { tag: 'thead', suggest: 'tr' },
+  tbody: { tag: 'tbody', suggest: 'tr' },
+  tr: { tag: 'tr', suggest: 'td' },
+  th: { tag: 'th', suggest: 'text' },
+  td: { tag: 'td', suggest: 'text' },
   /** repeats its children once per entry of the collection in its arg */
   'collection-list': { tag: 'div', suggest: 'div' },
   /** renders one picked entry through its collection's template */

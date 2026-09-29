@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
+import { loadFixture } from './fixtures/project'
 
 // Authoring a slider end to end in the real editor: build it from the ⌘E dock
 // and the Layers tree, watch the canvas build the track, configure it in the
@@ -36,7 +37,7 @@ async function openEditor(page: Page) {
     await page.getByRole('button', { name: 'Sign in' }).click()
   }
   await page.waitForURL(/\/admin(\?.*)?$/, { timeout: 30_000 })
-  await page.goto('/admin?demo')
+  await loadFixture(page)
   await expect(preview).toBeVisible({ timeout: 30_000 })
 }
 

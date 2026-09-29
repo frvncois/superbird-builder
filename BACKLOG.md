@@ -275,7 +275,7 @@ action on media-library SVGs.
 - **C6 — `pickingFor` holds the binding OBJECT, not its address.**
   `useInteraction.ts` keeps `pickingFor` as the binding itself so it resolves
   even for bindings on component masters outside the page tree. But undo,
-  a branch switch and `?demo` replace the whole `project` ref with a deep
+  a branch switch and a merge replace the whole `project` ref with a deep
   clone, so a pick started before a ⌘Z points at a detached binding and
   `pickTarget` writes `targetId` into an object nothing renders — silently. The
   right shape is `{nodeId, bindingId}` resolved at pick time, but it touches
@@ -285,21 +285,15 @@ action on media-library SVGs.
 - **C7 — `npm run test:e2e` silently requires a prior `npm run build`** (the e2e
   server serves `dist/`). Now stated in CLAUDE.md's Commands section; a real
   pre-step (or a `pretest:e2e` script) would still be better than a note.
-- **C8 — `scripts/generate-demo.ts` needs `npx tsx` but `tsx` isn't a
-  devDependency** and there's no npm script; output path is cwd-relative. Fix: add
-  `tsx` to devDependencies and a `gen:demo` script.
 
 ## Layers / structure
 
-- **The `?demo` fixture has 8 unclosed `:div` blocks** (`public/demo-project.json`, Home
-  page — 58 `:div` opens against 50 `div:` closes), so the Layers view's issues footer
-  reports 21 diagnostics on the showcase project. The parser is lenient, so it renders,
-  but each unclosed div swallows the siblings that follow it — the nesting is not what
-  `scripts/generate-demo.ts` intends. Pre-existing and newly VISIBLE: the code editor only
-  surfaced diagnostics while its column was open. Fixing means emitting `div:` for a
-  childless container in the generator and regenerating the fixture, which changes the
-  demo's rendered structure — so check the UI specs that assert on demo content.
-
+- **The e2e fixture has unclosed `:div` blocks and leaf-form `:list-item:` lines**
+  (`e2e/fixtures/project.json`, Home page), so `validateDocument` reports diagnostics on
+  it. The parser is lenient, so it renders, but each unclosed div swallows the siblings
+  that follow it. It is test data only now (the `?demo` URL and its generator were
+  removed), so this costs nothing in the product — but fixing it changes the fixture's
+  structure, so check the UI specs that assert on its content.
 
 - **The element clipboard does not cross between a page and a component.** ⌘C on the
   board and ⌘V on a page (or the reverse) does nothing: the page clipboard is dedented
@@ -362,9 +356,6 @@ The `guano mcp` server (`packages/guano/mcp/`) shipped Phases 0–8. Known, deli
 - **M7 — no truly empty leaf.** `content: ""` clears back to the element's
   placeholder, so a text leaf can't render empty; build decorative rules and
   spacers from styled `:div` containers instead.
-- **M8 — `:link` is a leaf and cannot wrap children.** A composite clickable
-  (text + icon) has to be a `:div` with an `@target` link, which doubles the
-  element count for a common pattern and emits a div where an anchor belongs.
 - **M9 — interactions are class-swap only.** Hover/click/appear toggling Tailwind
   classes. No timeline or scroll-driven animation (scroll smoothing, per-character
   text reveals, clip-path wipes, marquees, route transitions), and no tool for
@@ -442,11 +433,6 @@ serialization (the textarea orphan), master-id targetId gets a real error.
   untranslated and never appear in the worklist. Needs a per-locale
   attributes bucket (node.locales[code].attributes?) plus worklist rows —
   a localization-model change, not a patch.
-- **M19 — no way to put an sr-only label inside a leaf `:button:` (run #3
-  friction).** Leaves take no children, and aria-labelledby needs per-instance
-  ids ([[M10]]). The working pattern (localized button text with text-[0px] +
-  before:content-['☰']) is documented by the run; a `srLabel`/aria-label
-  localization ([[M18]]) would retire it.
 - **M20 — `looksStructural` misses glyph-and-number rulers (run #3).** "00h ──
   03h ──" reads as prose to the heuristic (has letters+digits). A
   mostly-non-letter ratio check could catch it; low stakes, watch for false

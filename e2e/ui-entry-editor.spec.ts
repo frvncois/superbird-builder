@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
+import { loadFixture } from './fixtures/project'
 
 // Editing a collection item's FIELD VALUES in the Pages drawer.
 //
@@ -41,7 +42,7 @@ async function openEditor(page: Page) {
     await page.getByRole('button', { name: 'Sign in' }).click()
   }
   await page.waitForURL(/\/admin(\?.*)?$/, { timeout: 30_000 })
-  await page.goto('/admin?demo')
+  await loadFixture(page)
   await expect(preview).toBeVisible({ timeout: 30_000 })
 }
 

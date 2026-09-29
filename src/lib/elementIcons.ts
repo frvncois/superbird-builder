@@ -27,6 +27,10 @@ import {
   Layers,
   FileText,
   GalleryHorizontalEnd,
+  Table,
+  Rows3,
+  Columns3,
+  TableProperties,
 } from 'lucide-vue-next'
 import { isComponentType } from './components'
 
@@ -71,6 +75,12 @@ const ICONS: Record<string, Component> = {
   'collection-list': Layers,
   'collection-item': FileText,
   slider: GalleryHorizontalEnd,
+  table: Table,
+  thead: TableProperties,
+  tbody: Rows3,
+  tr: Rows3,
+  th: Columns3,
+  td: Columns3,
 }
 
 /** the palette/header icon for an element type (components → the component glyph) */

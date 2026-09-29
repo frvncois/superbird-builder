@@ -6,11 +6,14 @@ import type { CatalogEntry } from '../types'
  * Every class here must pass `isValidClass` — a class written straight into
  * `node.classes` renders and exports fine but can't be re-typed in the Style
  * panel once removed, which is a trap to hand a user. Known rejects to avoid:
- * `/NN` opacity forms, `ring-offset-*`, `peer`, `top-full`, `place-items-*`,
- * `resize-none`, `min-h-svh`.
+ * `/NN` opacity forms, `ring-offset-*`, `top-full`, `place-items-*`,
+ * `min-h-svh`.
  *
  * Hover and focus are plain `hover:` / `focus-visible:` variants. Interactions
  * are for open/close semantics only — see ./interactive.
+ *
+ * `button`, `link` and `label` are CONTAINERS: their words live in a `:span:`
+ * child, which is what lets an icon sit beside the label.
  */
 
 const FOCUS = 'focus-visible:ring-2 focus-visible:ring-ring'
@@ -36,7 +39,11 @@ const button = (
   category: 'Buttons',
   description,
   tokens: ['ring', ...tokens],
-  root: { type: 'button', content, classes: `${BUTTON_BASE} ${classes}` },
+  root: {
+    type: 'button',
+    classes: `${BUTTON_BASE} ${classes}`,
+    children: [{ type: 'span', content }],
+  },
 })
 
 const badge = (
@@ -99,9 +106,9 @@ export const PRIMITIVES: CatalogEntry[] = [
     tokens: ['primary', 'ring'],
     root: {
       type: 'link',
-      content: 'Learn more',
       link: '/',
       classes: `inline-flex h-9 items-center text-sm font-medium text-primary underline-offset-4 outline-none hover:underline ${FOCUS}`,
+      children: [{ type: 'span', content: 'Learn more' }],
     },
   },
 
@@ -189,8 +196,8 @@ export const PRIMITIVES: CatalogEntry[] = [
         },
         {
           type: 'label',
-          content: 'Accept the terms',
           classes: 'text-sm font-medium text-foreground',
+          children: [{ type: 'span', content: 'Accept the terms' }],
         },
       ],
     },
@@ -201,7 +208,11 @@ export const PRIMITIVES: CatalogEntry[] = [
     category: 'Forms',
     description: 'A form field label.',
     tokens: ['foreground'],
-    root: { type: 'label', content: 'Label', classes: 'text-sm font-medium text-foreground' },
+    root: {
+      type: 'label',
+      classes: 'text-sm font-medium text-foreground',
+      children: [{ type: 'span', content: 'Label' }],
+    },
   },
   {
     key: 'field',
@@ -215,7 +226,11 @@ export const PRIMITIVES: CatalogEntry[] = [
       type: 'div',
       classes: 'flex w-full flex-col gap-1.5',
       children: [
-        { type: 'label', content: 'Email', classes: 'text-sm font-medium text-foreground' },
+        {
+          type: 'label',
+          classes: 'text-sm font-medium text-foreground',
+          children: [{ type: 'span', content: 'Email' }],
+        },
         {
           type: 'input',
           classes: `h-9 ${FIELD_BASE} ${PLACEHOLDER}`,

@@ -12,8 +12,8 @@ import { useInteraction } from './useInteraction'
 // and shared across elements, and editing it inline among per-element cards
 // made it read as per-element.
 //
-// State is IDS, NEVER OBJECTS. Undo, a branch switch, a merge and the demo
-// loader each replace the whole `project` ref with a deep clone — object
+// State is IDS, NEVER OBJECTS. Undo, a branch switch and a merge
+// each replace the whole `project` ref with a deep clone — object
 // identities change while ids survive. A held object would become a detached
 // orphan that silently swallows every subsequent keystroke.
 //

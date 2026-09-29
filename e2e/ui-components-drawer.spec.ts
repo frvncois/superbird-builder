@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
+import { loadFixture } from './fixtures/project'
 
 // The Components column: the shared-slot rail behaviour, the components board
 // it puts on the canvas, and the bundled library's round trip — use an entry on
@@ -34,7 +35,7 @@ async function openEditor(page: Page) {
     await page.getByRole('button', { name: 'Sign in' }).click()
   }
   await page.waitForURL(/\/admin(\?.*)?$/, { timeout: 30_000 })
-  await page.goto('/admin?demo')
+  await loadFixture(page)
   await expect(preview).toBeVisible({ timeout: 30_000 })
 }
 

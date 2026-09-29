@@ -15,7 +15,7 @@ export default defineConfig({
   build: {
     outDir: fileURLToPath(new URL('./packages/guano/runtime', import.meta.url)),
     emptyOutDir: true,
-    // don't copy the SPA's public/ (demo-project.json, favicon.ico) into the
+    // don't copy the SPA's public/ (favicon.ico) into the
     // runtime dir — this build emits only the MCP bundle
     copyPublicDir: false,
     // node runtime, not a browser — keep modern syntax, no polyfills

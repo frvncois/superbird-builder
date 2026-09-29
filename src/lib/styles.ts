@@ -273,8 +273,24 @@ function buildVocabulary(): string[] {
     'whitespace-normal', 'whitespace-nowrap', 'whitespace-pre', 'whitespace-pre-line',
     'whitespace-pre-wrap', 'break-words', 'break-all',
     // `group` marks a hover scope — without it every documented group-hover:
-    // variant was dead on arrival
-    'group', 'h-px', 'w-px', 'inset-0', 'inset-x-0', 'inset-y-0',
+    // variant was dead on arrival. `peer` is the sibling equivalent, and the
+    // only way to style a label from its own checkbox's checked state
+    'group', 'peer', 'h-px', 'w-px', 'inset-0', 'inset-x-0', 'inset-y-0',
+    // form-control resets: a switch or a styled checkbox has to drop the
+    // native control's own chrome before it can look like anything
+    'appearance-none', 'appearance-auto',
+    'resize', 'resize-none', 'resize-x', 'resize-y',
+    // the built-in keyframes — a spinner and a skeleton are nothing without
+    // them, and the arbitrary `animate-[spin_1s_linear_infinite]` escape hatch
+    // was the only spelling that passed
+    'animate-none', 'animate-spin', 'animate-pulse', 'animate-bounce', 'animate-ping',
+    // real tables (:table … :td) landed with the element registry. The `table`
+    // DISPLAY values are deliberately not here: a <table> tag already has them,
+    // and adding them to the display group is a separate call
+    'table-auto', 'table-fixed', 'border-collapse', 'border-separate',
+    'caption-top', 'caption-bottom',
+    'align-top', 'align-middle', 'align-bottom', 'align-baseline',
+    'align-text-top', 'align-text-bottom', 'align-sub', 'align-super',
     // the rich-text container class (shared/prose.js ships its CSS in every
     // export) — the handbook documented it while the validator refused it
     'prose',

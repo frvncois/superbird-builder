@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test'
+import { loadFixture } from './fixtures/project'
 
 // End-to-end smoke: first-run setup → load the demo project → edit a text
 // node in the Preview surface → publish → assert the edit on the published route →
@@ -23,7 +24,7 @@ test('setup, edit content, publish, view live, auth guard', async ({ page, conte
 
   // 3. load the demo project (the only content fixture) — resets the project
   //    in memory to the published "Brume" coffee site
-  await page.goto('/admin?demo')
+  await loadFixture(page)
 
   // 4. edit the home page's hero heading in the Preview surface. Preview is a
   //    MODE inside the one editor shell, not a route (/admin/preview redirects

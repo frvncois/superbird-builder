@@ -76,12 +76,16 @@ function fixture() {
               }),
               // --- exclusive accordion group ---
               node('hA', 'button', {
+                // a button holds its words in a child — with none it has no box to click
+                children: [node('hAText', 'span', { content: 'A' })],
                 htmlId: 'hA',
                 interactions: [
                   { id: 'b3', interactionId: OPEN, trigger: 'click', targetId: 'pA', group: 'faq' },
                 ],
               }),
               node('hB', 'button', {
+                // a button holds its words in a child — with none it has no box to click
+                children: [node('hBText', 'span', { content: 'B' })],
                 htmlId: 'hB',
                 interactions: [
                   { id: 'b4', interactionId: OPEN, trigger: 'click', targetId: 'pB', group: 'faq' },
@@ -92,6 +96,8 @@ function fixture() {
               // --- dismissible bar, remembered for the session ---
               node('bar', 'div', { htmlId: 'bar', children: [
                 node('dismiss', 'button', {
+                  // a button holds its words in a child — with none it has no box to click
+                  children: [node('dismissText', 'span', { content: 'Dismiss' })],
                   htmlId: 'dismiss',
                   interactions: [
                     { id: 'b5', interactionId: HIDE, trigger: 'click', targetId: 'bar',

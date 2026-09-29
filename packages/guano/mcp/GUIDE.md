@@ -220,9 +220,25 @@ Containers (open `:name` … close `name:`):
 | `article` | `<article>` | | `dropdown`/`select` | `<select>` |
 | `nav` | `<nav>` | | `fieldset` | `<fieldset>` |
 | `textarea` | `<textarea>` | | `slider` | `<div>` (carousel) |
+| `button` | `<button>` | | `link` | `<a>` |
+| `label` | `<label>` | | `table` | `<table>` |
+| `thead` / `tbody` | `<thead>` / `<tbody>` | | `tr` | `<tr>` |
+| `th` | `<th>` | | `td` | `<td>` |
 
 `list-item` is a container (its `<li>` wraps a tag/title/meta block) — put a `:text:` or
 richer children inside it, not text on the row itself.
+
+**`button`, `link` and `label` are containers.** Their words live in a child, which is
+what lets an icon, a badge or a second line sit beside the label:
+
+```
+:button
+	:span:        content: "Get started"
+button:
+```
+
+`content` on the `:button` itself is refused — write it on the `:span:` (or any other
+leaf) inside. The same goes for a table cell: put a `:text:` inside a `:td`.
 
 Leaves (always `:name:`):
 
@@ -233,9 +249,6 @@ Leaves (always `:name:`):
 | `text` | `<div>` | "Lorem ipsum" |
 | `paragraph` | `<p>` | "Dolor sit amet" |
 | `span` | `<span>` | "Dolor sit amet" |
-| `label` | `<label>` | "Label" |
-| `button` | `<button>` | "Button" |
-| `link` | `<a>` | "Link" |
 | `option` | `<option>` | "Option" |
 | `image` | `<img>` (void) | — |
 | `input` | `<input>` (void) | — |
@@ -252,7 +265,7 @@ nothing submits (state real form handling as a limit). The controls themselves a
 complete: `:input:` honours `attributes.type` on export (`email`, `tel`, `date`, …),
 `:checkbox:`/`:radio:` bake their type in (the `change` interaction trigger reads
 their checked state), `:select:`/`:dropdown:` take `:option:` children, and
-`:fieldset:` wraps with a `:legend:`. Give a `:label:` `attributes.for` pointing at
+`:fieldset:` wraps with a `:legend:`. Give a `:label` `attributes.for` pointing at
 the control's `htmlId` so clicking it activates the control — but note that inside a
 component, `htmlId` renders only on the SOURCE instance (see Components).
 
@@ -326,13 +339,16 @@ page being restructured under you.
 A token may carry a link suffix, glued directly to it:
 
 ```
-:link:@/about            an internal page path
-:button:@#install        an anchor on the page
-:link:@https://github.com/you/repo
-:link:@mailto:hello@example.com
-:link:@item              (inside an entry scope) link to the current entry's page
-:link:@locale:fr         THIS page in another locale — the language-switcher target
+:link@/about             an internal page path
+:button@#install         an anchor on the page
+:link@https://github.com/you/repo
+:link@mailto:hello@example.com
+:link@item               (inside an entry scope) link to the current entry's page
+:link@locale:fr          THIS page in another locale — the language-switcher target
+:h2:@/about              a leaf takes the suffix after its closing colon
 ```
+
+On a container the suffix sits on the OPEN line (`:link@/about` … `link:`).
 
 `@locale:<code>` always resolves to THIS page **in that locale**, from any route:
 `@locale:fr` on `/plan/nest` links `/fr/plan/nest`; `@locale:en` on `/fr/plan/nest`
@@ -564,7 +580,7 @@ Element text/media attaches to the node, not the code. Write it with `edit_eleme
 - **`background`** — any element: background media layered behind its content (image →
   CSS background, video → a video layer). Same URL rules as `src`; `""` clears.
 - **`htmlId`** — the html `id` attribute; this is how anchor targets work
-  (`htmlId: "install"` ↔ `:link:@#install`).
+  (`htmlId: "install"` ↔ `:link@#install`).
 - **`attributes`** — custom HTML attributes as a `{name: value}` object (replaces the
   whole set; `{}` or `null` clears). Allowlisted: `data-*`, `aria-*`, `target`, `rel`,
   `download`, `title`, `role`, `type`, `name`, `value`, `placeholder`, `alt`, `loading`,
@@ -705,9 +721,9 @@ numeric-aware, so ISO dates sort naturally. `null` clears. This is how you build
 
 Collection tips: **name collections singular** (`post`, `feature`) — the template page
 claims the `/<name>` route and entries render at `/<name>/<slug>`, so the plural stays
-free for your index page. A binding and a link target combine on one token —
-`:link[title]:@item` renders each entry's title linking to its page (perfect for docs
-sidebars/blog lists). A `:collection-list` nested inside a template page works (list
+free for your index page. A link target and a binding combine in one small block —
+`:link@item` holding a `:span[title]:` renders each entry's title linking to its page
+(perfect for docs sidebars/blog lists). A `:collection-list` nested inside a template page works (list
 all entries while rendering one). Bound field values pass through the same rich-text
 sanitizer, so `<br>` inside a field renders as a real line break (the workaround for
 multi-line code blocks — leading indentation still collapses).
@@ -866,10 +882,15 @@ and `change` are **symmetric** (they drive both directions themselves and reject
 **Hamburger menu** — one toggle, closes when you click away or press Escape:
 
 ```
-:button:  (the hamburger — content "Menu")
+:button   (the hamburger)
           bind: {trigger: click, targetId: <menu id>, closeOn: ["outside", "escape"]}
+  :span:  content: "Menu"
+button:
 :div      (the menu)   classes: hidden flex-col …
 ```
+
+(The recipes below leave the button's `:span:` and `button:` closer out for brevity —
+every `:button` has them.)
 
 with an interaction whose `toClasses` is `flex`. Works **inside a shared
 header/footer component**: bind the button and target the panel, both elements of the
@@ -888,11 +909,11 @@ every project breakpoint under the CSS cutoff.
 **Modal** — three triggers, one effect. Note they all share `targetId`:
 
 ```
-:button:  (Open)      bind: {trigger: click, targetId: <modal id>, action: "on"}
+:button   (Open)      bind: {trigger: click, targetId: <modal id>, action: "on"}
 :div      (the modal) classes: hidden fixed inset-0 items-center justify-center
   :div    (overlay)   bind: {trigger: click, targetId: <modal id>, action: "off"}
   :div    (panel)
-    :button: (X)      bind: {trigger: click, targetId: <modal id>, action: "off",
+    :button  (X)      bind: {trigger: click, targetId: <modal id>, action: "off",
                              closeOn: ["escape"]}
 ```
 
@@ -908,7 +929,7 @@ component instance:
 ```
 :collection-list[faq]
   :div
-    :button:  bind: {trigger: click, targetId: <answer id>, group: "faq"}
+    :button   bind: {trigger: click, targetId: <answer id>, group: "faq"}
     :div      (answer)  classes: hidden
   div:
 collection-list:
@@ -927,7 +948,7 @@ HIDES it, so the dismissal is `action: "on"`:
 
 ```
 :div      (the bar)
-  :button: (X)  bind: {trigger: click, targetId: <bar id>, action: "on", once: "session"}
+  :button  (X)  bind: {trigger: click, targetId: <bar id>, action: "on", once: "session"}
 ```
 
 with `toClasses: "hidden"`. `once` is honoured on the published site only — the
@@ -1332,8 +1353,7 @@ booking flow keep the controls in a styled `:div` (or give the button
 not expressible — build decorative rules/spacers from styled `:div` containers instead.
 There is **no inline SVG element**: upload an SVG and use it as an `:image:` `src` (it
 renders as an `<img>`, so it cannot inherit `currentColor` — use a token-colored icon
-font or an image per theme instead). `:link:` is a leaf and cannot wrap children — for a composite clickable
-(text + arrow), use a `:div` with an `@target` link wrapping the parts. `date` fields
+font or an image per theme instead). `date` fields
 render their raw ISO value (no formatting — use a text field for display dates). The
 `@link` code suffix is the supported way to set links.
 

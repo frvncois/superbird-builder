@@ -2,7 +2,6 @@ import { ref } from 'vue'
 import { usePersistence, projectStorageKey, BRANCHES_META_KEY, MAIN_ID } from './usePersistence'
 import { useProject } from './useProject'
 import { startEditTracking } from './useEditTracking'
-import { migrateStoredProject } from '@/lib/storage'
 import { hydrateStore, storeGet } from '@/lib/store'
 import { hydratePublishState, PUBLISHED_BASELINE_KEY, PUBLISHED_INFO_KEY } from './usePublish'
 import { useMedia } from './useMedia'
@@ -71,15 +70,6 @@ export function useEditorBoot() {
       void useMedia()
         .loadMedia()
         .catch(() => {})
-
-      // dev convenience: /admin?demo replaces the project with the
-      // generated showcase (public/demo-project.json)
-      if (new URLSearchParams(window.location.search).has('demo')) {
-        // public-dir file — served under the SPA's /admin/ base
-        const res = await fetch(import.meta.env.BASE_URL + 'demo-project.json')
-        const demo = res.ok && migrateStoredProject(await res.json())
-        if (demo) usePersistence().resetTo(demo)
-      }
     } catch {
       bootError.value = 'Cannot reach the server — is `npm run serve` running?'
     }

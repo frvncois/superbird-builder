@@ -82,7 +82,11 @@ var ELEMENTS = {
 	},
 	label: {
 		tag: "label",
-		defaultContent: "Label"
+		suggest: "span",
+		seed: {
+			type: "span",
+			content: "Label"
+		}
 	},
 	paragraph: {
 		tag: "p",
@@ -146,11 +150,43 @@ var ELEMENTS = {
 	},
 	button: {
 		tag: "button",
-		defaultContent: "Button"
+		suggest: "span",
+		seed: {
+			type: "span",
+			content: "Button"
+		}
 	},
 	link: {
 		tag: "a",
-		defaultContent: "Link"
+		suggest: "span",
+		seed: {
+			type: "span",
+			content: "Link"
+		}
+	},
+	table: {
+		tag: "table",
+		suggest: "thead"
+	},
+	thead: {
+		tag: "thead",
+		suggest: "tr"
+	},
+	tbody: {
+		tag: "tbody",
+		suggest: "tr"
+	},
+	tr: {
+		tag: "tr",
+		suggest: "td"
+	},
+	th: {
+		tag: "th",
+		suggest: "text"
+	},
+	td: {
+		tag: "td",
+		suggest: "text"
 	},
 	/** repeats its children once per entry of the collection in its arg */
 	"collection-list": {
@@ -217,11 +253,16 @@ var TYPE_GROUPS = [
 	[
 		"text",
 		"paragraph",
-		"span",
+		"span"
+	],
+	[
+		"button",
+		"link",
 		"label"
 	],
-	["button", "link"],
-	["list", "form"]
+	["list", "form"],
+	["thead", "tbody"],
+	["th", "td"]
 ];
 function typeOptionsFor(type) {
 	return TYPE_GROUPS.find((group) => group.includes(type)) ?? [];
@@ -1134,13 +1175,24 @@ function validateDocument(code, componentNames = [], collectionNames = [], listF
 }
 /** Elements that carry content/void render as leaves (:h1:), the rest open a block (:div) */
 function tokenFor(type) {
-	const def = ELEMENTS[type];
-	return def && (def.defaultContent !== void 0 || def.void) ? `:${type}:` : `:${type}`;
+	return isLeafElement(type) ? `:${type}:` : `:${type}`;
 }
-/** Dedented source lines for a brand-new element of the given type */
+/**
+* Dedented source lines for a brand-new element of the given type. A seeded
+* container (a button, a link) is born holding its child, so an insert lands
+* something visible rather than an empty box — the child's TEXT is node state
+* and is applied by the caller (`applySeedContent`), not carried by the code.
+*/
 function elementBlockLines(type) {
 	const token = tokenFor(type);
-	return token.endsWith(":") ? [token] : [token, `${type}:`];
+	if (token.endsWith(":")) return [token];
+	const seed = ELEMENTS[type]?.seed;
+	if (seed) return [
+		token,
+		`\t${tokenFor(seed.type)}`,
+		`${type}:`
+	];
+	return [token, `${type}:`];
 }
 //#endregion
 //#region src/lib/shared/slug.js
@@ -3110,11 +3162,37 @@ function buildVocabulary() {
 		"break-words",
 		"break-all",
 		"group",
+		"peer",
 		"h-px",
 		"w-px",
 		"inset-0",
 		"inset-x-0",
 		"inset-y-0",
+		"appearance-none",
+		"appearance-auto",
+		"resize",
+		"resize-none",
+		"resize-x",
+		"resize-y",
+		"animate-none",
+		"animate-spin",
+		"animate-pulse",
+		"animate-bounce",
+		"animate-ping",
+		"table-auto",
+		"table-fixed",
+		"border-collapse",
+		"border-separate",
+		"caption-top",
+		"caption-bottom",
+		"align-top",
+		"align-middle",
+		"align-bottom",
+		"align-baseline",
+		"align-text-top",
+		"align-text-bottom",
+		"align-sub",
+		"align-super",
 		"prose",
 		"visible",
 		"invisible",

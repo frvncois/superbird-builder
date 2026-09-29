@@ -124,8 +124,8 @@ export function hoistBlockRef(innerLines: string[]): { ref?: string; lines: stri
  * level at a time (like the page reconciler matching by line), so a container
  * keeps its identity even when its children change, while its children realign
  * among themselves. Classes/content/interactions are excluded — they are the
- * off-code state we're carrying across the edit. Two `:link:@/a` and
- * `:link:@/b` get distinct signatures; two bare `:link:` are genuinely
+ * off-code state we're carrying across the edit. Two `:h2:@/a` and
+ * `:h2:@/b` get distinct signatures; two bare `:h2:` are genuinely
  * indistinguishable (no algorithm can tell which identical sibling was
  * removed — same irreducible case the reconciler faces). */
 function nodeSignature(node: ElementNode): string {

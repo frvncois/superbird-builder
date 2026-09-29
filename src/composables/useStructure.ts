@@ -5,6 +5,7 @@ import { useReorderAnimation } from './useReorderAnimation'
 import { useComponentBoard } from './useComponentBoard'
 import { useProject } from './useProject'
 import { elementBlockLines } from '@/lib/syntax'
+import { applySeedContent } from '@/lib/elements'
 import { expandComponentInstances, isComponentType } from '@/lib/components'
 import {
   canDropInMaster,
@@ -149,7 +150,11 @@ export function useStructure() {
       }
       const block = blockFor(payload)
       if (!block) return null
-      return el.insertElementBlock(block, target.id, position)
+      const made = el.insertElementBlock(block, target.id, position)
+      // the seed child arrived through the code; its placeholder TEXT is node
+      // state, so it only exists once reconcile has minted the node
+      if (made && payload.kind === 'element') applySeedContent(made)
+      return made
     },
 
     move(ids, targetId, position) {

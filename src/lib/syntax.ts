@@ -7,7 +7,7 @@ import { walkNodes } from './tree'
 // an arg may start with '@' to name a BUILT-IN source rather than a collection
 // (:collection-list[@pages] iterates the site's own pages) — '@' is only ever
 // read inside the brackets, so it never collides with the '@link' suffix
-// and an optional link suffix: :link:@item, :div@/about, :button:@https://x
+// and an optional link suffix: :h2:@item, :div@/about, :button@https://x
 // args allow a dot for one-hop reference bindings: :h1[author.name]:
 // a '(+)' after the arg slot is the styled marker — display-only, derived from
 // node.classes; the group is non-capturing (and tolerates the mid-typing forms
@@ -990,14 +990,21 @@ function analyze(before: string): Context {
 
 /** Elements that carry content/void render as leaves (:h1:), the rest open a block (:div) */
 function tokenFor(type: string): string {
-  const def = ELEMENTS[type]
-  return def && (def.defaultContent !== undefined || def.void) ? `:${type}:` : `:${type}`
+  return isLeafElement(type) ? `:${type}:` : `:${type}`
 }
 
-/** Dedented source lines for a brand-new element of the given type */
+/**
+ * Dedented source lines for a brand-new element of the given type. A seeded
+ * container (a button, a link) is born holding its child, so an insert lands
+ * something visible rather than an empty box — the child's TEXT is node state
+ * and is applied by the caller (`applySeedContent`), not carried by the code.
+ */
 export function elementBlockLines(type: string): string[] {
   const token = tokenFor(type)
-  return token.endsWith(':') ? [token] : [token, `${type}:`]
+  if (token.endsWith(':')) return [token]
+  const seed = ELEMENTS[type]?.seed
+  if (seed) return [token, `\t${tokenFor(seed.type)}`, `${type}:`]
+  return [token, `${type}:`]
 }
 
 /**

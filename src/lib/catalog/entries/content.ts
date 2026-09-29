@@ -1,4 +1,4 @@
-import type { CatalogEntry } from '../types'
+import type { CatalogEntry, CatalogNode } from '../types'
 
 /**
  * Cards, feedback, marketing blocks and page furniture — everything static.
@@ -6,7 +6,8 @@ import type { CatalogEntry } from '../types'
  *
  * Components cannot nest components, so an entry that wants a button inside it
  * spells the button's markup out rather than referencing the Button entry.
- * Same class rules as ./primitives.
+ * Same class rules as ./primitives — including `button` and `link` being
+ * containers whose words live in a `:span:` child.
  */
 
 const FOCUS = 'focus-visible:ring-2 focus-visible:ring-ring'
@@ -15,6 +16,13 @@ const CARD_TOKENS = ['border', 'card', 'card-foreground']
 const PRIMARY_BUTTON =
   `inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors outline-none hover:opacity-90 ${FOCUS}`
 const NAV_LINK = 'text-sm text-muted-foreground transition-colors hover:text-foreground'
+
+const navLink = (content: string, link: string): CatalogNode => ({
+  type: 'link',
+  link,
+  classes: NAV_LINK,
+  children: [{ type: 'span', content }],
+})
 
 export const CONTENT: CatalogEntry[] = [
   {
@@ -86,7 +94,13 @@ export const CONTENT: CatalogEntry[] = [
         {
           type: 'div',
           classes: 'flex items-center justify-end gap-2 border-t border-border px-6 py-4',
-          children: [{ type: 'button', content: 'Continue', classes: PRIMARY_BUTTON }],
+          children: [
+            {
+              type: 'button',
+              classes: PRIMARY_BUTTON,
+              children: [{ type: 'span', content: 'Continue' }],
+            },
+          ],
         },
       ],
     },
@@ -230,7 +244,11 @@ export const CONTENT: CatalogEntry[] = [
             },
           ],
         },
-        { type: 'button', content: 'Get started', classes: `w-full ${PRIMARY_BUTTON}` },
+        {
+          type: 'button',
+          classes: `w-full ${PRIMARY_BUTTON}`,
+          children: [{ type: 'span', content: 'Get started' }],
+        },
       ],
     },
   },
@@ -278,9 +296,9 @@ export const CONTENT: CatalogEntry[] = [
               type: 'nav',
               classes: 'flex items-center gap-6',
               children: [
-                { type: 'link', content: 'Privacy', link: '/privacy', classes: NAV_LINK },
-                { type: 'link', content: 'Terms', link: '/terms', classes: NAV_LINK },
-                { type: 'link', content: 'Contact', link: '/contact', classes: NAV_LINK },
+                navLink('Privacy', '/privacy'),
+                navLink('Terms', '/terms'),
+                navLink('Contact', '/contact'),
               ],
             },
           ],
@@ -303,9 +321,9 @@ export const CONTENT: CatalogEntry[] = [
       type: 'nav',
       classes: 'flex items-center gap-2',
       children: [
-        { type: 'link', content: 'Home', link: '/', classes: NAV_LINK },
+        navLink('Home', '/'),
         { type: 'span', content: '/', classes: 'text-sm text-muted-foreground' },
-        { type: 'link', content: 'Docs', link: '/docs', classes: NAV_LINK },
+        navLink('Docs', '/docs'),
         { type: 'span', content: '/', classes: 'text-sm text-muted-foreground' },
         { type: 'span', content: 'This page', classes: 'text-sm font-medium text-foreground' },
       ],
@@ -336,11 +354,15 @@ export const CONTENT: CatalogEntry[] = [
           type: 'div',
           classes: 'flex flex-col gap-3 sm:flex-row',
           children: [
-            { type: 'button', content: 'Get started', classes: PRIMARY_BUTTON },
             {
               type: 'button',
-              content: 'Learn more',
+              classes: PRIMARY_BUTTON,
+              children: [{ type: 'span', content: 'Get started' }],
+            },
+            {
+              type: 'button',
               classes: `inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-input bg-background px-4 text-sm font-medium text-foreground transition-colors outline-none hover:bg-accent hover:text-accent-foreground ${FOCUS}`,
+              children: [{ type: 'span', content: 'Learn more' }],
             },
           ],
         },
@@ -369,8 +391,8 @@ export const CONTENT: CatalogEntry[] = [
         },
         {
           type: 'button',
-          content: 'Start for free',
           classes: `inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-background px-4 text-sm font-medium text-foreground transition-colors outline-none hover:opacity-90 ${FOCUS}`,
+          children: [{ type: 'span', content: 'Start for free' }],
         },
       ],
     },
