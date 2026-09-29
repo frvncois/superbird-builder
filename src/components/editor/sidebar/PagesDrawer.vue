@@ -8,7 +8,7 @@ const expanded = ref<Record<string, boolean>>({})
 
 <script setup lang="ts">
 // Pages/collections navigator toggled from the left rail — a docked column
-// beside the rail, like the code editor's: it takes its own 16rem track, stays
+// beside the rail: it takes the shared 16rem track, stays
 // open while you navigate, and only the rail button closes it. Three zones: a
 // search field, the scrollable Pages + Collections tree, and the locale
 // switcher pinned at the bottom. Row overflow actions

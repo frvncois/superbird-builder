@@ -170,10 +170,9 @@ patches; each was scoped in the plan and the scoping is reproduced here.
   component-block rules, and MCP addresses by `ref` / `setRef` / `targetRef`
   with `get_page {elements:"refs"}` listing them. Deliberately cut, as small
   follow-ups rather than blockers:
-  - **ref autocomplete in `suggestCompletion`** — the ghost-text completer
-    doesn't offer existing refs, so an agent or human typing `#` gets no help.
-  - **no ref UI in the editor panels** — refs are typed in code only;
-    `useElement.setElementRef` exists but nothing calls it from a panel.
+  - ~~ref autocomplete~~ and ~~no ref UI~~ — both moot since the code editor was
+    removed: a human names a ref by renaming a row in the Layers tree
+    (`LayerRow` → `setElementRef`), and nothing types refs any more.
   - **move + rename in one edit still mints a new node.** The ref pre-pass
     needs the ref to be unchanged to match, and the same-line fallback needs
     the line to be unchanged; an edit doing both defeats each. Rare, and the

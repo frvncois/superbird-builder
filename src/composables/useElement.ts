@@ -66,7 +66,7 @@ export function setSelectionScope(roots: (() => ElementNode[]) | null) {
 const selectionAnchorId = ref<string | null>(null)
 
 // a transient "preview" highlight, independent of selection — e.g. hovering an
-// interaction's Target button outlines the target on the canvas + code editor
+// interaction's Target button outlines the target on the canvas + Layers tree
 // without changing the real selection (which would swap the settings panel)
 const highlightedElementId = ref<string | null>(null)
 
@@ -76,8 +76,9 @@ const revealTick = ref(0)
 
 export type DropPosition = 'before' | 'after' | 'inside'
 
-// shared drag state so the canvas, the code editor and palette drags
-// stay in sync ('inside' is only produced by palette insert-drags)
+// shared drag state so the canvas, the Layers tree and palette drags stay in
+// sync ('inside' comes from tree drags and palette insert-drags — the canvas
+// drag only ever offers before/after)
 const draggingId = ref<string | null>(null)
 const dropTarget = ref<{ id: string; position: DropPosition } | null>(null)
 
@@ -434,8 +435,8 @@ export function useElement() {
 
   function selectByLine(line: number) {
     const id = elementAtLine(line)?.id ?? null
-    // caret landing inside the current multi-selection keeps it (else the
-    // keyup that follows an extend/move would collapse it back to one)
+    // landing inside the current multi-selection keeps it rather than
+    // collapsing it back to one
     if (id && selectedElementIds.value.includes(id)) return
     selectElement(id)
   }
@@ -599,7 +600,7 @@ export function useElement() {
   /**
    * Moves the whole multi-selection up/down one slot as a unit — same
    * descend-into-block / escape-to-parent / swap-with-sibling behaviour as the
-   * single-element move (mirrors moveSelected in CodeEditor). Selection preserved.
+   * single-element move (useStructure's nudgeOne). Selection preserved.
    */
   function moveSelectionGroup(dir: 'up' | 'down'): boolean {
     const ids = selectedElementIds.value

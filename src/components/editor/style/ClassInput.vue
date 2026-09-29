@@ -139,7 +139,7 @@ function onKeydown(e: KeyboardEvent) {
     commit(open.value ? (suggestions.value[active.value] ?? query.value) : query.value)
   } else if (e.key === 'Escape') {
     // with a query, Escape only clears it; empty, it bubbles up and
-    // closes the panel (returning focus to the code editor)
+    // closes the panel (returning focus to the Layers tree)
     if (query.value) {
       e.stopPropagation()
       query.value = ''

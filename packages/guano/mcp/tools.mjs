@@ -890,7 +890,7 @@ function instanceNodeForMaster(project, page, masterId) {
  * Keep a node's display-only code markers ([+] own data, (+) styled, {+}
  * interactions or animations) in step with its state — mirrors syncNodeMarkers for one node.
  * The editor's truth-sync does NOT run on load, so an MCP write must maintain
- * them or the code editor shows a stale affordance. Returns true when page.code
+ * them or the stored code carries a stale marker. Returns true when page.code
  * changed.
  */
 function syncMarkersForNode(page, node) {
@@ -912,7 +912,7 @@ function syncMarkersForNode(page, node) {
   const inter = interactionMarkerOf(line)
   if (inter === undefined || inter === '{+}') {
     // one marker covers both motion systems — a node that only animates still
-    // shows {+} so the code editor's affordance stays truthful
+    // shows {+} so the marker stays truthful
     const want = !!node.interactions?.length || !!node.animations?.length
     if (want !== (inter === '{+}')) line = withInteractionMarker(line, want)
   }

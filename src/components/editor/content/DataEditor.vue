@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { ChevronDown, ChevronUp, Plus, X } from 'lucide-vue-next'
-import { usePanel } from '@/composables/usePanel'
+import { usePanel, focusWhenPanelVisible } from '@/composables/usePanel'
 import GroupPopover from '@/components/popover/GroupPopover.vue'
 import RowUI from '@/components/ui/RowUI.vue'
 import InputUI from '@/components/ui/InputUI.vue'
@@ -91,7 +91,7 @@ const contentField = ref<InstanceType<typeof RichTextInput>>()
 function consumeFocus() {
   if (pendingFocus.value !== 'data') return
   pendingFocus.value = null
-  nextTick(() => (contentField.value ?? idField.value)?.focus())
+  focusWhenPanelVisible(() => (contentField.value ?? idField.value)?.focus())
 }
 onMounted(consumeFocus)
 watch(pendingFocus, consumeFocus)

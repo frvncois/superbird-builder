@@ -540,8 +540,8 @@ function expandComponentInstances(code, components, lineMap) {
 //#region src/lib/syntax.ts
 var REF = "(?:#(?<ref>[a-zA-Z][a-zA-Z0-9-]*)?)?";
 /** the same slot, uncaptured — for head-anchored matchers that only need to
-* SKIP it. Exported so the code editor's own regexes share this one definition
-* instead of each re-spelling the ref grammar. */
+* SKIP it. Exported so line-patching callers (setElementArg, setElementRef)
+* share this one definition instead of each re-spelling the ref grammar. */
 var REF_SLOT = "(?:#[a-zA-Z0-9-]*)?";
 var NAME = "[a-zA-Z][a-zA-Z0-9-]*";
 var ARG = "(?:\\[(?<arg>[a-z0-9.@+-]*)\\]?)?";

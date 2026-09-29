@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // The single editing shell. A rail toggle switches the surface between Build
 // (breakpoint canvas + full inspector) and Preview (full-site render,
-// restricted sidebar). The code editor is a separate column Build opens
+// restricted sidebar).
 // The centre is either the open page or the components board (`canvas`), and
 // the 16rem track beside the rail holds at most one of Pages, Layers and
 // Components (`column`) — the two are independent, so Layers can show the

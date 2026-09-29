@@ -41,27 +41,26 @@ export function useEditorShortcuts() {
   }
 
   useKeymap([
-    // the element panels have no shortcuts — Style, Data, and Interactions
-    // open by typing '(' / '[' / '{' on an element token in the code editor
+    // the element panels' keys (S / D / I) belong to the Layers tree, which
+    // only answers them while it has focus — see LayersPanel
     { key: 'c', mod: true, handler: buildOnly(copySelection) },
     { key: 'x', mod: true, handler: buildOnly(cutSelection) },
     { key: 'v', mod: true, handler: buildOnly(pasteOnSelection) },
     // shift: false so a stray ⌘⇧D (the removed data-panel shortcut) never duplicates
     { key: 'd', mod: true, shift: false, handler: buildOnly(duplicateSelection) },
-    // ⌘G wraps the selection in a div. Like ⌘C/D, the code editor handles it in
-    // its own keydown (so the caret follows the new div); this fires from canvas
+    // ⌘G wraps the selection in a div
     { key: 'g', mod: true, handler: buildOnly(wrapSelection) },
     { key: ['backspace', 'delete'], handler: buildOnly(deleteSelection) },
     // Shift+↑/↓ moves the selection one visual slot — a re-parent without the
-    // mouse. It lived in the code editor's own keydown; the tree owns it now,
-    // but the binding is app-level so it works from the canvas too.
+    // mouse. App-level rather than the tree's own, so it works from the canvas
+    // too.
     { key: 'up', shift: true, mod: false, handler: buildOnly(() => backend.value.nudge('up')) },
     { key: 'down', shift: true, mod: false, handler: buildOnly(() => backend.value.nudge('down')) },
     { key: 'z', mod: true, shift: false, handler: undo },
     { key: 'z', mod: true, shift: true, handler: redo },
     // save works even from a focused field, so ⌘S never opens the browser dialog
     { key: 's', mod: true, shift: false, allowInInput: true, handler: saveNow },
-    // ⌘E toggles the insert dock; allowInInput so it works from the code editor
+    // ⌘E toggles the insert dock; allowInInput so it works from a focused field
     { key: 'e', mod: true, allowInInput: true, handler: buildOnly(togglePalette) },
     // ⌘P publishes; allowInInput so it overrides the browser print dialog everywhere
     { key: 'p', mod: true, shift: false, allowInInput: true, handler: openPublish },

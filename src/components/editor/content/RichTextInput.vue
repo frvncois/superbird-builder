@@ -64,7 +64,7 @@ function makeLink() {
 
 // keystrokes stay local to the contenteditable (editor shortcuts must not
 // fire while writing) — except Escape, which bubbles so the panel's
-// window-level handler can close the popover and return to the code editor
+// window-level handler can close the popover and return to the Layers tree
 function onKeydown(e: KeyboardEvent) {
   if (e.key !== 'Escape') e.stopPropagation()
 }

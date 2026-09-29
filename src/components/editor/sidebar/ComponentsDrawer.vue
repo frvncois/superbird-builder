@@ -8,7 +8,7 @@ const expanded = ref<Record<string, boolean>>({})
 
 <script setup lang="ts">
 // Components navigator toggled from the left rail — a docked column sharing
-// the one track beside the rail with Pages and the code editor. While it is
+// the one track beside the rail with Pages and Layers. While it is
 // open the canvas shows the components board, and this column is its index:
 // clicking a row brings that component's card into view and selects it.
 // Inserting into a page happens on the page, from the ⌘E dock.

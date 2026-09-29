@@ -166,7 +166,7 @@ const { editing, editEl, startEditing, finishEditing, onEditKeydown } = useInlin
   initialText: inlineInitialText,
   commit: commitInlineText,
   escBehavior: 'cancel',
-  onExit: () => requestReveal(), // Esc/Enter returns the caret to the code editor line
+  onExit: () => requestReveal(), // Esc/Enter hands focus back to the Layers tree
 })
 
 const handlers = {
@@ -182,7 +182,7 @@ const handlers = {
     }
     fireClickInteractions()
     selectElement(props.node.id)
-    requestReveal() // land the caret on this element's line in the code editor
+    requestReveal() // bring this element's row into view in the Layers tree
   },
   contextmenu(e: MouseEvent) {
     e.stopPropagation()

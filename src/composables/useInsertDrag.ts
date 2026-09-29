@@ -18,8 +18,8 @@ const pointer = ref({ x: 0, y: 0 })
 /** set for one tick after a drop so open popovers ignore the release click */
 const suppressNextClick = ref(false)
 
-/** a surface with its own geometry (the code editor's lines, the Layers tree's
- *  rows) resolves its own drop target from the pointer's Y */
+/** a surface with its own geometry (the Layers tree's rows) resolves its own
+ *  drop target from the pointer's Y */
 type DropResolver = (clientY: number) => { id: string; position: DropPosition } | null
 let surfaceResolver: DropResolver | null = null
 

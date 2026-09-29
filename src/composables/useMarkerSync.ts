@@ -10,7 +10,7 @@ import { walkNodes } from '@/lib/tree'
  *
  * They are still written because the agent API shows them to agents and its
  * `version` contract depends on them; nothing in the browser needs them any
- * more. This used to live in the code editor, which meant styling done while
+ * more. This used to live in the (removed) code editor, so styling done while
  * that column was closed silently left them stale.
  *
  * Gated on `canBuild`: a contributor's marker write is a structural change the

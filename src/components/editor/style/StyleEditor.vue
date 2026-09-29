@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
-import { usePanel } from '@/composables/usePanel'
+import { computed, onMounted, ref, watch } from 'vue'
+import { usePanel, focusWhenPanelVisible } from '@/composables/usePanel'
 import { RotateCcw, X } from 'lucide-vue-next'
 import { STYLE_SECTIONS } from '@/lib/styleCatalog'
 import { STYLE_ICONS } from '@/lib/styleCatalogIcons'
@@ -412,14 +412,14 @@ function setInput(prop: StyleProperty, raw: string) {
   set(prop, `${prefix}-${raw.trim() || 'auto'}`)
 }
 
-// +S in the code editor lands the user straight in the class input
+// `S` in the Layers tree lands the user straight in the class input
 const { pendingFocus } = usePanel()
 const classInput = ref<InstanceType<typeof ClassInput>>()
 
 function consumeFocus() {
   if (pendingFocus.value !== 'style') return
   pendingFocus.value = null
-  nextTick(() => classInput.value?.focus())
+  focusWhenPanelVisible(() => classInput.value?.focus())
 }
 onMounted(consumeFocus)
 watch(pendingFocus, consumeFocus)

@@ -4,8 +4,8 @@
 // both can consume it directly. Types live in src/lib/elements.ts.
 //
 // tag: HTML tag rendered. defaultContent: placeholder text (marks a leaf).
-// void: self-closing, no children/text. suggest: the type ghost-suggested as
-// this block's first child in the code editor (autocomplete flow).
+// void: self-closing, no children/text. suggest: the natural first child of
+// this block (it also marks a content-less type as a container, not a leaf).
 export const ELEMENTS_DATA = {
   /** page root wrap — selectable but never added, removed, or reordered */
   body: { tag: 'div', suggest: 'section' },

@@ -7,7 +7,7 @@ import { useInsertDrag } from './useInsertDrag'
  *
  * A drawer column is persistent — it stays open until its rail button closes
  * it — so it may NOT claim Escape unconditionally: it would swallow the key
- * from the canvas, the code editor and the right panel for as long as it is
+ * from the canvas and the right panel for as long as it is
  * open. Two conditions gate it:
  *
  * · **engaged** — the last pointerdown or focus landed inside the panel. Focus
@@ -17,7 +17,7 @@ import { useInsertDrag } from './useInsertDrag'
  *   a detail pane) and never closes the column itself; only the rail does.
  *
  * The listener is capture-phase so a layer peels before `SettingsEditor`'s
- * window handler (bubble phase) pulls focus back to the code editor.
+ * window handler (bubble phase) closes the panel and moves focus.
  */
 export function useDrawerEscape(
   panel: Ref<HTMLElement | undefined>,

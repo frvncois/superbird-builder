@@ -35,7 +35,7 @@ const {
 } = useElement()
 const { backend } = useStructure()
 const { registerDropResolver } = useInsertDrag()
-const { togglePanel } = usePanel()
+const { activePanelId, openPanel, closePanel } = usePanel()
 const { reveal, isCollapsed, setCollapsed, toggle, editingRefId } = useLayerState()
 
 const roots = computed(() => backend.value.roots.value)
@@ -83,6 +83,10 @@ function ancestorsOf(id: string): string[] {
 // panel's target picker — has to become visible here. `revealTick` is the
 // explicit ask (after a dock insert, or Escape from the panels); the id watch
 // covers every other selection change.
+// an explicit reveal (Escape out of a panel, a canvas click, a dock insert)
+// also takes keyboard focus, so the tree's keys work without a click
+watch(revealTick, () => panel.value?.focus({ preventScroll: true }))
+
 watch(
   [() => selectedElement.value?.id, revealTick],
   async ([id]) => {
@@ -227,12 +231,13 @@ function onKeydown(e: KeyboardEvent) {
     e.preventDefault()
     return
   }
-  // the panels lost their keyboard entry point when the code editor's typed
-  // '(' / '[' / '{' went away — these are it, scoped to the focused tree so
-  // they can never fire while typing somewhere else
+  // the keyboard route into the panels, scoped to the focused tree so the keys
+  // can never fire while typing somewhere else. The panel opens with its
+  // primary input focused; Escape closes it and hands focus back here.
   const panelKey = { s: 'style', d: 'data', i: 'interactions' }[e.key.toLowerCase()]
   if (panelKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
-    togglePanel(panelKey)
+    if (activePanelId.value === panelKey) closePanel()
+    else openPanel(panelKey, { focus: true })
     e.preventDefault()
     return
   }

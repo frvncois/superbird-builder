@@ -169,7 +169,7 @@ onBeforeUnmount(() => {
 
 function pick(item: DockItem) {
   item.run() // stays open — add several in a row
-  requestReveal() // drop the caret on the new element's line
+  requestReveal() // bring the new element's row into view
 }
 
 // spatial navigation over the wrapping card grid: from the active card,

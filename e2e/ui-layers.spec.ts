@@ -181,10 +181,15 @@ test('S, D and I open the panels for the selected row', async ({ page }) => {
   await rows(page).nth(3).click()
   await page.keyboard.press('s')
   await expect(page.getByText('CLASSES')).toBeVisible()
+  // the panel opens with its input focused, so the next key is TYPED there —
+  // Escape closes the panel and hands the keyboard back to the tree
+  await expect(page.getByPlaceholder('Add class')).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(page.getByText('CLASSES')).toBeHidden()
   await page.keyboard.press('i')
-  await expect(page.getByText('CLASSES')).toBeHidden()
-  await page.keyboard.press('d')
-  await expect(page.getByText('CLASSES')).toBeHidden()
+  await expect(page.getByRole('button', { name: 'Interactions', exact: true })).toHaveClass(
+    /text-accent-foreground/,
+  )
 })
 
 test('a component gains an element on the board, and its page instance follows', async ({

@@ -76,9 +76,8 @@ body {
 }
 
 /* text-selection guard: nothing in the app chrome is selectable; form
-   fields and the code editor re-enable it (the editor clamps its
-   selection to the :body … body: region), and canvas text elements
-   opt back in with `select-text` */
+   fields re-enable it, and canvas text elements opt back in with
+   `select-text` */
 input,
 textarea {
   user-select: text;
@@ -106,8 +105,7 @@ input:autofill {
 }
 
 /* thin muted scrollbar shared across scrollable app chrome (popovers,
-   panels). Matches the code editor's thumb; unlike the editor it is not
-   focus-gated, since these containers never take focus. */
+   panels) */
 .custom-scrollbar {
   scrollbar-width: thin;
   scrollbar-color: color-mix(in oklch, var(--muted-foreground) 35%, transparent) transparent;

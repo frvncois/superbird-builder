@@ -6,8 +6,8 @@
 // element using it, so it lives in the focused InteractionDetail view instead;
 // editing it here among per-element controls made a change that retimed the
 // whole site look like a change to this one element.
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { usePanel } from '@/composables/usePanel'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { usePanel, focusWhenPanelVisible } from '@/composables/usePanel'
 import {
   Crosshair,
   Eye,
@@ -130,7 +130,7 @@ function unapply(binding: InteractionBinding) {
   if (target.value) removeBinding(target.value, binding.id)
 }
 
-// `+I` in the code editor: the panel's primary action, so Enter creates. Its
+// `I` in the Layers tree: the panel's primary action, so Enter creates. Its
 // old target (the first binding's "To" field) now lives in the detail view.
 const { pendingFocus } = usePanel()
 const newButton = ref<InstanceType<typeof ButtonUI>>()
@@ -138,7 +138,7 @@ const newButton = ref<InstanceType<typeof ButtonUI>>()
 function consumeFocus() {
   if (pendingFocus.value !== 'interactions') return
   pendingFocus.value = null
-  nextTick(() => newButton.value?.$el?.focus?.())
+  focusWhenPanelVisible(() => newButton.value?.$el?.focus?.())
 }
 onMounted(consumeFocus)
 watch(pendingFocus, consumeFocus)

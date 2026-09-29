@@ -1,10 +1,10 @@
 # Guano
 
-Guano is a self-hosted visual website builder. You write pages in a tiny
-indentation-based language while a live canvas renders them — style elements with
-Tailwind classes, add interactions, build reusable components and CMS collections,
-translate into locales, leave comments, and work in drafts before applying to the
-live site. Publishing compiles everything to a fully static site (plain HTML +
+Guano is a self-hosted visual website builder. You build pages on a live canvas
+with a layers tree — insert and arrange elements, style them with Tailwind classes,
+add interactions, build reusable components (or start from the bundled library) and
+CMS collections, translate into locales, leave comments, and work in drafts before
+applying to the live site. Publishing compiles everything to a fully static site (plain HTML +
 one CSS file + a ~1.5 KB runtime) that the built-in server hosts at `/` — or
 ships as a zip, or pushes straight to a GitHub repo. The admin editor lives at
 `/admin`; invite editors and contributors with role-based access.

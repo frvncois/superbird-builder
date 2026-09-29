@@ -54,10 +54,10 @@ const { pickingFor } = useInteraction()
 const { detail } = useEffectDetail()
 const { selectedElement, isMultiSelect, requestReveal } = useElement()
 
-// Escape always returns to the code editor with the caret on the current
-// selection: it closes an open panel first, and otherwise pulls focus back from
-// the canvas/sidebar. It defers to a focused text field (the code editor's own
-// Esc dismisses its ghost; other inputs handle their own) and to target picking.
+// Escape always returns to the Layers tree with the current selection in view:
+// it closes an open panel first, and otherwise pulls focus back from the
+// canvas/sidebar. It defers to a focused text field (inputs handle their own
+// Escape) and to target picking.
 // The panel popover opts out of the PopoverHost Escape (closeOnEscape: false)
 // so this handler stays the single owner of that flow.
 function onWindowKeydown(e: KeyboardEvent) {

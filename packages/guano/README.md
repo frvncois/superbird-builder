@@ -1,8 +1,8 @@
 # guano
 
-Self-hosted visual website builder: write pages in a tiny indentation-based
-language on a live canvas, style with Tailwind classes, add interactions,
-components, CMS collections and locales — then publish a fully static site
+Self-hosted visual website builder: build pages on a live canvas with a layers
+tree, style with Tailwind classes, add interactions, components (with a bundled
+library), CMS collections and locales — then publish a fully static site
 (plain HTML + one CSS file + a ~1.5 KB runtime) served by the built-in server,
 downloaded as a zip, or pushed to GitHub.
 
