@@ -17,6 +17,7 @@
     "build:motion": "vite build --config vite.motion.config.ts",
     "build:slider": "vite build --config vite.slider.config.ts",
     "type-check": "vue-tsc --build",
+    "check:catalog": "npx -y tsx --tsconfig tsconfig.app.json scripts/check-catalog.ts",
     "test:e2e": "playwright test"
   },
   "dependencies": {

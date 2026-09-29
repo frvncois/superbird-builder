@@ -298,6 +298,25 @@ action on media-library SVGs.
   devDependency** and there's no npm script; output path is cwd-relative. Fix: add
   `tsx` to devDependencies and a `gen:demo` script.
 
+## Components library
+
+- **Two components can end up sharing a name after a merge.** Main and a draft
+  each adding the same library entry creates two `ComponentDef`s with the same
+  `name` under different ids; `computeMerge` is id-keyed, so both survive and
+  `findComponent` (name lookup) takes the first. Every `:Name` instance then
+  resolves to whichever that is. The hazard predates the library — any two
+  hand-made components could collide — but copying catalog entries makes it
+  likely rather than theoretical. Fix would be a post-merge name de-duplication
+  pass that renames the losing side and rewrites its instances
+  (`renameComponent` in `src/lib/componentOps.ts` already does the rewrite).
+- **Deleting a component leaves its interactions and design tokens behind.**
+  Deliberate: both are shared libraries and the detached elements still use
+  them. But nothing ever garbage-collects an effect no binding references.
+- **Tabs is wired for exactly three tabs.** Its default-panel state is expressed
+  as "tab 1 is the off position of every effect", so a fourth tab means adding
+  its bindings by hand. A real variant/state system would be the answer; a
+  class-toggle model cannot express "one of N" without O(N) bindings.
+
 ## MCP (v1 limits)
 
 The `guano mcp` server (`packages/guano/mcp/`) shipped Phases 0–8. Known, deliberately-deferred limits:

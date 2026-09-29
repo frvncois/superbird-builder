@@ -1606,7 +1606,7 @@ function applyPageEdits(project, page, edits, locale, defaultLocale) {
  * as an instance. MUTATES `project`/`page`; the caller saves. Shared by
  * create_component and create_components so the two cannot drift.
  */
-function makeComponentFrom(project, page, elementId, rawName) {
+function makeComponentFrom(project, page, elementId, rawName, category) {
   const { node: source, inComponent } = resolveEditNode(page, { id: elementId })
   if (source.line === undefined || source.type === 'body') {
     return { ok: false, reason: 'invalid-source', message: 'pick a real element, not the body' }
@@ -1637,7 +1637,12 @@ function makeComponentFrom(project, page, elementId, rawName) {
   const root = { id: randomUUID(), type: name, content: '', children: [cloned] }
   const componentId = randomUUID()
   project.components = project.components ?? []
-  project.components.push({ id: componentId, name, root })
+  // `category` is written LAST and only when set — computeMerge compares whole
+  // objects with JSON.stringify, so the editor and this path must agree on key
+  // order or an untouched component reads as changed (see lib/componentOps.ts)
+  const def = { id: componentId, name, root }
+  if (category && String(category).trim()) def.category = String(category).trim()
+  project.components.push(def)
 
   // wrap the source block: open line, inner one level deeper, close line
   // (exact line map — mirrors the editor's createComponent)
@@ -2967,7 +2972,9 @@ const tools = [
   {
     name: 'list_components',
     description:
-      'The project\'s shared components: id, name (the :Name: token), structure (DSL block), ' +
+      'The project\'s shared components: id, name (the :Name: token), category (its grouping ' +
+      'in the editor\'s Components drawer, absent = Uncategorized), source (the bundled ' +
+      'library entry it was copied from, if any), structure (DSL block), ' +
       'and how many instances exist across pages. Pass `includeNodes: true` for each MASTER ' +
       'node\'s id, classes, content, src, background, htmlId, attributes, and full interaction ' +
       'and animation bindings (options + breakpoints) — the shared state every instance ' +
@@ -3050,6 +3057,8 @@ const tools = [
           return {
             id: def.id,
             name: def.name,
+            ...(def.category ? { category: def.category } : {}),
+            ...(def.source ? { source: def.source } : {}),
             instances,
             structure: [`:${def.name}`, ...def.root.children.flatMap((c) => serializeNode(c, '\t')), `${def.name}:`].join('\n'),
             ...(nodes ? { nodes } : {}),
@@ -3073,6 +3082,11 @@ const tools = [
         pageId: { type: 'string' },
         id: { type: 'string', description: 'element id (from get_page) whose subtree becomes the component' },
         name: { type: 'string', description: 'component name — normalized to CapitalCase' },
+        category: {
+          type: 'string',
+          description:
+            'optional grouping in the editor\'s Components drawer (e.g. "Cards"); omitted = Uncategorized',
+        },
         version: { type: 'string' },
       },
       required: ['pageId', 'id', 'name', 'version'],
@@ -3085,7 +3099,7 @@ const tools = [
       if (args.version !== current) {
         return { saved: false, reason: 'stale-version', message: STALE_MESSAGE, currentVersion: current }
       }
-      const made = makeComponentFrom(project, page, args.id, args.name)
+      const made = makeComponentFrom(project, page, args.id, args.name, args.category)
       if (!made.ok) return { saved: false, reason: made.reason, message: made.message }
       await saveTargetProject(project)
       return {
@@ -3121,6 +3135,10 @@ const tools = [
               pageId: { type: 'string' },
               id: { type: 'string', description: 'element id (from get_page) whose subtree becomes the component' },
               name: { type: 'string', description: 'component name — normalized to CapitalCase' },
+              category: {
+                type: 'string',
+                description: 'optional grouping in the editor\'s Components drawer',
+              },
             },
             required: ['pageId', 'id', 'name'],
             additionalProperties: false,
@@ -3173,7 +3191,7 @@ const tools = [
       for (let i = 0; i < args.items.length; i++) {
         const item = args.items[i]
         const page = findPage(project, item.pageId)
-        const made = makeComponentFrom(project, page, item.id, item.name)
+        const made = makeComponentFrom(project, page, item.id, item.name, item.category)
         if (!made.ok) failures.push({ index: i, reason: made.reason, message: made.message })
         else
           results.push({
@@ -3208,7 +3226,7 @@ const tools = [
       'is rewritten to match. Use edit_elements on any instance to style shared elements. ' +
       'A component master is not page code, so there is no `version` to pass: the only ' +
       'concurrency protection is the whole-project guard (a save is refused if the project ' +
-      'blob changed since this handler loaded it). Re-read with get_component right before ' +
+      'blob changed since this handler loaded it). Re-read with list_components right before ' +
       'replacing a block you did not just write. Requires a target.',
     inputSchema: {
       type: 'object',

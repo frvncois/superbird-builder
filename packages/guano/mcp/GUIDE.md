@@ -117,7 +117,7 @@ page's version from your last `get_page`/`list_pages`, so a page edited since yo
 is never deleted on stale information. Re-read, confirm the page is still the one you
 meant to remove, then delete. Component masters are not page code and have no version —
 `update_component`/`delete_component` rely on the whole-project guard and, for delete, the
-in-use scan; re-read with `get_component` before replacing a block you did not just write.
+in-use scan; re-read with `list_components` before replacing a block you did not just write.
 Writes to **different pages** parallelize freely; writes to the same page are sequential.
 To touch several pages at once (shared chrome, a sweeping restyle), pass `edit_elements`
 its `pages: [{pageId, version, edits}]` form — one call, one save, per-page version checks
@@ -516,6 +516,12 @@ with `bg-<token>`/`text-<token>`/`border-<token>` instead of repeating arbitrary
 values — tokens are the project's theming system, the single place a human retheme
 happens. Token names are kebab-case and values are `#hex`.
 
+If a human adds a component from the editor's bundled library, that add may CREATE
+the semantic tokens it needs (`primary`, `muted-foreground`, `border`, …) with
+neutral defaults — but never overwrites one that already exists. So re-read
+`get_settings` before replacing the token list: `update_settings { tokens }` replaces
+it wholesale, and a stale list would drop them.
+
 A token whose name matches a Tailwind palette name (`blue`, `orange`, `slate`, …) is
 accepted with `allowShadow: true` and a warning. A token defines `bg-blue`, NOT
 `bg-blue-500`, so the numbered shades keep working — real brand palettes do have a
@@ -758,7 +764,7 @@ the worklist instead of pinning `missingTranslatable` above 0 forever.
 
 Shared blocks (header, footer, cards) so a nav change is ONE edit, not one per page:
 
-- `create_component {pageId, id, name}` — an existing element's subtree becomes the
+- `create_component {pageId, id, name, category?}` — an existing element's subtree becomes the
   master; the original block is wrapped as `:Name … Name:` (an instance). The master
   takes the subtree's classes/content/bindings WITH it and the source instance is
   left inheriting (no shadow overrides — so shared chrome is translated once, on the
@@ -804,7 +810,8 @@ Shared blocks (header, footer, cards) so a nav change is ONE edit, not one per p
   orphan means that styling/binding no longer renders anywhere — and `versions`
   (instance blocks are rewritten IN each page's code, so touched pages get a new
   version hash; use these instead of a version cached from an earlier get_page).
-- `list_components` — names, structure, instance counts; `includeNodes: true` adds
+- `list_components` — names, category, source, structure, instance counts;
+  `includeNodes: true` adds
   each master node's id, classes, content, src and interaction bindings. Those master
   ids are valid `edit_elements` addresses on any page holding an instance (the write
   redirects to the master as usual; add `onMaster: true` for content) — no need to
@@ -819,6 +826,14 @@ Shared blocks (header, footer, cards) so a nav change is ONE edit, not one per p
   `label`+`checkbox` pair inside a shared card only works on the source page); keep
   id-dependent markup outside components, or accept it working on one instance only.
 - Components cannot nest other components.
+- **`category` is a drawer grouping, nothing more.** It groups the component in the
+  editor's Components column (absent = "Uncategorized") and has no effect on
+  rendering or the export. **`source`** is set when a component was copied from the
+  editor's bundled library; the copy is ordinary from that moment on (nothing
+  follows the catalog), so treat it as provenance, not as a link.
+- A human can **delete** a component from that drawer, which detaches every instance
+  into plain elements first — so a page never loses content, but a `:Name` token you
+  cached may be gone. `delete_component` here still refuses while instances exist.
 
 ## Class interactions — toggles, menus, modals, accordions
 
