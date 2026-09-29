@@ -824,7 +824,8 @@ Shared blocks (header, footer, cards) so a nav change is ONE edit, not one per p
   fields is fully styled via its master, not blank. Blanking a page and re-adding
   `:Name:` is always safe: masters live in the component library, never on a page.
 - `delete_component {componentId}` removes an unused component; it is refused (with
-  the list of pages) while instances exist.
+  the list of pages) while instances exist, and (with `heldBy`) while another
+  component holds an instance of it.
 - `update_component {componentId, code}` — replace the structure with a full
   `:Name … Name:` block; every instance is rewritten to match. Master nodes keep their
   identity (classes/content/interactions) wherever the code still lines up — matched by
@@ -850,7 +851,8 @@ Shared blocks (header, footer, cards) so a nav change is ONE edit, not one per p
   a component, do not rely on `htmlId` for anchors or `label[for]` wiring (a
   `label`+`checkbox` pair inside a shared card only works on the source page); keep
   id-dependent markup outside components, or accept it working on one instance only.
-- Components cannot nest other components.
+- **Components nest.** A component may hold instances of others — see Nesting below.
+  It can never end up holding itself, at any distance.
 - **`category` is a drawer grouping, nothing more.** It groups the component in the
   editor's Components column (absent = "Uncategorized") and has no effect on
   rendering or the export. **`source`** is set when a component was copied from the
@@ -859,6 +861,60 @@ Shared blocks (header, footer, cards) so a nav change is ONE edit, not one per p
 - A human can **delete** a component from that drawer, which detaches every instance
   into plain elements first — so a page never loses content, but a `:Name` token you
   cached may be gone. `delete_component` here still refuses while instances exist.
+
+## Nesting
+
+A component may hold an instance of another: a `Card` holds the real `Button`, not a
+copy of its markup. Write the instance as a leaf in the block you pass to
+`update_component` — it expands to the inner component's structure:
+
+```
+:Card
+	:div
+		:h3:
+		:Button:
+	div:
+Card:
+```
+
+**What is inside a nested instance belongs to the component it is an instance of.**
+Its classes, interactions and structure are Button's: restyle Button and the button in
+every Card follows. `edit_elements` with `addClasses` on an element inside a nested
+instance therefore lands on **Button's master**, exactly as it does for any instance.
+
+What the HOST decides is what an instance always decides: its **text and media**, its
+**`variants`**, and which parts are **`hidden`**. There are two levels of it:
+
+- **per host** — what every Card says about its button. The Card's master holds a
+  *mirror* of the Button (its structure, none of its look); address a mirror's elements
+  by the ids `list_components {includeNodes: true}` reports under the host, and set
+  `content` / `hidden` / `icon` there. Set `variants` on the mirror's `:Button` node.
+- **per page** — what THIS Card says. Set the same fields on the instance's own elements
+  on the page, as for any instance.
+
+They resolve in that order — the page's own value, then the host's, then (three levels
+deep) the host's host's, then the inner component's — and the first one that says
+anything wins.
+
+Rules:
+
+- **No cycles.** `:Card:` inside Button is refused if Card holds Button, directly or
+  through another component.
+- **A host cannot bind an interaction on an instance it holds** — a binding on the
+  nested `:Button` would be Button's, shared by every Button everywhere. Wrap the
+  instance in an element the host owns and bind there; give the wrapper the class
+  `contents` so it adds no box. The click on the button inside bubbles up to it:
+
+  ```
+  :div        classes: contents    bind: {trigger: click, targetId: <panel id>}
+  	:Button:
+  div:
+  ```
+- **A host cannot restyle one placement.** There is no per-instance class: to make the
+  button in a Card full-width, let the Card's layout stretch it (a `flex flex-col`
+  parent), or give Button a variant option for it.
+- Changing the inner component's structure reaches every instance of it, nested or
+  not, on every page — and every host's mirror, keeping what each host said.
 
 ## Variants
 

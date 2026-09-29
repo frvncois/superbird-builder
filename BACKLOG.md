@@ -315,6 +315,32 @@ element (`src/lib/shared/svg.js`).
 - **Deleting a component leaves its interactions and design tokens behind.**
   Deliberate: both are shared libraries and the detached elements still use
   them. But nothing ever garbage-collects an effect no binding references.
+- **On the board, structure inside a nested instance is not editable.** A Button held
+  by a Card is restructured in Button's own card; inside Card's card its rows refuse
+  moves, inserts and deletes (the nested instance itself moves, duplicates and goes like
+  any node). Redirecting the edit to the inner component was designed and dropped: an
+  edit made in one card would silently restructure every instance of another
+  component. On a PAGE the same edit still works, through the structure sync.
+- **No per-placement class on a nested instance.** What is inside one is the inner
+  component's, so a host cannot make *its* button full-width; the layout around it has
+  to do it, or a variant option. The day this hurts, the answer is an instance-level
+  class layer on the wrapper — one more layer for `mergeClassLayers`.
+- **A host cannot bind directly on an instance it holds.** The library wraps the
+  trigger in a `contents` element (`trigger()` in `catalog/entries/helpers.ts`). It
+  works, and it costs a row in the Layers tree per trigger.
+- **Two inline icons can share an SVG id.** The sanitizer keeps `id` (a gradient or a
+  clip path needs one) and ids are document-wide, so two custom SVGs defining `#a` on
+  one page resolve to whichever comes first. Bundled icons carry none. A fix would
+  prefix ids per node at sanitize time.
+- **Variant options layer in axis order.** Two axes overriding the same property is
+  resolved by which axis is declared last, which nothing in the UI says. Keep axes
+  orthogonal.
+- **`sameProperty` does not know side spacing, rings, outlines or token colours on
+  `text-`** — the style catalog does not list them. Variants work around it
+  (`sameLayerProperty` falls back to the class's own name), but the Style panel and
+  `applyClass` still add `px-3` beside `px-4` when one is typed by hand. Teaching
+  `propKey` the same fallback is the fix; it changes what the panel replaces, so it
+  wants its own pass.
 - **Tabs is wired for exactly three tabs.** Its default-panel state is expressed
   as "tab 1 is the off position of every effect", so a fourth tab means adding
   its bindings by hand. A real variant/state system would be the answer; a
