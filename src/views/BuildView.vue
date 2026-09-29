@@ -2,11 +2,10 @@
 // The single editing shell. A rail toggle switches the surface between Build
 // (breakpoint canvas + full inspector) and Preview (full-site render,
 // restricted sidebar). The code editor is a separate column Build opens
-// beside the canvas — off by default, toggled by the rail's Code button. The
-// pages and components drawers are columns of the same kind; all three share
-// one slot, so opening any closes the others. Components is also a canvas
-// mode: while its column is open the centre shows the components board
-// instead of the page.
+// The centre is either the open page or the components board (`canvas`), and
+// the 16rem track beside the rail holds at most one of Pages, Layers and
+// Components (`column`) — the two are independent, so Layers can show the
+// layers of whatever the canvas is displaying.
 // Contributors are pinned to Preview.
 import EditorLayout from '@/layouts/EditorLayout.vue'
 import AppRail from '@/components/editor/sidebar/AppRail.vue'
@@ -15,6 +14,7 @@ import ComponentsDrawer from '@/components/editor/sidebar/ComponentsDrawer.vue'
 import CanvasEditor from '@/components/editor/canvas/CanvasEditor.vue'
 import ComponentsBoard from '@/components/editor/canvas/ComponentsBoard.vue'
 import CodeEditor from '@/components/editor/code/CodeEditor.vue'
+import LayersPanel from '@/components/editor/layers/LayersPanel.vue'
 import SettingsEditor from '@/components/editor/sidebar/SettingsEditor.vue'
 import ContextMenu from '@/components/editor/canvas/ContextMenu.vue'
 import InsertDragChip from '@/components/editor/canvas/InsertDragChip.vue'
@@ -55,10 +55,8 @@ const { isBuild, visibleColumn, showComponents } = useViewMode()
         <ComponentsDrawer />
       </template>
 
-      <template v-if="visibleColumn === 'code'" #code>
-        <div class="h-full">
-          <CodeEditor />
-        </div>
+      <template v-if="visibleColumn === 'layers'" #layers>
+        <LayersPanel />
       </template>
 
       <!-- center: Build canvas or full-site preview -->

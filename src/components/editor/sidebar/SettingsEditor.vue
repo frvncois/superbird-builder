@@ -208,6 +208,8 @@ watch(activePanel, (panel) => {
         :ref="(el) => setPanelBtn(panel.id, el)"
         variant="ghost"
         :icon="panel.icon"
+        :tooltip="panel.label"
+        tooltip-side="left"
         class="w-7"
         :disabled="blocked(panel.id)"
         :class="

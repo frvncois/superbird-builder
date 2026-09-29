@@ -102,7 +102,7 @@ test('the board shows every component, and editing a library one adds it', async
   // panel wrote a stray `flex` beside `inline-flex` just for being opened.)
   const button = boardCard(page, 'catalog:button')
   await button.locator('button').click() // the rendered element, not the card label
-  await page.locator('aside').last().getByRole('button').nth(2).click() // Style
+  await page.getByRole('button', { name: 'Style', exact: true }).click()
   await expect(page.getByText('CLASSES')).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(button).toHaveCount(1)

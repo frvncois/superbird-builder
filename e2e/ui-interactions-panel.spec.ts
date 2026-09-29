@@ -44,7 +44,7 @@ async function openEditor(page: Page) {
 
 /** the right rail's Interactions button is icon-only (Zap) */
 async function openPanel(page: Page) {
-  await page.locator('button:has(svg.lucide-zap)').first().click()
+  await page.getByRole('button', { name: 'Interactions', exact: true }).click()
   await expect(page.getByText('Interaction library')).toBeVisible()
 }
 

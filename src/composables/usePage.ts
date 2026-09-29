@@ -2,6 +2,7 @@ import { computed, ref } from 'vue'
 import { useProject } from './useProject'
 import { useAuth } from './useAuth'
 import { useMotion } from './useMotion'
+import { useViewMode } from './useViewMode'
 import { createPage } from '@/lib/factories'
 import { buildDocument, extractBodyArg, extractBodyLines, slugify } from '@/lib/document'
 import { deepClone, walkNodes } from '@/lib/tree'
@@ -98,6 +99,10 @@ export function usePage() {
     // end states) — the new page's own triggers re-fire on mount
     if (id !== activePageId.value) useMotion().stopAll()
     activePageId.value = id
+    // opening a page means looking at it: if the components board held the
+    // canvas, hand it back. Here rather than in a watcher because re-opening
+    // the page you are already on must work too.
+    useViewMode().setCanvas('page')
   }
 
   return {

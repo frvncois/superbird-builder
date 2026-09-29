@@ -1,8 +1,8 @@
 import { test, expect, type Page } from '@playwright/test'
 
-// Authoring a slider end to end in the real editor: type `:slider` into the
-// code, watch the canvas build the track, configure it in the DATA panel (where
-// every carousel setting lives), and publish.
+// Authoring a slider end to end in the real editor: build it from the ⌘E dock
+// and the Layers tree, watch the canvas build the track, configure it in the
+// DATA panel (where every carousel setting lives), and publish.
 //
 // The two things worth a real browser here are the ones no unit check reaches:
 // the Data panel writes a config that survives to the published site, and the
@@ -45,31 +45,33 @@ async function publish(page: Page) {
   await expect(page.getByText('Published!')).toBeVisible({ timeout: 30_000 })
 }
 
+/** insert one element from the ⌘E dock at the current selection */
+async function insertFromDock(page: Page, key: string) {
+  await page.keyboard.press('ControlOrMeta+e')
+  await page.locator(`[data-dock-item="${key}"]`).click()
+  await page.keyboard.press('Escape')
+}
+
 /** append a three-slide manual slider to the end of the page body */
 async function writeSlider(page: Page) {
-  // the code column is off by default — the rail's Code button reveals it
-  await page.getByRole('button', { name: 'Code editor' }).click()
-  const code = page.locator('textarea').first()
-  const source = await code.inputValue()
-  const lines = source.split('\n')
-  const close = lines.lastIndexOf('body:')
-  lines.splice(
-    close,
-    0,
-    '\t:slider',
-    '\t\t:div',
-    '\t\t\t:h2:',
-    '\t\tdiv:',
-    '\t\t:div',
-    '\t\t\t:h2:',
-    '\t\tdiv:',
-    '\t\t:div',
-    '\t\t\t:h2:',
-    '\t\tdiv:',
-    '\tslider:',
-  )
-  await code.fill(lines.join('\n'))
-  // the canvas renders from the parsed tree, so this proves the code parsed
+  // the Layers tree is where structure is authored and where the insert point
+  // is chosen: an insert lands in the selection, so the slider has to be
+  // re-selected between slides (each new div is selected as it lands).
+  await page.getByRole('button', { name: 'Layers', exact: true }).click()
+  const bodyRow = page.locator('[data-layer-row]').first()
+  await bodyRow.click()
+  await insertFromDock(page, 'slider')
+
+  const sliderRow = page.locator('[data-layer-row]').filter({ hasText: 'slider' }).first()
+  await expect(sliderRow).toBeVisible({ timeout: 15_000 })
+  for (let i = 0; i < 3; i++) {
+    await sliderRow.click()
+    await insertFromDock(page, 'div')
+    // the new div is the selection, so this lands inside it — and gives the
+    // slide some height, without which the track measures zero
+    await insertFromDock(page, 'heading')
+  }
+  // the canvas renders from the parsed tree, so this proves the structure took
   await expect(page.locator('[data-sl-track]').first()).toBeVisible({ timeout: 15_000 })
 }
 
@@ -89,7 +91,7 @@ test('author a slider in code, configure it in the Data panel, and publish it', 
   // The arrow belongs to the slider host itself, so clicking it selects the
   // slider rather than whichever child sits under an arbitrary point.
   await canvasSlider.locator('[data-sl-prev]').click()
-  await page.locator('button:has(svg.lucide-paperclip)').first().click()
+  await page.getByRole('button', { name: 'Data', exact: true }).click()
 
   // every carousel setting lives in the Data panel's Slider group
   const dotsRow = page.locator('div').filter({ hasText: /^Dots$/ }).last()

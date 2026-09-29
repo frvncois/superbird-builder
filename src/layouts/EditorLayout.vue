@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // `column` names which docked column holds the single 16rem track beside the
-// rail — pages, code or components, or none for the bare canvas. One prop
+// rail — pages, layers or components, or none for the bare canvas. One prop
 // rather than three booleans so the rendered aside and the grid track can
 // never disagree; `useViewMode` owns which one it is.
 // `framed` gives the centre the Build canvas chrome (inset rounded card);
@@ -8,7 +8,7 @@
 import { computed } from 'vue'
 
 const props = withDefaults(
-  defineProps<{ column?: 'pages' | 'code' | 'components' | null; framed?: boolean }>(),
+  defineProps<{ column?: 'pages' | 'layers' | 'components' | null; framed?: boolean }>(),
   { column: null, framed: true },
 )
 
@@ -24,8 +24,8 @@ const columns = computed(() =>
     </aside>
 
     <!-- The rail draws no right border — whatever opens beside it owns the
-         divider instead. The drawers scroll their own panes, so they only
-         need to hold their height; the code column scrolls as one. -->
+         divider instead. Each column scrolls its own panes, so the track
+         only has to hold their height. -->
     <aside v-if="column === 'pages'" class="min-h-0 border-l border-input">
       <slot name="pages" />
     </aside>
@@ -34,8 +34,8 @@ const columns = computed(() =>
       <slot name="components" />
     </aside>
 
-    <aside v-else-if="column === 'code'" class="relative overflow-y-auto border-l border-input">
-      <slot name="code" />
+    <aside v-else-if="column === 'layers'" class="min-h-0 border-l border-input">
+      <slot name="layers" />
     </aside>
 
     <!-- Build gets the framed canvas surface; Preview is a plain full-bleed pane -->

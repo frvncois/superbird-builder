@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import {
-  Code, Component, Feather, Files, Image, Settings, UserRound, LogOut,
+  Component, Feather, Files, Image, Layers, Settings, UserRound, LogOut,
 } from 'lucide-vue-next'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import MainLogo from '@/assets/MainLogo.vue'
@@ -14,8 +14,8 @@ const { openLibrary } = useMediaLibrary()
 const { openModal } = useModal()
 const { canBuild, logout } = useAuth()
 const {
-  isPreview, isBuild, column, showCode, showComponents, pagesOpen,
-  setMode, toggleCode, togglePages, toggleComponents, showApp,
+  isPreview, isBuild, canvas, column, showLayers, showComponents, pagesOpen,
+  setMode, toggleLayers, togglePages, toggleComponents, showApp,
 } = useViewMode()
 </script>
 
@@ -30,7 +30,7 @@ const {
       tooltip="App"
       tooltip-side="right"
       class="w-7"
-      :class="isBuild && !column ? 'text-accent-foreground' : 'text-foreground'"
+      :class="isBuild && canvas === 'page' && !column ? 'text-accent-foreground' : 'text-foreground'"
       @click="showApp"
     >
       <MainLogo class="size-4" />
@@ -65,12 +65,12 @@ const {
     <ButtonUI
       v-if="canBuild"
       variant="ghost"
-      :icon="Code"
-      tooltip="Code editor"
+      :icon="Layers"
+      tooltip="Layers"
       tooltip-side="right"
       class="w-7"
-      :class="showCode ? 'text-accent-foreground' : 'text-muted-foreground'"
-      @click="toggleCode"
+      :class="showLayers ? 'text-accent-foreground' : 'text-muted-foreground'"
+      @click="toggleLayers"
     />
     <ButtonUI
       variant="ghost"

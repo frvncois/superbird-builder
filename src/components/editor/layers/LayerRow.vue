@@ -1,0 +1,151 @@
+<script setup lang="ts">
+/**
+ * One row of the Layers tree, and — recursively — its children.
+ *
+ * The row reads the composables directly rather than taking them as props:
+ * it is instantiated once per element, and prop-drilling selection, the
+ * backend and the collapse state through every level of a deep tree costs
+ * more than it documents.
+ */
+import { computed } from 'vue'
+import { ChevronRight, Palette, Paperclip, Zap } from 'lucide-vue-next'
+import { elementIcon } from '@/lib/elementIcons'
+import { isComponentType } from '@/lib/components'
+import { useElement } from '@/composables/useElement'
+import { useComponents } from '@/composables/useComponents'
+import { useContextMenu } from '@/composables/useContextMenu'
+import { useInteraction } from '@/composables/useInteraction'
+import { useStructure } from '@/composables/useStructure'
+import { usePanel } from '@/composables/usePanel'
+import { useLayerState } from './layerState'
+import type { ElementNode } from '@/types/editor'
+
+const props = defineProps<{ node: ElementNode; depth: number }>()
+
+const { selectedElementIds, selectElement, highlightElement, highlightedElement } = useElement()
+const { masterFor } = useComponents()
+const { openMenu } = useContextMenu()
+const { pickingFor, pickTarget } = useInteraction()
+const { backend } = useStructure()
+const { togglePanel } = usePanel()
+const { isCollapsed, toggle } = useLayerState()
+
+const selected = computed(() => selectedElementIds.value.includes(props.node.id))
+const highlighted = computed(() => highlightedElement.value?.id === props.node.id)
+const hasChildren = computed(() => props.node.children.length > 0)
+const open = computed(() => hasChildren.value && !isCollapsed(props.node.id))
+const isInstance = computed(() => isComponentType(props.node.type))
+
+/**
+ * What to call this row. The type alone — which is all anything in the app
+ * showed for a node until now — makes a page of `div` / `div` / `div`, so
+ * prefer whatever the author actually wrote: its ref, its text, its binding.
+ */
+const label = computed(() => {
+  const n = props.node
+  if (n.ref) return `#${n.ref}`
+  if (isInstance.value) return n.type
+  // inside an instance the node's own content is empty by design — the master
+  // holds it, and the master is what renders
+  const text = (n.content || masterFor(n.id)?.master.content || '').replace(/<[^>]*>/g, ' ').trim()
+  if (text) return text.length > 28 ? `${text.slice(0, 28)}…` : text
+  if (n.arg) return `[${n.arg}]`
+  // the TYPE, not the tag: `heading` and `text` say more than `h2` and `div`
+  return n.type
+})
+
+/** shown after the label when the label isn't already the type */
+const secondary = computed(() => (label.value === props.node.type ? '' : props.node.type))
+
+// the three badges mirror the panels they open — and stand in for the `(+)`,
+// `{+}` and `[+]` markers the code editor used to show on the token line
+const badges = computed(() => {
+  const n = props.node
+  const master = masterFor(n.id)?.master
+  const styled = !!(n.classes?.trim() || master?.classes?.trim())
+  const wired = !!(n.interactions?.length || n.animations?.length || master?.interactions?.length)
+  const owns = !!(n.content || n.src || n.slider || master?.content || master?.src)
+  return [
+    styled && { key: 'style', icon: Palette, title: 'Styled — open Style' },
+    wired && { key: 'interactions', icon: Zap, title: 'Interactive — open Interactions' },
+    owns && { key: 'data', icon: Paperclip, title: 'Has content — open Data' },
+  ].filter(Boolean) as { key: string; icon: typeof Palette; title: string }[]
+})
+
+function onClick(e: MouseEvent) {
+  // a pending "Pick target" claims the click instead of selecting — the same
+  // rule the canvas follows, so picking works from either surface
+  if (pickingFor.value) {
+    const mapping = masterFor(props.node.id)
+    pickTarget(mapping ? mapping.master.id : props.node.id)
+    return
+  }
+  if (e.shiftKey) {
+    // extending is only meaningful among siblings, which is what the
+    // selection model supports
+    selectElement(props.node.id)
+    return
+  }
+  selectElement(props.node.id)
+}
+
+const canDrop = computed(
+  () => backend.value.isContainer(props.node) || props.node.children.length > 0,
+)
+</script>
+
+<template>
+  <div>
+    <div
+      :data-layer-row="node.id"
+      class="group/row flex h-7 items-center gap-1 rounded-lg pr-1 text-xs"
+      :class="
+        selected
+          ? 'bg-accent/30 text-foreground'
+          : highlighted
+            ? 'bg-accent/15 text-foreground'
+            : 'text-muted-foreground hover:bg-accent/15'
+      "
+      :style="{ paddingLeft: `${depth * 12 + 4}px` }"
+      @click="onClick"
+      @contextmenu="openMenu($event, node.id)"
+      @pointerenter="highlightElement(node.id)"
+      @pointerleave="highlightElement(null)"
+    >
+      <!-- the twisty keeps its slot even on a leaf, so labels line up -->
+      <button
+        v-if="hasChildren"
+        type="button"
+        class="flex size-4 shrink-0 items-center justify-center rounded outline-none hover:text-foreground"
+        :aria-label="open ? 'Collapse' : 'Expand'"
+        @click.stop="toggle(node.id)"
+      >
+        <ChevronRight class="size-3 transition-transform" :class="open && 'rotate-90'" />
+      </button>
+      <span v-else class="size-4 shrink-0" />
+
+      <component :is="elementIcon(node.type)" class="size-3 shrink-0" />
+      <span class="min-w-0 flex-1 truncate" :class="selected && 'font-medium'">
+        {{ label }}
+        <span v-if="secondary" class="ml-1 text-[10px] opacity-50">{{ secondary }}</span>
+      </span>
+
+      <span class="flex shrink-0 items-center gap-0.5 opacity-60 group-hover/row:opacity-100">
+        <button
+          v-for="badge in badges"
+          :key="badge.key"
+          v-tooltip="{ text: badge.title, side: 'left' }"
+          type="button"
+          class="flex size-4 items-center justify-center rounded outline-none hover:text-foreground"
+          @click.stop="(selectElement(node.id), togglePanel(badge.key))"
+        >
+          <component :is="badge.icon" class="size-3" />
+        </button>
+      </span>
+    </div>
+
+    <template v-if="open">
+      <LayerRow v-for="child in node.children" :key="child.id" :node="child" :depth="depth + 1" />
+    </template>
+  </div>
+</template>
