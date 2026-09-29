@@ -4,7 +4,7 @@ import { useElement } from '@/composables/useElement'
 import { useProject } from '@/composables/useProject'
 import { resolveClassesForWidth } from '@/lib/responsive'
 import { FRAME_BREAKPOINT } from '@/components/editor/canvas/frameScope'
-import { useReorderAnimation } from '@/composables/useReorderAnimation'
+import { useStructure } from '@/composables/useStructure'
 import EntryScope from '@/components/shared/EntryScope.vue'
 import { useInteraction } from '@/composables/useInteraction'
 import { useContextMenu } from '@/composables/useContextMenu'
@@ -28,7 +28,7 @@ import type { ElementNode } from '@/types/editor'
 const props = defineProps<{ node: ElementNode }>()
 
 const { selectedElement, selectedElementIds, selectElement, draggingId, dropTarget, highlightedElement, requestEditorFocus } = useElement()
-const { canvasReorder } = useReorderAnimation()
+const { backend } = useStructure()
 const { pickingFor, pickTarget } = useInteraction()
 const { openMenu } = useContextMenu()
 
@@ -218,7 +218,7 @@ const handlers = {
       dropTarget.value?.id === props.node.id &&
       dropTarget.value.position !== 'inside'
     ) {
-      canvasReorder(draggingId.value, props.node.id, dropTarget.value.position)
+      backend.value.move([draggingId.value], props.node.id, dropTarget.value.position)
     }
     draggingId.value = null
     dropTarget.value = null

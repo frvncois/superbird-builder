@@ -1,6 +1,7 @@
 import { useKeymap } from './useShortcut'
 import { useContextMenu } from './useContextMenu'
 import { usePersistence } from './usePersistence'
+import { useStructure } from './useStructure'
 import { togglePalette } from './useCommandPalette'
 import { useModal } from './useModal'
 import { useViewMode } from './useViewMode'
@@ -21,6 +22,7 @@ export function useEditorShortcuts() {
     deleteSelection,
     wrapSelection,
   } = useContextMenu()
+  const { backend } = useStructure()
   const { undo, redo, saveNow } = usePersistence()
   const { openModal, stack } = useModal()
   const { isBuild, showComponents } = useViewMode()
@@ -51,6 +53,11 @@ export function useEditorShortcuts() {
     // its own keydown (so the caret follows the new div); this fires from canvas
     { key: 'g', mod: true, handler: buildOnly(wrapSelection) },
     { key: ['backspace', 'delete'], handler: buildOnly(deleteSelection) },
+    // Shift+↑/↓ moves the selection one visual slot — a re-parent without the
+    // mouse. It lived in the code editor's own keydown; the tree owns it now,
+    // but the binding is app-level so it works from the canvas too.
+    { key: 'up', shift: true, mod: false, handler: buildOnly(() => backend.value.nudge('up')) },
+    { key: 'down', shift: true, mod: false, handler: buildOnly(() => backend.value.nudge('down')) },
     { key: 'z', mod: true, shift: false, handler: undo },
     { key: 'z', mod: true, shift: true, handler: redo },
     // save works even from a focused field, so ⌘S never opens the browser dialog

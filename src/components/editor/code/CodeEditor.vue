@@ -46,7 +46,7 @@ const { undo, redo } = usePersistence()
 const { activePanelId, openPanel } = usePanel()
 const { components, masterFor } = useComponents()
 const componentNames = computed(() => components.value.map((c) => c.name))
-const { registerCodeResolver } = useInsertDrag()
+const { registerDropResolver } = useInsertDrag()
 const { collections, activeCollection, activeEntry, entryPath } = useCollections()
 const { activeLocale, locales, defaultLocale, setActiveLocale } = useLocale()
 const collectionNames = computed(() => collections.value.map((c) => c.name))
@@ -864,10 +864,10 @@ const dropLine = computed(() => {
 // midpoint, body takes children, scaffold lines reject; interior
 // component-instance lines retarget to the instance root
 onMounted(() =>
-  registerCodeResolver((clientY) => resolveDrop(clientY)),
+  registerDropResolver((clientY) => resolveDrop(clientY)),
 )
 onBeforeUnmount(() => {
-  registerCodeResolver(null)
+  registerDropResolver(null)
   if (resolvedTimer) clearTimeout(resolvedTimer)
 })
 
@@ -1723,7 +1723,7 @@ function onInput() {
 
 <template>
   <div
-    data-insert-code-surface
+    data-insert-surface
     class="relative flex h-full flex-col overflow-hidden bg-background font-mono text-[10px] leading-5 tab-2"
   >
     <div class="flex flex-1 overflow-hidden px-2">

@@ -14,6 +14,7 @@ import { ELEMENTS, typeOptionsFor } from '@/lib/elements'
 import { hasAncestorOfType } from '@/lib/tree'
 import { sanitizeAttributes, isAllowedAttribute } from '@/lib/shared/attributes.js'
 import { useElement } from '@/composables/useElement'
+import { useStructure } from '@/composables/useStructure'
 import { usePage } from '@/composables/usePage'
 import { useCollections } from '@/composables/useCollections'
 import { useLocale } from '@/composables/useLocale'
@@ -22,7 +23,13 @@ import { resolveSliderConfig, SLIDER_DEFAULTS } from '@/lib/shared/slider.js'
 import { useProject } from '@/composables/useProject'
 import type { CollectionEntry, CollectionField } from '@/types/editor'
 
-const { selectedElement, changeElementType, setElementArg, setElementLink } = useElement()
+const { selectedElement } = useElement()
+// structural writes go through the backend so they land on the page or on a
+// component master, depending on what is being edited
+const { backend } = useStructure()
+const changeElementType = (id: string, type: string) => backend.value.retype(id, type)
+const setElementArg = (id: string, arg: string | null) => backend.value.setArg(id, arg)
+const setElementLink = (id: string, link: string | null) => backend.value.setLink(id, link)
 const { activePage } = usePage()
 const { breakpoints } = useProject()
 const {

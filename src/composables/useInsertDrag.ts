@@ -2,8 +2,7 @@ import { ref } from 'vue'
 import type { Component } from 'vue'
 import { useElement, type DropPosition } from './useElement'
 import { useComponents } from './useComponents'
-import { expandComponentInstances } from '@/lib/components'
-import { elementBlockLines } from '@/lib/syntax'
+import { useStructure } from './useStructure'
 import type { ElementNode } from '@/types/editor'
 
 /** what a palette card puts on the drag: a built-in type or a component */
@@ -19,17 +18,19 @@ const pointer = ref({ x: 0, y: 0 })
 /** set for one tick after a drop so open popovers ignore the release click */
 const suppressNextClick = ref(false)
 
-/** the code editor owns fold/scroll geometry, so it registers its own resolver */
-type CodeResolver = (clientY: number) => { id: string; position: DropPosition } | null
-let codeResolver: CodeResolver | null = null
+/** a surface with its own geometry (the code editor's lines, the Layers tree's
+ *  rows) resolves its own drop target from the pointer's Y */
+type DropResolver = (clientY: number) => { id: string; position: DropPosition } | null
+let surfaceResolver: DropResolver | null = null
 
 // a drag begins on pointerdown but only activates after a small move,
 // so plain clicks on palette cards stay inert
 const DRAG_THRESHOLD = 4
 
 export function useInsertDrag() {
-  const { dropTarget, getElement, bodyElement, insertElementBlock } = useElement()
-  const { components, findComponent, masterFor, addFromCatalog } = useComponents()
+  const { dropTarget, getElement, bodyElement } = useElement()
+  const { masterFor } = useComponents()
+  const { backend } = useStructure()
 
   function canvasTarget(
     node: ElementNode,
@@ -65,7 +66,7 @@ export function useInsertDrag() {
   function resolveAt(x: number, y: number): { id: string; position: DropPosition } | null {
     const el = document.elementFromPoint(x, y) as HTMLElement | null
     if (!el) return null
-    if (el.closest('[data-insert-code-surface]')) return codeResolver?.(y) ?? null
+    if (el.closest('[data-insert-surface]')) return surfaceResolver?.(y) ?? null
     // collection-item interiors render template-page nodes whose ids
     // aren't in this page — climb until an id resolves
     let marker = el.closest<HTMLElement>('[data-node-id]')
@@ -82,16 +83,13 @@ export function useInsertDrag() {
   }
 
   function insert(p: InsertPayload, target: { id: string; position: DropPosition }) {
-    if (p.kind === 'element') {
-      insertElementBlock(elementBlockLines(p.type), target.id, target.position)
-      return
-    }
-    // a library entry is copied into the project by being used
-    const name = p.kind === 'catalog' ? addFromCatalog(p.key)?.def.name : p.name
-    // component removed mid-drag → nothing sane to insert
-    if (!name || !findComponent(name)) return
-    const block = expandComponentInstances(`:${name}:`, components.value).split('\n')
-    insertElementBlock(block, target.id, target.position)
+    const payload =
+      p.kind === 'element'
+        ? ({ kind: 'element', type: p.type } as const)
+        : p.kind === 'catalog'
+          ? ({ kind: 'catalog', key: p.key } as const)
+          : ({ kind: 'component', name: p.name } as const)
+    backend.value.insert(payload, target.id, target.position)
   }
 
   /** swallow the click the browser fires after the drag's pointerup, so
@@ -165,9 +163,11 @@ export function useInsertDrag() {
     window.addEventListener('keydown', onKeydown, { capture: true })
   }
 
-  function registerCodeResolver(fn: CodeResolver | null) {
-    codeResolver = fn
+  /** a surface claims the drop resolution for its own region. One slot: only
+   *  one such surface is ever mounted at a time. */
+  function registerDropResolver(fn: DropResolver | null) {
+    surfaceResolver = fn
   }
 
-  return { payload, pointer, suppressNextClick, startInsertDrag, registerCodeResolver }
+  return { payload, pointer, suppressNextClick, startInsertDrag, registerDropResolver }
 }

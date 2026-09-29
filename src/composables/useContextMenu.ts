@@ -1,13 +1,13 @@
 import { computed, ref } from 'vue'
 import { useElement } from './useElement'
-import type { ElementBlock } from './useElement'
+import { useStructure } from './useStructure'
 import type { InteractionBinding } from '@/types/editor'
 import { deepClone } from '@/lib/tree'
 
 const menu = ref<{ x: number; y: number; targetId: string } | null>(null)
 
-// app-internal clipboard (elements aren't representable in the OS one)
-const copiedBlock = ref<ElementBlock | null>(null)
+// class/interaction copies are node STATE, not structure, so they stay here;
+// the element clipboard lives in useStructure with the ops that use it
 const copiedClasses = ref<string | null>(null)
 const copiedInteractions = ref<InteractionBinding[] | null>(null)
 // tracks whether the most recent copy/cut was an element (vs. text) so the
@@ -15,19 +15,9 @@ const copiedInteractions = ref<InteractionBinding[] | null>(null)
 const clipboardIsElement = ref(false)
 
 export function useContextMenu() {
-  const {
-    selectedElement,
-    selectedElementIds,
-    isMultiSelect,
-    getElement,
-    selectElement,
-    copyElementBlock,
-    copyElementsBlock,
-    pasteElementBlock,
-    removeElement,
-    removeElements,
-    wrapSelectionInDiv,
-  } = useElement()
+  const { selectedElement, selectedElementIds, getElement, selectElement } = useElement()
+  const { backend, clipboard } = useStructure()
+  const copiedBlock = clipboard
 
   const target = computed(() => (menu.value ? getElement(menu.value.targetId) : null))
   const targetIsBody = computed(() => target.value?.type === 'body')
@@ -35,43 +25,25 @@ export function useContextMenu() {
   // --- keyboard-driven actions operate on the current selection ---
 
   function copySelection() {
-    const el = selectedElement.value
-    if (!el || el.type === 'body') return
-    const block = isMultiSelect.value
-      ? copyElementsBlock(selectedElementIds.value)
-      : copyElementBlock(el.id)
-    if (block) {
-      copiedBlock.value = block
-      clipboardIsElement.value = true
-    }
+    backend.value.copy(selectedElementIds.value)
+    if (clipboard.value) clipboardIsElement.value = true
   }
 
   function pasteOnSelection() {
     const el = selectedElement.value
-    if (el && copiedBlock.value) pasteElementBlock(el.id, copiedBlock.value)
+    if (el) backend.value.paste(el.id)
   }
 
   function duplicateSelection() {
-    const el = selectedElement.value
-    if (!el || el.type === 'body') return
-    const ids = selectedElementIds.value
-    const block = isMultiSelect.value ? copyElementsBlock(ids) : copyElementBlock(el.id)
-    // paste after the last element of the (possibly multi-) selection
-    const targetId = isMultiSelect.value ? ids[ids.length - 1]! : el.id
-    if (block) pasteElementBlock(targetId, block)
+    backend.value.duplicate(selectedElementIds.value)
   }
 
   function deleteSelection() {
-    const el = selectedElement.value
-    if (!el || el.type === 'body') return
-    if (isMultiSelect.value) removeElements(selectedElementIds.value)
-    else removeElement(el.id)
+    backend.value.remove(selectedElementIds.value)
   }
 
   function wrapSelection() {
-    const el = selectedElement.value
-    if (!el || el.type === 'body') return
-    wrapSelectionInDiv()
+    backend.value.wrap(selectedElementIds.value)
   }
 
   function cutSelection() {
@@ -92,25 +64,21 @@ export function useContextMenu() {
   }
 
   function duplicate() {
-    const id = menu.value?.targetId
-    const block = id ? copyElementBlock(id) : null
-    if (id && block) pasteElementBlock(id, block)
+    if (menu.value) backend.value.duplicate([menu.value.targetId])
   }
 
   function copy() {
-    const block = menu.value ? copyElementBlock(menu.value.targetId) : null
-    if (block) {
-      copiedBlock.value = block
-      clipboardIsElement.value = true
-    }
+    if (!menu.value) return
+    backend.value.copy([menu.value.targetId])
+    if (clipboard.value) clipboardIsElement.value = true
   }
 
   function paste() {
-    if (menu.value && copiedBlock.value) pasteElementBlock(menu.value.targetId, copiedBlock.value)
+    if (menu.value) backend.value.paste(menu.value.targetId)
   }
 
   function remove() {
-    if (menu.value) removeElement(menu.value.targetId)
+    if (menu.value) backend.value.remove([menu.value.targetId])
   }
 
   function copyClasses() {
