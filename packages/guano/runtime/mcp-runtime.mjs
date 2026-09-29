@@ -1917,7 +1917,7 @@ var sel = (pairs) => ({
 		class: cls
 	}))
 });
-var slide = (prefix, stops = SPACING) => ({
+var slide$1 = (prefix, stops = SPACING) => ({
 	kind: "slider",
 	prefix,
 	stops
@@ -2132,7 +2132,7 @@ var STYLE_SECTIONS = [
 				label: "Gap",
 				needsDisplay: true,
 				relevance: inFlexGrid,
-				control: slide("gap")
+				control: slide$1("gap")
 			},
 			{
 				id: "flex",
@@ -2214,7 +2214,7 @@ var STYLE_SECTIONS = [
 				id: "grid-rows",
 				label: "Grid rows",
 				relevance: inGrid,
-				control: slide("grid-rows", [
+				control: slide$1("grid-rows", [
 					"1",
 					"2",
 					"3",
@@ -2335,31 +2335,31 @@ var STYLE_SECTIONS = [
 			{
 				id: "top",
 				label: "Top",
-				control: slide("top"),
+				control: slide$1("top"),
 				relevance: positioned
 			},
 			{
 				id: "right",
 				label: "Right",
-				control: slide("right"),
+				control: slide$1("right"),
 				relevance: positioned
 			},
 			{
 				id: "bottom",
 				label: "Bottom",
-				control: slide("bottom"),
+				control: slide$1("bottom"),
 				relevance: positioned
 			},
 			{
 				id: "left",
 				label: "Left",
-				control: slide("left"),
+				control: slide$1("left"),
 				relevance: positioned
 			},
 			{
 				id: "z-index",
 				label: "Z-index",
-				control: slide("z", [
+				control: slide$1("z", [
 					"0",
 					"10",
 					"20",
@@ -2439,11 +2439,11 @@ var STYLE_SECTIONS = [
 		properties: [{
 			id: "padding",
 			label: "Padding",
-			control: slide("p")
+			control: slide$1("p")
 		}, {
 			id: "margin",
 			label: "Margin",
-			control: slide("m")
+			control: slide$1("m")
 		}]
 	},
 	{
@@ -2764,7 +2764,7 @@ var STYLE_SECTIONS = [
 			{
 				id: "opacity",
 				label: "Opacity",
-				control: slide("opacity", OPACITY),
+				control: slide$1("opacity", OPACITY),
 				default: "opacity-100"
 			},
 			{
@@ -2817,7 +2817,7 @@ var STYLE_SECTIONS = [
 				id: "duration",
 				label: "Duration",
 				relevance: whenTransition,
-				control: slide("duration", [
+				control: slide$1("duration", [
 					"75",
 					"100",
 					"150",
@@ -2859,7 +2859,7 @@ var STYLE_SECTIONS = [
 				id: "delay",
 				label: "Delay",
 				relevance: whenTransition,
-				control: slide("delay", [
+				control: slide$1("delay", [
 					"75",
 					"150",
 					"300",
@@ -2877,7 +2877,7 @@ var STYLE_SECTIONS = [
 			{
 				id: "scale",
 				label: "Scale",
-				control: slide("scale", [
+				control: slide$1("scale", [
 					"0",
 					"50",
 					"75",
@@ -3372,6 +3372,8 @@ function buildVocabulary() {
 		"inline-flex",
 		"inline-grid",
 		"outline-none",
+		"contents",
+		"flow-root",
 		"whitespace-normal",
 		"whitespace-nowrap",
 		"whitespace-pre",
@@ -5694,4 +5696,2051 @@ function createProject(name) {
 	};
 }
 //#endregion
-export { APPEAR_MODES, BUILTIN_LIST_SOURCES, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MOTION_PROPS, NODE_STATE_KEYS, REF_SLOT, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, SCROLL_LERP_MAX, SCROLL_LERP_MIN, SLIDER_DEFAULTS, STYLE_SECTIONS, TOKEN_NAME_RE, TRANSITION_DEFAULTS, TRANSITION_PRESET_IDS, VARIANT_NAME_RE, addVariantAxis, addVariantOption, adoptStructure, alignInstanceLines, alignMirrors, applyClass, buildDocument, buildInstanceMap, canNest, cloneForMaster, compileAnimation, componentReaches, countLocaleSeo, createNode, createPage, createProject, dataMarkerOf, deepClone, defaultBreakpoints, defaultSettings, dependencyOrder, effectiveClasses, elementBlockLines, enforceDocument, expandComponentInstances, extractBodyArg, extractBodyDecor, extractBodyLines, findNode, findParent, fontError, fontFormatForUrl, hasAncestorOfType, hasNodeState, hasOpenArgBracket, hoistBlockRef, inheritedInstanceValue, interactionGroupKey, interactionMarkerOf, interactionStateKey, isAllowedAttribute, isBodyOpenLine, isClosedBlock, isComponentType, isEmittableToken, isInstanceWrapper, isKnownElement, isLeafElement, isNodeHidden, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isValidClass, isValidToken, lexLine, lucideNameOf, lucideSvg, matchClass, mergeClassLayers, nestedComponentNames, normalizeComponentName, normalizeSyntax, parseSetup, parseSyntax, pickedKeys, purgeLocaleSeo, pushMasterStructure, reconcile, refOf, removeVariantAxis, removeVariantOption, renameVariantAxis, renameVariantOption, replaceSetup, resolveInstanceValue, resolvePicks, resolveSliderConfig, rewriteInstanceBlock, sameLayerProperty, sameProperty, sanitizeAttributes, sanitizeInlineSvg, sanitizeRich, serializeNode, setInstancePick, setNodeHidden, setSetupLocale, setStyleTokens, setVariantAxes, setVariantClasses, setVariantDefault, slugify, stripExtractedInstanceState, stripNodeState, styleMarkerOf, tokenError, typeOptionsFor, validateAnimation, validateBinding, validateDocument, validateMotionSettings, validateSliderConfig, variantKey, walkNodes, withDataMarker, withInteractionMarker, withStyleMarker, withoutRef };
+//#region src/lib/catalog/entries/helpers.ts
+/**
+* What the entries share.
+*
+* Every class in an entry must pass `isValidClass` — a class written straight
+* into `node.classes` renders and exports fine but can't be re-typed in the
+* Style panel once removed, which is a trap to hand a user. `npm run
+* check:catalog` holds every entry to that. Known rejects to avoid: `/NN`
+* opacity forms, `top-full`, `place-items-*`, `min-h-svh`.
+*
+* Hover and focus are plain `hover:` / `focus-visible:` variants; checked and
+* open states that CSS can see (`has-[:checked]:`, `group-hover:`) are plain
+* variants too. Interactions are for what only a click can decide.
+*/
+var FOCUS = "focus-visible:ring-2 focus-visible:ring-ring";
+var CARD = "rounded-xl border border-border bg-card text-card-foreground shadow-sm";
+var CARD_TOKENS = [
+	"border",
+	"card",
+	"card-foreground"
+];
+var FIELD = `w-full rounded-lg border border-input bg-background px-3 text-sm text-foreground outline-none ${FOCUS}`;
+var FIELD_TOKENS = [
+	"input",
+	"background",
+	"foreground",
+	"ring"
+];
+var PLACEHOLDER = "placeholder:text-muted-foreground";
+/** a floating surface: a menu, a popover, a hover card */
+var SURFACE = "rounded-lg border border-border bg-card text-card-foreground shadow-md";
+/** text, as the one child of a `button` / `link` / `label` — they are
+*  containers, and their words live in a span */
+var words = (content, key) => ({
+	type: "span",
+	content,
+	...key ? { key } : {}
+});
+var icon = (name, classes = "size-4 shrink-0", extra = {}) => ({
+	type: "icon",
+	icon: name,
+	classes,
+	...extra
+});
+var link = (content, href, classes) => ({
+	type: "link",
+	link: href,
+	classes,
+	children: [words(content)]
+});
+/**
+* An instance of the Button entry. What is inside belongs to Button — restyle
+* it there and every host follows — so a host only says which look it wears,
+* what it reads, and which of its two icons show.
+*/
+var button = (label, opts = {}) => {
+	const variants = {};
+	if (opts.variant) variants.variant = opts.variant;
+	if (opts.size) variants.size = opts.size;
+	const parts = { label: { content: label } };
+	if (opts.iconOnly) parts.label = {
+		content: label,
+		hidden: true
+	};
+	if (opts.start) parts["icon-start"] = {
+		icon: opts.start,
+		hidden: false
+	};
+	if (opts.end) parts["icon-end"] = {
+		icon: opts.end,
+		hidden: false
+	};
+	return {
+		type: "Button",
+		component: "button",
+		...Object.keys(variants).length ? { variants } : {},
+		parts
+	};
+};
+/**
+* A host cannot bind an interaction ON a nested instance — its bindings are
+* the component's own. So the trigger is a wrapper the host owns: it adds no
+* box (`contents`), and the click on the button inside bubbles up to it.
+*/
+var trigger = (child, interactions, classes = "contents") => ({
+	type: "div",
+	classes,
+	interactions,
+	children: [child]
+});
+//#endregion
+//#region src/lib/catalog/entries/primitives.ts
+/**
+* Buttons, badges and the small display pieces.
+*
+* One component per THING, not per look: a Button is a Button, and default /
+* outline / ghost are options it wears. See ./helpers for the class rules.
+*/
+var PRIMITIVES = [
+	{
+		key: "button",
+		name: "Button",
+		category: "Buttons",
+		description: "An action, in six looks and four sizes, with an optional icon on either side.",
+		tokens: [
+			"ring",
+			"primary",
+			"primary-foreground",
+			"secondary",
+			"secondary-foreground",
+			"destructive",
+			"destructive-foreground",
+			"input",
+			"background",
+			"foreground",
+			"accent",
+			"accent-foreground"
+		],
+		variants: [{
+			name: "variant",
+			options: [
+				"default",
+				"secondary",
+				"outline",
+				"ghost",
+				"destructive",
+				"link"
+			],
+			default: "default"
+		}, {
+			name: "size",
+			options: [
+				"md",
+				"sm",
+				"lg",
+				"icon"
+			],
+			default: "md"
+		}],
+		root: {
+			type: "button",
+			key: "button",
+			classes: `inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-medium whitespace-nowrap text-primary-foreground transition-colors outline-none hover:opacity-90 disabled:opacity-50 ${FOCUS}`,
+			variantClasses: {
+				"variant:secondary": "bg-secondary text-secondary-foreground",
+				"variant:outline": "border border-input bg-background text-foreground hover:bg-accent hover:text-accent-foreground hover:opacity-100",
+				"variant:ghost": "bg-transparent text-foreground hover:bg-accent hover:text-accent-foreground hover:opacity-100",
+				"variant:destructive": "bg-destructive text-destructive-foreground",
+				"variant:link": "h-auto bg-transparent px-0 text-primary underline-offset-4 hover:underline hover:opacity-100",
+				"size:sm": "h-8 gap-1.5 rounded-md px-3 text-xs",
+				"size:lg": "h-10 px-6 text-base",
+				"size:icon": "w-9 px-0"
+			},
+			children: [
+				icon("arrow-left", "size-4 shrink-0", {
+					key: "icon-start",
+					hidden: true
+				}),
+				words("Button", "label"),
+				icon("arrow-right", "size-4 shrink-0", {
+					key: "icon-end",
+					hidden: true
+				})
+			]
+		}
+	},
+	{
+		key: "badge",
+		name: "Badge",
+		category: "Badges",
+		description: "A status or a count, in four looks.",
+		tokens: [
+			"primary",
+			"primary-foreground",
+			"secondary",
+			"secondary-foreground",
+			"destructive",
+			"destructive-foreground",
+			"border",
+			"foreground"
+		],
+		variants: [{
+			name: "variant",
+			options: [
+				"default",
+				"secondary",
+				"outline",
+				"destructive"
+			],
+			default: "default"
+		}],
+		root: {
+			type: "span",
+			key: "label",
+			content: "Badge",
+			classes: "inline-flex w-fit items-center rounded-full border border-transparent bg-primary px-2 py-1 text-xs font-medium text-primary-foreground",
+			variantClasses: {
+				"variant:secondary": "bg-secondary text-secondary-foreground",
+				"variant:outline": "border-border bg-transparent text-foreground",
+				"variant:destructive": "bg-destructive text-destructive-foreground"
+			}
+		}
+	},
+	{
+		key: "avatar",
+		name: "Avatar",
+		category: "Display",
+		description: "A round profile image.",
+		tokens: ["muted"],
+		root: {
+			type: "div",
+			classes: "size-10 shrink-0 overflow-hidden rounded-full bg-muted",
+			children: [{
+				type: "image",
+				key: "image",
+				classes: "h-full w-full object-cover"
+			}]
+		}
+	},
+	{
+		key: "separator",
+		name: "Separator",
+		category: "Display",
+		description: "A hairline rule between sections.",
+		tokens: ["border"],
+		root: {
+			type: "div",
+			classes: "h-px w-full bg-border"
+		}
+	},
+	{
+		key: "kbd",
+		name: "Kbd",
+		category: "Display",
+		description: "A key, or a shortcut.",
+		tokens: [
+			"border",
+			"muted",
+			"muted-foreground"
+		],
+		root: {
+			type: "span",
+			key: "label",
+			content: "⌘K",
+			classes: "inline-flex h-5 w-fit items-center rounded-md border border-border bg-muted px-1.5 font-mono text-xs font-medium text-muted-foreground"
+		}
+	},
+	{
+		key: "skeleton",
+		name: "Skeleton",
+		category: "Display",
+		description: "A placeholder that pulses while content loads.",
+		tokens: ["muted"],
+		root: {
+			type: "div",
+			classes: "h-4 w-full animate-pulse rounded-md bg-muted"
+		}
+	},
+	{
+		key: "spinner",
+		name: "Spinner",
+		category: "Display",
+		description: "Something is happening.",
+		tokens: ["muted-foreground"],
+		root: icon("loader-circle", "size-4 shrink-0 animate-spin text-muted-foreground", { attributes: { "aria-label": "Loading" } })
+	},
+	{
+		key: "progress",
+		name: "Progress",
+		category: "Display",
+		description: "How far along. Set the bar’s width to the share done.",
+		tokens: ["muted", "primary"],
+		root: {
+			type: "div",
+			classes: "h-2 w-full overflow-hidden rounded-full bg-muted",
+			attributes: { role: "progressbar" },
+			children: [{
+				type: "div",
+				key: "bar",
+				classes: "h-full w-1/2 rounded-full bg-primary transition-all"
+			}]
+		}
+	},
+	{
+		key: "empty",
+		name: "Empty",
+		category: "Display",
+		description: "What a list shows when there is nothing in it yet.",
+		tokens: [
+			"border",
+			"muted",
+			"muted-foreground",
+			"foreground"
+		],
+		root: {
+			type: "div",
+			classes: "flex w-full flex-col items-center gap-4 rounded-xl border border-dashed border-border p-10 text-center",
+			children: [
+				{
+					type: "div",
+					classes: "flex size-10 items-center justify-center rounded-lg bg-muted text-muted-foreground",
+					children: [icon("inbox", "size-5 shrink-0", { key: "icon" })]
+				},
+				{
+					type: "div",
+					classes: "flex flex-col gap-1",
+					children: [{
+						type: "h3",
+						key: "title",
+						content: "Nothing here yet",
+						classes: "text-base font-semibold text-foreground"
+					}, {
+						type: "paragraph",
+						key: "description",
+						content: "Create your first one to see it listed here.",
+						classes: "text-sm text-muted-foreground"
+					}]
+				},
+				button("Create one", { start: "plus" })
+			]
+		}
+	}
+];
+//#endregion
+//#region src/lib/catalog/entries/forms.ts
+/**
+* Form controls.
+*
+* The ones with a state — switch, toggle, radio — are REAL inputs, so they
+* work with no JavaScript, submit with a form and answer to the keyboard. What
+* shows the state is CSS reading the input (`has-[:checked]:`), and the input
+* itself is visually hidden (`sr-only`), not removed.
+*
+* No `for` / `id` pairing anywhere: `htmlId` does not replicate across
+* instances, so every instance would claim the same id. A `label` is a
+* container, so the control simply sits inside it.
+*/
+var LABEL = "text-sm font-medium text-foreground";
+var radio = (label, value, checked = false) => ({
+	type: "label",
+	classes: "flex cursor-pointer items-center gap-2",
+	children: [{
+		type: "radio",
+		classes: `size-4 shrink-0 border border-input accent-primary outline-none ${FOCUS}`,
+		attributes: {
+			name: "choice",
+			value,
+			...checked ? { checked: "" } : {}
+		}
+	}, {
+		type: "span",
+		content: label,
+		classes: LABEL
+	}]
+});
+var toggleItem = (iconName, label, value) => ({
+	type: "label",
+	classes: "inline-flex size-9 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted has-[:checked]:bg-accent has-[:checked]:text-accent-foreground has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring",
+	attributes: { "aria-label": label },
+	children: [{
+		type: "radio",
+		classes: "sr-only",
+		attributes: {
+			name: "align",
+			value
+		}
+	}, icon(iconName)]
+});
+var FORMS = [
+	{
+		key: "input",
+		name: "Input",
+		category: "Forms",
+		description: "A single-line text field.",
+		tokens: [...FIELD_TOKENS, "muted-foreground"],
+		root: {
+			type: "input",
+			key: "input",
+			classes: `h-9 ${FIELD} ${PLACEHOLDER}`,
+			attributes: {
+				type: "text",
+				placeholder: "Enter your email",
+				name: "email"
+			}
+		}
+	},
+	{
+		key: "textarea",
+		name: "Textarea",
+		category: "Forms",
+		description: "A multi-line text field.",
+		tokens: [...FIELD_TOKENS, "muted-foreground"],
+		root: {
+			type: "textarea",
+			key: "input",
+			classes: `py-2 ${FIELD} ${PLACEHOLDER}`,
+			attributes: {
+				placeholder: "Your message",
+				name: "message",
+				rows: "4"
+			}
+		}
+	},
+	{
+		key: "select",
+		name: "Select",
+		category: "Forms",
+		description: "A dropdown of fixed choices.",
+		tokens: FIELD_TOKENS,
+		root: {
+			type: "select",
+			key: "input",
+			classes: `h-9 ${FIELD}`,
+			attributes: { name: "choice" },
+			children: [
+				{
+					type: "option",
+					content: "First option"
+				},
+				{
+					type: "option",
+					content: "Second option"
+				},
+				{
+					type: "option",
+					content: "Third option"
+				}
+			]
+		}
+	},
+	{
+		key: "label",
+		name: "Label",
+		category: "Forms",
+		description: "A form field label.",
+		tokens: ["foreground"],
+		root: {
+			type: "label",
+			classes: LABEL,
+			children: [words("Label", "label")]
+		}
+	},
+	{
+		key: "field",
+		name: "Field",
+		category: "Forms",
+		description: "A label over an input, with a line of help under it.",
+		tokens: [...FIELD_TOKENS, "muted-foreground"],
+		root: {
+			type: "label",
+			classes: "flex w-full flex-col gap-1.5",
+			children: [
+				{
+					type: "span",
+					key: "label",
+					content: "Email",
+					classes: LABEL
+				},
+				{
+					type: "input",
+					key: "input",
+					classes: `h-9 ${FIELD} ${PLACEHOLDER}`,
+					attributes: {
+						type: "email",
+						placeholder: "you@example.com",
+						name: "email"
+					}
+				},
+				{
+					type: "span",
+					key: "help",
+					content: "We only use it to reply.",
+					classes: "text-xs text-muted-foreground",
+					hidden: true
+				}
+			]
+		}
+	},
+	{
+		key: "checkbox",
+		name: "Checkbox",
+		category: "Forms",
+		description: "A checkbox with its label.",
+		tokens: [
+			"input",
+			"primary",
+			"foreground",
+			"ring"
+		],
+		root: {
+			type: "label",
+			classes: "flex cursor-pointer items-center gap-2",
+			children: [{
+				type: "checkbox",
+				key: "input",
+				classes: `size-4 shrink-0 rounded-md border border-input accent-primary outline-none ${FOCUS}`,
+				attributes: { name: "accept" }
+			}, {
+				type: "span",
+				key: "label",
+				content: "Accept the terms",
+				classes: LABEL
+			}]
+		}
+	},
+	{
+		key: "radio-group",
+		name: "RadioGroup",
+		category: "Forms",
+		description: "One choice out of a few.",
+		tokens: [
+			"input",
+			"primary",
+			"foreground",
+			"ring"
+		],
+		root: {
+			type: "fieldset",
+			classes: "flex flex-col gap-3",
+			children: [
+				radio("Comfortable", "comfortable", true),
+				radio("Compact", "compact"),
+				radio("Spacious", "spacious")
+			]
+		}
+	},
+	{
+		key: "switch",
+		name: "Switch",
+		category: "Forms",
+		description: "On or off, at once.",
+		tokens: [
+			"input",
+			"primary",
+			"background",
+			"foreground",
+			"ring"
+		],
+		root: {
+			type: "label",
+			classes: "group flex w-fit cursor-pointer items-center gap-2",
+			children: [
+				{
+					type: "checkbox",
+					key: "input",
+					classes: "sr-only",
+					attributes: {
+						name: "enabled",
+						role: "switch"
+					}
+				},
+				{
+					type: "div",
+					key: "track",
+					classes: "relative h-5 w-9 shrink-0 rounded-full bg-input transition-colors group-has-[:checked]:bg-primary group-has-[:focus-visible]:ring-2 group-has-[:focus-visible]:ring-ring",
+					children: [{
+						type: "div",
+						key: "thumb",
+						classes: "absolute top-[2px] left-[2px] size-4 rounded-full bg-background shadow-sm transition-transform group-has-[:checked]:translate-x-4"
+					}]
+				},
+				{
+					type: "span",
+					key: "label",
+					content: "Airplane mode",
+					classes: LABEL
+				}
+			]
+		}
+	},
+	{
+		key: "toggle",
+		name: "Toggle",
+		category: "Forms",
+		description: "A button that stays pressed.",
+		tokens: [
+			"muted",
+			"muted-foreground",
+			"accent",
+			"accent-foreground",
+			"ring"
+		],
+		root: {
+			type: "label",
+			classes: "inline-flex h-9 w-fit cursor-pointer items-center justify-center gap-2 rounded-lg px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted has-[:checked]:bg-accent has-[:checked]:text-accent-foreground has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring",
+			children: [
+				{
+					type: "checkbox",
+					key: "input",
+					classes: "sr-only",
+					attributes: { name: "bold" }
+				},
+				icon("bold", "size-4 shrink-0", { key: "icon" }),
+				{
+					type: "span",
+					key: "label",
+					content: "Bold"
+				}
+			]
+		}
+	},
+	{
+		key: "toggle-group",
+		name: "ToggleGroup",
+		category: "Forms",
+		description: "A row of toggles where one is pressed at a time.",
+		tokens: [
+			"border",
+			"muted",
+			"muted-foreground",
+			"accent",
+			"accent-foreground",
+			"ring"
+		],
+		root: {
+			type: "fieldset",
+			classes: "flex w-fit items-center gap-1 rounded-lg border border-border p-1",
+			children: [
+				toggleItem("text-align-start", "Align left", "left"),
+				toggleItem("text-align-center", "Align center", "center"),
+				toggleItem("text-align-end", "Align right", "right")
+			]
+		}
+	}
+];
+//#endregion
+//#region src/lib/catalog/entries/content.ts
+/**
+* Cards, feedback, marketing blocks and page furniture — everything static.
+* The interactive pieces live in ./interactive.
+*
+* Where one of these has a button, it holds an instance of the Button entry
+* rather than a copy of its markup: restyle Button once and every card, hero
+* and pricing plan follows. See ./helpers for the class rules.
+*/
+var NAV_LINK = "text-sm text-muted-foreground transition-colors hover:text-foreground";
+var navLink = (content, href) => link(content, href, NAV_LINK);
+var CARD_TITLE = "text-lg font-semibold tracking-tight text-card-foreground";
+var cell = (content, classes = "") => ({
+	type: "td",
+	classes: `p-2 align-middle ${classes}`.trim(),
+	children: [{
+		type: "text",
+		content
+	}]
+});
+var headCell = (content, classes = "") => ({
+	type: "th",
+	classes: `h-10 px-2 text-left align-middle font-medium text-muted-foreground ${classes}`.trim(),
+	children: [{
+		type: "text",
+		content
+	}]
+});
+var row = (...cells) => ({
+	type: "tr",
+	classes: "border-b border-border transition-colors hover:bg-muted",
+	children: cells
+});
+var feature = (text) => ({
+	type: "list-item",
+	classes: "flex items-center gap-2 text-sm text-muted-foreground",
+	children: [icon("check", "size-4 shrink-0 text-primary"), {
+		type: "text",
+		content: text
+	}]
+});
+var slide = (title) => ({
+	type: "div",
+	classes: "flex h-48 items-center justify-center rounded-xl bg-muted",
+	children: [{
+		type: "span",
+		content: title,
+		classes: "text-2xl font-semibold text-muted-foreground"
+	}]
+});
+var CONTENT = [
+	{
+		key: "card",
+		name: "Card",
+		category: "Cards",
+		description: "A titled panel with body copy, and a footer action you can switch on.",
+		tokens: [...CARD_TOKENS, "muted-foreground"],
+		root: {
+			type: "div",
+			classes: CARD,
+			children: [
+				{
+					type: "div",
+					classes: "flex flex-col gap-1.5 p-6",
+					children: [{
+						type: "h3",
+						key: "title",
+						content: "Card title",
+						classes: CARD_TITLE
+					}, {
+						type: "paragraph",
+						key: "description",
+						content: "A short line about what this card holds.",
+						classes: "text-sm text-muted-foreground"
+					}]
+				},
+				{
+					type: "div",
+					classes: "px-6 pb-6",
+					children: [{
+						type: "paragraph",
+						key: "content",
+						content: "Card content goes here.",
+						classes: "text-sm text-card-foreground"
+					}]
+				},
+				{
+					type: "div",
+					key: "footer",
+					hidden: true,
+					classes: "flex items-center justify-end gap-2 border-t border-border px-6 py-4",
+					children: [button("Continue")]
+				}
+			]
+		}
+	},
+	{
+		key: "alert",
+		name: "Alert",
+		category: "Feedback",
+		description: "A notice, plain or for an error.",
+		tokens: [
+			"border",
+			"background",
+			"foreground",
+			"muted-foreground",
+			"destructive"
+		],
+		variants: [{
+			name: "variant",
+			options: ["default", "destructive"],
+			default: "default"
+		}],
+		root: {
+			type: "div",
+			classes: "flex w-full gap-3 rounded-lg border border-border bg-background p-4 text-foreground",
+			attributes: { role: "alert" },
+			variantClasses: { "variant:destructive": "border-destructive text-destructive" },
+			children: [icon("info", "mt-0.5 size-4 shrink-0", { key: "icon" }), {
+				type: "div",
+				classes: "flex min-w-0 flex-col gap-1",
+				children: [{
+					type: "h4",
+					key: "title",
+					content: "Heads up",
+					classes: "text-sm font-medium"
+				}, {
+					type: "paragraph",
+					key: "description",
+					content: "Something worth knowing before you carry on.",
+					classes: "text-sm text-muted-foreground",
+					variantClasses: { "variant:destructive": "text-destructive" }
+				}]
+			}]
+		}
+	},
+	{
+		key: "testimonial",
+		name: "Testimonial",
+		category: "Content",
+		description: "A quote with an attributed author.",
+		tokens: [
+			...CARD_TOKENS,
+			"muted",
+			"muted-foreground"
+		],
+		root: {
+			type: "div",
+			classes: `flex flex-col gap-4 p-6 ${CARD}`,
+			children: [{
+				type: "paragraph",
+				key: "quote",
+				content: "This is the single best tool we have adopted all year.",
+				classes: "text-base text-card-foreground"
+			}, {
+				type: "div",
+				classes: "flex items-center gap-3",
+				children: [{
+					type: "div",
+					classes: "size-10 shrink-0 overflow-hidden rounded-full bg-muted",
+					children: [{
+						type: "image",
+						key: "photo",
+						classes: "h-full w-full object-cover"
+					}]
+				}, {
+					type: "div",
+					classes: "flex min-w-0 flex-col",
+					children: [{
+						type: "span",
+						key: "name",
+						content: "Jane Doe",
+						classes: "truncate text-sm font-medium text-card-foreground"
+					}, {
+						type: "span",
+						key: "role",
+						content: "Head of Design, Acme",
+						classes: "truncate text-xs text-muted-foreground"
+					}]
+				}]
+			}]
+		}
+	},
+	{
+		key: "pricing-card",
+		name: "PricingCard",
+		category: "Content",
+		description: "A plan, its price and what it includes.",
+		tokens: [
+			...CARD_TOKENS,
+			"muted-foreground",
+			"primary"
+		],
+		root: {
+			type: "div",
+			classes: `flex flex-col gap-6 p-6 ${CARD}`,
+			children: [
+				{
+					type: "div",
+					classes: "flex flex-col gap-2",
+					children: [{
+						type: "div",
+						classes: "flex items-center justify-between gap-2",
+						children: [{
+							type: "span",
+							key: "plan",
+							content: "Pro",
+							classes: "text-sm font-medium text-muted-foreground"
+						}, {
+							type: "Badge",
+							component: "badge",
+							key: "badge",
+							hidden: true,
+							variants: { variant: "secondary" },
+							parts: { label: { content: "Most popular" } }
+						}]
+					}, {
+						type: "div",
+						classes: "flex items-end gap-1",
+						children: [{
+							type: "span",
+							key: "price",
+							content: "$29",
+							classes: "text-4xl font-bold tracking-tight text-card-foreground"
+						}, {
+							type: "span",
+							key: "period",
+							content: "/month",
+							classes: "text-sm text-muted-foreground"
+						}]
+					}]
+				},
+				{
+					type: "list",
+					classes: "flex flex-col gap-2",
+					children: [
+						feature("Unlimited projects"),
+						feature("Priority support"),
+						feature("Custom domains")
+					]
+				},
+				{
+					type: "div",
+					classes: "flex flex-col",
+					children: [button("Get started")]
+				}
+			]
+		}
+	},
+	{
+		key: "feature-block",
+		name: "FeatureBlock",
+		category: "Content",
+		description: "An icon, a heading and a line — for a feature grid.",
+		tokens: [
+			"muted",
+			"foreground",
+			"muted-foreground"
+		],
+		root: {
+			type: "div",
+			classes: "flex flex-col gap-3",
+			children: [
+				{
+					type: "div",
+					classes: "flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted text-foreground",
+					children: [icon("zap", "size-5 shrink-0", { key: "icon" })]
+				},
+				{
+					type: "h3",
+					key: "title",
+					content: "Fast by default",
+					classes: "text-base font-semibold text-foreground"
+				},
+				{
+					type: "paragraph",
+					key: "description",
+					content: "A sentence on why this matters to the reader.",
+					classes: "text-sm text-muted-foreground"
+				}
+			]
+		}
+	},
+	{
+		key: "table",
+		name: "Table",
+		category: "Content",
+		description: "Rows and columns, with a header.",
+		tokens: [
+			"border",
+			"muted",
+			"muted-foreground",
+			"foreground"
+		],
+		root: {
+			type: "div",
+			classes: "w-full overflow-x-auto",
+			children: [{
+				type: "table",
+				classes: "w-full border-collapse text-sm text-foreground",
+				children: [{
+					type: "thead",
+					children: [{
+						type: "tr",
+						classes: "border-b border-border",
+						children: [
+							headCell("Invoice"),
+							headCell("Status"),
+							headCell("Amount", "text-right")
+						]
+					}]
+				}, {
+					type: "tbody",
+					children: [
+						row(cell("INV-001", "font-medium"), cell("Paid"), cell("$250.00", "text-right")),
+						row(cell("INV-002", "font-medium"), cell("Pending"), cell("$150.00", "text-right")),
+						row(cell("INV-003", "font-medium"), cell("Unpaid"), cell("$350.00", "text-right"))
+					]
+				}]
+			}]
+		}
+	},
+	{
+		key: "carousel",
+		name: "Carousel",
+		category: "Content",
+		description: "Slides you step through, with arrows and dots.",
+		tokens: ["muted", "muted-foreground"],
+		root: {
+			type: "slider",
+			classes: "w-full",
+			slider: { gap: 16 },
+			children: [
+				slide("One"),
+				slide("Two"),
+				slide("Three")
+			]
+		}
+	},
+	{
+		key: "pagination",
+		name: "Pagination",
+		category: "Navigation",
+		description: "Previous, next, and the pages between.",
+		tokens: [],
+		root: {
+			type: "nav",
+			classes: "flex items-center justify-center gap-1",
+			attributes: { "aria-label": "Pagination" },
+			children: [
+				button("Previous", {
+					variant: "ghost",
+					start: "chevron-left"
+				}),
+				button("1", {
+					variant: "outline",
+					size: "icon"
+				}),
+				button("2", {
+					variant: "ghost",
+					size: "icon"
+				}),
+				button("3", {
+					variant: "ghost",
+					size: "icon"
+				}),
+				button("Next", {
+					variant: "ghost",
+					end: "chevron-right"
+				})
+			]
+		}
+	},
+	{
+		key: "breadcrumb",
+		name: "Breadcrumb",
+		category: "Navigation",
+		description: "The trail back up to the home page.",
+		tokens: ["foreground", "muted-foreground"],
+		root: {
+			type: "nav",
+			classes: "flex items-center gap-2 text-muted-foreground",
+			attributes: { "aria-label": "Breadcrumb" },
+			children: [
+				navLink("Home", "/"),
+				icon("chevron-right", "size-3 shrink-0"),
+				navLink("Docs", "/docs"),
+				icon("chevron-right", "size-3 shrink-0"),
+				{
+					type: "span",
+					key: "current",
+					content: "This page",
+					classes: "text-sm font-medium text-foreground"
+				}
+			]
+		}
+	},
+	{
+		key: "footer",
+		name: "Footer",
+		category: "Navigation",
+		description: "A site footer with links and a copyright line.",
+		tokens: [
+			"border",
+			"background",
+			"foreground",
+			"muted-foreground"
+		],
+		root: {
+			type: "footer",
+			classes: "flex flex-col gap-6 border-t border-border bg-background px-6 py-12",
+			children: [{
+				type: "div",
+				classes: "flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between",
+				children: [{
+					type: "span",
+					key: "brand",
+					content: "Acme Inc.",
+					classes: "text-sm font-semibold text-foreground"
+				}, {
+					type: "nav",
+					classes: "flex items-center gap-6",
+					children: [
+						navLink("Privacy", "/privacy"),
+						navLink("Terms", "/terms"),
+						navLink("Contact", "/contact")
+					]
+				}]
+			}, {
+				type: "span",
+				key: "legal",
+				content: "© Acme Inc. All rights reserved.",
+				classes: "text-xs text-muted-foreground"
+			}]
+		}
+	},
+	{
+		key: "hero",
+		name: "Hero",
+		category: "Sections",
+		description: "A headline, a line of copy and two actions.",
+		tokens: ["foreground", "muted-foreground"],
+		root: {
+			type: "section",
+			classes: "flex flex-col items-center gap-6 px-6 py-24 text-center",
+			children: [
+				{
+					type: "h1",
+					key: "title",
+					content: "Build your site, faster",
+					classes: "max-w-3xl text-4xl font-bold tracking-tight text-foreground md:text-5xl"
+				},
+				{
+					type: "paragraph",
+					key: "description",
+					content: "One sentence on what this does and who it is for.",
+					classes: "max-w-2xl text-base text-muted-foreground"
+				},
+				{
+					type: "div",
+					classes: "flex flex-col gap-3 sm:flex-row",
+					children: [button("Get started", {
+						size: "lg",
+						end: "arrow-right"
+					}), button("Learn more", {
+						variant: "outline",
+						size: "lg"
+					})]
+				}
+			]
+		}
+	},
+	{
+		key: "cta",
+		name: "CallToAction",
+		category: "Sections",
+		description: "A closing band that asks for the click.",
+		tokens: ["primary", "primary-foreground"],
+		root: {
+			type: "section",
+			classes: "flex flex-col items-center gap-4 rounded-xl bg-primary px-6 py-16 text-center",
+			children: [
+				{
+					type: "h2",
+					key: "title",
+					content: "Ready to get started?",
+					classes: "text-3xl font-bold tracking-tight text-primary-foreground"
+				},
+				{
+					type: "paragraph",
+					key: "description",
+					content: "Set up your first site in a couple of minutes.",
+					classes: "max-w-xl text-sm text-primary-foreground"
+				},
+				button("Start for free", {
+					variant: "secondary",
+					size: "lg"
+				})
+			]
+		}
+	}
+];
+//#endregion
+//#region src/lib/catalog/entries/interactive.ts
+/**
+* The entries that open, close and switch.
+*
+* Two rules shape the ones that carry interaction bindings:
+*
+* · **State is keyed by (interaction, target), not by binding.** That is what
+*   lets an open button, a close button and an overlay drive one effect, and
+*   it is why every binding below that means "the same panel" names the same
+*   target.
+* · **A `group` holds ONE open key.** So a grouped binding and an ungrouped
+*   one may never share a target, and an `off` binding never carries a group.
+*
+* Effect names are entry-specific ("Accordion · open"): the interaction
+* library is project-wide and shared by reference, so a generic "Show" would
+* mean editing one component silently restyles another.
+*
+* Where the trigger is a Button, the binding sits on a wrapper the entry owns
+* (`trigger` in ./helpers): a host cannot bind on an instance it holds.
+*
+* Tooltip and HoverCard carry no binding at all. Hover is something CSS can
+* see (`group-hover:`), so they work with no JavaScript.
+*/
+var MENU_ITEM = "rounded-md px-2 py-1.5 text-sm text-card-foreground transition-colors hover:bg-accent hover:text-accent-foreground";
+var NAVBAR_LINK = "text-sm text-muted-foreground transition-colors hover:text-foreground";
+var MOBILE_LINK = "rounded-md px-2 py-1.5 text-sm text-foreground transition-colors hover:bg-accent hover:text-accent-foreground";
+var OVERLAY = "absolute inset-0 bg-[rgba(0,0,0,0.5)]";
+var DIALOG_PANEL = `relative z-50 flex w-full max-w-md flex-col gap-4 rounded-xl p-6 shadow-lg border border-border bg-card text-card-foreground`;
+/** one accordion row: a full-width trigger over a panel that starts hidden */
+var accordionItem = (key, question, answer) => ({
+	type: "div",
+	classes: "flex flex-col border-b border-border",
+	children: [{
+		type: "button",
+		classes: `flex w-full items-center justify-between gap-4 py-4 text-left text-sm font-medium text-foreground outline-none ${FOCUS}`,
+		children: [words(question), icon("chevron-down", "size-4 shrink-0 text-muted-foreground")],
+		interactions: [{
+			interaction: "open",
+			trigger: "click",
+			target: key,
+			group: "accordion"
+		}]
+	}, {
+		type: "div",
+		key,
+		content: answer,
+		classes: "hidden pb-4 text-sm text-muted-foreground"
+	}]
+});
+/**
+* Tabs, without a default-state trigger.
+*
+* Panel 1 is visible in the markup and panels 2..N start `hidden`, so the
+* component reads correctly with no JS at all. An `appear` binding would have
+* been the obvious way to set the default, and it is wrong here: the published
+* runtime forces every appear state on after 3s, which would snap the reader
+* back to tab 1 mid-read.
+*
+* So tab 1 is the "off" position of every effect, and tabs 2..N turn theirs on:
+*   tab k≥2 → Show@Pk on (grouped, so the other panels close) + Hide@P1 on
+*   tab 1   → Hide@P1 off + Show@Pk off for every k
+* with the same shape again for the active-tab highlight.
+*
+* Adding a fourth tab means wiring its bindings by hand — the accepted limit
+* of expressing this in a class-toggle model.
+*/
+var TAB_KEYS = [
+	"panel-1",
+	"panel-2",
+	"panel-3"
+];
+var TAB_LABELS = [
+	"Overview",
+	"Details",
+	"Activity"
+];
+var TAB_BODIES = [
+	"The first panel is the one visible before anything is clicked.",
+	"The second panel. Clicking its tab hides the others.",
+	"The third panel, same again."
+];
+var TAB_BASE = `flex-1 rounded-md px-3 py-1.5 text-sm font-medium outline-none transition-colors ${FOCUS}`;
+var tabsRoot = () => {
+	const tabs = TAB_LABELS.map((label, i) => {
+		const key = `tab-${i + 1}`;
+		const first = i === 0;
+		return {
+			type: "button",
+			key,
+			children: [words(label)],
+			classes: first ? `${TAB_BASE} bg-background text-foreground` : `${TAB_BASE} text-muted-foreground`,
+			interactions: first ? [
+				{
+					interaction: "hide-first",
+					trigger: "click",
+					target: TAB_KEYS[0],
+					action: "off"
+				},
+				...TAB_KEYS.slice(1).map((k) => ({
+					interaction: "show",
+					trigger: "click",
+					target: k,
+					action: "off"
+				})),
+				{
+					interaction: "dim-first",
+					trigger: "click",
+					target: "tab-1",
+					action: "off"
+				},
+				...TAB_LABELS.slice(1).map((_, j) => ({
+					interaction: "activate",
+					trigger: "click",
+					target: `tab-${j + 2}`,
+					action: "off"
+				}))
+			] : [
+				{
+					interaction: "show",
+					trigger: "click",
+					target: TAB_KEYS[i],
+					action: "on",
+					group: "panels"
+				},
+				{
+					interaction: "hide-first",
+					trigger: "click",
+					target: TAB_KEYS[0],
+					action: "on"
+				},
+				{
+					interaction: "activate",
+					trigger: "click",
+					target: key,
+					action: "on",
+					group: "tabs"
+				},
+				{
+					interaction: "dim-first",
+					trigger: "click",
+					target: "tab-1",
+					action: "on"
+				}
+			]
+		};
+	});
+	const panels = TAB_KEYS.map((key, i) => ({
+		type: "div",
+		key,
+		content: TAB_BODIES[i],
+		classes: i === 0 ? "py-4 text-sm text-muted-foreground" : "hidden py-4 text-sm text-muted-foreground"
+	}));
+	return {
+		type: "div",
+		classes: "flex w-full flex-col",
+		children: [{
+			type: "div",
+			classes: "flex items-center gap-1 rounded-lg bg-muted p-1",
+			children: tabs
+		}, ...panels]
+	};
+};
+/** a modal: a trigger, and a layer over the page holding an overlay and a panel */
+var modal = (opts) => ({
+	type: "div",
+	classes: "flex flex-col items-start gap-4",
+	children: [trigger(button(opts.open), [{
+		interaction: "open",
+		trigger: "click",
+		target: "layer",
+		action: "on"
+	}]), {
+		type: "div",
+		key: "layer",
+		classes: "hidden fixed inset-0 z-50 items-center justify-center p-6",
+		children: [{
+			type: "div",
+			classes: OVERLAY,
+			...opts.dismissible ? { interactions: [{
+				interaction: "open",
+				trigger: "click",
+				target: "layer",
+				action: "off"
+			}] } : {}
+		}, {
+			type: "div",
+			classes: DIALOG_PANEL,
+			attributes: {
+				role: opts.dismissible ? "dialog" : "alertdialog",
+				"aria-modal": "true"
+			},
+			children: [
+				{
+					type: "h3",
+					key: "title",
+					content: opts.title,
+					classes: "text-lg font-semibold tracking-tight text-card-foreground"
+				},
+				{
+					type: "paragraph",
+					key: "description",
+					content: opts.body,
+					classes: "text-sm text-muted-foreground"
+				},
+				{
+					type: "div",
+					classes: "flex items-center justify-end gap-2",
+					children: opts.actions
+				}
+			]
+		}]
+	}]
+});
+/** an action inside a modal: it answers, and the modal closes */
+var closes = (child, escape = false) => trigger(child, [{
+	interaction: "open",
+	trigger: "click",
+	target: "layer",
+	action: "off",
+	...escape ? { closeOn: ["escape"] } : {}
+}]);
+var INTERACTIVE = [
+	{
+		key: "accordion",
+		name: "Accordion",
+		category: "Interactive",
+		description: "Question rows that open one at a time.",
+		tokens: [
+			"border",
+			"foreground",
+			"muted-foreground",
+			"ring"
+		],
+		interactions: [{
+			key: "open",
+			name: "Accordion · open",
+			toClasses: "block"
+		}],
+		root: {
+			type: "div",
+			classes: "flex w-full flex-col",
+			children: [
+				accordionItem("answer-1", "Is it accessible?", "Yes — it is keyboard operable throughout."),
+				accordionItem("answer-2", "Can I restyle it?", "Every part is a normal element you can style."),
+				accordionItem("answer-3", "Does it work on mobile?", "It does; the rows stack at any width.")
+			]
+		}
+	},
+	{
+		key: "collapsible",
+		name: "Collapsible",
+		category: "Interactive",
+		description: "One section that opens and closes.",
+		tokens: [
+			"border",
+			"foreground",
+			"muted-foreground"
+		],
+		interactions: [{
+			key: "open",
+			name: "Collapsible · open",
+			toClasses: "flex"
+		}],
+		root: {
+			type: "div",
+			classes: "flex w-full flex-col gap-2",
+			children: [{
+				type: "div",
+				classes: "flex items-center justify-between gap-4",
+				children: [{
+					type: "span",
+					key: "title",
+					content: "Three more items",
+					classes: "text-sm font-medium text-foreground"
+				}, trigger(button("Toggle", {
+					variant: "ghost",
+					size: "icon",
+					start: "chevrons-up-down",
+					iconOnly: true
+				}), [{
+					interaction: "open",
+					trigger: "click",
+					target: "content"
+				}])]
+			}, {
+				type: "div",
+				key: "content",
+				classes: "hidden flex-col gap-2",
+				children: [
+					{
+						type: "text",
+						content: "First item",
+						classes: "rounded-md border border-border px-4 py-2 text-sm text-muted-foreground"
+					},
+					{
+						type: "text",
+						content: "Second item",
+						classes: "rounded-md border border-border px-4 py-2 text-sm text-muted-foreground"
+					},
+					{
+						type: "text",
+						content: "Third item",
+						classes: "rounded-md border border-border px-4 py-2 text-sm text-muted-foreground"
+					}
+				]
+			}]
+		}
+	},
+	{
+		key: "dialog",
+		name: "Dialog",
+		category: "Interactive",
+		description: "A modal over a dimmed page. The overlay and Escape dismiss it.",
+		tokens: [
+			"border",
+			"card",
+			"card-foreground",
+			"muted-foreground"
+		],
+		interactions: [{
+			key: "open",
+			name: "Dialog · open",
+			toClasses: "flex"
+		}],
+		root: modal({
+			open: "Open dialog",
+			title: "Edit profile",
+			body: "Make your changes here, then save when you are done.",
+			dismissible: true,
+			actions: [closes(button("Cancel", { variant: "outline" }), true), closes(button("Save changes"))]
+		})
+	},
+	{
+		key: "alert-dialog",
+		name: "AlertDialog",
+		category: "Interactive",
+		description: "A modal that wants an answer: only its buttons close it.",
+		tokens: [
+			"border",
+			"card",
+			"card-foreground",
+			"muted-foreground"
+		],
+		interactions: [{
+			key: "open",
+			name: "Alert dialog · open",
+			toClasses: "flex"
+		}],
+		root: modal({
+			open: "Delete account",
+			title: "Are you sure?",
+			body: "This action cannot be undone.",
+			dismissible: false,
+			actions: [closes(button("Cancel", { variant: "outline" })), closes(button("Delete", { variant: "destructive" }))]
+		})
+	},
+	{
+		key: "sheet",
+		name: "Sheet",
+		category: "Interactive",
+		description: "A panel that comes in from an edge of the screen.",
+		tokens: [
+			"border",
+			"background",
+			"foreground",
+			"muted-foreground"
+		],
+		variants: [{
+			name: "side",
+			options: [
+				"right",
+				"left",
+				"top",
+				"bottom"
+			],
+			default: "right"
+		}],
+		interactions: [{
+			key: "open",
+			name: "Sheet · open",
+			toClasses: "block"
+		}],
+		root: {
+			type: "div",
+			classes: "flex flex-col items-start gap-4",
+			children: [trigger(button("Open sheet", { variant: "outline" }), [{
+				interaction: "open",
+				trigger: "click",
+				target: "layer",
+				action: "on"
+			}]), {
+				type: "div",
+				key: "layer",
+				classes: "hidden fixed inset-0 z-50",
+				children: [{
+					type: "div",
+					classes: OVERLAY,
+					interactions: [{
+						interaction: "open",
+						trigger: "click",
+						target: "layer",
+						action: "off",
+						closeOn: ["escape"]
+					}]
+				}, {
+					type: "div",
+					key: "panel",
+					classes: "absolute inset-y-0 right-0 flex h-full w-80 flex-col gap-4 border-l border-border bg-background p-6 shadow-lg",
+					variantClasses: {
+						"side:left": "right-auto left-0 border-l-0 border-r",
+						"side:top": "inset-x-0 inset-y-auto top-0 h-auto w-full border-l-0 border-b",
+						"side:bottom": "inset-x-0 inset-y-auto bottom-0 h-auto w-full border-l-0 border-t"
+					},
+					attributes: {
+						role: "dialog",
+						"aria-modal": "true"
+					},
+					children: [
+						{
+							type: "h3",
+							key: "title",
+							content: "Sheet title",
+							classes: "text-lg font-semibold tracking-tight text-foreground"
+						},
+						{
+							type: "paragraph",
+							key: "description",
+							content: "What this panel is for, in a line.",
+							classes: "text-sm text-muted-foreground"
+						},
+						closes(button("Close", { variant: "outline" }))
+					]
+				}]
+			}]
+		}
+	},
+	{
+		key: "dropdown-menu",
+		name: "DropdownMenu",
+		category: "Interactive",
+		description: "A button that opens a menu, dismissed by clicking away or Escape.",
+		tokens: [
+			"accent",
+			"accent-foreground",
+			"border",
+			"card",
+			"card-foreground"
+		],
+		interactions: [{
+			key: "open",
+			name: "Dropdown · open",
+			toClasses: "flex"
+		}],
+		root: {
+			type: "div",
+			classes: "relative inline-flex",
+			children: [trigger(button("Options", {
+				variant: "outline",
+				end: "chevron-down"
+			}), [{
+				interaction: "open",
+				trigger: "click",
+				target: "menu",
+				closeOn: ["outside", "escape"]
+			}]), {
+				type: "div",
+				key: "menu",
+				classes: `hidden absolute left-0 top-[100%] z-50 mt-2 w-44 flex-col p-1 ${SURFACE}`,
+				attributes: { role: "menu" },
+				children: [
+					link("Profile", "/", MENU_ITEM),
+					link("Settings", "/", MENU_ITEM),
+					link("Sign out", "/", MENU_ITEM)
+				]
+			}]
+		}
+	},
+	{
+		key: "popover",
+		name: "Popover",
+		category: "Interactive",
+		description: "A small panel anchored to the button that opens it.",
+		tokens: [
+			"border",
+			"card",
+			"card-foreground",
+			"muted-foreground"
+		],
+		interactions: [{
+			key: "open",
+			name: "Popover · open",
+			toClasses: "flex"
+		}],
+		root: {
+			type: "div",
+			classes: "relative inline-flex",
+			children: [trigger(button("Open popover", { variant: "outline" }), [{
+				interaction: "open",
+				trigger: "click",
+				target: "panel",
+				closeOn: ["outside", "escape"]
+			}]), {
+				type: "div",
+				key: "panel",
+				classes: `hidden absolute left-0 top-[100%] z-50 mt-2 w-72 flex-col gap-1 p-4 ${SURFACE}`,
+				children: [{
+					type: "h4",
+					key: "title",
+					content: "Dimensions",
+					classes: "text-sm font-medium text-card-foreground"
+				}, {
+					type: "paragraph",
+					key: "description",
+					content: "Set the dimensions for the layer.",
+					classes: "text-sm text-muted-foreground"
+				}]
+			}]
+		}
+	},
+	{
+		key: "tooltip",
+		name: "Tooltip",
+		category: "Interactive",
+		description: "A word of explanation, on hover or focus.",
+		tokens: ["foreground", "background"],
+		root: {
+			type: "div",
+			classes: "group relative inline-flex",
+			children: [button("Hover me", { variant: "outline" }), {
+				type: "span",
+				key: "label",
+				content: "Add to library",
+				classes: "pointer-events-none absolute bottom-[100%] left-[50%] z-50 mb-2 -translate-x-1/2 rounded-md bg-foreground px-2 py-1 text-xs whitespace-nowrap text-background opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100",
+				attributes: { role: "tooltip" }
+			}]
+		}
+	},
+	{
+		key: "hover-card",
+		name: "HoverCard",
+		category: "Interactive",
+		description: "A preview of what a link leads to, on hover.",
+		tokens: [
+			"primary",
+			"border",
+			"card",
+			"card-foreground",
+			"muted-foreground"
+		],
+		root: {
+			type: "div",
+			classes: "group relative inline-flex",
+			children: [link("@acme", "/", "text-sm font-medium text-primary underline-offset-4 hover:underline"), {
+				type: "div",
+				key: "card",
+				classes: `pointer-events-none absolute left-0 top-[100%] z-50 mt-2 flex w-64 flex-col gap-1 p-4 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 ${SURFACE}`,
+				children: [{
+					type: "span",
+					key: "name",
+					content: "Acme Inc.",
+					classes: "text-sm font-semibold text-card-foreground"
+				}, {
+					type: "paragraph",
+					key: "description",
+					content: "Tools for people who build for the web.",
+					classes: "text-sm text-muted-foreground"
+				}]
+			}]
+		}
+	},
+	{
+		key: "navbar",
+		name: "Navbar",
+		category: "Navigation",
+		description: "A sticky header whose links collapse into a menu on mobile.",
+		tokens: [
+			"border",
+			"background",
+			"foreground",
+			"muted-foreground",
+			"accent",
+			"accent-foreground"
+		],
+		interactions: [{
+			key: "open",
+			name: "Navbar · open menu",
+			toClasses: "flex"
+		}],
+		root: {
+			type: "header",
+			classes: "sticky top-0 z-50 flex items-center justify-between border-b border-border bg-background px-6 py-3",
+			children: [
+				link("Acme", "/", "text-base font-semibold text-foreground"),
+				{
+					type: "nav",
+					classes: "hidden items-center gap-6 md:flex",
+					children: [
+						link("Home", "/", NAVBAR_LINK),
+						link("Features", "/features", NAVBAR_LINK),
+						link("Pricing", "/pricing", NAVBAR_LINK)
+					]
+				},
+				trigger(button("Menu", {
+					variant: "outline",
+					size: "icon",
+					start: "menu",
+					iconOnly: true
+				}), [{
+					interaction: "open",
+					trigger: "click",
+					target: "mobile-menu",
+					closeOn: ["outside", "escape"]
+				}], "flex md:hidden"),
+				{
+					type: "nav",
+					key: "mobile-menu",
+					classes: "hidden absolute left-0 top-[100%] z-50 w-full flex-col gap-1 border-b border-border bg-background p-4 md:hidden",
+					children: [
+						link("Home", "/", MOBILE_LINK),
+						link("Features", "/features", MOBILE_LINK),
+						link("Pricing", "/pricing", MOBILE_LINK)
+					]
+				}
+			]
+		}
+	},
+	{
+		key: "tabs",
+		name: "Tabs",
+		category: "Interactive",
+		description: "Three panels behind three tabs. The first is open by default.",
+		tokens: [
+			"muted",
+			"muted-foreground",
+			"background",
+			"foreground",
+			"ring"
+		],
+		interactions: [
+			{
+				key: "show",
+				name: "Tabs · show panel",
+				toClasses: "block"
+			},
+			{
+				key: "hide-first",
+				name: "Tabs · hide first panel",
+				toClasses: "hidden"
+			},
+			{
+				key: "activate",
+				name: "Tabs · active tab",
+				toClasses: "bg-background text-foreground"
+			},
+			{
+				key: "dim-first",
+				name: "Tabs · inactive first tab",
+				toClasses: "bg-muted text-muted-foreground"
+			}
+		],
+		root: tabsRoot()
+	}
+];
+//#endregion
+//#region src/lib/catalog/tokens.ts
+/**
+* The semantic palette the bundled library is built on — the shadcn set, with
+* neutral light-theme defaults.
+*
+* Adding an entry creates only the tokens it actually names, and never touches
+* one that already exists: the point is that a project restyles the whole
+* library from Settings → Design tokens, so the user's value always wins.
+*
+* Design tokens are hex colours only. Radii, spacing and type scale live in
+* `settings.theme`, so the entries spell those as ordinary Tailwind classes.
+*/
+var CATALOG_TOKENS = {
+	background: "#ffffff",
+	foreground: "#0a0a0a",
+	card: "#ffffff",
+	"card-foreground": "#0a0a0a",
+	primary: "#171717",
+	"primary-foreground": "#fafafa",
+	secondary: "#f5f5f5",
+	"secondary-foreground": "#171717",
+	muted: "#f5f5f5",
+	"muted-foreground": "#737373",
+	accent: "#f5f5f5",
+	"accent-foreground": "#171717",
+	destructive: "#e7000b",
+	"destructive-foreground": "#ffffff",
+	border: "#e5e5e5",
+	input: "#e5e5e5",
+	ring: "#a1a1a1"
+};
+//#endregion
+//#region src/lib/catalog/icons.ts
+var CATALOG_ICONS = {
+	"arrow-left": "<path d=\"m12 19-7-7 7-7\"/><path d=\"M19 12H5\"/>",
+	"arrow-right": "<path d=\"M5 12h14\"/><path d=\"m12 5 7 7-7 7\"/>",
+	"bold": "<path d=\"M6 12h9a4 4 0 0 1 0 8H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h7a4 4 0 0 1 0 8\"/>",
+	"check": "<path d=\"M20 6 9 17l-5-5\"/>",
+	"chevron-down": "<path d=\"m6 9 6 6 6-6\"/>",
+	"chevron-left": "<path d=\"m15 18-6-6 6-6\"/>",
+	"chevron-right": "<path d=\"m9 18 6-6-6-6\"/>",
+	"chevrons-up-down": "<path d=\"m7 15 5 5 5-5\"/><path d=\"m7 9 5-5 5 5\"/>",
+	"inbox": "<polyline points=\"22 12 16 12 14 15 10 15 8 12 2 12\"/><path d=\"M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z\"/>",
+	"info": "<circle cx=\"12\" cy=\"12\" r=\"10\"/><path d=\"M12 16v-4\"/><path d=\"M12 8h.01\"/>",
+	"loader-circle": "<path d=\"M21 12a9 9 0 1 1-6.219-8.56\"/>",
+	"menu": "<path d=\"M4 5h16\"/><path d=\"M4 12h16\"/><path d=\"M4 19h16\"/>",
+	"plus": "<path d=\"M5 12h14\"/><path d=\"M12 5v14\"/>",
+	"text-align-center": "<path d=\"M21 5H3\"/><path d=\"M17 12H7\"/><path d=\"M19 19H5\"/>",
+	"text-align-end": "<path d=\"M21 5H3\"/><path d=\"M21 12H9\"/><path d=\"M21 19H7\"/>",
+	"text-align-start": "<path d=\"M21 5H3\"/><path d=\"M15 12H3\"/><path d=\"M17 19H3\"/>",
+	"zap": "<path d=\"M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z\"/>"
+};
+//#endregion
+//#region src/lib/catalog/materialize.ts
+var iconMarkup = (name) => CATALOG_ICONS[name] ? lucideSvg(name, CATALOG_ICONS[name]) : "";
+/** where each keyed node of an entry sits, as child indexes from its root */
+function keyPaths(entry) {
+	const paths = /* @__PURE__ */ new Map();
+	const visit = (node, path) => {
+		if (node.key) paths.set(node.key, path);
+		if (!node.component) (node.children ?? []).forEach((child, i) => visit(child, [...path, i]));
+	};
+	visit(entry.root, []);
+	return paths;
+}
+var DEFAULT_DURATION = "duration-200";
+var DEFAULT_EASING = "ease-out";
+/**
+* Turns a bundled library entry into a real, independent `ComponentDef` for
+* this project — fresh ids throughout, symbolic targets resolved, and the
+* shared library entries it needs alongside it.
+*
+* Nothing links back to the catalog afterwards: `source` only records where it
+* came from, so the Library can show which entries are already added.
+*/
+function materialize(entry, project, context) {
+	const name = normalizeComponentName(entry.name, project.components.map((c) => c.name));
+	const newInteractions = [];
+	const interactionIds = /* @__PURE__ */ new Map();
+	for (const spec of entry.interactions ?? []) {
+		const shape = {
+			name: spec.name,
+			toClasses: spec.toClasses,
+			duration: spec.duration ?? DEFAULT_DURATION,
+			easing: spec.easing ?? DEFAULT_EASING
+		};
+		const existing = project.interactions.find((i) => i.name === shape.name && i.toClasses === shape.toClasses && i.duration === shape.duration && i.easing === shape.easing);
+		if (existing) {
+			interactionIds.set(spec.key, existing.id);
+			continue;
+		}
+		const made = {
+			id: crypto.randomUUID(),
+			...shape
+		};
+		newInteractions.push(made);
+		interactionIds.set(spec.key, made.id);
+	}
+	const keyToId = /* @__PURE__ */ new Map();
+	const dependencies = {};
+	const pending = [];
+	/** an instance of another entry: a mirror of that component, carrying what
+	*  this entry says about it */
+	const instance = (source) => {
+		const inner = context.component(source.component);
+		if (!inner) throw new Error(`"${entry.key}" holds "${source.component}", which could not be resolved`);
+		dependencies[source.component] = inner.name;
+		const node = createMirror(inner.root);
+		for (const [axis, option] of Object.entries(source.variants ?? {})) setInstancePick(inner, node, axis, option);
+		if (source.hidden) node.hidden = true;
+		const held = context.entry(source.component);
+		const paths = held ? keyPaths(held) : /* @__PURE__ */ new Map();
+		for (const [key, part] of Object.entries(source.parts ?? {})) {
+			const path = paths.get(key);
+			if (!path) continue;
+			let at = node.children[0];
+			for (const i of path) at = at?.children[i];
+			if (!at) continue;
+			if (part.content !== void 0) at.content = part.content;
+			if (part.hidden !== void 0) at.hidden = part.hidden;
+			if (part.icon && at.type === "icon") {
+				const svg = iconMarkup(part.icon);
+				if (svg) at.svg = svg;
+			}
+		}
+		if (source.key) keyToId.set(source.key, node.id);
+		return node;
+	};
+	const build = (source) => {
+		if (source.component) return instance(source);
+		const node = {
+			id: crypto.randomUUID(),
+			type: source.type,
+			content: source.content ?? "",
+			children: (source.children ?? []).map(build)
+		};
+		if (source.classes) node.classes = source.classes;
+		if (source.link) node.link = source.link;
+		if (source.attributes) node.attributes = { ...source.attributes };
+		if (source.src) node.src = source.src;
+		if (source.hidden) node.hidden = true;
+		if (source.icon) {
+			const svg = iconMarkup(source.icon);
+			if (svg) node.svg = svg;
+		}
+		if (source.slider) node.slider = JSON.parse(JSON.stringify(source.slider));
+		if (source.variantClasses && Object.keys(source.variantClasses).length) {
+			const kept = {};
+			for (const axis of entry.variants ?? []) for (const option of axis.options) {
+				const classes = source.variantClasses[`${axis.name}:${option}`];
+				if (classes) kept[`${axis.name}:${option}`] = classes;
+			}
+			if (Object.keys(kept).length) node.variantClasses = kept;
+		}
+		if (source.key) keyToId.set(source.key, node.id);
+		if (source.interactions?.length) pending.push({
+			node,
+			source
+		});
+		return node;
+	};
+	const child = build(entry.root);
+	for (const { node, source } of pending) {
+		const bindings = [];
+		for (const b of source.interactions ?? []) {
+			const interactionId = interactionIds.get(b.interaction);
+			if (!interactionId) continue;
+			const binding = {
+				id: crypto.randomUUID(),
+				interactionId,
+				trigger: b.trigger,
+				targetId: b.target ? keyToId.get(b.target) ?? null : null
+			};
+			if (b.action) binding.action = b.action;
+			if (b.closeOn?.length) binding.closeOn = [...b.closeOn];
+			if (b.group) binding.group = b.group;
+			if (b.once) binding.once = b.once;
+			bindings.push(binding);
+		}
+		if (bindings.length) node.interactions = bindings;
+	}
+	const root = {
+		id: crypto.randomUUID(),
+		type: name,
+		content: "",
+		children: [child]
+	};
+	const def = {
+		id: crypto.randomUUID(),
+		name,
+		root
+	};
+	setComponentMeta(def, {
+		category: entry.category,
+		source: entry.key,
+		variants: entry.variants
+	});
+	const have = new Set(project.settings.tokens.map((t) => t.name));
+	return {
+		def,
+		interactions: newInteractions,
+		tokens: entry.tokens.filter((n) => !have.has(n) && CATALOG_TOKENS[n]).map((n) => ({
+			id: crypto.randomUUID(),
+			name: n,
+			value: CATALOG_TOKENS[n]
+		})),
+		...Object.keys(dependencies).length ? { dependencies } : {}
+	};
+}
+//#endregion
+//#region src/lib/catalog/index.ts
+/**
+* The bundled component library — ready-made pieces the user COPIES into a
+* project. Once added, a component is ordinary: nothing follows the catalog,
+* so editing or deleting it has no effect here and a library update never
+* reaches a project that already added the entry.
+*
+* Ships with the app rather than being fetched, so it works offline and is
+* versioned with the editor that renders it.
+*/
+var CATALOG = [
+	...PRIMITIVES,
+	...FORMS,
+	...CONTENT,
+	...INTERACTIVE
+];
+function catalogEntry(key) {
+	return CATALOG.find((e) => e.key === key) ?? null;
+}
+/** the entries an entry holds an instance of, directly — by key, each once */
+function catalogDependencies(entry) {
+	const keys = /* @__PURE__ */ new Set();
+	const visit = (node) => {
+		if (node.component) keys.add(node.component);
+		else (node.children ?? []).forEach(visit);
+	};
+	visit(entry.root);
+	return [...keys];
+}
+/**
+* Turn a library entry into a component for this project.
+*
+* An entry may hold instances of other entries (a Card holds a Button).
+* `component` says what each of those resolves to; by default, the component
+* the project already made from that entry. A caller that can ADD the missing
+* one — or stand a preview in for it — passes its own.
+*/
+function materializeCatalogEntry(entry, project, component = (key) => project.components.find((c) => c.source === key) ?? null) {
+	return materialize(entry, project, {
+		component,
+		entry: catalogEntry
+	});
+}
+//#endregion
+export { APPEAR_MODES, BUILTIN_LIST_SOURCES, CATALOG, CATALOG_TOKENS, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MOTION_PROPS, NODE_STATE_KEYS, REF_SLOT, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, SCROLL_LERP_MAX, SCROLL_LERP_MIN, SLIDER_DEFAULTS, STYLE_SECTIONS, TOKEN_NAME_RE, TRANSITION_DEFAULTS, TRANSITION_PRESET_IDS, VARIANT_NAME_RE, addVariantAxis, addVariantOption, adoptStructure, alignInstanceLines, alignMirrors, applyClass, buildDocument, buildInstanceMap, canNest, catalogDependencies, catalogEntry, cloneForMaster, compileAnimation, componentReaches, countLocaleSeo, createNode, createPage, createProject, dataMarkerOf, deepClone, defaultBreakpoints, defaultSettings, dependencyOrder, effectiveClasses, elementBlockLines, enforceDocument, expandComponentInstances, extractBodyArg, extractBodyDecor, extractBodyLines, findNode, findParent, fontError, fontFormatForUrl, hasAncestorOfType, hasNodeState, hasOpenArgBracket, hoistBlockRef, inheritedInstanceValue, interactionGroupKey, interactionMarkerOf, interactionStateKey, isAllowedAttribute, isBodyOpenLine, isClosedBlock, isComponentType, isEmittableToken, isInstanceWrapper, isKnownElement, isLeafElement, isNodeHidden, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isValidClass, isValidToken, lexLine, lucideNameOf, lucideSvg, matchClass, materializeCatalogEntry, mergeClassLayers, nestedComponentNames, normalizeComponentName, normalizeSyntax, parseSetup, parseSyntax, pickedKeys, purgeLocaleSeo, pushMasterStructure, reconcile, refOf, removeVariantAxis, removeVariantOption, renameVariantAxis, renameVariantOption, replaceSetup, resolveInstanceValue, resolvePicks, resolveSliderConfig, rewriteInstanceBlock, sameLayerProperty, sameProperty, sanitizeAttributes, sanitizeInlineSvg, sanitizeRich, serializeNode, setInstancePick, setNodeHidden, setSetupLocale, setStyleTokens, setVariantAxes, setVariantClasses, setVariantDefault, slugify, stripExtractedInstanceState, stripNodeState, styleMarkerOf, tokenError, typeOptionsFor, validateAnimation, validateBinding, validateDocument, validateMotionSettings, validateSliderConfig, variantKey, walkNodes, withDataMarker, withInteractionMarker, withStyleMarker, withoutRef };

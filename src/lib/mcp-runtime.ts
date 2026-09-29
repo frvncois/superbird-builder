@@ -226,3 +226,13 @@ export { createPage, createProject, defaultBreakpoints } from './factories'
 
 // --- shared element/node types (compile-time only; erased at runtime)
 export type { ElementNode } from '@/types/editor'
+
+// the bundled component library — so the exporter's own tests, and any tool
+// that adds a library entry, build components with the editor's code
+export {
+  CATALOG,
+  CATALOG_TOKENS,
+  catalogEntry,
+  catalogDependencies,
+  materializeCatalogEntry,
+} from './catalog'

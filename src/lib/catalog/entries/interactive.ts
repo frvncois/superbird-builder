@@ -1,9 +1,10 @@
 import type { CatalogEntry, CatalogNode } from '../types'
+import { FOCUS, SURFACE, button, icon, link, trigger, words } from './helpers'
 
 /**
- * The entries that carry real interaction bindings.
+ * The entries that open, close and switch.
  *
- * Two rules shape all of them:
+ * Two rules shape the ones that carry interaction bindings:
  *
  * · **State is keyed by (interaction, target), not by binding.** That is what
  *   lets an open button, a close button and an overlay drive one effect, and
@@ -15,28 +16,21 @@ import type { CatalogEntry, CatalogNode } from '../types'
  * Effect names are entry-specific ("Accordion · open"): the interaction
  * library is project-wide and shared by reference, so a generic "Show" would
  * mean editing one component silently restyles another.
+ *
+ * Where the trigger is a Button, the binding sits on a wrapper the entry owns
+ * (`trigger` in ./helpers): a host cannot bind on an instance it holds.
+ *
+ * Tooltip and HoverCard carry no binding at all. Hover is something CSS can
+ * see (`group-hover:`), so they work with no JavaScript.
  */
 
-const FOCUS = 'focus-visible:ring-2 focus-visible:ring-ring'
 const MENU_ITEM =
   'rounded-md px-2 py-1.5 text-sm text-card-foreground transition-colors hover:bg-accent hover:text-accent-foreground'
-const SURFACE = 'rounded-lg border border-border bg-card p-1 shadow-md'
 const NAVBAR_LINK = 'text-sm text-muted-foreground transition-colors hover:text-foreground'
 const MOBILE_LINK =
   'rounded-md px-2 py-1.5 text-sm text-foreground transition-colors hover:bg-accent hover:text-accent-foreground'
-
-/** `button` and `link` are containers — their words live in a `:span:` child,
- *  which is what leaves room for an icon beside the label. The `key` (an
- *  interaction target) stays on the element that fires or receives, never on
- *  the span. */
-const words = (content: string): CatalogNode[] => [{ type: 'span', content }]
-
-const menuLink = (content: string, link: string, classes: string): CatalogNode => ({
-  type: 'link',
-  link,
-  classes,
-  children: words(content),
-})
+const OVERLAY = 'absolute inset-0 bg-[rgba(0,0,0,0.5)]'
+const DIALOG_PANEL = `relative z-50 flex w-full max-w-md flex-col gap-4 rounded-xl p-6 shadow-lg border border-border bg-card text-card-foreground`
 
 /** one accordion row: a full-width trigger over a panel that starts hidden */
 const accordionItem = (key: string, question: string, answer: string): CatalogNode => ({
@@ -45,20 +39,13 @@ const accordionItem = (key: string, question: string, answer: string): CatalogNo
   children: [
     {
       type: 'button',
-      children: words(question),
-      classes: `flex w-full items-center justify-between py-4 text-left text-sm font-medium text-foreground outline-none ${FOCUS}`,
+      classes: `flex w-full items-center justify-between gap-4 py-4 text-left text-sm font-medium text-foreground outline-none ${FOCUS}`,
+      children: [words(question), icon('chevron-down', 'size-4 shrink-0 text-muted-foreground')],
       // the group makes it exclusive — and is scoped per component instance by
       // the runtime, so two accordions on a page never fight
-      interactions: [
-        { interaction: 'open', trigger: 'click', target: key, group: 'accordion' },
-      ],
+      interactions: [{ interaction: 'open', trigger: 'click', target: key, group: 'accordion' }],
     },
-    {
-      type: 'div',
-      key,
-      content: answer,
-      classes: 'hidden pb-4 text-sm text-muted-foreground',
-    },
+    { type: 'div', key, content: answer, classes: 'hidden pb-4 text-sm text-muted-foreground' },
   ],
 })
 
@@ -96,7 +83,7 @@ const tabsRoot = (): CatalogNode => {
     return {
       type: 'button',
       key,
-      children: words(label),
+      children: [words(label)],
       classes: first
         ? `${TAB_BASE} bg-background text-foreground`
         : `${TAB_BASE} text-muted-foreground`,
@@ -144,6 +131,65 @@ const tabsRoot = (): CatalogNode => {
   }
 }
 
+/** a modal: a trigger, and a layer over the page holding an overlay and a panel */
+const modal = (opts: {
+  open: string
+  title: string
+  body: string
+  /** may the overlay and Escape dismiss it? An alert dialog asks for an answer. */
+  dismissible: boolean
+  actions: CatalogNode[]
+}): CatalogNode => ({
+  type: 'div',
+  classes: 'flex flex-col items-start gap-4',
+  children: [
+    trigger(button(opts.open), [{ interaction: 'open', trigger: 'click', target: 'layer', action: 'on' }]),
+    {
+      type: 'div',
+      key: 'layer',
+      classes: 'hidden fixed inset-0 z-50 items-center justify-center p-6',
+      children: [
+        {
+          type: 'div',
+          classes: OVERLAY,
+          ...(opts.dismissible
+            ? { interactions: [{ interaction: 'open', trigger: 'click' as const, target: 'layer', action: 'off' as const }] }
+            : {}),
+        },
+        {
+          type: 'div',
+          classes: DIALOG_PANEL,
+          attributes: { role: opts.dismissible ? 'dialog' : 'alertdialog', 'aria-modal': 'true' },
+          children: [
+            {
+              type: 'h3',
+              key: 'title',
+              content: opts.title,
+              classes: 'text-lg font-semibold tracking-tight text-card-foreground',
+            },
+            { type: 'paragraph', key: 'description', content: opts.body, classes: 'text-sm text-muted-foreground' },
+            { type: 'div', classes: 'flex items-center justify-end gap-2', children: opts.actions },
+          ],
+        },
+      ],
+    },
+  ],
+})
+
+/** an action inside a modal: it answers, and the modal closes */
+const closes = (child: CatalogNode, escape = false): CatalogNode =>
+  trigger(child, [
+    {
+      interaction: 'open',
+      trigger: 'click',
+      target: 'layer',
+      action: 'off',
+      // closeOn applies to the EFFECT, not this one trigger, so it reads best
+      // on the button that says "cancel"
+      ...(escape ? { closeOn: ['escape' as const] } : {}),
+    },
+  ])
+
 export const INTERACTIVE: CatalogEntry[] = [
   {
     key: 'accordion',
@@ -162,82 +208,120 @@ export const INTERACTIVE: CatalogEntry[] = [
       ],
     },
   },
+  {
+    key: 'collapsible',
+    name: 'Collapsible',
+    category: 'Interactive',
+    description: 'One section that opens and closes.',
+    tokens: ['border', 'foreground', 'muted-foreground'],
+    interactions: [{ key: 'open', name: 'Collapsible · open', toClasses: 'flex' }],
+    root: {
+      type: 'div',
+      classes: 'flex w-full flex-col gap-2',
+      children: [
+        {
+          type: 'div',
+          classes: 'flex items-center justify-between gap-4',
+          children: [
+            { type: 'span', key: 'title', content: 'Three more items', classes: 'text-sm font-medium text-foreground' },
+            trigger(button('Toggle', { variant: 'ghost', size: 'icon', start: 'chevrons-up-down', iconOnly: true }), [
+              { interaction: 'open', trigger: 'click', target: 'content' },
+            ]),
+          ],
+        },
+        {
+          type: 'div',
+          key: 'content',
+          classes: 'hidden flex-col gap-2',
+          children: [
+            { type: 'text', content: 'First item', classes: 'rounded-md border border-border px-4 py-2 text-sm text-muted-foreground' },
+            { type: 'text', content: 'Second item', classes: 'rounded-md border border-border px-4 py-2 text-sm text-muted-foreground' },
+            { type: 'text', content: 'Third item', classes: 'rounded-md border border-border px-4 py-2 text-sm text-muted-foreground' },
+          ],
+        },
+      ],
+    },
+  },
 
   {
     key: 'dialog',
     name: 'Dialog',
     category: 'Interactive',
-    description: 'A modal over a dimmed page, with an overlay that dismisses it.',
-    tokens: ['primary', 'primary-foreground', 'border', 'card', 'card-foreground', 'muted-foreground', 'input', 'background', 'foreground', 'accent', 'accent-foreground', 'destructive', 'destructive-foreground', 'ring'],
+    description: 'A modal over a dimmed page. The overlay and Escape dismiss it.',
+    tokens: ['border', 'card', 'card-foreground', 'muted-foreground'],
     interactions: [{ key: 'open', name: 'Dialog · open', toClasses: 'flex' }],
+    root: modal({
+      open: 'Open dialog',
+      title: 'Edit profile',
+      body: 'Make your changes here, then save when you are done.',
+      dismissible: true,
+      actions: [closes(button('Cancel', { variant: 'outline' }), true), closes(button('Save changes'))],
+    }),
+  },
+  {
+    key: 'alert-dialog',
+    name: 'AlertDialog',
+    category: 'Interactive',
+    description: 'A modal that wants an answer: only its buttons close it.',
+    tokens: ['border', 'card', 'card-foreground', 'muted-foreground'],
+    interactions: [{ key: 'open', name: 'Alert dialog · open', toClasses: 'flex' }],
+    root: modal({
+      open: 'Delete account',
+      title: 'Are you sure?',
+      body: 'This action cannot be undone.',
+      dismissible: false,
+      actions: [closes(button('Cancel', { variant: 'outline' })), closes(button('Delete', { variant: 'destructive' }))],
+    }),
+  },
+  {
+    key: 'sheet',
+    name: 'Sheet',
+    category: 'Interactive',
+    description: 'A panel that comes in from an edge of the screen.',
+    tokens: ['border', 'background', 'foreground', 'muted-foreground'],
+    variants: [{ name: 'side', options: ['right', 'left', 'top', 'bottom'], default: 'right' }],
+    interactions: [{ key: 'open', name: 'Sheet · open', toClasses: 'block' }],
     root: {
       type: 'div',
       classes: 'flex flex-col items-start gap-4',
       children: [
-        {
-          type: 'button',
-          children: words('Open dialog'),
-          classes: `inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors outline-none hover:opacity-90 ${FOCUS}`,
-          interactions: [
-            { interaction: 'open', trigger: 'click', target: 'dialog', action: 'on' },
-          ],
-        },
+        trigger(button('Open sheet', { variant: 'outline' }), [
+          { interaction: 'open', trigger: 'click', target: 'layer', action: 'on' },
+        ]),
         {
           type: 'div',
-          key: 'dialog',
-          classes: 'hidden fixed inset-0 z-50 items-center justify-center p-6',
+          key: 'layer',
+          classes: 'hidden fixed inset-0 z-50',
           children: [
             {
               type: 'div',
-              classes: 'absolute inset-0 bg-[rgba(0,0,0,0.5)]',
+              classes: OVERLAY,
               interactions: [
-                { interaction: 'open', trigger: 'click', target: 'dialog', action: 'off' },
+                { interaction: 'open', trigger: 'click', target: 'layer', action: 'off', closeOn: ['escape'] },
               ],
             },
             {
               type: 'div',
-              classes: `relative z-50 flex w-full max-w-md flex-col gap-4 p-6 ${SURFACE.replace('p-1', '')} rounded-xl shadow-lg`,
+              key: 'panel',
+              classes:
+                'absolute inset-y-0 right-0 flex h-full w-80 flex-col gap-4 border-l border-border bg-background p-6 shadow-lg',
+              // the side it comes from: only the edge it hugs and the border
+              // facing the page change
+              variantClasses: {
+                'side:left': 'right-auto left-0 border-l-0 border-r',
+                'side:top': 'inset-x-0 inset-y-auto top-0 h-auto w-full border-l-0 border-b',
+                'side:bottom': 'inset-x-0 inset-y-auto bottom-0 h-auto w-full border-l-0 border-t',
+              },
+              attributes: { role: 'dialog', 'aria-modal': 'true' },
               children: [
-                {
-                  type: 'h3',
-                  content: 'Are you sure?',
-                  classes: 'text-lg font-semibold tracking-tight text-card-foreground',
-                },
+                { type: 'h3', key: 'title', content: 'Sheet title', classes: 'text-lg font-semibold tracking-tight text-foreground' },
                 {
                   type: 'paragraph',
-                  content: 'This action cannot be undone.',
+                  key: 'description',
+                  content: 'What this panel is for, in a line.',
                   classes: 'text-sm text-muted-foreground',
                 },
-                {
-                  type: 'div',
-                  classes: 'flex items-center justify-end gap-2',
-                  children: [
-                    {
-                      type: 'button',
-                      children: words('Cancel'),
-                      classes: `inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-input bg-background px-4 text-sm font-medium text-foreground transition-colors outline-none hover:bg-accent hover:text-accent-foreground ${FOCUS}`,
-                      // closeOn applies to the EFFECT, not this one trigger, so
-                      // it reads best on the button that says "cancel"
-                      interactions: [
-                        {
-                          interaction: 'open',
-                          trigger: 'click',
-                          target: 'dialog',
-                          action: 'off',
-                          closeOn: ['escape'],
-                        },
-                      ],
-                    },
-                    {
-                      type: 'button',
-                      children: words('Confirm'),
-                      classes: `inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-destructive px-4 text-sm font-medium text-destructive-foreground transition-colors outline-none hover:opacity-90 ${FOCUS}`,
-                      interactions: [
-                        { interaction: 'open', trigger: 'click', target: 'dialog', action: 'off' },
-                      ],
-                    },
-                  ],
-                },
+                closes(button('Close', { variant: 'outline' })),
               ],
             },
           ],
@@ -252,33 +336,101 @@ export const INTERACTIVE: CatalogEntry[] = [
     // not "Dropdown": `dropdown` is already a built-in element (a <select>)
     category: 'Interactive',
     description: 'A button that opens a menu, dismissed by clicking away or Escape.',
-    tokens: ['input', 'background', 'foreground', 'accent', 'accent-foreground', 'border', 'card', 'card-foreground', 'ring'],
+    tokens: ['accent', 'accent-foreground', 'border', 'card', 'card-foreground'],
     interactions: [{ key: 'open', name: 'Dropdown · open', toClasses: 'flex' }],
     root: {
       type: 'div',
       classes: 'relative inline-flex',
       children: [
-        {
-          type: 'button',
-          children: words('Options'),
-          classes: `inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-input bg-background px-4 text-sm font-medium text-foreground transition-colors outline-none hover:bg-accent hover:text-accent-foreground ${FOCUS}`,
-          interactions: [
-            {
-              interaction: 'open',
-              trigger: 'click',
-              target: 'menu',
-              closeOn: ['outside', 'escape'],
-            },
-          ],
-        },
+        trigger(button('Options', { variant: 'outline', end: 'chevron-down' }), [
+          { interaction: 'open', trigger: 'click', target: 'menu', closeOn: ['outside', 'escape'] },
+        ]),
         {
           type: 'div',
           key: 'menu',
-          classes: `hidden absolute left-0 top-[100%] z-50 mt-2 w-44 flex-col ${SURFACE}`,
+          classes: `hidden absolute left-0 top-[100%] z-50 mt-2 w-44 flex-col p-1 ${SURFACE}`,
+          attributes: { role: 'menu' },
+          children: [link('Profile', '/', MENU_ITEM), link('Settings', '/', MENU_ITEM), link('Sign out', '/', MENU_ITEM)],
+        },
+      ],
+    },
+  },
+  {
+    key: 'popover',
+    name: 'Popover',
+    category: 'Interactive',
+    description: 'A small panel anchored to the button that opens it.',
+    tokens: ['border', 'card', 'card-foreground', 'muted-foreground'],
+    interactions: [{ key: 'open', name: 'Popover · open', toClasses: 'flex' }],
+    root: {
+      type: 'div',
+      classes: 'relative inline-flex',
+      children: [
+        trigger(button('Open popover', { variant: 'outline' }), [
+          { interaction: 'open', trigger: 'click', target: 'panel', closeOn: ['outside', 'escape'] },
+        ]),
+        {
+          type: 'div',
+          key: 'panel',
+          classes: `hidden absolute left-0 top-[100%] z-50 mt-2 w-72 flex-col gap-1 p-4 ${SURFACE}`,
           children: [
-            menuLink('Profile', '/', MENU_ITEM),
-            menuLink('Settings', '/', MENU_ITEM),
-            menuLink('Sign out', '/', MENU_ITEM),
+            { type: 'h4', key: 'title', content: 'Dimensions', classes: 'text-sm font-medium text-card-foreground' },
+            {
+              type: 'paragraph',
+              key: 'description',
+              content: 'Set the dimensions for the layer.',
+              classes: 'text-sm text-muted-foreground',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    key: 'tooltip',
+    name: 'Tooltip',
+    category: 'Interactive',
+    description: 'A word of explanation, on hover or focus.',
+    tokens: ['foreground', 'background'],
+    root: {
+      type: 'div',
+      classes: 'group relative inline-flex',
+      children: [
+        button('Hover me', { variant: 'outline' }),
+        {
+          type: 'span',
+          key: 'label',
+          content: 'Add to library',
+          classes:
+            'pointer-events-none absolute bottom-[100%] left-[50%] z-50 mb-2 -translate-x-1/2 rounded-md bg-foreground px-2 py-1 text-xs whitespace-nowrap text-background opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100',
+          attributes: { role: 'tooltip' },
+        },
+      ],
+    },
+  },
+  {
+    key: 'hover-card',
+    name: 'HoverCard',
+    category: 'Interactive',
+    description: 'A preview of what a link leads to, on hover.',
+    tokens: ['primary', 'border', 'card', 'card-foreground', 'muted-foreground'],
+    root: {
+      type: 'div',
+      classes: 'group relative inline-flex',
+      children: [
+        link('@acme', '/', 'text-sm font-medium text-primary underline-offset-4 hover:underline'),
+        {
+          type: 'div',
+          key: 'card',
+          classes: `pointer-events-none absolute left-0 top-[100%] z-50 mt-2 flex w-64 flex-col gap-1 p-4 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 ${SURFACE}`,
+          children: [
+            { type: 'span', key: 'name', content: 'Acme Inc.', classes: 'text-sm font-semibold text-card-foreground' },
+            {
+              type: 'paragraph',
+              key: 'description',
+              content: 'Tools for people who build for the web.',
+              classes: 'text-sm text-muted-foreground',
+            },
           ],
         },
       ],
@@ -290,49 +442,41 @@ export const INTERACTIVE: CatalogEntry[] = [
     name: 'Navbar',
     category: 'Navigation',
     description: 'A sticky header whose links collapse into a menu on mobile.',
-    tokens: ['border', 'background', 'foreground', 'muted-foreground', 'accent', 'accent-foreground', 'input', 'ring'],
+    tokens: ['border', 'background', 'foreground', 'muted-foreground', 'accent', 'accent-foreground'],
     interactions: [{ key: 'open', name: 'Navbar · open menu', toClasses: 'flex' }],
     root: {
       type: 'header',
       classes:
         'sticky top-0 z-50 flex items-center justify-between border-b border-border bg-background px-6 py-3',
       children: [
-        menuLink('Acme', '/', 'text-base font-semibold text-foreground'),
+        link('Acme', '/', 'text-base font-semibold text-foreground'),
         {
           type: 'nav',
           classes: 'hidden items-center gap-6 md:flex',
           children: [
-            menuLink('Home', '/', NAVBAR_LINK),
-            menuLink('Features', '/features', NAVBAR_LINK),
-            menuLink('Pricing', '/pricing', NAVBAR_LINK),
+            link('Home', '/', NAVBAR_LINK),
+            link('Features', '/features', NAVBAR_LINK),
+            link('Pricing', '/pricing', NAVBAR_LINK),
           ],
         },
-        {
-          type: 'button',
-          children: words('Menu'),
-          classes: `inline-flex h-9 items-center justify-center rounded-lg border border-input px-3 text-sm font-medium text-foreground outline-none md:hidden ${FOCUS}`,
-          // deliberately NOT breakpoint-scoped: the binding's breakpoints gate
-          // by the PROJECT's widths while `md:hidden` gates by Tailwind's, and
-          // scoping to Mobile would leave the button visible but dead from
-          // 391px to 767px — which is most phones
-          interactions: [
-            {
-              interaction: 'open',
-              trigger: 'click',
-              target: 'mobile-menu',
-              closeOn: ['outside', 'escape'],
-            },
-          ],
-        },
+        // deliberately NOT breakpoint-scoped: the binding's breakpoints gate by
+        // the PROJECT's widths while `md:hidden` gates by Tailwind's, and
+        // scoping to Mobile would leave the button visible but dead from 391px
+        // to 767px — which is most phones
+        trigger(
+          button('Menu', { variant: 'outline', size: 'icon', start: 'menu', iconOnly: true }),
+          [{ interaction: 'open', trigger: 'click', target: 'mobile-menu', closeOn: ['outside', 'escape'] }],
+          'flex md:hidden',
+        ),
         {
           type: 'nav',
           key: 'mobile-menu',
           classes:
             'hidden absolute left-0 top-[100%] z-50 w-full flex-col gap-1 border-b border-border bg-background p-4 md:hidden',
           children: [
-            menuLink('Home', '/', MOBILE_LINK),
-            menuLink('Features', '/features', MOBILE_LINK),
-            menuLink('Pricing', '/pricing', MOBILE_LINK),
+            link('Home', '/', MOBILE_LINK),
+            link('Features', '/features', MOBILE_LINK),
+            link('Pricing', '/pricing', MOBILE_LINK),
           ],
         },
       ],

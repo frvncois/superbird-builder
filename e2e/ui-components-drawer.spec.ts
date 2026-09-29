@@ -216,7 +216,9 @@ test('Dialog: opens, dismisses from the overlay, and from Escape', async ({ page
   await publish(page)
   await page.goto('/')
 
-  const body = page.getByText('This action cannot be undone.')
+  // the trigger is a nested Button: its click reaches the binding on the
+  // wrapper the Dialog owns, which is the only place a host can bind
+  const body = page.getByText('Make your changes here, then save when you are done.')
   await expect(body).toBeHidden()
 
   await page.getByRole('button', { name: 'Open dialog' }).click()

@@ -270,6 +270,10 @@ function buildVocabulary(): string[] {
     'object-cover', 'object-contain', 'aspect-square', 'aspect-video',
     'antialiased', 'col-span-full', 'col-auto', 'row-span-full',
     'inline', 'inline-block', 'inline-flex', 'inline-grid', 'outline-none',
+    // the two display values the conflict group already knew (DISPLAY_CLASSES)
+    // and the validator refused. `contents` is how a wrapper takes part in the
+    // tree — holding a click binding, say — without adding a box
+    'contents', 'flow-root',
     'whitespace-normal', 'whitespace-nowrap', 'whitespace-pre', 'whitespace-pre-line',
     'whitespace-pre-wrap', 'break-words', 'break-all',
     // `group` marks a hover scope — without it every documented group-hover:

@@ -1,242 +1,87 @@
 import type { CatalogEntry } from '../types'
+import { FOCUS, button, icon, words } from './helpers'
 
 /**
- * Buttons, badges, form controls and the small display pieces.
+ * Buttons, badges and the small display pieces.
  *
- * Every class here must pass `isValidClass` — a class written straight into
- * `node.classes` renders and exports fine but can't be re-typed in the Style
- * panel once removed, which is a trap to hand a user. Known rejects to avoid:
- * `/NN` opacity forms, `ring-offset-*`, `top-full`, `place-items-*`,
- * `min-h-svh`.
- *
- * Hover and focus are plain `hover:` / `focus-visible:` variants. Interactions
- * are for open/close semantics only — see ./interactive.
- *
- * `button`, `link` and `label` are CONTAINERS: their words live in a `:span:`
- * child, which is what lets an icon sit beside the label.
+ * One component per THING, not per look: a Button is a Button, and default /
+ * outline / ghost are options it wears. See ./helpers for the class rules.
  */
-
-const FOCUS = 'focus-visible:ring-2 focus-visible:ring-ring'
-const BUTTON_BASE =
-  `inline-flex h-9 items-center justify-center gap-2 rounded-lg px-4 text-sm font-medium transition-colors outline-none ${FOCUS}`
-const FIELD_BASE =
-  `w-full rounded-lg border border-input bg-background px-3 text-sm text-foreground outline-none ${FOCUS}`
-// a <select> has no placeholder, so it does not carry this (and does not need
-// the muted-foreground token)
-const PLACEHOLDER = 'placeholder:text-muted-foreground'
-const BADGE_BASE = 'inline-flex items-center rounded-full px-2 py-1 text-xs font-medium'
-
-const button = (
-  key: string,
-  name: string,
-  description: string,
-  classes: string,
-  tokens: string[],
-  content = 'Button',
-): CatalogEntry => ({
-  key,
-  name,
-  category: 'Buttons',
-  description,
-  tokens: ['ring', ...tokens],
-  root: {
-    type: 'button',
-    classes: `${BUTTON_BASE} ${classes}`,
-    children: [{ type: 'span', content }],
-  },
-})
-
-const badge = (
-  key: string,
-  name: string,
-  description: string,
-  classes: string,
-  tokens: string[],
-): CatalogEntry => ({
-  key,
-  name,
-  category: 'Badges',
-  description,
-  tokens,
-  root: { type: 'span', content: 'Badge', classes: `${BADGE_BASE} ${classes}` },
-})
-
 export const PRIMITIVES: CatalogEntry[] = [
-  button(
-    'button',
-    'Button',
-    'The primary action.',
-    'bg-primary text-primary-foreground hover:opacity-90',
-    ['primary', 'primary-foreground'],
-  ),
-  button(
-    'button-secondary',
-    'ButtonSecondary',
-    'A quieter action beside a primary one.',
-    'bg-secondary text-secondary-foreground hover:opacity-90',
-    ['secondary', 'secondary-foreground'],
-  ),
-  button(
-    'button-outline',
-    'ButtonOutline',
-    'Bordered, for secondary actions on a plain background.',
-    'border border-input bg-background text-foreground hover:bg-accent hover:text-accent-foreground',
-    ['input', 'background', 'foreground', 'accent', 'accent-foreground'],
-  ),
-  button(
-    'button-ghost',
-    'ButtonGhost',
-    'No chrome until hovered — for toolbars and menus.',
-    'text-foreground hover:bg-accent hover:text-accent-foreground',
-    ['foreground', 'accent', 'accent-foreground'],
-  ),
-  button(
-    'button-destructive',
-    'ButtonDestructive',
-    'Delete and other irreversible actions.',
-    'bg-destructive text-destructive-foreground hover:opacity-90',
-    ['destructive', 'destructive-foreground'],
-    'Delete',
-  ),
   {
-    key: 'button-link',
-    name: 'ButtonLink',
+    key: 'button',
+    name: 'Button',
     category: 'Buttons',
-    description: 'An action that reads as a link.',
-    tokens: ['primary', 'ring'],
+    description: 'An action, in six looks and four sizes, with an optional icon on either side.',
+    tokens: [
+      'ring', 'primary', 'primary-foreground', 'secondary', 'secondary-foreground',
+      'destructive', 'destructive-foreground', 'input', 'background', 'foreground',
+      'accent', 'accent-foreground',
+    ],
+    variants: [
+      {
+        name: 'variant',
+        options: ['default', 'secondary', 'outline', 'ghost', 'destructive', 'link'],
+        default: 'default',
+      },
+      { name: 'size', options: ['md', 'sm', 'lg', 'icon'], default: 'md' },
+    ],
     root: {
-      type: 'link',
-      link: '/',
-      classes: `inline-flex h-9 items-center text-sm font-medium text-primary underline-offset-4 outline-none hover:underline ${FOCUS}`,
-      children: [{ type: 'span', content: 'Learn more' }],
+      type: 'button',
+      key: 'button',
+      classes: `inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-medium whitespace-nowrap text-primary-foreground transition-colors outline-none hover:opacity-90 disabled:opacity-50 ${FOCUS}`,
+      // only what differs from the base — a class here REPLACES the base class
+      // on the same property for an instance wearing the option
+      variantClasses: {
+        'variant:secondary': 'bg-secondary text-secondary-foreground',
+        'variant:outline':
+          'border border-input bg-background text-foreground hover:bg-accent hover:text-accent-foreground hover:opacity-100',
+        'variant:ghost':
+          'bg-transparent text-foreground hover:bg-accent hover:text-accent-foreground hover:opacity-100',
+        'variant:destructive': 'bg-destructive text-destructive-foreground',
+        'variant:link':
+          'h-auto bg-transparent px-0 text-primary underline-offset-4 hover:underline hover:opacity-100',
+        'size:sm': 'h-8 gap-1.5 rounded-md px-3 text-xs',
+        'size:lg': 'h-10 px-6 text-base',
+        'size:icon': 'w-9 px-0',
+      },
+      children: [
+        // both icons are there and hidden: an instance shows the one it wants,
+        // which is how one Button has an icon and the next does not
+        icon('arrow-left', 'size-4 shrink-0', { key: 'icon-start', hidden: true }),
+        words('Button', 'label'),
+        icon('arrow-right', 'size-4 shrink-0', { key: 'icon-end', hidden: true }),
+      ],
     },
   },
 
-  badge('badge', 'Badge', 'A status or count.', 'bg-primary text-primary-foreground', [
-    'primary',
-    'primary-foreground',
-  ]),
-  badge(
-    'badge-secondary',
-    'BadgeSecondary',
-    'A quieter label.',
-    'bg-secondary text-secondary-foreground',
-    ['secondary', 'secondary-foreground'],
-  ),
-  badge(
-    'badge-outline',
-    'BadgeOutline',
-    'Bordered, no fill.',
-    'border border-border text-foreground',
-    ['border', 'foreground'],
-  ),
-  badge(
-    'badge-destructive',
-    'BadgeDestructive',
-    'An error or warning label.',
-    'bg-destructive text-destructive-foreground',
-    ['destructive', 'destructive-foreground'],
-  ),
-
   {
-    key: 'input',
-    name: 'Input',
-    category: 'Forms',
-    description: 'A single-line text field.',
-    tokens: ['input', 'background', 'foreground', 'muted-foreground', 'ring'],
+    key: 'badge',
+    name: 'Badge',
+    category: 'Badges',
+    description: 'A status or a count, in four looks.',
+    tokens: [
+      'primary', 'primary-foreground', 'secondary', 'secondary-foreground',
+      'destructive', 'destructive-foreground', 'border', 'foreground',
+    ],
+    variants: [
+      {
+        name: 'variant',
+        options: ['default', 'secondary', 'outline', 'destructive'],
+        default: 'default',
+      },
+    ],
     root: {
-      type: 'input',
-      classes: `h-9 ${FIELD_BASE} ${PLACEHOLDER}`,
-      attributes: { type: 'text', placeholder: 'Enter your email', name: 'email' },
-    },
-  },
-  {
-    key: 'textarea',
-    name: 'Textarea',
-    category: 'Forms',
-    description: 'A multi-line text field.',
-    tokens: ['input', 'background', 'foreground', 'muted-foreground', 'ring'],
-    root: {
-      type: 'textarea',
-      classes: `py-2 ${FIELD_BASE} ${PLACEHOLDER}`,
-      attributes: { placeholder: 'Your message', name: 'message', rows: '4' },
-    },
-  },
-  {
-    key: 'select',
-    name: 'Select',
-    category: 'Forms',
-    description: 'A dropdown of fixed choices.',
-    tokens: ['input', 'background', 'foreground', 'ring'],
-    root: {
-      type: 'select',
-      classes: `h-9 ${FIELD_BASE}`,
-      attributes: { name: 'choice' },
-      children: [
-        { type: 'option', content: 'First option' },
-        { type: 'option', content: 'Second option' },
-        { type: 'option', content: 'Third option' },
-      ],
-    },
-  },
-  {
-    key: 'checkbox',
-    name: 'Checkbox',
-    category: 'Forms',
-    description: 'A checkbox with its label.',
-    tokens: ['input', 'foreground', 'ring'],
-    root: {
-      type: 'div',
-      classes: 'flex items-center gap-2',
-      children: [
-        {
-          type: 'checkbox',
-          classes: `size-4 shrink-0 rounded-md border border-input outline-none ${FOCUS}`,
-          attributes: { name: 'accept' },
-        },
-        {
-          type: 'label',
-          classes: 'text-sm font-medium text-foreground',
-          children: [{ type: 'span', content: 'Accept the terms' }],
-        },
-      ],
-    },
-  },
-  {
-    key: 'label',
-    name: 'Label',
-    category: 'Forms',
-    description: 'A form field label.',
-    tokens: ['foreground'],
-    root: {
-      type: 'label',
-      classes: 'text-sm font-medium text-foreground',
-      children: [{ type: 'span', content: 'Label' }],
-    },
-  },
-  {
-    key: 'field',
-    name: 'Field',
-    category: 'Forms',
-    // no `for`/`id` pairing: htmlId does not replicate across instances, so
-    // every instance would claim the same id
-    description: 'A label stacked over an input.',
-    tokens: ['input', 'background', 'foreground', 'muted-foreground', 'ring'],
-    root: {
-      type: 'div',
-      classes: 'flex w-full flex-col gap-1.5',
-      children: [
-        {
-          type: 'label',
-          classes: 'text-sm font-medium text-foreground',
-          children: [{ type: 'span', content: 'Email' }],
-        },
-        {
-          type: 'input',
-          classes: `h-9 ${FIELD_BASE} ${PLACEHOLDER}`,
-          attributes: { type: 'email', placeholder: 'you@example.com', name: 'email' },
-        },
-      ],
+      type: 'span',
+      key: 'label',
+      content: 'Badge',
+      classes:
+        'inline-flex w-fit items-center rounded-full border border-transparent bg-primary px-2 py-1 text-xs font-medium text-primary-foreground',
+      variantClasses: {
+        'variant:secondary': 'bg-secondary text-secondary-foreground',
+        'variant:outline': 'border-border bg-transparent text-foreground',
+        'variant:destructive': 'bg-destructive text-destructive-foreground',
+      },
     },
   },
 
@@ -249,7 +94,7 @@ export const PRIMITIVES: CatalogEntry[] = [
     root: {
       type: 'div',
       classes: 'size-10 shrink-0 overflow-hidden rounded-full bg-muted',
-      children: [{ type: 'image', classes: 'h-full w-full object-cover' }],
+      children: [{ type: 'image', key: 'image', classes: 'h-full w-full object-cover' }],
     },
   },
   {
@@ -259,5 +104,85 @@ export const PRIMITIVES: CatalogEntry[] = [
     description: 'A hairline rule between sections.',
     tokens: ['border'],
     root: { type: 'div', classes: 'h-px w-full bg-border' },
+  },
+  {
+    key: 'kbd',
+    name: 'Kbd',
+    category: 'Display',
+    description: 'A key, or a shortcut.',
+    tokens: ['border', 'muted', 'muted-foreground'],
+    root: {
+      type: 'span',
+      key: 'label',
+      content: '⌘K',
+      classes:
+        'inline-flex h-5 w-fit items-center rounded-md border border-border bg-muted px-1.5 font-mono text-xs font-medium text-muted-foreground',
+    },
+  },
+  {
+    key: 'skeleton',
+    name: 'Skeleton',
+    category: 'Display',
+    description: 'A placeholder that pulses while content loads.',
+    tokens: ['muted'],
+    root: { type: 'div', classes: 'h-4 w-full animate-pulse rounded-md bg-muted' },
+  },
+  {
+    key: 'spinner',
+    name: 'Spinner',
+    category: 'Display',
+    description: 'Something is happening.',
+    tokens: ['muted-foreground'],
+    root: icon('loader-circle', 'size-4 shrink-0 animate-spin text-muted-foreground', {
+      attributes: { 'aria-label': 'Loading' },
+    }),
+  },
+  {
+    key: 'progress',
+    name: 'Progress',
+    category: 'Display',
+    description: 'How far along. Set the bar’s width to the share done.',
+    tokens: ['muted', 'primary'],
+    root: {
+      type: 'div',
+      classes: 'h-2 w-full overflow-hidden rounded-full bg-muted',
+      attributes: { role: 'progressbar' },
+      children: [
+        { type: 'div', key: 'bar', classes: 'h-full w-1/2 rounded-full bg-primary transition-all' },
+      ],
+    },
+  },
+  {
+    key: 'empty',
+    name: 'Empty',
+    category: 'Display',
+    description: 'What a list shows when there is nothing in it yet.',
+    tokens: ['border', 'muted', 'muted-foreground', 'foreground'],
+    root: {
+      type: 'div',
+      classes:
+        'flex w-full flex-col items-center gap-4 rounded-xl border border-dashed border-border p-10 text-center',
+      children: [
+        {
+          type: 'div',
+          classes: 'flex size-10 items-center justify-center rounded-lg bg-muted text-muted-foreground',
+          children: [icon('inbox', 'size-5 shrink-0', { key: 'icon' })],
+        },
+        {
+          type: 'div',
+          classes: 'flex flex-col gap-1',
+          children: [
+            { type: 'h3', key: 'title', content: 'Nothing here yet', classes: 'text-base font-semibold text-foreground' },
+            {
+              type: 'paragraph',
+              key: 'description',
+              content: 'Create your first one to see it listed here.',
+              classes: 'text-sm text-muted-foreground',
+            },
+          ],
+        },
+        button('Create one', { start: 'plus' }),
+      ],
+    },
   },
 ]

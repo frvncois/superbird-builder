@@ -3,9 +3,11 @@ import { loadFixture } from './fixtures/project'
 
 // Nesting — a component that holds another.
 //
-// A Card is given a Button on the board; every Card on the page follows. Then
-// the two things nesting is FOR: each Card says its own thing in its button,
-// and restyling Button once restyles the button in every Card — because what
+// A Testimonial is given a Button on the board; every one on the page follows.
+// (The library's own Card already holds a Button — this is the same thing,
+// done by hand.) Then
+// the two things nesting is FOR: each host says its own thing in its button,
+// and restyling Button once restyles the button in every host — because what
 // is inside a nested instance still belongs to the component it is an
 // instance of.
 //
@@ -97,44 +99,46 @@ async function retype(page: Page, rowId: string, text: string) {
   await page.keyboard.press('Enter')
 }
 
-test('a Card holds a Button: each Card says its own, and Button is styled once', async ({ page }) => {
+test('a component is given a Button: each instance says its own, and Button is styled once', async ({ page }) => {
   await openEditor(page)
   await openLayers(page)
 
-  // two Cards on the page
+  // two of them on the page
   await rows(page).first().click()
-  await insertFromDock(page, 'catalog:card')
+  await insertFromDock(page, 'catalog:testimonial')
   await rows(page).first().click()
   await page.keyboard.press('ControlOrMeta+e')
-  await page.locator('[data-dock-item^="component:"]', { hasText: /^Card$/ }).first().click()
+  await page.locator('[data-dock-item^="component:"]', { hasText: /^Testimonial$/ }).first().click()
   await page.keyboard.press('Escape')
   const wrappers = (name: string) => rows(page).filter({ hasText: new RegExp(`^\\s*${name}\\s*$`) })
-  await expect(wrappers('Card')).toHaveCount(2)
+  await expect(wrappers('Testimonial')).toHaveCount(2)
   await expect(wrappers('Button')).toHaveCount(0)
 
-  // --- on the board, the Card gets a Button. It comes from the library, so
+  // --- on the board, the component gets a Button. It comes from the library, so
   // this is also what adds Button to the project.
   await rail(page, 'Components').click()
-  await componentRow(page, 'Card').locator('[data-row-toggle]').click()
-  await rows(page).first().click() // the card's own box
+  await componentRow(page, 'Testimonial').locator('[data-row-toggle]').click()
+  await rows(page).first().click() // the testimonial's own box
   await insertFromDock(page, 'catalog:button')
   await expect(componentRow(page, 'Button')).toBeVisible()
   // a component never offers to go inside itself, or inside what it holds
   await componentRow(page, 'Button').locator('[data-row-toggle]').click()
   await componentRow(page, 'Button').locator('..').locator('[data-layer-row]').first().click()
   await page.keyboard.press('ControlOrMeta+e')
-  await expect(page.locator('[data-dock-item^="component:"]', { hasText: /^Card$/ })).toHaveCount(0)
+  await expect(page.locator('[data-dock-item^="component:"]', { hasText: /^Testimonial$/ })).toHaveCount(0)
   await expect(page.locator('[data-dock-item^="component:"]', { hasText: /^Button$/ })).toHaveCount(0)
   await page.keyboard.press('Escape')
 
-  // --- both Cards on the page followed
+  // --- both instances on the page followed
   await rail(page, 'App').click()
   await openLayers(page)
   await expect(wrappers('Button')).toHaveCount(2)
 
-  // --- each Card says its own: the words of the FIRST one's button
+  // --- each says its own: the words of the FIRST one's button
   const firstButton = wrappers('Button').first()
-  const spanRow = firstButton.locator('xpath=following::*[@data-layer-row][2]')
+  // after the wrapper: the <button>, its leading icon (hidden, so it has a row
+  // and no element), then the span holding the words
+  const spanRow = firstButton.locator('xpath=following::*[@data-layer-row][3]')
   const spanId = (await spanRow.getAttribute('data-layer-row'))!
   await retype(page, spanId, 'Read more')
 
@@ -151,11 +155,11 @@ test('a Card holds a Button: each Card says its own, and Button is styled once',
   await publish(page)
   const html = await (await page.request.get('/')).text()
   const buttons = [...html.matchAll(/<button[^>]*class="([^"]*)"[^>]*><span[^>]*>([^<]*)<\/span>/g)]
-  const inCards = buttons.filter((m) => ['Read more', 'Button'].includes(m[2]!))
-  // one says what its Card said, the other what Button says by default
-  expect(inCards.map((m) => m[2]).sort()).toEqual(['Button', 'Read more'])
-  // and both wear what Button wears now — styled once, not once per Card
-  for (const m of inCards) {
+  const held = buttons.filter((m) => ['Read more', 'Button'].includes(m[2]!))
+  // one says what its host said, the other what Button says by default
+  expect(held.map((m) => m[2]).sort()).toEqual(['Button', 'Read more'])
+  // and both wear what Button wears now — styled once, not once per host
+  for (const m of held) {
     const classes = m[1]!.split(' ')
     expect(classes).toContain('rounded-full')
     expect(classes).not.toContain('rounded-lg')

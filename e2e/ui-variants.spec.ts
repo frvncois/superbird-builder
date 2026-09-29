@@ -116,15 +116,18 @@ test('an axis is named, an option styled, and one instance of two wears it', asy
   await row.getByRole('button').last().click() // the row kebab
   await page.getByRole('button', { name: 'Settings', exact: true }).click()
 
+  // the library's Button comes with two axes already; this adds a third
   const axes = page.locator('[data-variant-axes]')
-  await axes.getByPlaceholder('New axis: size, variant…').fill('Size')
+  await expect(page.locator('[data-variant-axis="variant"]')).toBeVisible()
+  await expect(page.locator('[data-variant-axis="size"]')).toBeVisible()
+  await axes.getByPlaceholder('New axis: size, variant…').fill('Tone')
   await page.keyboard.press('Enter')
   // tidied to the name rule, and born with one option: the default
-  const axis = page.locator('[data-variant-axis="size"]')
+  const axis = page.locator('[data-variant-axis="tone"]')
   await expect(axis.locator('[data-variant-option="default"]')).toBeVisible()
-  await axis.getByPlaceholder('Add an option…').fill('sm')
+  await axis.getByPlaceholder('Add an option…').fill('loud')
   await page.keyboard.press('Enter')
-  await expect(axis.locator('[data-variant-option="sm"]')).toBeVisible()
+  await expect(axis.locator('[data-variant-option="loud"]')).toBeVisible()
 
   // a name that is already taken is refused, and says so
   await axes.getByPlaceholder('New axis: size, variant…').fill('size')
@@ -133,14 +136,14 @@ test('an axis is named, an option styled, and one instance of two wears it', asy
   await page.getByRole('button', { name: 'Back', exact: true }).click()
 
   // --- wear the option on the board, then style it
-  const pick = page.locator('[data-board-pick="Button:size"]')
-  await pick.selectOption('sm')
+  const pick = page.locator('[data-board-pick="Button:tone"]')
+  await pick.selectOption('loud')
   await componentRow(page, 'Button').locator('[data-row-toggle]').click()
   await rows(page).first().click() // the master's <button>
   await page.getByRole('button', { name: 'Style', exact: true }).click()
 
   const layer = page.locator('[data-style-layer]')
-  await choose(layer, 'size: sm')
+  await choose(layer, 'tone: loud')
   const classes = page.getByPlaceholder('Add class')
   await classes.fill('h-8')
   await page.keyboard.press('Enter')
@@ -162,7 +165,7 @@ test('an axis is named, an option styled, and one instance of two wears it', asy
   await openLayers(page)
   await instances.first().click()
   await page.getByRole('button', { name: 'Data', exact: true }).click()
-  await choose(page.locator('[data-instance-pick="size"]'), 'sm')
+  await choose(page.locator('[data-instance-pick="tone"]'), 'loud')
   await page.keyboard.press('Escape')
 
   await publish(page)

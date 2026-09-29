@@ -367,7 +367,8 @@ test('Pages and Components share one column; layers live inside each', async ({ 
 
   // a component's layers unfold under its row, library entries included
   await page.locator('[data-catalog="alert"] [data-row-toggle]').click()
-  await expect(rows(page)).toHaveCount(3)
+  // the alert, its icon, the text column, its title and its description
+  await expect(rows(page)).toHaveCount(5)
 
   // selecting on the board opens the component it belongs to
   await page.locator('[data-board-card="catalog:card"]').getByText('Card title').click()
