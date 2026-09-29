@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import {
-  Component, Feather, Files, Image, Layers, Settings, UserRound, LogOut,
+  Component, Feather, Files, Image, Settings, UserRound, LogOut,
 } from 'lucide-vue-next'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import MainLogo from '@/assets/MainLogo.vue'
@@ -14,8 +14,8 @@ const { openLibrary } = useMediaLibrary()
 const { openModal } = useModal()
 const { canBuild, logout } = useAuth()
 const {
-  isPreview, isBuild, canvas, column, showLayers, showComponents, pagesOpen,
-  setMode, toggleLayers, togglePages, toggleComponents, showApp,
+  isPreview, isBuild, canvas, column, showComponents, pagesOpen,
+  setMode, togglePages, toggleComponents, showApp,
 } = useViewMode()
 </script>
 
@@ -50,8 +50,8 @@ const {
       @click="togglePages"
     />
 
-    <!-- Building tools: both are Build-surface columns, so contributors —
-         content-only, pinned to Preview — don't get either -->
+    <!-- A Build-surface tool, so contributors — content-only, pinned to
+         Preview — don't get it -->
     <ButtonUI
       v-if="canBuild"
       variant="ghost"
@@ -61,16 +61,6 @@ const {
       class="w-7"
       :class="showComponents ? 'text-accent-foreground' : 'text-muted-foreground'"
       @click="toggleComponents"
-    />
-    <ButtonUI
-      v-if="canBuild"
-      variant="ghost"
-      :icon="Layers"
-      tooltip="Layers"
-      tooltip-side="right"
-      class="w-7"
-      :class="showLayers ? 'text-accent-foreground' : 'text-muted-foreground'"
-      @click="toggleLayers"
     />
     <ButtonUI
       variant="ghost"

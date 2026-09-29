@@ -73,7 +73,11 @@ async function writeSlider(page: Page) {
   // the Layers tree is where structure is authored and where the insert point
   // is chosen: an insert lands in the selection, so the slider has to be
   // re-selected between slides (each new div is selected as it lands).
-  await page.getByRole('button', { name: 'Layers', exact: true }).click()
+  // a page's layers open from its Edit icon in the Pages drawer
+  await page.getByRole('button', { name: 'Pages', exact: true }).click()
+  const pageRow = page.locator('[data-page-row="Home"]')
+  await pageRow.hover()
+  await pageRow.getByRole('button', { name: 'Edit layers' }).click()
   const bodyRow = page.locator('[data-layer-row]').first()
   await bodyRow.click()
   await insertFromDock(page, 'slider')

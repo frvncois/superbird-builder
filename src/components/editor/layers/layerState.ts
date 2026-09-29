@@ -3,7 +3,7 @@ import { ref } from 'vue'
 /**
  * Which rows are collapsed, by node id.
  *
- * Module-level because the Layers column unmounts whenever another column
+ * Module-level because the drawer showing the tree unmounts whenever another column
  * takes the shared track, and the tree should come back as it was left.
  * Deliberately NOT stored on the node: a component master's tree is compared
  * by `JSON.stringify` to decide whether a library preview has been edited, so

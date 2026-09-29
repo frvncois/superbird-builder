@@ -15,6 +15,7 @@ import { hasAncestorOfType } from '@/lib/tree'
 import { sanitizeAttributes, isAllowedAttribute } from '@/lib/shared/attributes.js'
 import { useElement } from '@/composables/useElement'
 import { useStructure } from '@/composables/useStructure'
+import { FIELD_TYPES, isRefType, setFieldType } from '@/lib/collectionFields'
 import { usePage } from '@/composables/usePage'
 import { useCollections } from '@/composables/useCollections'
 import { useLocale } from '@/composables/useLocale'
@@ -463,26 +464,15 @@ const entryOptions = computed(() => [
 const hasContent = computed(() => def.value?.defaultContent !== undefined)
 const isMedia = computed(() => ['image', 'video'].includes(selectedElement.value?.type ?? ''))
 
-// collection field schema, edited on the template's body
-const FIELD_TYPES = [
-  { label: 'Text', value: 'text' },
-  { label: 'Image', value: 'image' },
-  { label: 'Date', value: 'date' },
-  { label: 'Reference', value: 'reference' },
-  { label: 'Multi-ref', value: 'multi-reference' },
-  { label: 'Gallery', value: 'multi-image' },
-]
-
-const isRefType = (t: string) => t === 'reference' || t === 'multi-reference'
+// collection field schema, edited on the template's body (and in the Pages
+// drawer's collection settings — both go through lib/collectionFields)
 
 const collectionOptions = computed(() => collections.value.map((c) => ({ label: c.name, value: c.id })))
 
 // switching a field to a reference type needs a target; default to the
 // first collection so the picker is never dangling
 function onFieldTypeChange(field: CollectionField, type: CollectionField['type']) {
-  field.type = type
-  if (isRefType(type)) field.refCollectionId ??= collections.value[0]?.id
-  else delete field.refCollectionId
+  setFieldType(field, type, collections.value)
 }
 
 // --- binding resolution (possibly through a reference hop) ---

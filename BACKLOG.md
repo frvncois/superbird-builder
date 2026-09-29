@@ -292,7 +292,7 @@ action on media-library SVGs.
 ## Layers / structure
 
 - **The `?demo` fixture has 8 unclosed `:div` blocks** (`public/demo-project.json`, Home
-  page — 58 `:div` opens against 50 `div:` closes), so the Layers column's issues footer
+  page — 58 `:div` opens against 50 `div:` closes), so the Layers view's issues footer
   reports 21 diagnostics on the showcase project. The parser is lenient, so it renders,
   but each unclosed div swallows the siblings that follow it — the nesting is not what
   `scripts/generate-demo.ts` intends. Pre-existing and newly VISIBLE: the code editor only

@@ -1,110 +1,134 @@
 <script lang="ts">
 import { ref } from 'vue'
 
-// per-category expand state — module-level because the column unmounts when
-// it is toggled off, and the tree should come back as the user left it
+// expand state — module-level because the column unmounts when it is toggled
+// off, and the tree should come back as the user left it. Groups default to
+// open, components to closed. Components are keyed by the def's id, NOT the
+// board card's key: a library preview's key changes the moment an edit copies
+// it into the project, and the row being edited must not snap shut.
 const expanded = ref<Record<string, boolean>>({})
+const openComponents = ref<Record<string, boolean>>({})
 </script>
 
 <script setup lang="ts">
 // Components navigator toggled from the left rail — a docked column sharing
-// the one track beside the rail with Pages and Layers. While it is
-// open the canvas shows the components board, and this column is its index:
-// clicking a row brings that component's card into view and selects it.
-// Inserting into a page happens on the page, from the ⌘E dock.
-import { computed, onBeforeUnmount } from 'vue'
-import {
-  Check, ChevronRight, Component as ComponentIcon, Copy, Plus, Search, Settings, Trash2,
-} from 'lucide-vue-next'
-import ButtonUI from '@/components/ui/ButtonUI.vue'
+// the one track beside the rail with Pages. While it is open the canvas shows
+// the components board, and this column is its index AND its layers: clicking
+// a row brings that component's card into view, expanding one shows its
+// element tree, editable in place. Inserting a component into a page happens
+// on the page, from the ⌘E dock.
+import { computed } from 'vue'
+import { ChevronRight, Component as ComponentIcon, Copy, Search, Settings, Trash2 } from 'lucide-vue-next'
 import MenuUI from '@/components/ui/MenuUI.vue'
 import ComponentSettingsEditor from './ComponentSettingsEditor.vue'
-import { catalogCategories } from '@/lib/catalog'
+import LayerRow from '@/components/editor/layers/LayerRow.vue'
+import { useLayerSurface } from '@/components/editor/layers/useLayerSurface'
 import { useComponents } from '@/composables/useComponents'
-import { catalogCardKey, focusCard } from '@/composables/useComponentBoard'
+import { UNCATEGORIZED, focusCard, useComponentBoard } from '@/composables/useComponentBoard'
+import type { BoardCard } from '@/composables/useComponentBoard'
 import { useDrawerEscape } from '@/composables/useDrawerEscape'
 import { useModal } from '@/composables/useModal'
+import { findNode } from '@/lib/tree'
 import type { ComponentDef } from '@/types/editor'
 
-const { components, addFromCatalog, duplicateComponent, usageOf, deleteComponent } = useComponents()
+const { duplicateComponent, usageOf, deleteComponent } = useComponents()
+const { cards, activeCard } = useComponentBoard()
 const { confirm } = useModal()
 
 /** when set, the drawer swaps its list for that component's settings */
 const settingsId = ref<string | null>(null)
 const query = ref('')
 
-const UNCATEGORIZED = 'Uncategorized'
-
 // --- filtering ---
 const needle = computed(() => query.value.trim().toLowerCase())
 const searching = computed(() => needle.value.length > 0)
 const matches = (name: string) => name.toLowerCase().includes(needle.value)
 
-/** components by category, alphabetical, with Uncategorized always last —
- * a category whose own name matches the filter keeps all of its components */
-const groups = computed<{ name: string; items: ComponentDef[] }[]>(() => {
-  const byCategory = new Map<string, ComponentDef[]>()
-  for (const c of components.value) {
-    const category = c.category?.trim() || UNCATEGORIZED
-    const keepAll = searching.value && matches(category)
-    if (searching.value && !keepAll && !matches(c.name)) continue
-    const list = byCategory.get(category)
-    if (list) list.push(c)
-    else byCategory.set(category, [c])
-  }
-  return [...byCategory.entries()]
-    .map(([name, items]) => ({ name, items: [...items].sort((a, b) => a.name.localeCompare(b.name)) }))
-    .sort((a, b) => {
-      if (a.name === UNCATEGORIZED) return 1
-      if (b.name === UNCATEGORIZED) return -1
-      return a.name.localeCompare(b.name)
-    })
-})
-
-// --- the bundled library ---
-/** catalog keys already copied into this project */
-const added = computed(() => new Set(components.value.map((c) => c.source).filter(Boolean)))
-
-const libraryGroups = computed(() =>
-  catalogCategories()
-    .map(({ name, items }) => ({
-      name,
-      items:
-        searching.value && !matches(name)
-          ? items.filter((e) => matches(e.name) || matches(e.description))
-          : items,
-    }))
-    .filter((g) => g.items.length),
-)
-
-const noResults = computed(
-  () => searching.value && !groups.value.length && !libraryGroups.value.length,
-)
-
-/** what the last add created, shown for a moment under the Library heading —
- * adding tokens quietly would leave the user wondering where they came from */
-const justAdded = ref<string | null>(null)
-let addedTimer: ReturnType<typeof setTimeout> | undefined
-
-function onAdd(key: string) {
-  const made = addFromCatalog(key)
-  if (!made) return
-  justAdded.value = made.tokens.length
-    ? `Added ${made.def.name} · created ${made.tokens.length} design ${made.tokens.length === 1 ? 'token' : 'tokens'}`
-    : `Added ${made.def.name}`
-  clearTimeout(addedTimer)
-  addedTimer = setTimeout(() => (justAdded.value = null), 2500)
+interface Group {
+  key: string
+  name: string
+  cards: BoardCard[]
 }
-onBeforeUnmount(() => clearTimeout(addedTimer))
+
+/** cards by category, in board order — a category whose own name matches the
+ *  filter keeps all of its components */
+function groupsOf(list: BoardCard[], prefix: string, sort: boolean): Group[] {
+  const byCategory = new Map<string, BoardCard[]>()
+  for (const card of list) {
+    const keepAll = searching.value && matches(card.category)
+    const hit =
+      matches(card.def.name) || (!!card.preview && matches(card.preview.description))
+    if (searching.value && !keepAll && !hit) continue
+    const group = byCategory.get(card.category)
+    if (group) group.push(card)
+    else byCategory.set(card.category, [card])
+  }
+  const groups = [...byCategory.entries()].map(([name, cards]) => ({
+    key: `${prefix}${name}`,
+    name,
+    cards: sort ? [...cards].sort((a, b) => a.def.name.localeCompare(b.def.name)) : cards,
+  }))
+  if (!sort) return groups // the library keeps the order it was authored in
+  return groups.sort((a, b) => {
+    if (a.name === UNCATEGORIZED) return 1
+    if (b.name === UNCATEGORIZED) return -1
+    return a.name.localeCompare(b.name)
+  })
+}
+
+// The library lists what the project does NOT have yet. An entry moves up to
+// Project the moment it is edited here or used on a page — there is no
+// separate "add" step, so there is nothing to mark as added.
+const sections = computed(() => [
+  { title: 'Project', groups: groupsOf(cards.value.filter((c) => !c.preview), 'own:', true) },
+  { title: 'Library', groups: groupsOf(cards.value.filter((c) => c.preview), 'lib:', false) },
+])
+
+const hasOwn = computed(() => cards.value.some((c) => !c.preview))
+const noResults = computed(
+  () => searching.value && sections.value.every((section) => !section.groups.length),
+)
 
 // while filtering every group is forced open (without touching the stored state)
-const isExpanded = (name: string) => searching.value || expanded.value[name] !== false
-const toggleGroup = (name: string) => {
+const isExpanded = (key: string) => searching.value || expanded.value[key] !== false
+const toggleGroup = (key: string) => {
   if (searching.value) return
-  expanded.value[name] = expanded.value[name] === false
+  expanded.value[key] = expanded.value[key] === false
 }
 
+const isOpen = (def: ComponentDef) => openComponents.value[def.id] === true
+const toggleComponent = (def: ComponentDef) => {
+  openComponents.value[def.id] = !isOpen(def)
+}
+
+// --- the element trees of the expanded components ---
+
+const surface = ref<HTMLElement>()
+const { onKeydown } = useLayerSurface({
+  surface,
+  // what ↑/↓ walk: the children of every open component, in display order.
+  // The component's own row stands for the root wrapper.
+  roots: () =>
+    sections.value
+      .flatMap((section) => section.groups)
+      .filter((group) => isExpanded(group.key))
+      .flatMap((group) => group.cards)
+      .filter((card) => isOpen(card.def))
+      .flatMap((card) => card.def.root.children),
+  // a master's nodes never reach a page's ref space
+  canRename: () => false,
+  // a selection made on the board opens the component it belongs to
+  beforeReveal(id) {
+    const owner = cards.value.find((c) => !!findNode(c.def.root.children, id))
+    if (!owner) return
+    openComponents.value[owner.def.id] = true
+    const section = owner.preview ? 'lib:' : 'own:'
+    expanded.value[`${section}${owner.category}`] = true
+  },
+})
+
 // --- row actions ---
+
 async function confirmDelete(def: ComponentDef) {
   const used = usageOf(def.name)
   const ok = await confirm({
@@ -153,135 +177,122 @@ useDrawerEscape(panel, {
             />
           </div>
 
-          <!-- tree: pb leaves room for a row kebab opened near the bottom -->
-          <div class="flex-1 overflow-y-auto pb-10">
-            <div class="flex items-center gap-1 px-2.5 pt-2 pb-1">
-              <span class="flex-1 text-[9px] font-medium tracking-wide text-muted-foreground uppercase">
-                Project
-              </span>
-            </div>
-
-            <p v-if="!components.length" class="px-2.5 py-1 text-[10px] text-muted-foreground">
-              Nothing yet. Add one from the library below, or select an element on the canvas and
-              choose “Create component”.
-            </p>
-
-            <div v-for="group in groups" :key="group.name">
-              <div class="group/row mx-1 flex h-7 items-center rounded-lg pr-0.5 pl-1 hover:bg-accent/15">
-                <button
-                  type="button"
-                  class="flex h-full min-w-0 flex-1 items-center gap-1 text-left outline-none"
-                  @click="toggleGroup(group.name)"
-                >
-                  <ChevronRight
-                    class="size-3 shrink-0 text-muted-foreground transition-transform"
-                    :class="isExpanded(group.name) && 'rotate-90'"
-                  />
-                  <span class="truncate text-xs font-medium">{{ group.name }}</span>
-                  <span class="shrink-0 text-[10px] text-muted-foreground">{{ group.items.length }}</span>
-                </button>
+          <!-- the tree is also a LAYER SURFACE: it takes focus for the tree's
+               keys and is a drop target for row drags and the ⌘E dock.
+               pb leaves room for a row kebab opened near the bottom -->
+          <div
+            ref="surface"
+            data-insert-surface
+            tabindex="0"
+            class="flex-1 overflow-y-auto pb-10 outline-none"
+            @keydown="onKeydown"
+          >
+            <template v-for="(section, i) in sections" :key="section.title">
+              <div class="flex items-center gap-1 px-2.5 pb-1" :class="i ? 'pt-4' : 'pt-2'">
+                <span class="flex-1 text-[9px] font-medium tracking-wide text-muted-foreground uppercase">
+                  {{ section.title }}
+                </span>
               </div>
 
-              <!-- a guide line carries the nesting at this width -->
-              <div v-if="isExpanded(group.name)" class="mt-0.5 mb-1 ml-3.5 border-l border-input pl-1">
-                <div
-                  v-for="def in group.items"
-                  :key="def.id"
-                  :data-component="def.name"
-                  class="group/row mr-1 flex h-7 items-center rounded-lg pr-0.5 pl-1.5 hover:bg-accent/15"
-                >
+              <p
+                v-if="section.title === 'Project' && !hasOwn"
+                class="px-2.5 py-1 text-[10px] text-muted-foreground"
+              >
+                Nothing yet. Edit one from the library below, use one on a page, or select an
+                element on a page and choose “Create component”.
+              </p>
+
+              <div v-for="group in section.groups" :key="group.key">
+                <div class="group/row mx-1 flex h-7 items-center rounded-lg pr-0.5 pl-1 hover:bg-accent/15">
                   <button
                     type="button"
-                    class="flex h-full min-w-0 flex-1 items-center gap-1.5 text-left outline-none"
-                    @click="focusCard(def.id)"
+                    class="flex h-full min-w-0 flex-1 items-center gap-1 text-left outline-none"
+                    @click="toggleGroup(group.key)"
                   >
-                    <ComponentIcon class="size-3 shrink-0 text-muted-foreground" />
-                    <span class="truncate text-xs text-muted-foreground">{{ def.name }}</span>
+                    <ChevronRight
+                      class="size-3 shrink-0 text-muted-foreground transition-transform"
+                      :class="isExpanded(group.key) && 'rotate-90'"
+                    />
+                    <span class="truncate text-xs font-medium">{{ group.name }}</span>
+                    <span class="shrink-0 text-[10px] text-muted-foreground">{{ group.cards.length }}</span>
                   </button>
-                  <MenuUI
-                    width="w-40"
-                    class="opacity-0 group-hover/row:opacity-100 data-[open]:opacity-100"
-                    trigger-class="flex size-6 items-center justify-center rounded-lg text-muted-foreground outline-none hover:bg-accent/30 focus-visible:ring-2 focus-visible:ring-accent"
-                  >
-                    <template #default="{ close }">
-                      <button type="button" class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs outline-none hover:bg-accent/30 focus-visible:bg-accent/30" @click="(settingsId = def.id, close())">
-                        <Settings class="size-3.5" /> Settings
+                </div>
+
+                <!-- a guide line carries the nesting at this width -->
+                <div v-if="isExpanded(group.key)" class="mt-0.5 mb-1 ml-3.5 border-l border-input pl-1">
+                  <template v-for="card in group.cards" :key="card.def.id">
+                    <div
+                      :data-component="card.preview ? undefined : card.def.name"
+                      :data-catalog="card.preview?.key"
+                      class="group/row mr-1 flex h-7 items-center rounded-lg pr-0.5 pl-0.5"
+                      :class="activeCard?.def.id === card.def.id ? 'bg-accent/15' : 'hover:bg-accent/15'"
+                    >
+                      <button
+                        type="button"
+                        data-row-toggle
+                        class="flex size-4 shrink-0 items-center justify-center rounded text-muted-foreground outline-none hover:text-foreground"
+                        :aria-label="isOpen(card.def) ? 'Collapse' : 'Expand'"
+                        @click="toggleComponent(card.def)"
+                      >
+                        <ChevronRight
+                          class="size-3 transition-transform"
+                          :class="isOpen(card.def) && 'rotate-90'"
+                        />
                       </button>
-                      <button type="button" class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs outline-none hover:bg-accent/30 focus-visible:bg-accent/30" @click="(duplicateComponent(def.id), close())">
-                        <Copy class="size-3.5" /> Duplicate
+                      <button
+                        v-tooltip="card.preview ? { text: card.preview.description, side: 'right' } : ''"
+                        type="button"
+                        data-row-main
+                        class="flex h-full min-w-0 flex-1 items-center gap-1.5 text-left outline-none"
+                        @click="focusCard(card.key)"
+                      >
+                        <ComponentIcon class="size-3 shrink-0 text-muted-foreground" />
+                        <span
+                          class="truncate text-xs"
+                          :class="activeCard?.def.id === card.def.id ? 'font-medium' : 'text-muted-foreground'"
+                        >{{ card.def.name }}</span>
                       </button>
-                      <div class="mx-1 my-1 h-px bg-input" />
-                      <button type="button" class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-danger outline-none hover:bg-accent/30 focus-visible:bg-accent/30" @click="(confirmDelete(def), close())">
-                        <Trash2 class="size-3.5" /> Delete
-                      </button>
-                    </template>
-                  </MenuUI>
+                      <MenuUI
+                        v-if="!card.preview"
+                        width="w-40"
+                        class="opacity-0 group-hover/row:opacity-100 data-[open]:opacity-100"
+                        trigger-class="flex size-6 items-center justify-center rounded-lg text-muted-foreground outline-none hover:bg-accent/30 focus-visible:ring-2 focus-visible:ring-accent"
+                      >
+                        <template #default="{ close }">
+                          <button type="button" class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs outline-none hover:bg-accent/30 focus-visible:bg-accent/30" @click="(settingsId = card.def.id, close())">
+                            <Settings class="size-3.5" /> Settings
+                          </button>
+                          <button type="button" class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs outline-none hover:bg-accent/30 focus-visible:bg-accent/30" @click="(duplicateComponent(card.def.id), close())">
+                            <Copy class="size-3.5" /> Duplicate
+                          </button>
+                          <div class="mx-1 my-1 h-px bg-input" />
+                          <button type="button" class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-danger outline-none hover:bg-accent/30 focus-visible:bg-accent/30" @click="(confirmDelete(card.def), close())">
+                            <Trash2 class="size-3.5" /> Delete
+                          </button>
+                        </template>
+                      </MenuUI>
+                    </div>
+
+                    <!-- the component's element tree. Its own row above stands
+                         for the root wrapper, so the tree starts at its children -->
+                    <div v-if="isOpen(card.def)" class="mr-1 mb-1">
+                      <LayerRow
+                        v-for="child in card.def.root.children"
+                        :key="child.id"
+                        :node="child"
+                        :depth="1"
+                      />
+                      <p
+                        v-if="!card.def.root.children.length"
+                        class="py-1 pl-6 text-[10px] text-muted-foreground"
+                      >
+                        Empty. Insert an element with ⌘E.
+                      </p>
+                    </div>
+                  </template>
                 </div>
               </div>
-            </div>
-
-            <!-- the bundled library: adding COPIES an entry into the project,
-                 after which nothing follows the catalog -->
-            <div class="flex items-center gap-1 px-2.5 pt-4 pb-1">
-              <span class="flex-1 text-[9px] font-medium tracking-wide text-muted-foreground uppercase">
-                Library
-              </span>
-            </div>
-            <p v-if="justAdded" class="px-2.5 pb-1 text-[10px] text-muted-foreground">
-              {{ justAdded }}
-            </p>
-
-            <div v-for="group in libraryGroups" :key="`lib-${group.name}`">
-              <div class="group/row mx-1 flex h-7 items-center rounded-lg pr-0.5 pl-1 hover:bg-accent/15">
-                <button
-                  type="button"
-                  class="flex h-full min-w-0 flex-1 items-center gap-1 text-left outline-none"
-                  @click="toggleGroup(`lib-${group.name}`)"
-                >
-                  <ChevronRight
-                    class="size-3 shrink-0 text-muted-foreground transition-transform"
-                    :class="isExpanded(`lib-${group.name}`) && 'rotate-90'"
-                  />
-                  <span class="truncate text-xs font-medium">{{ group.name }}</span>
-                  <span class="shrink-0 text-[10px] text-muted-foreground">{{ group.items.length }}</span>
-                </button>
-              </div>
-
-              <div v-if="isExpanded(`lib-${group.name}`)" class="mt-0.5 mb-1 ml-3.5 border-l border-input pl-1">
-                <div
-                  v-for="entry in group.items"
-                  :key="entry.key"
-                  :data-catalog="entry.key"
-                  class="group/row mr-1 flex h-7 items-center rounded-lg pr-0.5 pl-1.5 hover:bg-accent/15"
-                >
-                  <button
-                    v-tooltip="{ text: entry.description, side: 'right' }"
-                    type="button"
-                    class="flex h-full min-w-0 flex-1 items-center gap-1.5 text-left outline-none"
-                    @click="focusCard(catalogCardKey(entry.key))"
-                  >
-                    <ComponentIcon class="size-3 shrink-0 text-muted-foreground" />
-                    <span class="truncate text-xs text-muted-foreground">{{ entry.name }}</span>
-                  </button>
-                  <span
-                    v-if="added.has(entry.key)"
-                    v-tooltip="'Already in this project'"
-                    class="flex size-6 items-center justify-center text-muted-foreground"
-                  >
-                    <Check class="size-3.5" />
-                  </span>
-                  <ButtonUI
-                    v-else
-                    variant="icon"
-                    size="xs"
-                    :icon="Plus"
-                    tooltip="Add to project"
-                    class="w-6 shrink-0 text-muted-foreground opacity-0 group-hover/row:opacity-100"
-                    @click="onAdd(entry.key)"
-                  />
-                </div>
-              </div>
-            </div>
+            </template>
 
             <p v-if="noResults" class="px-2 py-6 text-center text-xs text-muted-foreground">
               No results for “{{ query.trim() }}”.

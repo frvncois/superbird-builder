@@ -13,24 +13,22 @@ const mode = ref<'build' | 'preview'>('build')
 /**
  * What the Build canvas shows: the open page, or the components board.
  *
- * Deliberately separate from `column` below. They used to be one thing — the
- * board was visible exactly while the Components column was open — which
- * cannot survive Layers, whose whole job is to show the layers of whatever is
- * on the canvas WHILE holding the column itself.
+ * Deliberately separate from `column` below, so the board can stay up while a
+ * different column — or none — holds the track (pressing Components again
+ * closes its column and leaves the board at full width).
  */
 const canvas = ref<'page' | 'components'>('page')
 
 /**
- * The docked column beside the rail — pages, layers or components. They share
- * ONE 16rem track, so at most one is open. That is why this is a single ref
- * rather than three booleans: with flags every toggle would have to clear the
- * others by hand and the invariant would live in six places. `null` is the
- * bare canvas.
+ * The docked column beside the rail — pages or components. They share ONE
+ * 16rem track, so at most one is open: a single ref rather than a flag each,
+ * so the invariant is the type and not a set of handlers. `null` is the bare
+ * canvas.
  *
- * Pages belongs to the shell (both surfaces, contributors included); layers
- * and components are Build-only building tools.
+ * Pages belongs to the shell (both surfaces, contributors included) and is
+ * also where a page's layers are edited; components is a Build-only tool.
  */
-const column = ref<'pages' | 'layers' | 'components' | null>(null)
+const column = ref<'pages' | 'components' | null>(null)
 let pinStarted = false
 
 export function useViewMode() {
@@ -44,8 +42,8 @@ export function useViewMode() {
       if (!can) {
         mode.value = 'preview'
         canvas.value = 'page'
-        // only the build-only columns close: a contributor still gets Pages
-        if (column.value === 'layers' || column.value === 'components') column.value = null
+        // only the build-only column closes: a contributor still gets Pages
+        if (column.value === 'components') column.value = null
       }
     }, { immediate: true })
   }
@@ -64,24 +62,6 @@ export function useViewMode() {
     if (!canBuild.value) return
     canvas.value = next
   }
-
-  /**
-   * A Build-only column button. From Preview it brings you back to the Build
-   * surface WITH the column open (one click, not two); on Build it flips it.
-   * Contributors never get here (the buttons are hidden and `setMode` refuses
-   * Build anyway).
-   */
-  function toggleBuildColumn(which: 'layers' | 'components') {
-    if (!canBuild.value) return
-    if (mode.value !== 'build') {
-      setMode('build')
-      column.value = which
-      return
-    }
-    column.value = column.value === which ? null : which
-  }
-
-  const toggleLayers = () => toggleBuildColumn('layers')
 
   /**
    * The rail's Components button: the board, plus its column. Pressed again
@@ -111,10 +91,7 @@ export function useViewMode() {
   const isPreview = computed(() => mode.value === 'preview')
   const isBuild = computed(() => mode.value === 'build')
   const pagesOpen = computed(() => column.value === 'pages')
-  const layersOpen = computed(() => column.value === 'layers')
   const componentsOpen = computed(() => column.value === 'components')
-  /** the build-only columns render only on Build, and only when toggled on */
-  const showLayers = computed(() => isBuild.value && layersOpen.value)
   /** the board is a CANVAS state now, not a column one */
   const showComponents = computed(() => isBuild.value && canvas.value === 'components')
   /**
@@ -128,7 +105,7 @@ export function useViewMode() {
 
   return {
     mode, isPreview, isBuild, canvas,
-    column, visibleColumn, pagesOpen, layersOpen, componentsOpen, showLayers, showComponents,
-    setMode, setCanvas, toggleLayers, togglePages, toggleComponents, showApp,
+    column, visibleColumn, pagesOpen, componentsOpen, showComponents,
+    setMode, setCanvas, togglePages, toggleComponents, showApp,
   }
 }

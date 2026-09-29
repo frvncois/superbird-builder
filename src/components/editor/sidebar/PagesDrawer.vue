@@ -11,16 +11,20 @@ const expanded = ref<Record<string, boolean>>({})
 // beside the rail: it takes the shared 16rem track, stays
 // open while you navigate, and only the rail button closes it. Three zones: a
 // search field, the scrollable Pages + Collections tree, and the locale
-// switcher pinned at the bottom. Row overflow actions
-// (settings/duplicate/delete) live in a per-row kebab.
+// switcher pinned at the bottom. A row reveals its actions on hover: an Edit
+// icon that swaps the drawer to that page's LAYERS, and a kebab
+// (settings/duplicate/delete). The list swaps in place for three detail
+// views — layers, page/item settings, collection settings.
 import { computed, onMounted } from 'vue'
 import {
   Plus, Copy, Trash2, Settings, Languages, ChevronDown, ChevronRight, Check,
-  House, Search, Layers,
+  House, Search, SquarePen,
 } from 'lucide-vue-next'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import MenuUI from '@/components/ui/MenuUI.vue'
 import PageSettingsEditor, { type SettingsTarget } from './PageSettingsEditor.vue'
+import CollectionSettingsEditor from './CollectionSettingsEditor.vue'
+import LayersPane from '@/components/editor/layers/LayersPane.vue'
 import CreateCollectionModal from '@/components/shared/CreateCollectionModal.vue'
 import { usePage } from '@/composables/usePage'
 import { useProject } from '@/composables/useProject'
@@ -29,6 +33,8 @@ import { useHeaderNav } from '@/composables/useHeaderNav'
 import { useLocale } from '@/composables/useLocale'
 import { useLocaleQuickAdd } from '@/composables/useLocaleQuickAdd'
 import { useModal } from '@/composables/useModal'
+import { useAuth } from '@/composables/useAuth'
+import { useViewMode } from '@/composables/useViewMode'
 import { useDrawerEscape } from '@/composables/useDrawerEscape'
 import { walkNodes } from '@/lib/tree'
 import type { Collection, CollectionEntry, ElementNode, Page } from '@/types/editor'
@@ -46,9 +52,32 @@ const {
   startAddLocale, confirmAddLocale,
 } = useLocaleQuickAdd()
 const { openModal, confirm } = useModal()
+const { canBuild } = useAuth()
+const { setMode } = useViewMode()
 
 // when set, the drawer swaps its list for the page/item settings panel
 const settingsTarget = ref<SettingsTarget | null>(null)
+// the Layers view of the page on the canvas
+const layersOpen = ref(false)
+// the collection whose fields/URL are being edited — an id, never the object
+const collectionSettingsId = ref<string | null>(null)
+const detailOpen = computed(
+  () => !!settingsTarget.value || layersOpen.value || !!collectionSettingsId.value,
+)
+function closeDetail() {
+  settingsTarget.value = null
+  layersOpen.value = false
+  collectionSettingsId.value = null
+}
+
+/** the Edit icon: put the page on the canvas and show its layers */
+function editLayers(pageId: string) {
+  // structure is a Build job: from Preview this brings the canvas back
+  setMode('build')
+  openPage(pageId)
+  closeDetail()
+  layersOpen.value = true
+}
 // name filter across pages, collections and entries
 const query = ref('')
 
@@ -213,14 +242,20 @@ async function confirmDeleteLocale(loc: string) {
 
 const panel = ref<HTMLElement>()
 
-// Escape peels one layer at a time — filter, then the settings view — and
-// never closes the column itself; only the rail does. See useDrawerEscape for
-// why a persistent column can't just claim the key.
+// Escape peels one layer at a time — filter, then a settings view — and never
+// closes the column itself; only the rail does. See useDrawerEscape for why a
+// persistent column can't just claim the key.
+//
+// The LAYERS view is deliberately not peelable. It is a working surface, not a
+// detail you glance at: Escape is what closes a panel, the ⌘E dock and a
+// target pick while you work in it, and each of those would also have thrown
+// you back to the page list. Only its Back button leaves it.
 useDrawerEscape(panel, {
-  canPeel: () => searching.value || !!settingsTarget.value,
+  canPeel: () =>
+    searching.value || (!layersOpen.value && (!!settingsTarget.value || !!collectionSettingsId.value)),
   peel: () => {
     if (searching.value) query.value = ''
-    else settingsTarget.value = null
+    else closeDetail()
   },
 })
 </script>
@@ -233,10 +268,17 @@ useDrawerEscape(panel, {
          states already share a header height so the swap moves no pixels. -->
     <div class="relative min-h-0 flex-1 overflow-hidden">
     <Transition name="drawer-push">
-    <div v-if="settingsTarget" class="pane pane-settings overflow-y-auto">
+    <div v-if="detailOpen" class="pane pane-settings overflow-y-auto">
+      <LayersPane v-if="layersOpen" @back="closeDetail" />
+      <CollectionSettingsEditor
+        v-else-if="collectionSettingsId"
+        :collection-id="collectionSettingsId"
+        @back="closeDetail"
+      />
       <PageSettingsEditor
+        v-else-if="settingsTarget"
         :target="settingsTarget"
-        @back="settingsTarget = null"
+        @back="closeDetail"
       />
     </div>
 
@@ -269,6 +311,7 @@ useDrawerEscape(panel, {
       </div>
       <div
         v-for="page in visiblePages" :key="page.id"
+        :data-page-row="page.name"
         class="group/row mx-1 flex h-7 items-center rounded-lg pr-0.5 pl-1.5"
         :class="isActivePage(page.id) ? 'bg-accent/25' : 'hover:bg-accent/15'"
       >
@@ -288,6 +331,12 @@ useDrawerEscape(panel, {
             class="size-1.5 shrink-0 rounded-full bg-pending"
           />
         </button>
+        <ButtonUI
+          v-if="canBuild"
+          variant="icon" size="xs" :icon="SquarePen" tooltip="Edit layers"
+          class="w-5 shrink-0 text-muted-foreground opacity-0 group-hover/row:opacity-100"
+          @click.stop="editLayers(page.id)"
+        />
         <MenuUI
           width="w-40"
           class="opacity-0 group-hover/row:opacity-100 data-[open]:opacity-100"
@@ -327,7 +376,10 @@ useDrawerEscape(panel, {
       </p>
 
       <div v-for="{ collection, entries } in visibleCollections" :key="collection.id">
-        <div class="group/row mx-1 flex h-7 items-center rounded-lg pr-0.5 pl-1 hover:bg-accent/15">
+        <div
+          :data-collection-row="collection.name"
+          class="group/row mx-1 flex h-7 items-center rounded-lg pr-0.5 pl-1 hover:bg-accent/15"
+        >
           <button
             type="button"
             class="flex h-full min-w-0 flex-1 items-center gap-1 text-left outline-none"
@@ -340,6 +392,13 @@ useDrawerEscape(panel, {
             <span class="truncate text-xs font-medium">{{ collection.name }}</span>
             <span class="shrink-0 text-[10px] text-muted-foreground">{{ collection.entries.length }}</span>
           </button>
+          <!-- a data-only collection has no template page, so no layers to edit -->
+          <ButtonUI
+            v-if="canBuild && collection.templatePageId"
+            variant="icon" size="xs" :icon="SquarePen" tooltip="Edit template layers"
+            class="w-5 shrink-0 text-muted-foreground opacity-0 group-hover/row:opacity-100"
+            @click.stop="editLayers(collection.templatePageId)"
+          />
           <ButtonUI
             variant="icon" size="xs" :icon="Plus" tooltip="Add item"
             class="w-5 shrink-0 text-muted-foreground opacity-0 group-hover/row:opacity-100"
@@ -351,13 +410,11 @@ useDrawerEscape(panel, {
             trigger-class="flex size-6 items-center justify-center rounded-lg text-muted-foreground outline-none hover:bg-accent/30 focus-visible:ring-2 focus-visible:ring-accent"
           >
             <template #default="{ close }">
-              <!-- a data-only collection has no template page (templatePageId: '') -->
               <button
-                v-if="collection.templatePageId"
                 type="button" class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs outline-none hover:bg-accent/30 focus-visible:bg-accent/30"
-                @click="(openPage(collection.templatePageId), close())"
+                @click="(collectionSettingsId = collection.id, close())"
               >
-                <Layers class="size-3.5" /> Edit template
+                <Settings class="size-3.5" /> Settings
               </button>
               <button type="button" class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs outline-none hover:bg-accent/30 focus-visible:bg-accent/30" @click="(duplicateCollection(collection), close())">
                 <Copy class="size-3.5" /> Duplicate

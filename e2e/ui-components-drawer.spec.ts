@@ -108,9 +108,9 @@ test('the board shows every component, and editing a library one adds it', async
 
   // a drawer row moves the camera to its card — the board is an infinite
   // canvas, so anything off-screen is reached this way (or by panning)
-  await libraryRow(page, 'tabs').getByRole('button').first().click()
+  await libraryRow(page, 'tabs').locator('[data-row-main]').click()
   await expect(boardCard(page, 'catalog:tabs')).toBeInViewport()
-  await libraryRow(page, 'button').getByRole('button').first().click()
+  await libraryRow(page, 'button').locator('[data-row-main]').click()
   await expect(boardCard(page, 'catalog:button')).toBeInViewport()
 
   // looking is not editing: selecting an element and opening the Style panel
@@ -125,7 +125,7 @@ test('the board shows every component, and editing a library one adds it', async
   await expect(projectRow(page, 'Button')).toHaveCount(0)
 
   // editing it in place is what copies it into the project
-  await libraryRow(page, 'card').getByRole('button').first().click()
+  await libraryRow(page, 'card').locator('[data-row-main]').click()
   await expect(card).toBeInViewport()
   const title = card.getByText('Card title')
   await title.dblclick()
@@ -135,7 +135,8 @@ test('the board shows every component, and editing a library one adds it', async
 
   await expect(projectRow(page, 'Card')).toHaveCount(1)
   await expect(boardCard(page, 'catalog:card')).toHaveCount(0)
-  await expect(page.getByText('Edited on the board')).toBeVisible()
+  // (twice: on the board, and in the component's now-open layers in the drawer)
+  await expect(page.getByText('Edited on the board').first()).toBeVisible()
 
   // and the edit is the component's: an instance on a page carries it
   await page.getByRole('button', { name: 'App', exact: true }).click()
@@ -154,7 +155,8 @@ test('a library button reaches the published page, styled by a created token', a
   // using it added it: it is a project component now
   await rail(page, 'Components').click()
   await expect(projectRow(page, 'Button')).toHaveCount(1)
-  await expect(libraryRow(page, 'button').getByRole('button', { name: 'Add to project' })).toHaveCount(0)
+  // …and has left the Library, which lists only what the project lacks
+  await expect(libraryRow(page, 'button')).toHaveCount(0)
 
   await publish(page)
   await page.goto('/')

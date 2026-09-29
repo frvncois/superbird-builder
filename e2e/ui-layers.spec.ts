@@ -64,10 +64,21 @@ async function publish(page: Page) {
 const rail = (page: Page, name: string) => page.getByRole('button', { name, exact: true })
 const rows = (page: Page) => page.locator('[data-layer-row]')
 
-async function openLayers(page: Page) {
-  await rail(page, 'Layers').click()
+/** a page's layers open from its Edit icon in the Pages drawer */
+async function openLayers(page: Page, name = 'Home') {
+  if (!(await page.getByPlaceholder('Search pages, items…').isVisible())) {
+    // the Layers view may already be showing; Back returns to the list
+    const back = page.getByRole('button', { name: 'Back' })
+    if (await back.isVisible()) await back.click()
+    else await rail(page, 'Pages').click()
+  }
+  const row = page.locator(`[data-page-row="${name}"]`)
+  await row.hover()
+  await row.getByRole('button', { name: 'Edit layers' }).click()
   await expect(rows(page).first()).toBeVisible({ timeout: 15_000 })
 }
+
+const componentRow = (page: Page, name: string) => page.locator(`[data-component="${name}"]`)
 
 /** insert one element from the ⌘E dock at the current selection */
 async function insertFromDock(page: Page, key: string) {
@@ -203,23 +214,20 @@ test('a component gains an element on the board, and its page instance follows',
   await insertFromDock(page, 'catalog:card')
   const pageRows = await rows(page).count()
 
-  // edit the COMPONENT on the board. Structure there is the master's — and
-  // the master is pushed to every instance on every page.
+  // edit the COMPONENT: expanding its row in the Components drawer shows its
+  // layers. Structure there is the master's — pushed to every instance.
   await rail(page, 'Components').click()
-  await page.locator('[data-board-card]').filter({ hasText: 'Card title' }).first()
-    .getByText('Card title').click()
-  await rail(page, 'Layers').click()
-  // the tree follows the canvas: it shows the component, not the page
-  await expect(rows(page).first()).toContainText('Card')
+  await componentRow(page, 'Card').locator('[data-row-toggle]').click()
+  await expect(rows(page).first()).toBeVisible()
   const masterRows = await rows(page).count()
 
-  await rows(page).nth(1).click()
+  await rows(page).first().click()
   await insertFromDock(page, 'paragraph')
   await expect(rows(page)).toHaveCount(masterRows + 1)
 
   // back on the page, the instance grew the same element
   await rail(page, 'App').click()
-  await rail(page, 'Layers').click()
+  await openLayers(page)
   await expect(rows(page)).toHaveCount(pageRows + 1)
 })
 
@@ -244,22 +252,48 @@ test('removing an element from a component removes it from the page instance', a
   await expect(page.getByText('Something worth knowing before you carry on.')).toBeVisible()
 })
 
-test('the columns share one slot, and Layers works on either canvas', async ({ page }) => {
+test('Pages and Components share one column; layers live inside each', async ({ page }) => {
   await openEditor(page)
   await openLayers(page)
 
-  await rail(page, 'Pages').click()
+  // the Layers view is a layer of the Pages drawer: Back returns to the list
+  await page.getByRole('button', { name: 'Back' }).click()
   await expect(page.getByPlaceholder('Search pages, items…')).toBeVisible()
   await expect(rows(page)).toHaveCount(0)
 
   // Components puts the board on the canvas AND takes the column
   await rail(page, 'Components').click()
   await expect(page.getByPlaceholder('Search components…')).toBeVisible()
+  await expect(page.getByPlaceholder('Search pages, items…')).toBeHidden()
   await expect(page.locator('[data-board-card]').first()).toBeVisible()
 
-  // Layers takes the column back; the board stays, because the canvas and the
-  // column are independent
-  await rail(page, 'Layers').click()
-  await expect(page.getByPlaceholder('Search components…')).toBeHidden()
-  await expect(page.locator('[data-board-card]').first()).toBeVisible()
+  // a component's layers unfold under its row, library entries included
+  await page.locator('[data-catalog="alert"] [data-row-toggle]').click()
+  await expect(rows(page)).toHaveCount(3)
+
+  // selecting on the board opens the component it belongs to
+  await page.locator('[data-board-card="catalog:card"]').getByText('Card title').click()
+  await expect(rows(page).filter({ hasText: 'Card title' })).toBeVisible()
+})
+
+test('a collection has settings: its fields and its URL', async ({ page }) => {
+  await openEditor(page)
+  await rail(page, 'Pages').click()
+
+  const row = page.locator('[data-collection-row]').first()
+  await row.hover()
+  await row.getByRole('button').last().click() // the row kebab
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+
+  // the demo's post collection carries its fields
+  await expect(page.locator('[data-field="title"]')).toBeVisible()
+  const before = await page.locator('[data-field]').count()
+  await page.getByRole('button', { name: 'Add field' }).click()
+  await expect(page.locator('[data-field]')).toHaveCount(before + 1)
+
+  // the hint spells out where entries publish, and follows the prefix
+  const prefix = page.locator('input[placeholder="post"]')
+  await prefix.fill('journal')
+  await prefix.press('Enter')
+  await expect(page.getByText('/journal/my-entry')).toBeVisible()
 })

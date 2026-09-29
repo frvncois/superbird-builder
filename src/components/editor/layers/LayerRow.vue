@@ -18,10 +18,11 @@ import { useInteraction } from '@/composables/useInteraction'
 import { useStructure } from '@/composables/useStructure'
 import { usePanel } from '@/composables/usePanel'
 import { useLayerState } from './layerState'
+import { useLayerSurfaceRow } from './useLayerSurface'
 import type { ElementNode } from '@/types/editor'
 
 const props = defineProps<{ node: ElementNode; depth: number }>()
-const emit = defineEmits<{ 'row-pointerdown': [e: PointerEvent, id: string] }>()
+const surface = useLayerSurfaceRow()
 
 const {
   selectedElementIds, selectElement, highlightElement, highlightedElement, dropTarget,
@@ -155,7 +156,7 @@ function commitRef() {
       @click="onClick"
       @dblclick="startRename"
       @contextmenu="openMenu($event, node.id)"
-      @pointerdown="emit('row-pointerdown', $event, node.id)"
+      @pointerdown="surface?.onRowPointerDown($event, node.id)"
       @pointerenter="highlightElement(node.id)"
       @pointerleave="highlightElement(null)"
     >
@@ -208,13 +209,7 @@ function commitRef() {
     </div>
 
     <template v-if="open">
-      <LayerRow
-        v-for="child in node.children"
-        :key="child.id"
-        :node="child"
-        :depth="depth + 1"
-        @row-pointerdown="(e, id) => emit('row-pointerdown', e, id)"
-      />
+      <LayerRow v-for="child in node.children" :key="child.id" :node="child" :depth="depth + 1" />
     </template>
   </div>
 </template>

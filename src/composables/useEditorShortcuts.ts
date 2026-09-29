@@ -42,7 +42,7 @@ export function useEditorShortcuts() {
 
   useKeymap([
     // the element panels' keys (S / D / I) belong to the Layers tree, which
-    // only answers them while it has focus — see LayersPanel
+    // only answers them while it has focus — see useLayerSurface
     { key: 'c', mod: true, handler: buildOnly(copySelection) },
     { key: 'x', mod: true, handler: buildOnly(cutSelection) },
     { key: 'v', mod: true, handler: buildOnly(pasteOnSelection) },
@@ -54,8 +54,8 @@ export function useEditorShortcuts() {
     // Shift+↑/↓ moves the selection one visual slot — a re-parent without the
     // mouse. App-level rather than the tree's own, so it works from the canvas
     // too.
-    { key: 'up', shift: true, mod: false, handler: buildOnly(() => backend.value.nudge('up')) },
-    { key: 'down', shift: true, mod: false, handler: buildOnly(() => backend.value.nudge('down')) },
+    { key: 'arrowup', shift: true, mod: false, handler: buildOnly(() => backend.value.nudge('up')) },
+    { key: 'arrowdown', shift: true, mod: false, handler: buildOnly(() => backend.value.nudge('down')) },
     { key: 'z', mod: true, shift: false, handler: undo },
     { key: 'z', mod: true, shift: true, handler: redo },
     // save works even from a focused field, so ⌘S never opens the browser dialog

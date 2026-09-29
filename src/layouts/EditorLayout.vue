@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // `column` names which docked column holds the single 16rem track beside the
-// rail — pages, layers or components, or none for the bare canvas. One prop
+// rail — pages or components, or none for the bare canvas. One prop
 // rather than three booleans so the rendered aside and the grid track can
 // never disagree; `useViewMode` owns which one it is.
 // `framed` gives the centre the Build canvas chrome (inset rounded card);
@@ -8,7 +8,7 @@
 import { computed } from 'vue'
 
 const props = withDefaults(
-  defineProps<{ column?: 'pages' | 'layers' | 'components' | null; framed?: boolean }>(),
+  defineProps<{ column?: 'pages' | 'components' | null; framed?: boolean }>(),
   { column: null, framed: true },
 )
 
@@ -32,10 +32,6 @@ const columns = computed(() =>
 
     <aside v-else-if="column === 'components'" class="min-h-0 border-l border-input">
       <slot name="components" />
-    </aside>
-
-    <aside v-else-if="column === 'layers'" class="min-h-0 border-l border-input">
-      <slot name="layers" />
     </aside>
 
     <!-- Build gets the framed canvas surface; Preview is a plain full-bleed pane -->

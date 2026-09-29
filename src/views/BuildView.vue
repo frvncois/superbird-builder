@@ -3,9 +3,9 @@
 // (breakpoint canvas + full inspector) and Preview (full-site render,
 // restricted sidebar).
 // The centre is either the open page or the components board (`canvas`), and
-// the 16rem track beside the rail holds at most one of Pages, Layers and
-// Components (`column`) — the two are independent, so Layers can show the
-// layers of whatever the canvas is displaying.
+// the 16rem track beside the rail holds Pages or Components (`column`). Layers
+// are edited inside those columns: a page's from its Edit icon in Pages, a
+// component's by expanding its row in Components.
 // Contributors are pinned to Preview.
 import EditorLayout from '@/layouts/EditorLayout.vue'
 import AppRail from '@/components/editor/sidebar/AppRail.vue'
@@ -13,7 +13,6 @@ import PagesDrawer from '@/components/editor/sidebar/PagesDrawer.vue'
 import ComponentsDrawer from '@/components/editor/sidebar/ComponentsDrawer.vue'
 import CanvasEditor from '@/components/editor/canvas/CanvasEditor.vue'
 import ComponentsBoard from '@/components/editor/canvas/ComponentsBoard.vue'
-import LayersPanel from '@/components/editor/layers/LayersPanel.vue'
 import SettingsEditor from '@/components/editor/sidebar/SettingsEditor.vue'
 import ContextMenu from '@/components/editor/canvas/ContextMenu.vue'
 import InsertDragChip from '@/components/editor/canvas/InsertDragChip.vue'
@@ -52,10 +51,6 @@ const { isBuild, visibleColumn, showComponents } = useViewMode()
 
       <template v-if="visibleColumn === 'components'" #components>
         <ComponentsDrawer />
-      </template>
-
-      <template v-if="visibleColumn === 'layers'" #layers>
-        <LayersPanel />
       </template>
 
       <!-- center: Build canvas or full-site preview -->
