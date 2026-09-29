@@ -21,6 +21,7 @@ import { DEFAULT_SCROLL_AT } from '@/lib/shared/interactionKeys.js'
 import { useLocale } from './useLocale'
 import { SAFE_SRC } from '@/lib/shared/urls.js'
 import { DEFAULT_ICON_SVG, parseInlineSvg, sanitizeInlineSvg } from '@/lib/shared/svg.js'
+import { isNodeHidden } from '@/lib/instances'
 import type {
   CollectionEntry,
   ElementNode,
@@ -281,6 +282,16 @@ export function useRenderNode(
     const v = srcInfo.value.value
     return v && SAFE_SRC.test(v) ? v : undefined
   })
+
+  // --- hidden ---
+  //
+  // A hidden node renders nothing, on every surface: the canvas shows what the
+  // site will. It stays in the Layers tree, which is where it is shown again.
+  // Own flag first, then the component's — so one instance can drop a part
+  // (or show one its component hides) without touching the others.
+  const hidden = computed(
+    () => node.value.type !== 'body' && isNodeHidden(node.value, mapping.value),
+  )
 
   // --- inline icon ---
   //
@@ -666,6 +677,7 @@ export function useRenderNode(
     srcAttr,
     altAttr,
     iconInfo,
+    hidden,
     editableText,
     richEditing,
     inlineInitialText,

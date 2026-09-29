@@ -59,7 +59,7 @@ const {
   def,
   listCollection, listEntries, itemCollection, itemEntry, itemTemplateChildren, selfNested,
   boundField, boundEntry, customAttrs, backgroundInfo,
-  displayContent, richContent, srcAttr, altAttr, iconInfo, linkRaw, baseClasses,
+  displayContent, richContent, srcAttr, altAttr, iconInfo, hidden, linkRaw, baseClasses,
   editableText, richEditing, inlineInitialText, commitInlineText,
   hoverHandlers, fireClickInteractions, fireChangeInteractions, el,
   motionStyle,
@@ -239,9 +239,11 @@ const handlers = {
 </script>
 
 <template>
+  <!-- a hidden node renders nothing; it lives on in the Layers tree -->
+  <template v-if="hidden" />
   <component
     :is="def?.tag ?? 'div'"
-    v-if="node.type === 'collection-list'"
+    v-else-if="node.type === 'collection-list'"
     ref="el"
     v-bind="customAttrs"
     :id="node.htmlId || undefined"

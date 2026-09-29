@@ -10,6 +10,7 @@ import {
 } from './components'
 import { createNode, isLeafElement, seedChildFor } from './elements'
 import { deepClone, findNode, findParent, walkNodes } from './tree'
+import { buildInstanceMap } from './instances'
 
 /**
  * Whole-project operations on components — rename, duplicate, categorize,
@@ -17,9 +18,10 @@ import { deepClone, findNode, findParent, walkNodes } from './tree'
  *
  * These live here rather than in `useComponents` because every one of them
  * spans ALL pages, while the composable's `masterMap` / `detachComponent` are
- * bound to the active page; and rather than in `lib/components.ts` because
- * that module is re-exported into the committed MCP runtime bundle, which
- * would have to be rebuilt for changes that never concern an agent.
+ * bound to the active page. The structural ones (`rewriteInstanceBlock`,
+ * `pushMasterStructure`, …) are re-exported into the committed MCP runtime
+ * bundle, so the agent path runs this code rather than a copy of it: rebuild
+ * the bundle (`npm run build:mcp-runtime`) after changing them.
  *
  * All of it is pure: a `Project` in, mutations out, no Vue. That is what makes
  * it testable headlessly.
@@ -161,21 +163,20 @@ interface Pair {
 }
 
 /**
- * Pairs an instance's nodes with their masters by structural position — the
- * same index+type walk `useComponents`' masterMap does, but over any page
- * rather than only the active one.
+ * One instance's nodes with their masters — the shared pairing
+ * (lib/instances), over any page rather than only the active one, plus the
+ * master → instance direction a detach needs to retarget bindings.
  */
-function pairWithMaster(instance: ElementNode, root: ElementNode) {
+function pairWithMaster(instance: ElementNode, def: ComponentDef) {
   const pairs: Pair[] = []
   const masterToInstance = new Map<string, string>()
-  const pair = (inst: ElementNode, master: ElementNode) => {
-    if (inst.type !== master.type) return
-    pairs.push({ node: inst, master })
-    masterToInstance.set(master.id, inst.id)
-    const length = Math.min(inst.children.length, master.children.length)
-    for (let i = 0; i < length; i++) pair(inst.children[i]!, master.children[i]!)
-  }
-  pair(instance, root)
+  const map = buildInstanceMap([instance], [def])
+  walkNodes([instance], (node) => {
+    const mapping = map.get(node.id)
+    if (!mapping) return
+    pairs.push({ node, master: mapping.master })
+    masterToInstance.set(mapping.master.id, node.id)
+  })
   return { pairs, masterToInstance }
 }
 
@@ -211,6 +212,10 @@ function bakeMasterState(pairs: Pair[], masterToInstance: Map<string, string>): 
     if (!node.content && master.content) node.content = master.content
     if (!node.src && master.src) node.src = master.src
     if (!node.svg && master.svg) node.svg = master.svg
+    // a part the component hides stays hidden; one this instance chose to show
+    // (`false`) has nothing left to override, so the flag goes
+    if (node.hidden === undefined && master.hidden) node.hidden = true
+    else if (node.hidden === false) delete node.hidden
     if (!node.background && master.background) node.background = master.background
     if (!node.locales && master.locales) node.locales = deepClone(master.locales)
   }
@@ -251,7 +256,7 @@ function detachOne(page: Page, def: ComponentDef, instanceId: string): boolean {
   const instance = findNode(page.elements, instanceId)
   if (!instance || instance.type !== def.name || instance.line === undefined) return false
 
-  const { pairs, masterToInstance } = pairWithMaster(instance, def.root)
+  const { pairs, masterToInstance } = pairWithMaster(instance, def)
   bakeMasterState(pairs, masterToInstance)
 
   const lines = page.code.split('\n')
@@ -580,8 +585,7 @@ export function pushMasterStructure(project: Project, def: ComponentDef): number
  * Regenerates one instance's inner code lines from its master.
  *
  * Lifted out of `useComponents` so the master-first operations above can reuse
- * it; it closed over nothing. (`packages/guano/mcp/tools.mjs` keeps its own
- * copy for the agent path — the two must stay in step.)
+ * it; it closed over nothing.
  */
 export function rewriteInstanceBlock(page: Page, node: ElementNode, def: ComponentDef): boolean {
   if (node.line === undefined) return false

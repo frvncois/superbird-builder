@@ -155,6 +155,10 @@ export interface ElementNode {
    * a custom SVG, ALWAYS the output of shared/svg.sanitizeInlineSvg. Node-only
    * state like `src`, and per-instance inside a component the same way. */
   svg?: string
+  /** not rendered and not exported. Node-only state, and per-instance inside a
+   * component: an instance hides a part for itself, or — with an explicit
+   * `false` — shows one its component hides by default. Omitted = inherit. */
+  hidden?: boolean
   /** background media (a /media/<id> URL) layered behind the element's content;
    * image → CSS background-image, video → an absolutely-positioned <video> layer.
    * node-only visual state like classes/src */

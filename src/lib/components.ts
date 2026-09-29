@@ -55,6 +55,9 @@ export function stripExtractedInstanceState(source: ElementNode): void {
     delete n.attributes
     delete n.src
     delete n.svg
+    // the master took the flag with the rest; left here it would shadow a
+    // later change to the component's default
+    delete n.hidden
     delete n.background
     delete n.locales
     delete n.content

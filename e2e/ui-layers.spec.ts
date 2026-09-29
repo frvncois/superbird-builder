@@ -262,6 +262,45 @@ test('an icon is picked from the grid and publishes as an inline svg', async ({ 
   )
 })
 
+test('one instance hides a part of its component; the other keeps it', async ({ page }) => {
+  await openEditor(page)
+  await openLayers(page)
+
+  // two instances of the same component, side by side
+  // (using a library entry copies it into the project, so the second insert
+  // finds it among the project's own components)
+  await rows(page).first().click()
+  await insertFromDock(page, 'catalog:alert')
+  await rows(page).first().click()
+  await page.keyboard.press('ControlOrMeta+e')
+  await page.locator('[data-dock-item^="component:"]', { hasText: 'Alert' }).first().click()
+  await page.keyboard.press('Escape')
+  const headings = rows(page).filter({ hasText: 'Heads up' })
+  await expect(headings).toHaveCount(2)
+
+  // hide the heading in ONE of them. The eye only shows on a hovered row —
+  // and then stays, because a hidden row has to say so without being pointed at
+  await headings.first().hover()
+  await headings.first().locator('[data-layer-eye]').click()
+  await expect(page.locator('[data-layer-hidden]')).toHaveCount(1)
+  await rows(page).first().hover()
+  await expect(headings.first().locator('[data-layer-eye]')).toBeVisible()
+
+  // the canvas shows what the site will: one heading left per frame
+  const frames = await page.locator('[data-node-id]', { hasText: /^Heads up$/ }).count()
+
+  await publish(page)
+  const html = await (await page.request.get('/')).text()
+  expect(html.match(/Heads up/g)!).toHaveLength(1)
+  await page.keyboard.press('Escape')
+
+  // showing it again leaves no trace: the flag is dropped, not set to false
+  await headings.first().hover()
+  await headings.first().locator('[data-layer-eye]').click()
+  await expect(page.locator('[data-layer-hidden]')).toHaveCount(0)
+  await expect(page.locator('[data-node-id]', { hasText: /^Heads up$/ })).toHaveCount(frames * 2)
+})
+
 test('a component gains an element on the board, and its page instance follows', async ({
   page,
 }) => {

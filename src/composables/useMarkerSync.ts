@@ -36,7 +36,7 @@ export function useMarkerSync() {
           parts.push(
             `${n.id}:${n.classes ?? ''}:${n.interactions?.length ?? 0}:${
               n.animations?.length ?? 0
-            }:${n.arg ?? ''}:${n.content ? 1 : 0}:${n.src ? 1 : 0}:${n.svg ? 1 : 0}:${n.slider ? 1 : 0}`,
+            }:${n.arg ?? ''}:${n.content ? 1 : 0}:${n.src ? 1 : 0}:${n.svg ? 1 : 0}:${n.slider ? 1 : 0}:${n.hidden ?? ''}`,
           )
         })
       }

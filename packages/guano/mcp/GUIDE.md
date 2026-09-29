@@ -577,6 +577,12 @@ Element text/media attaches to the node, not the code. Write it with `edit_eleme
   EMPTY leaf is not expressible, so build decorative dots/spacers/rules from `:div`
   containers (styled, no content), never from text leaves.
 - **`icon`** / **`svg`** — icon elements only; see Icons below.
+- **`hidden`** — any element but the body: `true` removes it from the canvas and the
+  published page (it stays in the code and the tree). Inside a component instance it is
+  **this instance's** choice — hide a part here (`true`), or show one the component hides
+  by default (`false`); `null` goes back to inheriting. With `onMaster: true` it sets the
+  component's default for every instance. This is how one Button has an icon and the
+  next does not, without a second component.
 - **`src`** — image/video elements only: a `/media/<id>` path (media library), an
   `https://` URL, or a `data:image/…` / `data:video/…` URL.
 - **`background`** — any element: background media layered behind its content (image →

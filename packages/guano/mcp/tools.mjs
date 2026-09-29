@@ -126,6 +126,10 @@ export function createToolSet({ api, runtime, elicit }) {
     sanitizeInlineSvg,
     lucideSvg,
     lucideNameOf,
+    buildInstanceMap: sharedInstanceMap,
+    rewriteInstanceBlock,
+    setNodeHidden,
+    isNodeHidden,
   } = runtime
 
   // ---------- the bundled icon table ----------
@@ -751,6 +755,7 @@ function elementSummary(project, page, opts = {}) {
       ...(n.listQuery ? { listQuery: n.listQuery } : {}),
       ...(n.entryId ? { entryId: n.entryId } : {}),
       ...(n.slider ? { slider: n.slider } : {}),
+      ...(n.hidden !== undefined ? { hidden: n.hidden } : {}),
       // the bundled icon's name when there is one — the markup itself is noise
       ...(n.svg ? { icon: lucideNameOf(n.svg) ?? 'custom svg' } : {}),
     }
@@ -923,7 +928,7 @@ function syncMarkersForNode(page, node) {
   if (node.type !== 'body' && node.arg === undefined) {
     // a real [name] binding owns the slot — withDataMarker no-ops on it.
     // a slider's config is Data-panel state too, so it earns the marker
-    const want = !!(node.content || node.src || node.svg || node.slider)
+    const want = !!(node.content || node.src || node.svg || node.slider) || node.hidden !== undefined
     if (want !== (dataMarkerOf(line) === '[+]')) line = withDataMarker(line, want)
   }
   const style = styleMarkerOf(line)
@@ -945,49 +950,22 @@ function syncMarkersForNode(page, node) {
 }
 
 /**
- * Master node an in-component instance node maps to, by structural position
- * (mirrors export.mjs buildMasterMap / the editor's pairing). Returns null
- * when the instance's structure has diverged past the master's.
+ * instance node id → its mapping ({ master, instanceId, … }) for every
+ * in-component node on a page. The SAME walk the editor and the exporter run
+ * (shared/instances.js, through the runtime bundle) — it used to be mirrored
+ * here by hand, twice. `instanceId` is the instance's :Name wrapper id: two
+ * nodes in the same instance share it.
  */
-function masterNodeFor(project, page, instanceNode) {
-  let found = null
-  walkNodes(page.elements ?? [], (n) => {
-    if (found || !isComponentType(n.type)) return
-    const def = (project.components ?? []).find((c) => c.name === n.type)
-    if (!def) return
-    const pair = (inst, master) => {
-      if (found || inst.type !== master.type) return
-      if (inst.id === instanceNode.id) {
-        found = master
-        return
-      }
-      const len = Math.min(inst.children.length, master.children.length)
-      for (let i = 0; i < len; i++) pair(inst.children[i], master.children[i])
-    }
-    pair(n, def.root)
-  })
-  return found
+function buildInstanceMap(project, page) {
+  return sharedInstanceMap(page.elements ?? [], project.components ?? [])
 }
 
 /**
- * instance node id → { master, rootId } for every in-component node on a page
- * (mirrors export.mjs buildMasterMap). `rootId` is the instance's :Name
- * wrapper id — two nodes in the same instance share it.
+ * Master node an in-component instance node maps to. Returns null when the
+ * instance's structure has diverged past the master's.
  */
-function buildInstanceMap(project, page) {
-  const map = new Map()
-  const pair = (inst, master, rootId) => {
-    if (inst.type !== master.type) return
-    map.set(inst.id, { master, rootId })
-    const len = Math.min(inst.children.length, master.children.length)
-    for (let i = 0; i < len; i++) pair(inst.children[i], master.children[i], rootId)
-  }
-  walkNodes(page.elements ?? [], (n) => {
-    if (!isComponentType(n.type)) return
-    const def = (project.components ?? []).find((c) => c.name === n.type)
-    if (def) pair(n, def.root, n.id)
-  })
-  return map
+function masterNodeFor(project, page, instanceNode) {
+  return buildInstanceMap(project, page).get(instanceNode.id)?.master ?? null
 }
 
 /**
@@ -1054,7 +1032,7 @@ function resolveBindTarget(project, page, ownerNode, inComponent, rawTarget, raw
   const instMap = buildInstanceMap(project, page)
   const ownerInfo = instMap.get(ownerNode.id)
   const targetInfo = instMap.get(target)
-  if (!targetInfo || targetInfo.rootId !== ownerInfo?.rootId) {
+  if (!targetInfo || targetInfo.instanceId !== ownerInfo?.instanceId) {
     return { error: `bind targetId "${target}" must be another element in the same component instance` }
   }
   return { targetId: targetInfo.master.id }
@@ -1064,36 +1042,8 @@ function resolveBindTarget(project, page, ownerNode, inComponent, rawTarget, raw
 // runtime (bundled from @/lib/components) — no local reimplementation, so the
 // MCP and the editor reshape masters identically.
 
-/** rewrite one closed instance block from the master's structure, keeping
- * same-position nodes' identity (mirrors useComponents.rewriteInstanceBlock) */
-function rewriteInstanceBlock(page, node, def) {
-  if (node.line === undefined) return
-  const lines = page.code.split('\n')
-  const start = node.line
-  const end = node.endLine ?? node.line
-  if (end <= start) return
-  const indent = lines[start].match(/^\t*/)[0]
-  const inner = def.root.children.flatMap((c) => serializeNode(c, `${indent}\t`))
-  const oldInnerLength = end - start - 1
-  const rest = [...lines.slice(0, start + 1), ...inner, ...lines.slice(end)]
-  // signature-aware inner map (exact line, then token type) so an inserted
-  // master node doesn't re-seat every following instance node — and its
-  // content overrides — one line off (mirrors the editor)
-  const align = alignInstanceLines(lines.slice(start + 1, end), inner)
-  const map = new Map()
-  for (let i = 0; i < rest.length; i++) {
-    if (i <= start) map.set(i, i)
-    else if (i < start + 1 + inner.length) {
-      const oldInner = align.get(i - (start + 1))
-      if (oldInner !== undefined) map.set(i, start + 1 + oldInner)
-    } else {
-      map.set(i, i - inner.length + oldInnerLength)
-    }
-  }
-  const before = page.code
-  page.code = rest.join('\n')
-  page.elements = reconcile(before, page.code, page.elements, map)
-}
+// …and `rewriteInstanceBlock` is the editor's own too (lib/componentOps, through
+// the runtime bundle): a second copy here had to be kept in step by hand.
 
 /** write/prune a per-locale content/src override — empty values delete the
  * key, empty buckets are pruned, so touch-then-clear leaves the node
@@ -1266,6 +1216,28 @@ function applyPageEdits(project, page, edits, locale, defaultLocale) {
           delete dataTarget.src
         }
         applied.push(edit.onMaster ? 'src (on component master — all instances)' : 'src')
+        changed = true
+      }
+    }
+
+    // --- hidden (any element but the body) ---
+    // Inside a component instance this is the INSTANCE's own choice, written
+    // only where it differs from what the component says; `onMaster` sets the
+    // component's default instead. `null` drops the instance's override.
+    if (edit.hidden !== undefined) {
+      if (node.type === 'body') {
+        errors.push('hidden refused: the body cannot be hidden')
+      } else if (edit.hidden !== null && typeof edit.hidden !== 'boolean') {
+        errors.push('hidden must be true, false, or null (inherit)')
+      } else if (dataTargetError) {
+        errors.push(dataTargetError)
+      } else {
+        if (edit.hidden === null) delete dataTarget.hidden
+        else {
+          const mapping = edit.onMaster ? null : buildInstanceMap(project, page).get(node.id)
+          setNodeHidden(dataTarget, mapping ?? null, edit.hidden)
+        }
+        applied.push(edit.onMaster ? 'hidden (on component master — all instances)' : 'hidden')
         changed = true
       }
     }
@@ -4204,6 +4176,13 @@ const tools = [
                   },
                 },
                 additionalProperties: false,
+              },
+              hidden: {
+                type: ['boolean', 'null'],
+                description:
+                  'not rendered and not exported. Inside a component instance this hides ' +
+                  '(true) or shows (false) the part for THIS instance only; with onMaster it ' +
+                  'sets the component\'s default. null drops the override and inherits',
               },
               icon: {
                 type: 'string',

@@ -60,6 +60,10 @@ export {
 } from './components'
 export type { AdoptResult, OrphanedNode } from './components'
 
+// whole-project component operations. Pure and DOM-free, so the agent path
+// runs the editor's own code instead of a copy that has to be kept in step.
+export { rewriteInstanceBlock, isClosedBlock, pushMasterStructure } from './componentOps'
+
 // --- canonical page document scaffold (src/lib/document.ts)
 export {
   buildDocument,
@@ -112,6 +116,15 @@ export { SAFE_HREF, SAFE_SRC } from './shared/urls.js'
 // The icon TABLE is deliberately not re-exported: it is the whole Lucide set,
 // and the tools import it on demand (see loadIcons in mcp/tools.mjs)
 export { sanitizeInlineSvg, lucideSvg, lucideNameOf } from './shared/svg.js'
+
+// component instances — the one pairing walk, and the chain it resolves
+export {
+  buildInstanceMap,
+  resolveInstanceValue,
+  inheritedInstanceValue,
+  isNodeHidden,
+  setNodeHidden,
+} from './shared/instances.js'
 
 // --- custom attribute allowlist (src/lib/shared/attributes.js) — the MCP
 // sanitizes attributes with the SAME allowlist the editor and exporter use

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { Copy, ClipboardPaste, CopyPlus, Trash2, Palette, Zap, Component, Unlink, Group, type LucideIcon } from 'lucide-vue-next'
+import { Copy, ClipboardPaste, CopyPlus, Trash2, Palette, Zap, Component, Unlink, Group, Eye, EyeOff, type LucideIcon } from 'lucide-vue-next'
 import { isComponentType } from '@/lib/components'
 import { useComponents } from '@/composables/useComponents'
 import { useStructure } from '@/composables/useStructure'
@@ -9,7 +9,9 @@ import ButtonUI from '@/components/ui/ButtonUI.vue'
 import CreateComponentModal from '@/components/editor/canvas/CreateComponentModal.vue'
 import { useContextMenu } from '@/composables/useContextMenu'
 
-const { masterFor, detachComponent } = useComponents()
+const { masterFor, detachComponent, isHidden, setHidden } = useComponents()
+
+const targetHidden = computed(() => !!target.value && isHidden(target.value))
 const { backend } = useStructure()
 const { openModal } = useModal()
 
@@ -51,6 +53,12 @@ const items = computed<Item[]>(() => [
   { label: 'Paste', icon: ClipboardPaste, run: paste, disabled: !copiedBlock.value, shortcut: '⌘V' },
   { label: 'Delete', icon: Trash2, run: remove, disabled: targetIsBody.value, shortcut: '⌫' },
   { label: 'Wrap in div', icon: Group, run: wrapSelection, disabled: targetIsBody.value, shortcut: '⌘G', divider: true },
+  {
+    label: targetHidden.value ? 'Show' : 'Hide',
+    icon: targetHidden.value ? Eye : EyeOff,
+    run: () => target.value && setHidden(target.value, !targetHidden.value),
+    disabled: targetIsBody.value,
+  },
   { label: 'Copy style classes', icon: Palette, run: copyClasses, divider: true },
   { label: 'Paste style classes', icon: Palette, run: pasteClasses, disabled: copiedClasses.value === null },
   { label: 'Copy interactions', icon: Zap, run: copyInteractions, divider: true },

@@ -24,6 +24,7 @@ import {
 import { isRich, rewriteRichMedia, sanitizeRich } from '../src/lib/shared/richtext.js'
 import { backgroundRender, backgroundKindFromUrl } from '../src/lib/shared/background.js'
 import { DEFAULT_ICON_SVG, parseInlineSvg, sanitizeInlineSvg } from '../src/lib/shared/svg.js'
+import { buildInstanceMap, isNodeHidden } from '../src/lib/shared/instances.js'
 import { conflictingBaseClasses } from '../src/lib/shared/interactionClasses.js'
 import {
   DEFAULT_SCROLL_AT,
@@ -158,23 +159,11 @@ const entryValue = (entry, field, locale, def) => {
   )
 }
 
-// ---------- component master pairing (mirror useComponents masterMap) ----------
+// ---------- component master pairing ----------
 
-function buildMasterMap(elements, components) {
-  const map = new Map()
-  const pair = (inst, master, instanceId, root) => {
-    if (inst.type !== master.type) return
-    map.set(inst.id, { master, instanceId, root })
-    const length = Math.min(inst.children.length, master.children.length)
-    for (let i = 0; i < length; i++) pair(inst.children[i], master.children[i], instanceId, root)
-  }
-  walkNodes(elements, (node) => {
-    if (!/^[A-Z]/.test(node.type)) return
-    const def = components.find((c) => c.name === node.type)
-    if (def) pair(node, def.root, node.id, def.root)
-  })
-  return map
-}
+// the SAME walk the editor's masterMap runs (shared/instances.js) — it used to
+// be mirrored here by hand
+const buildMasterMap = (elements, components) => buildInstanceMap(elements, components ?? [])
 
 // ---------- interactions ----------
 
@@ -665,6 +654,9 @@ function attrsFor(node, ctx, bg, { wrapLink = true, extraClass = '' } = {}) {
 }
 
 function renderNode(node, ctx) {
+  // a hidden node emits nothing — own flag first, then its component's
+  if (node.type !== 'body' && isNodeHidden(node, ctx.mm.get(node.id))) return ''
+
   const def = ELEMENTS[node.type]
   const tag = def?.tag ?? 'div'
 

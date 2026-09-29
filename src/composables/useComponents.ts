@@ -24,19 +24,15 @@ import {
 import { catalogEntry, materializeCatalogEntry } from '@/lib/catalog'
 import { useSettings } from './useSettings'
 import { findNode, walkNodes } from '@/lib/tree'
+import { buildInstanceMap, isNodeHidden, setNodeHidden, type InstanceMapping } from '@/lib/instances'
+import { useAuth } from './useAuth'
 import type { ComponentDef, ElementNode, Page } from '@/types/editor'
 
 let syncStarted = false
 let syncing = false
 
-export interface MasterMapping {
-  /** shared master node this page node corresponds to */
-  master: ElementNode
-  /** page node of the :Name … Name: instance block */
-  instanceId: string
-  /** the component's master root, for interaction lookups */
-  root: ElementNode
-}
+/** what a page node inside a component instance stands for — see lib/instances */
+export type MasterMapping = InstanceMapping
 
 // project / active page / components / masterMap live at MODULE scope so
 // every renderer node shares ONE masterMap computed instead of building
@@ -58,24 +54,7 @@ function findComponent(name: string): ComponentDef | null {
  * render/edit the shared master's style and interactions while
  * keeping their own content.
  */
-const masterMap = computed(() => {
-  const map = new Map<string, MasterMapping>()
-  const pair = (inst: ElementNode, master: ElementNode, instanceId: string, root: ElementNode) => {
-    if (inst.type !== master.type) return
-    map.set(inst.id, { master, instanceId, root })
-    const length = Math.min(inst.children.length, master.children.length)
-    for (let i = 0; i < length; i++) {
-      pair(inst.children[i]!, master.children[i]!, instanceId, root)
-    }
-  }
-  walkNodes(activePage.value.elements, (node) => {
-    if (!isComponentType(node.type)) return
-    const def = findComponent(node.type)
-    // the instance block itself maps to the master root
-    if (def) pair(node, def.root, node.id, def.root)
-  })
-  return map
-})
+const masterMap = computed(() => buildInstanceMap(activePage.value.elements, components.value))
 
 function masterFor(nodeId: string): MasterMapping | null {
   return masterMap.value.get(nodeId) ?? null
@@ -95,6 +74,22 @@ const editTarget = computed(() => {
   if (!selected) return null
   return masterFor(selected.id)?.master ?? selected
 })
+
+/** is this node hidden, by its own flag or its component's? */
+function isHidden(node: ElementNode): boolean {
+  return node.type !== 'body' && isNodeHidden(node, masterFor(node.id))
+}
+
+/**
+ * Show or hide a node. Inside a component instance this is the INSTANCE's own
+ * choice; on the components board it is the component's default for all of
+ * them. Not a structural edit — the code does not change — but still not
+ * something a contributor may do: the server keeps it out of their allowlist.
+ */
+function setHidden(node: ElementNode, hidden: boolean): void {
+  if (node.type === 'body' || !useAuth().canBuild.value) return
+  setNodeHidden(node, masterFor(node.id), hidden)
+}
 
 export function useComponents() {
   const { selectElement } = useElement()
@@ -295,6 +290,8 @@ export function useComponents() {
     findComponent,
     masterFor,
     editTarget,
+    isHidden,
+    setHidden,
     findMasterNode,
     createComponent,
     detachComponent,

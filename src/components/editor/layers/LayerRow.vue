@@ -8,12 +8,13 @@
  * more than it documents.
  */
 import { computed, nextTick, ref, watch } from 'vue'
-import { ChevronRight, Palette, Paperclip, Zap } from 'lucide-vue-next'
+import { ChevronRight, Eye, EyeOff, Palette, Paperclip, Zap } from 'lucide-vue-next'
 import { elementIcon } from '@/lib/elementIcons'
 import { ELEMENTS } from '@/lib/elements'
 import { isComponentType } from '@/lib/components'
 import { useElement } from '@/composables/useElement'
 import { useComponents } from '@/composables/useComponents'
+import { useAuth } from '@/composables/useAuth'
 import { useContextMenu } from '@/composables/useContextMenu'
 import { useInteraction } from '@/composables/useInteraction'
 import { useStructure } from '@/composables/useStructure'
@@ -28,7 +29,8 @@ const surface = useLayerSurfaceRow()
 const {
   selectedElementIds, selectElement, highlightElement, highlightedElement, dropTarget,
 } = useElement()
-const { masterFor } = useComponents()
+const { masterFor, isHidden, setHidden } = useComponents()
+const { canBuild } = useAuth()
 const { openMenu } = useContextMenu()
 const { pickingFor, pickTarget } = useInteraction()
 const { backend } = useStructure()
@@ -40,6 +42,9 @@ const highlighted = computed(() => highlightedElement.value?.id === props.node.i
 const hasChildren = computed(() => props.node.children.length > 0)
 const open = computed(() => hasChildren.value && !isCollapsed(props.node.id))
 const isInstance = computed(() => isComponentType(props.node.type))
+/** hidden rows stay in the tree — it is the only place left to show them again */
+const hidden = computed(() => isHidden(props.node))
+const canHide = computed(() => canBuild.value && props.node.type !== 'body')
 
 /**
  * What to call this row. The type alone — which is all anything in the app
@@ -154,9 +159,10 @@ function commitRef() {
 </script>
 
 <template>
-  <div>
+  <div :class="hidden && 'opacity-50'">
     <div
       :data-layer-row="node.id"
+      :data-layer-hidden="hidden || undefined"
       class="group/row flex h-7 items-center gap-1 rounded-lg pr-1 text-xs"
       :class="[
         selected
@@ -211,6 +217,21 @@ function commitRef() {
       </span>
 
       <span class="flex shrink-0 items-center gap-0.5 opacity-60 group-hover/row:opacity-100">
+        <!-- shown on hover, and always while hidden: the state has to be visible
+             on a row nobody is pointing at -->
+        <button
+          v-if="canHide"
+          type="button"
+          data-layer-eye
+          class="size-4 items-center justify-center rounded outline-none hover:text-foreground"
+          :class="hidden ? 'flex' : 'hidden group-hover/row:flex'"
+          :aria-label="hidden ? 'Show' : 'Hide'"
+          :aria-pressed="hidden"
+          @click.stop="setHidden(node, !hidden)"
+          @dblclick.stop
+        >
+          <component :is="hidden ? EyeOff : Eye" class="size-3" />
+        </button>
         <button
           v-for="badge in badges"
           :key="badge.key"

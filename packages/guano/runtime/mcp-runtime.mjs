@@ -358,6 +358,7 @@ function stripExtractedInstanceState(source) {
 		delete n.attributes;
 		delete n.src;
 		delete n.svg;
+		delete n.hidden;
 		delete n.background;
 		delete n.locales;
 		delete n.content;
@@ -732,6 +733,52 @@ function withDataMarker(line, on) {
 	return m[1] + (on ? "[+]" : "") + rest;
 }
 /**
+* Brings every token line's three display-only markers — '[+]' own data, '(+)'
+* styled, '{+}' interactions — back in step with the node state they mirror,
+* and returns the code (the SAME string when nothing moved).
+*
+* Pure, so it serves both the editor's live truth-sync on the active page and
+* whole-project operations on pages nobody has open. Component instance
+* subtrees are skipped: their style and interactions live on the master, so
+* these nodes carry none of their own to mark.
+*/
+function applyNodeMarkers(code, elements) {
+	const lines = code.split("\n");
+	let changed = false;
+	const visit = (nodes) => {
+		for (const node of nodes) {
+			const at = node.line;
+			if (at !== void 0 && lines[at] !== void 0) {
+				let line = lines[at];
+				if (!hasOpenArgBracket(line)) {
+					if (node.type !== "body" && node.arg === void 0) {
+						const data = dataMarkerOf(line);
+						const want = !!node.content || !!node.src || !!node.svg || !!node.slider || node.hidden !== void 0;
+						if (want !== (data === "[+]")) line = withDataMarker(line, want);
+					}
+					const style = styleMarkerOf(line);
+					if (style === void 0 || style === "(+)") {
+						const want = !!node.classes?.trim();
+						if (want !== (style === "(+)")) line = withStyleMarker(line, want);
+					}
+					const inter = interactionMarkerOf(line);
+					if (inter === void 0 || inter === "{+}") {
+						const want = !!node.interactions?.length || !!node.animations?.length;
+						if (want !== (inter === "{+}")) line = withInteractionMarker(line, want);
+					}
+					if (line !== lines[at]) {
+						lines[at] = line;
+						changed = true;
+					}
+				}
+			}
+			if (!isComponentType(node.type)) visit(node.children);
+		}
+	};
+	visit(elements);
+	return changed ? lines.join("\n") : code;
+}
+/**
 * Enforces one syntax token per line AND forces indentation from the token
 * structure: every line is re-indented to its nesting depth — one deeper
 * after an open, one shallower before a close — so whatever tabs the author
@@ -941,6 +988,7 @@ var NODE_STATE_KEYS = [
 	"content",
 	"src",
 	"svg",
+	"hidden",
 	"background",
 	"htmlId",
 	"attributes",
@@ -1199,6 +1247,186 @@ function elementBlockLines(type) {
 		`${type}:`
 	];
 	return [token, `${type}:`];
+}
+//#endregion
+//#region src/lib/shared/instances.js
+/** component types are Capitalized in the syntax; built-ins stay lowercase */
+var isComponentType$1 = (type) => /^[A-Z]/.test(type);
+/**
+* @typedef {object} Mapping
+* @property {object} master      the master node this page node stands for —
+*                                where its classes, interactions and structure live
+* @property {object} root        the root of that master's component
+* @property {object} def         the component itself
+* @property {string} instanceId  the id of the instance wrapper this node sits
+*                                in: what makes a binding's state unique per instance
+* @property {object[]} mirrors   nodes between this one and its master that may
+*                                also carry its state, most specific first (the
+*                                copies held by the components it is nested in)
+* @property {Record<string,string>} picks  the instance's variant option per axis
+*/
+/**
+* Map every node that lives in a component instance to its master, by
+* structural position (index + type): the instance block on the page mirrors
+* the master's tree, so the n-th child stands for the master's n-th child.
+*
+* `roots` are the trees to walk — a page's elements, or (on the components
+* board) each master's own children. `components` is the project's list; a
+* name resolves to the FIRST component carrying it, as `findComponent` does.
+*
+* @returns {Map<string, Mapping>}
+*/
+function buildInstanceMap(roots, components) {
+	const byName = /* @__PURE__ */ new Map();
+	for (const def of components ?? []) if (!byName.has(def.name)) byName.set(def.name, def);
+	const map = /* @__PURE__ */ new Map();
+	const pair = (inst, master, scope) => {
+		if (inst.type !== master.type) return;
+		map.set(inst.id, {
+			master,
+			root: scope.def.root,
+			def: scope.def,
+			instanceId: scope.instanceId,
+			mirrors: [],
+			picks: scope.picks
+		});
+		const length = Math.min(inst.children.length, master.children.length);
+		for (let i = 0; i < length; i++) pair(inst.children[i], master.children[i], scope);
+	};
+	const visit = (nodes) => {
+		for (const node of nodes ?? []) {
+			const def = isComponentType$1(node.type) ? byName.get(node.type) : void 0;
+			if (!def) {
+				visit(node.children);
+				continue;
+			}
+			pair(node, def.root, {
+				def,
+				instanceId: node.id,
+				picks: {}
+			});
+		}
+	};
+	visit(roots);
+	return map;
+}
+/**
+* The first DEFINED value of `key` along a node's chain: its own, then each
+* mirror's, then its master's. `undefined` when nothing in the chain sets it.
+*
+* "Defined", not "truthy": `hidden: false` on an instance is how it shows a
+* part its component hides by default.
+*/
+function resolveInstanceValue(node, mapping, key) {
+	if (node[key] !== void 0) return node[key];
+	if (!mapping) return void 0;
+	for (const mirror of mapping.mirrors) if (mirror[key] !== void 0) return mirror[key];
+	return mapping.master[key];
+}
+/** what a node would inherit for `key` if it set nothing itself */
+function inheritedInstanceValue(mapping, key) {
+	if (!mapping) return void 0;
+	for (const mirror of mapping.mirrors) if (mirror[key] !== void 0) return mirror[key];
+	return mapping.master[key];
+}
+/** a hidden node is not rendered and not exported — for this instance only,
+* when the flag is its own */
+function isNodeHidden(node, mapping) {
+	return resolveInstanceValue(node, mapping, "hidden") === true;
+}
+/**
+* Show or hide a node, writing only what differs from what it inherits — so
+* hiding a part and showing it again leaves the node byte-identical, which
+* keeps merge signatures (whole-object JSON) from reporting a change that
+* was undone.
+*/
+function setNodeHidden(node, mapping, hidden) {
+	if (hidden === (inheritedInstanceValue(mapping, "hidden") === true)) delete node.hidden;
+	else node.hidden = hidden;
+}
+//#endregion
+//#region src/lib/componentOps.ts
+var indentOf = (line) => line.match(/^\t*/)[0];
+/** `:Card:` leaf instances can sit unexpanded in stored code (nothing expands
+* them until someone types in that page). Detaching one means materializing
+* the master's structure first, so there are nodes to bake onto. Only THIS
+* component's leaves are touched. */
+function expandLeafInstances(page, def) {
+	const lineMap = [];
+	const next = expandComponentInstances(page.code, [def], lineMap);
+	if (next === page.code) return;
+	const map = /* @__PURE__ */ new Map();
+	lineMap.forEach((out, input) => map.set(out, input));
+	const before = page.code;
+	page.code = next;
+	page.elements = reconcile(before, next, page.elements, map);
+}
+/**
+* Pushes a master's current structure out to every instance of it, on every
+* page. Returns how many instance blocks were rewritten.
+*
+* Every CLOSED instance is rewritten unconditionally — deliberately NOT gated
+* on a structure signature the way `syncStructure` is, because that signature
+* is type-only: an arg or link change leaves it identical and would never
+* reach the instances.
+*/
+function pushMasterStructure(project, def) {
+	if (!project.components.some((c) => c.id === def.id)) return 0;
+	let rewritten = 0;
+	for (const page of project.pages) {
+		expandLeafInstances(page, def);
+		const ids = [];
+		walkNodes(page.elements, (n) => {
+			if (n.type === def.name) ids.push(n.id);
+		});
+		const ordered = ids.map((id) => findNode(page.elements, id)).filter((n) => !!n && n.line !== void 0).sort((a, b) => b.line - a.line).map((n) => n.id);
+		for (const id of ordered) {
+			const node = findNode(page.elements, id);
+			if (node && isClosedBlock(page, node, def.name) && rewriteInstanceBlock(page, node, def)) rewritten++;
+		}
+		const marked = applyNodeMarkers(page.code, page.elements);
+		if (marked !== page.code) page.code = marked;
+	}
+	return rewritten;
+}
+/**
+* Regenerates one instance's inner code lines from its master.
+*
+* Lifted out of `useComponents` so the master-first operations above can reuse
+* it; it closed over nothing.
+*/
+function rewriteInstanceBlock(page, node, def) {
+	if (node.line === void 0) return false;
+	const lines = page.code.split("\n");
+	const start = node.line;
+	const end = node.endLine ?? node.line;
+	if (end <= start) return false;
+	const indent = indentOf(lines[start]);
+	const inner = def.root.children.flatMap((c) => serializeNode(c, `${indent}\t`));
+	const oldInnerLength = end - start - 1;
+	const rest = [
+		...lines.slice(0, start + 1),
+		...inner,
+		...lines.slice(end)
+	];
+	const align = alignInstanceLines(lines.slice(start + 1, end), inner);
+	const map = /* @__PURE__ */ new Map();
+	for (let i = 0; i < rest.length; i++) if (i <= start) map.set(i, i);
+	else if (i < start + 1 + inner.length) {
+		const oldInner = align.get(i - (start + 1));
+		if (oldInner !== void 0) map.set(i, start + 1 + oldInner);
+	} else map.set(i, i - inner.length + oldInnerLength);
+	const before = page.code;
+	page.code = rest.join("\n");
+	page.elements = reconcile(before, page.code, page.elements, map);
+	return true;
+}
+/** a block only counts once its close line exists — while an edit is mid-flight
+* the parser sees an unclosed block that swallows whatever follows, and syncing
+* from that would corrupt the master */
+function isClosedBlock(page, node, name) {
+	if (node.line === void 0 || node.endLine === void 0 || node.endLine <= node.line) return false;
+	return page.code.split("\n")[node.endLine]?.trim() === `${name}:`;
 }
 //#endregion
 //#region src/lib/shared/slug.js
@@ -4941,4 +5169,4 @@ function createProject(name) {
 	};
 }
 //#endregion
-export { APPEAR_MODES, BUILTIN_LIST_SOURCES, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MOTION_PROPS, NODE_STATE_KEYS, REF_SLOT, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, SCROLL_LERP_MAX, SCROLL_LERP_MIN, SLIDER_DEFAULTS, STYLE_SECTIONS, TOKEN_NAME_RE, TRANSITION_DEFAULTS, TRANSITION_PRESET_IDS, adoptStructure, alignInstanceLines, applyClass, buildDocument, cloneForMaster, compileAnimation, countLocaleSeo, createNode, createPage, createProject, dataMarkerOf, deepClone, defaultBreakpoints, defaultSettings, elementBlockLines, enforceDocument, expandComponentInstances, extractBodyArg, extractBodyDecor, extractBodyLines, findNode, findParent, fontError, fontFormatForUrl, hasAncestorOfType, hasNodeState, hasOpenArgBracket, hoistBlockRef, interactionGroupKey, interactionMarkerOf, interactionStateKey, isAllowedAttribute, isBodyOpenLine, isComponentType, isEmittableToken, isKnownElement, isLeafElement, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isValidClass, isValidToken, lexLine, lucideNameOf, lucideSvg, matchClass, normalizeComponentName, normalizeSyntax, parseSetup, parseSyntax, purgeLocaleSeo, reconcile, refOf, replaceSetup, resolveSliderConfig, sameProperty, sanitizeAttributes, sanitizeInlineSvg, sanitizeRich, serializeNode, setSetupLocale, setStyleTokens, slugify, stripExtractedInstanceState, stripNodeState, styleMarkerOf, tokenError, typeOptionsFor, validateAnimation, validateBinding, validateDocument, validateMotionSettings, validateSliderConfig, walkNodes, withDataMarker, withInteractionMarker, withStyleMarker, withoutRef };
+export { APPEAR_MODES, BUILTIN_LIST_SOURCES, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MOTION_PROPS, NODE_STATE_KEYS, REF_SLOT, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, SCROLL_LERP_MAX, SCROLL_LERP_MIN, SLIDER_DEFAULTS, STYLE_SECTIONS, TOKEN_NAME_RE, TRANSITION_DEFAULTS, TRANSITION_PRESET_IDS, adoptStructure, alignInstanceLines, applyClass, buildDocument, buildInstanceMap, cloneForMaster, compileAnimation, countLocaleSeo, createNode, createPage, createProject, dataMarkerOf, deepClone, defaultBreakpoints, defaultSettings, elementBlockLines, enforceDocument, expandComponentInstances, extractBodyArg, extractBodyDecor, extractBodyLines, findNode, findParent, fontError, fontFormatForUrl, hasAncestorOfType, hasNodeState, hasOpenArgBracket, hoistBlockRef, inheritedInstanceValue, interactionGroupKey, interactionMarkerOf, interactionStateKey, isAllowedAttribute, isBodyOpenLine, isClosedBlock, isComponentType, isEmittableToken, isKnownElement, isLeafElement, isNodeHidden, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isValidClass, isValidToken, lexLine, lucideNameOf, lucideSvg, matchClass, normalizeComponentName, normalizeSyntax, parseSetup, parseSyntax, purgeLocaleSeo, pushMasterStructure, reconcile, refOf, replaceSetup, resolveInstanceValue, resolveSliderConfig, rewriteInstanceBlock, sameProperty, sanitizeAttributes, sanitizeInlineSvg, sanitizeRich, serializeNode, setNodeHidden, setSetupLocale, setStyleTokens, slugify, stripExtractedInstanceState, stripNodeState, styleMarkerOf, tokenError, typeOptionsFor, validateAnimation, validateBinding, validateDocument, validateMotionSettings, validateSliderConfig, walkNodes, withDataMarker, withInteractionMarker, withStyleMarker, withoutRef };

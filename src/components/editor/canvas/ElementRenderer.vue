@@ -53,6 +53,7 @@ const {
   srcAttr,
   altAttr,
   iconInfo,
+  hidden,
   editableText,
   richEditing,
   inlineInitialText,
@@ -234,9 +235,11 @@ const handlers = {
 
 <template>
   <!-- repeats its children (the inline item template) once per entry -->
+  <!-- a hidden node renders nothing; it lives on in the Layers tree -->
+  <template v-if="hidden" />
   <component
     :is="def?.tag ?? 'div'"
-    v-if="node.type === 'collection-list'"
+    v-else-if="node.type === 'collection-list'"
     ref="el"
     v-bind="customAttrs"
     :id="node.htmlId || undefined"
