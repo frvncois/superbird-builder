@@ -210,6 +210,7 @@ function bakeMasterState(pairs: Pair[], masterToInstance: Map<string, string>): 
     // them back.
     if (!node.content && master.content) node.content = master.content
     if (!node.src && master.src) node.src = master.src
+    if (!node.svg && master.svg) node.svg = master.svg
     if (!node.background && master.background) node.background = master.background
     if (!node.locales && master.locales) node.locales = deepClone(master.locales)
   }

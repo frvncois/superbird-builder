@@ -248,7 +248,7 @@ export function applyNodeMarkers(code: string, elements: ElementNode[]): string 
             const data = dataMarkerOf(line)
             // a slider's carousel config lives in the Data panel too, so it
             // earns the same marker as own content/media
-            const want = !!node.content || !!node.src || !!node.slider
+            const want = !!node.content || !!node.src || !!node.svg || !!node.slider
             if (want !== (data === '[+]')) line = withDataMarker(line, want)
           }
           const style = styleMarkerOf(line)
@@ -589,6 +589,7 @@ export const NODE_STATE_KEYS = [
   'classes',
   'content',
   'src',
+  'svg',
   'background',
   'htmlId',
   'attributes',

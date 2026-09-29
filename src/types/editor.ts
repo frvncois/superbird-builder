@@ -151,6 +151,10 @@ export interface ElementNode {
   htmlId?: string
   /** media source (data URL or remote) for image/video elements */
   src?: string
+  /** icon only: the inline `<svg>` markup it renders — a bundled Lucide icon or
+   * a custom SVG, ALWAYS the output of shared/svg.sanitizeInlineSvg. Node-only
+   * state like `src`, and per-instance inside a component the same way. */
+  svg?: string
   /** background media (a /media/<id> URL) layered behind the element's content;
    * image → CSS background-image, video → an absolutely-positioned <video> layer.
    * node-only visual state like classes/src */

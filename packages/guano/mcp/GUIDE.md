@@ -251,6 +251,7 @@ Leaves (always `:name:`):
 | `span` | `<span>` | "Dolor sit amet" |
 | `option` | `<option>` | "Option" |
 | `image` | `<img>` (void) | — |
+| `icon` | inline `<svg>` (void) | a circle |
 | `input` | `<input>` (void) | — |
 | `checkbox` | `<input type="checkbox">` (void) | — |
 | `radio` | `<input type="radio">` (void) | — |
@@ -575,6 +576,7 @@ Element text/media attaches to the node, not the code. Write it with `edit_eleme
   `<mark>` is the highlight element. `""` clears back to the placeholder — a truly
   EMPTY leaf is not expressible, so build decorative dots/spacers/rules from `:div`
   containers (styled, no content), never from text leaves.
+- **`icon`** / **`svg`** — icon elements only; see Icons below.
 - **`src`** — image/video elements only: a `/media/<id>` path (media library), an
   `https://` URL, or a `data:image/…` / `data:video/…` URL.
 - **`background`** — any element: background media layered behind its content (image →
@@ -851,6 +853,40 @@ Shared blocks (header, footer, cards) so a nav change is ONE edit, not one per p
 - A human can **delete** a component from that drawer, which detaches every instance
   into plain elements first — so a page never loses content, but a `:Name` token you
   cached may be gone. `delete_component` here still refuses while instances exist.
+
+## Icons
+
+`:icon:` renders an **inline `<svg>`**. Because the markup is in the page rather than
+behind an `<img>`, the icon **follows the text colour** of whatever holds it and takes
+classes like any element — `size-4` for its box, `text-primary` for its colour,
+`stroke-1` for a lighter line.
+
+```
+:button
+	:icon:        icon: "arrow-right"    classes: size-4
+	:span:        content: "Continue"
+button:
+```
+
+Set it with `edit_elements`:
+
+- **`icon`** — the name of a bundled icon. The set is Lucide (~1700 icons); **search it
+  with `list_icons {query: "arrow right"}`** rather than guessing a name — a wrong name
+  is refused.
+- **`svg`** — custom markup, for a mark the set lacks (a logo glyph). It is rebuilt by a
+  strict sanitizer: only shapes survive (`path circle ellipse rect line polyline polygon
+  g defs clipPath mask linearGradient radialGradient stop title desc`), every paint is
+  recoloured to `currentColor`, and scripts, styles, links, event handlers and external
+  references are dropped. One `<svg>`, 32 KB at most. A multi-colour logo belongs in an
+  `:image:` instead.
+
+Pass one or the other, never both; `""` clears back to the placeholder circle. An icon
+is not localizable. `get_page` reports a set icon as `icon: "<name>"` (or
+`"custom svg"`), never the markup. Inside a component an icon falls back to the
+master's like `src` does, so `onMaster: true` sets it for every instance.
+
+An icon is decorative by default (`aria-hidden`). For an icon-only button, put the
+accessible name on the **button**: `attributes: {"aria-label": "Close"}`.
 
 ## Class interactions — toggles, menus, modals, accordions
 
@@ -1351,9 +1387,9 @@ say so rather than implying a form will deliver anything. Beware: a `:button` in
 booking flow keep the controls in a styled `:div` (or give the button
 `attributes: {type: "button"}`). Truly empty leaf elements are
 not expressible — build decorative rules/spacers from styled `:div` containers instead.
-There is **no inline SVG element**: upload an SVG and use it as an `:image:` `src` (it
-renders as an `<img>`, so it cannot inherit `currentColor` — use a token-colored icon
-font or an image per theme instead). `date` fields
+An SVG used as an `:image:` `src` renders as an `<img>`, so it cannot inherit
+`currentColor` — for a mark that should follow the text colour use an `:icon:` (see
+Icons). `date` fields
 render their raw ISO value (no formatting — use a text field for display dates). The
 `@link` code suffix is the supported way to set links.
 

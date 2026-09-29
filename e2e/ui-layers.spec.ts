@@ -236,6 +236,32 @@ test('a button lands holding its words, on a page and in a component', async ({ 
   await expect(rows(page)).toHaveCount(masterRows + 2)
 })
 
+test('an icon is picked from the grid and publishes as an inline svg', async ({ page }) => {
+  await openEditor(page)
+  await openLayers(page)
+
+  // a button, then an icon inside it: the insert lands in the selection
+  await rows(page).first().click()
+  await insertFromDock(page, 'button')
+  await insertFromDock(page, 'icon')
+
+  await page.getByRole('button', { name: 'Data', exact: true }).click()
+  await expect(page.locator('[data-icon-current]')).toHaveText('No icon picked')
+
+  // the table is the whole icon set, loaded on demand — so the grid is empty
+  // for a moment, and searching is how anyone finds anything in it
+  await page.getByPlaceholder('Search icons…').fill('arrow right')
+  await page.locator('[data-icon-option="arrow-right"]').click()
+  await expect(page.locator('[data-icon-current]')).toHaveText('arrow-right')
+  await page.keyboard.press('Escape')
+
+  await publish(page)
+  const html = await (await page.request.get('/')).text()
+  expect(html).toMatch(
+    /<button[^>]*><span[^>]*>Button<\/span><svg[^>]*data-icon="lucide:arrow-right"[^>]*>.*?<\/svg><\/button>/,
+  )
+})
+
 test('a component gains an element on the board, and its page instance follows', async ({
   page,
 }) => {

@@ -108,6 +108,10 @@ var ELEMENTS = {
 		tag: "img",
 		void: true
 	},
+	icon: {
+		tag: "svg",
+		void: true
+	},
 	video: { tag: "video" },
 	form: {
 		tag: "form",
@@ -353,6 +357,7 @@ function stripExtractedInstanceState(source) {
 		delete n.animations;
 		delete n.attributes;
 		delete n.src;
+		delete n.svg;
 		delete n.background;
 		delete n.locales;
 		delete n.content;
@@ -406,8 +411,8 @@ function hoistBlockRef(innerLines) {
 * level at a time (like the page reconciler matching by line), so a container
 * keeps its identity even when its children change, while its children realign
 * among themselves. Classes/content/interactions are excluded — they are the
-* off-code state we're carrying across the edit. Two `:link:@/a` and
-* `:link:@/b` get distinct signatures; two bare `:link:` are genuinely
+* off-code state we're carrying across the edit. Two `:h2:@/a` and
+* `:h2:@/b` get distinct signatures; two bare `:h2:` are genuinely
 * indistinguishable (no algorithm can tell which identical sibling was
 * removed — same irreducible case the reconciler faces). */
 function nodeSignature(node) {
@@ -935,6 +940,7 @@ var NODE_STATE_KEYS = [
 	"classes",
 	"content",
 	"src",
+	"svg",
 	"background",
 	"htmlId",
 	"attributes",
@@ -3627,7 +3633,7 @@ var ALLOWED = {
 	li: {},
 	a: { href: true }
 };
-var escapeText = (s) => s.replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+var escapeText$1 = (s) => s.replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 var escapeAttr = (s) => s.replaceAll("&", "&amp;").replaceAll("\"", "&quot;").replaceAll("<", "&lt;");
 /** true when a string uses any of the allowed rich tags */
 function isRich(value) {
@@ -3640,12 +3646,12 @@ function sanitizeRich(html) {
 	const open = [];
 	for (const token of html.match(/<[^>]*>|[^<]+|</g) ?? []) {
 		if (token[0] !== "<" || token.length === 1) {
-			out.push(escapeText(token));
+			out.push(escapeText$1(token));
 			continue;
 		}
 		const match = token.match(/^<(\/?)([a-zA-Z0-9]+)([^>]*)>$/);
 		if (!match) {
-			out.push(escapeText(token));
+			out.push(escapeText$1(token));
 			continue;
 		}
 		const closing = match[1] === "/";
@@ -3674,6 +3680,237 @@ function sanitizeRich(html) {
 	for (let i = open.length - 1; i >= 0; i--) out.push(`</${open[i]}>`);
 	return out.join("");
 }
+var canonical = (names) => new Map(names.map((n) => [n.toLowerCase(), n]));
+var ELEMENTS$1 = canonical([
+	"svg",
+	"g",
+	"path",
+	"circle",
+	"ellipse",
+	"rect",
+	"line",
+	"polyline",
+	"polygon",
+	"defs",
+	"clipPath",
+	"mask",
+	"linearGradient",
+	"radialGradient",
+	"stop",
+	"title",
+	"desc"
+]);
+/** the only elements whose TEXT is kept (escaped); text anywhere else is dropped */
+var TEXT_ELEMENTS = /* @__PURE__ */ new Set(["title", "desc"]);
+var ATTRIBUTES = canonical([
+	"d",
+	"cx",
+	"cy",
+	"r",
+	"rx",
+	"ry",
+	"x",
+	"y",
+	"x1",
+	"y1",
+	"x2",
+	"y2",
+	"points",
+	"width",
+	"height",
+	"viewBox",
+	"transform",
+	"pathLength",
+	"preserveAspectRatio",
+	"fill",
+	"stroke",
+	"opacity",
+	"fill-opacity",
+	"fill-rule",
+	"clip-rule",
+	"stroke-width",
+	"stroke-linecap",
+	"stroke-linejoin",
+	"stroke-dasharray",
+	"stroke-dashoffset",
+	"stroke-miterlimit",
+	"stroke-opacity",
+	"clip-path",
+	"mask",
+	"offset",
+	"stop-color",
+	"stop-opacity",
+	"gradientUnits",
+	"gradientTransform",
+	"fx",
+	"fy",
+	"spreadMethod",
+	"clipPathUnits",
+	"maskUnits",
+	"maskContentUnits",
+	"id",
+	"role",
+	"aria-hidden",
+	"aria-label",
+	"data-icon"
+]);
+/** what a value may be made of. No quotes, no `&` (so no entity can smuggle a
+* scheme past the checks below), no angle brackets, no backslash. */
+var VALUE_RE = /^[A-Za-z0-9\s.,#%()+\-_/:]*$/;
+/** the one `url()` allowed: a reference to something in this same SVG */
+var LOCAL_URL_RE = /^url\(#[A-Za-z0-9_-]+\)$/;
+var ID_RE = /^[A-Za-z][A-Za-z0-9_-]*$/;
+/** the only attributes that may hold a `url(#…)` */
+var URL_ATTRIBUTES = /* @__PURE__ */ new Set([
+	"fill",
+	"stroke",
+	"clip-path",
+	"mask"
+]);
+var TOKEN_RE = /<!--[\s\S]*?(?:-->|$)|<!\[CDATA\[[\s\S]*?(?:\]\]>|$)|<[^>]*>|[^<]+|</g;
+var TAG_RE = /^<(\/?)([a-zA-Z][a-zA-Z0-9:-]*)([\s\S]*?)(\/?)>$/;
+var ATTR_RE = /([^\s=/"'<>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>]+)))?/g;
+var escapeText = (text) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+function cleanValue(name, raw) {
+	const value = String(raw ?? "").trim();
+	if (!VALUE_RE.test(value)) return void 0;
+	if (name === "id") return ID_RE.test(value) ? value : void 0;
+	if (/url\s*\(/i.test(value)) return URL_ATTRIBUTES.has(name) && LOCAL_URL_RE.test(value) ? value : void 0;
+	if (name === "data-icon") return /^[a-z][a-z0-9-]*:[a-z0-9-]+$/.test(value) ? value : void 0;
+	if (value.includes(":")) return void 0;
+	return value;
+}
+function cleanAttributes(source, { recolor }) {
+	const out = [];
+	const seen = /* @__PURE__ */ new Set();
+	for (const m of source.matchAll(ATTR_RE)) {
+		const name = ATTRIBUTES.get(m[1].toLowerCase());
+		if (!name || seen.has(name)) continue;
+		let value = cleanValue(name, m[2] ?? m[3] ?? m[4] ?? "");
+		if (value === void 0) continue;
+		if (recolor && (name === "fill" || name === "stroke" || name === "stop-color")) {
+			if (value !== "none") value = "currentColor";
+		}
+		seen.add(name);
+		out.push([name, value]);
+	}
+	return out;
+}
+var writeAttributes = (attrs) => attrs.map(([k, v]) => ` ${k}="${v}"`).join("");
+/**
+* Sanitize SVG markup for inlining. Returns '' for anything that is not a
+* single well-formed-enough `<svg>`. Idempotent.
+*
+* `recolor` (default on) makes the icon follow the text colour: every paint
+* other than `none` becomes `currentColor`, and a root that declares no fill
+* gets one — an SVG with no fill at all paints BLACK, not the current colour.
+*/
+function sanitizeInlineSvg(markup, { recolor = true } = {}) {
+	if (typeof markup !== "string" || !markup || markup.length > 32768) return "";
+	const out = [];
+	/** open allowed elements, innermost last */
+	const open = [];
+	/** the disallowed element being skipped, with everything inside it */
+	let skipping = null;
+	let skipDepth = 0;
+	let closed = false;
+	for (const token of markup.match(TOKEN_RE) ?? []) {
+		if (closed) break;
+		if (token[0] !== "<" || token.length === 1) {
+			const parent = open[open.length - 1];
+			if (!skipping && parent && TEXT_ELEMENTS.has(parent)) out.push(escapeText(token));
+			continue;
+		}
+		const tag = token.match(TAG_RE);
+		if (!tag) continue;
+		const closing = tag[1] === "/";
+		const rawName = tag[2].toLowerCase();
+		const selfClosing = tag[4] === "/";
+		if (skipping) {
+			if (rawName !== skipping) continue;
+			if (closing) {
+				if (--skipDepth === 0) skipping = null;
+			} else if (!selfClosing) skipDepth++;
+			continue;
+		}
+		const name = ELEMENTS$1.get(rawName);
+		if (!name) {
+			if (!closing && !selfClosing) {
+				skipping = rawName;
+				skipDepth = 1;
+			}
+			continue;
+		}
+		if (closing) {
+			const at = open.lastIndexOf(name);
+			if (at === -1) continue;
+			for (let i = open.length - 1; i >= at; i--) out.push(`</${open[i]}>`);
+			open.length = at;
+			if (!open.length) closed = true;
+			continue;
+		}
+		if (!open.length ? name !== "svg" : name === "svg") {
+			if (!open.length) return "";
+			if (!selfClosing) {
+				skipping = rawName;
+				skipDepth = 1;
+			}
+			continue;
+		}
+		const attrs = cleanAttributes(tag[3], { recolor });
+		if (name === "svg") normalizeRoot(attrs, { recolor });
+		if (selfClosing) {
+			out.push(`<${name}${writeAttributes(attrs)}/>`);
+			if (name === "svg") closed = true;
+		} else {
+			out.push(`<${name}${writeAttributes(attrs)}>`);
+			open.push(name);
+		}
+	}
+	for (let i = open.length - 1; i >= 0; i--) out.push(`</${open[i]}>`);
+	const result = out.join("");
+	return result.startsWith("<svg") ? result : "";
+}
+/** the root needs a viewBox to scale with its box, and a paint to inherit */
+function normalizeRoot(attrs, { recolor }) {
+	const get = (k) => attrs.find(([name]) => name === k)?.[1];
+	if (!get("viewBox")) {
+		const w = Number.parseFloat(get("width") ?? "");
+		const h = Number.parseFloat(get("height") ?? "");
+		if (w > 0 && h > 0) attrs.push(["viewBox", `0 0 ${w} ${h}`]);
+	}
+	if (recolor && !get("fill")) attrs.push(["fill", "currentColor"]);
+}
+/**
+* Split sanitized markup into the root's attributes and its inner markup —
+* the shape a renderer needs, since the `<svg>` IS the element and carries
+* the node's own classes, id and listeners. Returns null for anything
+* `sanitizeInlineSvg` did not produce.
+*/
+function parseInlineSvg(markup) {
+	if (typeof markup !== "string") return null;
+	const m = markup.match(/^<svg([^>]*?)(?:\/>|>([\s\S]*)<\/svg>)$/);
+	if (!m) return null;
+	const attrs = {};
+	for (const a of m[1].matchAll(/ ([A-Za-z][A-Za-z0-9-]*)="([^"]*)"/g)) attrs[a[1]] = a[2];
+	return {
+		attrs,
+		inner: m[2] ?? ""
+	};
+}
+/** the root attributes every Lucide icon shares */
+var LUCIDE_ROOT = "width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"";
+/** full markup for a bundled Lucide icon, given its inner markup from the table */
+function lucideSvg(name, inner) {
+	return sanitizeInlineSvg(`<svg data-icon="lucide:${name}" ${LUCIDE_ROOT}>${inner}</svg>`);
+}
+/** the bundled icon this markup came from (`arrow-right`), or undefined for a
+* custom SVG */
+function lucideNameOf(markup) {
+	const icon = parseInlineSvg(markup)?.attrs["data-icon"];
+	return icon?.startsWith("lucide:") ? icon.slice(7) : void 0;
+}
+lucideSvg("circle", "<circle cx=\"12\" cy=\"12\" r=\"10\"/>");
 //#endregion
 //#region src/lib/shared/attributes.js
 /** attribute names allowed verbatim */
@@ -4704,4 +4941,4 @@ function createProject(name) {
 	};
 }
 //#endregion
-export { APPEAR_MODES, BUILTIN_LIST_SOURCES, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MOTION_PROPS, NODE_STATE_KEYS, REF_SLOT, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, SCROLL_LERP_MAX, SCROLL_LERP_MIN, SLIDER_DEFAULTS, STYLE_SECTIONS, TOKEN_NAME_RE, TRANSITION_DEFAULTS, TRANSITION_PRESET_IDS, adoptStructure, alignInstanceLines, applyClass, buildDocument, cloneForMaster, compileAnimation, countLocaleSeo, createNode, createPage, createProject, dataMarkerOf, deepClone, defaultBreakpoints, defaultSettings, elementBlockLines, enforceDocument, expandComponentInstances, extractBodyArg, extractBodyDecor, extractBodyLines, findNode, findParent, fontError, fontFormatForUrl, hasAncestorOfType, hasNodeState, hasOpenArgBracket, hoistBlockRef, interactionGroupKey, interactionMarkerOf, interactionStateKey, isAllowedAttribute, isBodyOpenLine, isComponentType, isEmittableToken, isKnownElement, isLeafElement, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isValidClass, isValidToken, lexLine, matchClass, normalizeComponentName, normalizeSyntax, parseSetup, parseSyntax, purgeLocaleSeo, reconcile, refOf, replaceSetup, resolveSliderConfig, sameProperty, sanitizeAttributes, sanitizeRich, serializeNode, setSetupLocale, setStyleTokens, slugify, stripExtractedInstanceState, stripNodeState, styleMarkerOf, tokenError, typeOptionsFor, validateAnimation, validateBinding, validateDocument, validateMotionSettings, validateSliderConfig, walkNodes, withDataMarker, withInteractionMarker, withStyleMarker, withoutRef };
+export { APPEAR_MODES, BUILTIN_LIST_SOURCES, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MOTION_PROPS, NODE_STATE_KEYS, REF_SLOT, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, SCROLL_LERP_MAX, SCROLL_LERP_MIN, SLIDER_DEFAULTS, STYLE_SECTIONS, TOKEN_NAME_RE, TRANSITION_DEFAULTS, TRANSITION_PRESET_IDS, adoptStructure, alignInstanceLines, applyClass, buildDocument, cloneForMaster, compileAnimation, countLocaleSeo, createNode, createPage, createProject, dataMarkerOf, deepClone, defaultBreakpoints, defaultSettings, elementBlockLines, enforceDocument, expandComponentInstances, extractBodyArg, extractBodyDecor, extractBodyLines, findNode, findParent, fontError, fontFormatForUrl, hasAncestorOfType, hasNodeState, hasOpenArgBracket, hoistBlockRef, interactionGroupKey, interactionMarkerOf, interactionStateKey, isAllowedAttribute, isBodyOpenLine, isComponentType, isEmittableToken, isKnownElement, isLeafElement, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isValidClass, isValidToken, lexLine, lucideNameOf, lucideSvg, matchClass, normalizeComponentName, normalizeSyntax, parseSetup, parseSyntax, purgeLocaleSeo, reconcile, refOf, replaceSetup, resolveSliderConfig, sameProperty, sanitizeAttributes, sanitizeInlineSvg, sanitizeRich, serializeNode, setSetupLocale, setStyleTokens, slugify, stripExtractedInstanceState, stripNodeState, styleMarkerOf, tokenError, typeOptionsFor, validateAnimation, validateBinding, validateDocument, validateMotionSettings, validateSliderConfig, walkNodes, withDataMarker, withInteractionMarker, withStyleMarker, withoutRef };

@@ -39,6 +39,10 @@ export const ELEMENTS_DATA = {
   // :text: (or richer children) inside it rather than text on the row itself
   'list-item': { tag: 'li', suggest: 'text' },
   image: { tag: 'img', void: true },
+  // an inline <svg>, so it follows the text colour and takes size/colour
+  // classes like any element — which an <img> of an SVG never can. Its markup
+  // is node state (`node.svg`), always sanitized: see shared/svg.js
+  icon: { tag: 'svg', void: true },
   video: { tag: 'video' },
   form: { tag: 'form', suggest: 'input' },
   input: { tag: 'input', void: true },

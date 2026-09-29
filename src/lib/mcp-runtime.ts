@@ -108,6 +108,11 @@ export { STYLE_SECTIONS } from './styleCatalog'
 export { isRich, sanitizeRich } from './shared/richtext.js'
 export { SAFE_HREF, SAFE_SRC } from './shared/urls.js'
 
+// inline SVG for the `:icon:` element — the sanitizer every renderer trusts.
+// The icon TABLE is deliberately not re-exported: it is the whole Lucide set,
+// and the tools import it on demand (see loadIcons in mcp/tools.mjs)
+export { sanitizeInlineSvg, lucideSvg, lucideNameOf } from './shared/svg.js'
+
 // --- custom attribute allowlist (src/lib/shared/attributes.js) — the MCP
 // sanitizes attributes with the SAME allowlist the editor and exporter use
 export { sanitizeAttributes, isAllowedAttribute } from './shared/attributes.js'

@@ -20,6 +20,7 @@ import { sanitizeAttributes, withSafeRel } from '@/lib/shared/attributes.js'
 import { DEFAULT_SCROLL_AT } from '@/lib/shared/interactionKeys.js'
 import { useLocale } from './useLocale'
 import { SAFE_SRC } from '@/lib/shared/urls.js'
+import { DEFAULT_ICON_SVG, parseInlineSvg, sanitizeInlineSvg } from '@/lib/shared/svg.js'
 import type {
   CollectionEntry,
   ElementNode,
@@ -279,6 +280,20 @@ export function useRenderNode(
   const srcAttr = computed(() => {
     const v = srcInfo.value.value
     return v && SAFE_SRC.test(v) ? v : undefined
+  })
+
+  // --- inline icon ---
+  //
+  // The <svg> IS the element, so what the renderers need is its root
+  // attributes and its inner markup, separately. Same own-then-master
+  // precedence as `src`. It is sanitized HERE and not only where it is written:
+  // the markup goes into the page through v-html, and a project blob can
+  // arrive by import, by merge or from an agent without passing any writer.
+  const iconInfo = computed(() => {
+    if (node.value.type !== 'icon') return null
+    const stored = node.value.svg || mapping.value?.master.svg
+    const safe = stored ? sanitizeInlineSvg(stored) : ''
+    return parseInlineSvg(safe || DEFAULT_ICON_SVG)
   })
 
   // images carry alt: the author's attributes.alt wins over the library
@@ -650,6 +665,7 @@ export function useRenderNode(
     srcInfo,
     srcAttr,
     altAttr,
+    iconInfo,
     editableText,
     richEditing,
     inlineInitialText,

@@ -59,7 +59,7 @@ const {
   def,
   listCollection, listEntries, itemCollection, itemEntry, itemTemplateChildren, selfNested,
   boundField, boundEntry, customAttrs, backgroundInfo,
-  displayContent, richContent, srcAttr, altAttr, linkRaw, baseClasses,
+  displayContent, richContent, srcAttr, altAttr, iconInfo, linkRaw, baseClasses,
   editableText, richEditing, inlineInitialText, commitInlineText,
   hoverHandlers, fireClickInteractions, fireChangeInteractions, el,
   motionStyle,
@@ -358,6 +358,18 @@ const handlers = {
     </template>
   </component>
 
+  <!-- an icon: the <svg> is the element itself (see ElementRenderer) -->
+  <svg
+    v-else-if="iconInfo"
+    ref="el"
+    v-bind="{ ...iconInfo.attrs, ...customAttrs }"
+    :id="node.htmlId || undefined"
+    :data-node-id="node.id"
+    :class="[classes, hoverAffordance]"
+    :style="motionStyle"
+    v-on="handlers"
+    v-html="iconInfo.inner"
+  />
   <component
     :is="def?.tag ?? 'div'"
     v-else-if="def?.void"

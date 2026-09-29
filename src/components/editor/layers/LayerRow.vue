@@ -82,7 +82,9 @@ const badges = computed(() => {
   const master = masterFor(n.id)?.master
   const styled = !!(n.classes?.trim() || master?.classes?.trim())
   const wired = !!(n.interactions?.length || n.animations?.length || master?.interactions?.length)
-  const owns = !!(n.content || n.src || n.slider || master?.content || master?.src)
+  const owns = !!(
+    n.content || n.src || n.svg || n.slider || master?.content || master?.src || master?.svg
+  )
   return [
     styled && { key: 'style', icon: Palette, title: 'Styled — open Style' },
     wired && { key: 'interactions', icon: Zap, title: 'Interactive — open Interactions' },

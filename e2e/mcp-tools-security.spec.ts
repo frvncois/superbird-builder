@@ -283,3 +283,74 @@ test('set_target: no elicitation capability falls back to the attestation gates'
   expect(okRes.ok).toBe(true)
   expect(set.getTarget()).toBe('main')
 })
+
+test('an agent sets an icon by name, and custom markup is sanitized at write', async () => {
+  const { store, api } = fixture()
+  const project = JSON.parse(store.get('guano-project:main')!)
+  project.pages[0].code =
+    '@setup\n  name: Home\n  slug: /\n  status: published\n:body\n  :button\n    :icon:\n    :span:\n  button:\n  :h1:\nbody:'
+  // element edits address the parsed tree, which the fixture leaves empty
+  const runtime = await runtimePromise
+  test.skip(!runtime, 'runtime bundle missing')
+  project.pages[0].elements = runtime.parseSyntax(project.pages[0].code)
+  store.set('guano-project:main', JSON.stringify(project))
+  const call = await toolset(api)
+
+  // the set is ~1700 icons: an agent searches, it never guesses
+  const found = await call('list_icons', { query: 'arrow right' })
+  expect(found.icons[0]).toBe('arrow-right')
+
+  // addressed by line, pinned by type: line 6 is the `:icon:` inside the button
+  const page = await call('get_page', { pageId: 'home' })
+  const edit = (patch: Record<string, unknown>, version: string) =>
+    call('edit_elements', {
+      pageId: 'home',
+      version,
+      edits: [{ line: 6, expectType: 'icon', ...patch }],
+    })
+  const nodeOf = () => {
+    const stored = JSON.parse(store.get('guano-project:main')!)
+    const walk = (nodes: { type: string; svg?: string; children: never[] }[]): { svg?: string } | undefined => {
+      for (const n of nodes) {
+        if (n.type === 'icon') return n
+        const hit = walk(n.children)
+        if (hit) return hit
+      }
+    }
+    return walk(stored.pages[0].elements)!
+  }
+
+  let result = await edit({ icon: 'arrow-right' }, page.version)
+  expect(result.saved).toBe(true)
+  expect(nodeOf().svg).toContain('data-icon="lucide:arrow-right"')
+  expect(nodeOf().svg).toContain('stroke="currentColor"')
+
+  // a name that does not exist is refused, and says where to look
+  result = await edit({ icon: 'definitely-not-an-icon' }, result.version)
+  expect(JSON.stringify(result)).toContain('list_icons')
+  expect(nodeOf().svg).toContain('lucide:arrow-right') // untouched
+
+  // custom markup is rebuilt by the sanitizer before it is ever stored
+  const fresh = await call('get_page', { pageId: 'home' })
+  result = await edit(
+    {
+      svg: '<svg viewBox="0 0 8 8" onload="x()"><script>x()</script><a href="javascript:x()"><path d="M0 0"/></a><rect width="8" height="8" fill="red"/></svg>',
+    },
+    fresh.version,
+  )
+  expect(result.saved).toBe(true)
+  const stored = nodeOf().svg!
+  for (const vector of ['script', 'onload', 'javascript', 'href', '<a']) {
+    expect(stored, vector).not.toContain(vector)
+  }
+  expect(stored).toContain('<rect width="8" height="8" fill="currentColor"/>')
+
+  // and it is an icon-only field
+  const after = await call('get_page', { pageId: 'home' })
+  const refused = await call('edit_elements', {
+    pageId: 'home',
+    version: after.version,
+    edits: [{ line: 9, expectType: 'h1', icon: 'star' }],
+  })
+  expect(JSON.stringify(refused)).toContain('not an icon element')
+})

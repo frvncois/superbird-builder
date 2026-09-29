@@ -31,6 +31,7 @@ import {
   Rows3,
   Columns3,
   TableProperties,
+  Smile,
 } from 'lucide-vue-next'
 import { isComponentType } from './components'
 
@@ -59,6 +60,7 @@ const ICONS: Record<string, Component> = {
   label: Tag,
   image: Image,
   video: Video,
+  icon: Smile,
   form: RectangleHorizontal,
   input: FormInput,
   textarea: TextCursorInput,

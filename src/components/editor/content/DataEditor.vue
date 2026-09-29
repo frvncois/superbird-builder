@@ -10,6 +10,7 @@ import ToggleUI from '@/components/ui/ToggleUI.vue'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import MediaPickerControl from '@/components/editor/content/MediaPickerControl.vue'
 import RichTextInput from '@/components/editor/content/RichTextInput.vue'
+import IconPickerControl from '@/components/editor/content/IconPickerControl.vue'
 import { ELEMENTS, typeOptionsFor } from '@/lib/elements'
 import { hasAncestorOfType } from '@/lib/tree'
 import { sanitizeAttributes, isAllowedAttribute } from '@/lib/shared/attributes.js'
@@ -22,6 +23,8 @@ import { useLocale } from '@/composables/useLocale'
 import { resolveBinding, refIds, mediaUrls } from '@/lib/shared/fields.js'
 import { resolveSliderConfig, SLIDER_DEFAULTS } from '@/lib/shared/slider.js'
 import { useProject } from '@/composables/useProject'
+import { useAuth } from '@/composables/useAuth'
+import { useComponents } from '@/composables/useComponents'
 import type { CollectionEntry, CollectionField } from '@/types/editor'
 
 const { selectedElement } = useElement()
@@ -613,6 +616,31 @@ const contentPlaceholder = computed(() => {
   return def.value?.defaultContent
 })
 
+// --- icon ---
+
+const { canBuild } = useAuth()
+const { masterFor } = useComponents()
+
+/** an icon's markup is not content a contributor may change: the server keeps
+ *  it out of the contributor allowlist, so offering the picker would only
+ *  produce an edit that silently does not save */
+const isIcon = computed(() => selectedElement.value?.type === 'icon' && canBuild.value)
+
+/** own markup first, then the component master's — what actually renders */
+const svg = computed({
+  get: () => {
+    const node = selectedElement.value
+    if (!node) return ''
+    return node.svg || masterFor(node.id)?.master.svg || ''
+  },
+  set: (value: string) => {
+    const node = selectedElement.value
+    if (!node) return
+    if (value) node.svg = value
+    else delete node.svg
+  },
+})
+
 const src = computed({
   get: () => {
     if (boundField.value?.type === 'image' && binding.value?.entry) {
@@ -733,6 +761,10 @@ const src = computed({
 
     <GroupPopover v-if="hasContent && !boundIsRef">
       <RichTextInput ref="contentField" v-model="content" :placeholder="contentPlaceholder" />
+    </GroupPopover>
+
+    <GroupPopover v-if="isIcon" label="Icon">
+      <IconPickerControl v-model="svg" />
     </GroupPopover>
 
     <GroupPopover v-if="isMedia">

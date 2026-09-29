@@ -54,6 +54,7 @@ export function stripExtractedInstanceState(source: ElementNode): void {
     delete n.animations
     delete n.attributes
     delete n.src
+    delete n.svg
     delete n.background
     delete n.locales
     delete n.content

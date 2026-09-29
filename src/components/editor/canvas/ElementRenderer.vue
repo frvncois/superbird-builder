@@ -52,6 +52,7 @@ const {
   srcInfo,
   srcAttr,
   altAttr,
+  iconInfo,
   editableText,
   richEditing,
   inlineInitialText,
@@ -385,6 +386,20 @@ const handlers = {
     </div>
   </component>
 
+  <!-- an icon: the <svg> is the element itself, so classes, id and listeners
+       land on it like on any other; only its shapes come from the markup -->
+  <svg
+    v-else-if="iconInfo"
+    ref="el"
+    v-bind="{ ...iconInfo.attrs, ...customAttrs }"
+    :id="node.htmlId || undefined"
+    :data-node-id="node.id"
+    :class="classes"
+    :style="motionStyle"
+    draggable="true"
+    v-on="handlers"
+    v-html="iconInfo.inner"
+  />
   <component
     :is="def?.tag ?? 'div'"
     v-else-if="def?.void"

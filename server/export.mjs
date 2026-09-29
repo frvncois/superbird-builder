@@ -23,6 +23,7 @@ import {
 } from '../src/lib/shared/attributes.js'
 import { isRich, rewriteRichMedia, sanitizeRich } from '../src/lib/shared/richtext.js'
 import { backgroundRender, backgroundKindFromUrl } from '../src/lib/shared/background.js'
+import { DEFAULT_ICON_SVG, parseInlineSvg, sanitizeInlineSvg } from '../src/lib/shared/svg.js'
 import { conflictingBaseClasses } from '../src/lib/shared/interactionClasses.js'
 import {
   DEFAULT_SCROLL_AT,
@@ -783,6 +784,24 @@ function renderNode(node, ctx) {
       }
     }
     return linkWrap(`<${tag}${attrsFor(node, ctx)}>${inner}</${tag}>`, node, ctx)
+  }
+
+  // an icon: the <svg> IS the element, so the node's own attributes (class,
+  // id, the interaction wiring) sit on the root beside the markup's. Sanitized
+  // HERE, whatever was stored: this is the line where markup becomes a page.
+  if (node.type === 'icon') {
+    const mapping = ctx.mm.get(node.id)
+    const stored = node.svg || mapping?.master.svg
+    const icon = parseInlineSvg((stored && sanitizeInlineSvg(stored)) || DEFAULT_ICON_SVG)
+    const own = attrsFor(node, ctx)
+    // the author's attributes win over the markup's (an aria-label over the
+    // icon's default aria-hidden); a duplicate attribute would be dropped by
+    // the parser anyway, first one kept
+    const root = Object.entries(icon.attrs)
+      .filter(([name]) => !new RegExp(`\\s${name}=`).test(own))
+      .map(([name, value]) => ` ${name}="${escapeHtml(value)}"`)
+      .join('')
+    return linkWrap(`<svg${own}${root}>${icon.inner}</svg>`, node, ctx)
   }
 
   if (def?.void) return linkWrap(`<${tag}${attrsFor(node, ctx)}>`, node, ctx)

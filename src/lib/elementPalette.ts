@@ -25,6 +25,7 @@ import {
   Rows3,
   Columns3,
   TableProperties,
+  Smile,
 } from 'lucide-vue-next'
 
 export interface PaletteItem {
@@ -60,6 +61,7 @@ export const ELEMENT_GROUPS: { title: string; items: PaletteItem[] }[] = [
     items: [
       { type: 'image', label: 'Image', icon: Image },
       { type: 'video', label: 'Video', icon: Video },
+      { type: 'icon', label: 'Icon', icon: Smile },
     ],
   },
   {

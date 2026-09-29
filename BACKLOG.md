@@ -239,13 +239,8 @@ patches; each was scoped in the plan and the scoping is reproduced here.
   case. Drag + inertia would be a new `'drag'` trigger on the animation
   runtime — lowest value on the whole list; do it last or not at all.
 
-Inline SVG / `currentColor` icons was the fifth item; it is tracked as **M6**
-below. The plan's extra detail: a new `icon` element whose `content` holds an
-inline SVG sanitized by a shared `src/lib/shared/svg.js` (lift the existing
-`sanitizeSvg` out of `server/media.mjs` so both surfaces use one
-implementation), rendered as raw inner HTML with `fill`/`stroke` forced to
-`currentColor`, plus an `svg` field on `edit_elements` and a "use inline"
-action on media-library SVGs.
+Inline SVG / `currentColor` icons was the fifth item; it shipped as the `:icon:`
+element (`src/lib/shared/svg.js`).
 
 ## Launch (pre-publish)
 
@@ -348,11 +343,6 @@ The `guano mcp` server (`packages/guano/mcp/`) shipped Phases 0–8. Known, deli
   master, `onMaster: true` writes shared content/src, `update_component` replaces
   the structure, and `list_components {includeNodes: true}` +
   `get_page {elements: "all"}` (`masterClasses`) read the shared state back.
-- **M6 — no inline SVG element.** An uploaded SVG can be an `:image:` `src`, but
-  it renders as an `<img>`, so it cannot inherit `currentColor` / follow a design
-  token. A real `:svg:` leaf needs a strict sanitizer (allowlisted shape
-  elements + presentation attributes, no script/handlers/foreignObject/external
-  href) with its own security tests before it can ship.
 - **M7 — no truly empty leaf.** `content: ""` clears back to the element's
   placeholder, so a text leaf can't render empty; build decorative rules and
   spacers from styled `:div` containers instead.

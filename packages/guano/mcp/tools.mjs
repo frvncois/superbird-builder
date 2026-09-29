@@ -123,7 +123,27 @@ export function createToolSet({ api, runtime, elicit }) {
     isSymmetricTrigger,
     SLIDER_DEFAULTS,
     validateSliderConfig,
+    sanitizeInlineSvg,
+    lucideSvg,
+    lucideNameOf,
   } = runtime
+
+  // ---------- the bundled icon table ----------
+  //
+  // The whole Lucide set: ~360 KB that most sessions never touch, so it stays
+  // out of the runtime bundle and is imported the first time a tool needs it.
+  // `src/lib/shared/` ships beside this file in the npm package (prepack
+  // copies it) and sits three levels up in the repo — same two-layout
+  // resolution the server uses for the runtime bundle.
+  let icons = null
+  async function loadIcons() {
+    if (icons) return icons
+    const mod = await import(
+      new URL('../../../src/lib/shared/lucideIcons.js', import.meta.url).href
+    ).catch(() => import(new URL('../src/lib/shared/lucideIcons.js', import.meta.url).href))
+    icons = mod.LUCIDE_ICONS
+    return icons
+  }
 
   // ---------- local-file payloads ----------
   //
@@ -731,6 +751,8 @@ function elementSummary(project, page, opts = {}) {
       ...(n.listQuery ? { listQuery: n.listQuery } : {}),
       ...(n.entryId ? { entryId: n.entryId } : {}),
       ...(n.slider ? { slider: n.slider } : {}),
+      // the bundled icon's name when there is one — the markup itself is noise
+      ...(n.svg ? { icon: lucideNameOf(n.svg) ?? 'custom svg' } : {}),
     }
   }
   const visit = (nodes, inComponent) => {
@@ -901,7 +923,7 @@ function syncMarkersForNode(page, node) {
   if (node.type !== 'body' && node.arg === undefined) {
     // a real [name] binding owns the slot — withDataMarker no-ops on it.
     // a slider's config is Data-panel state too, so it earns the marker
-    const want = !!(node.content || node.src || node.slider)
+    const want = !!(node.content || node.src || node.svg || node.slider)
     if (want !== (dataMarkerOf(line) === '[+]')) line = withDataMarker(line, want)
   }
   const style = styleMarkerOf(line)
@@ -1245,6 +1267,44 @@ function applyPageEdits(project, page, edits, locale, defaultLocale) {
         }
         applied.push(edit.onMaster ? 'src (on component master — all instances)' : 'src')
         changed = true
+      }
+    }
+
+    // --- icon markup (icon only) ---
+    // `icon` names a bundled Lucide icon; `svg` is custom markup. Both land as
+    // sanitized markup on `node.svg` — the one thing a renderer ever reads.
+    if (edit.icon !== undefined || edit.svg !== undefined) {
+      if (node.type !== 'icon') {
+        errors.push(`icon/svg refused: ':${node.type}' is not an icon element`)
+      } else if (edit.icon !== undefined && edit.svg !== undefined) {
+        errors.push('pass `icon` (a bundled icon name) or `svg` (custom markup), not both')
+      } else if (localized) {
+        errors.push('an icon is not localizable — omit locale for icon/svg edits')
+      } else if (dataTargetError) {
+        errors.push(dataTargetError)
+      } else {
+        let markup = ''
+        let problem = null
+        if (edit.icon) {
+          const inner = icons?.[edit.icon]
+          if (!inner) problem = `icon refused: no bundled icon named "${edit.icon}" — find one with list_icons`
+          else markup = lucideSvg(edit.icon, inner)
+        } else if (edit.svg) {
+          markup = sanitizeInlineSvg(String(edit.svg))
+          if (!markup) {
+            problem =
+              'svg refused: not usable as an inline icon — it must be one <svg> under 32 KB, ' +
+              'built from shapes (path, circle, rect, line, polyline, polygon, g, defs, gradients)'
+          }
+        }
+        if (problem) {
+          errors.push(problem)
+        } else {
+          if (markup) dataTarget.svg = markup
+          else delete dataTarget.svg
+          applied.push(edit.onMaster ? 'icon (on component master — all instances)' : 'icon')
+          changed = true
+        }
       }
     }
 
@@ -2019,6 +2079,38 @@ const entryView = (e) => ({
 // ---------- tools ----------
 
 const tools = [
+  {
+    name: 'list_icons',
+    description:
+      'Find a bundled icon by name for an `:icon:` element. Pass `query` (one or more words — ' +
+      '"arrow right", "user", "cart") and get the matching names back, best first; set one ' +
+      'with edit_elements `icon`. The set is Lucide (~1700 icons), so always search rather ' +
+      'than guess a name. Read-only; needs no target.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'words the icon name should contain' },
+        limit: { type: 'integer', minimum: 1, maximum: 200, description: 'default 40' },
+      },
+      required: ['query'],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const table = await loadIcons()
+      const words = String(args.query ?? '').toLowerCase().split(/[\s-]+/).filter(Boolean)
+      if (!words.length) throw new Error('pass a `query` — the set is too large to list whole')
+      const limit = Math.min(Math.max(Number(args.limit) || 40, 1), 200)
+      const hits = Object.keys(table).filter((name) => words.every((w) => name.includes(w)))
+      // a name that STARTS with the query is the better match, then the shorter
+      hits.sort(
+        (a, b) =>
+          Number(b.startsWith(words[0])) - Number(a.startsWith(words[0])) ||
+          a.length - b.length ||
+          a.localeCompare(b),
+      )
+      return { query: args.query, total: hits.length, icons: hits.slice(0, limit) }
+    },
+  },
   {
     name: 'get_guide',
     description:
@@ -4001,6 +4093,7 @@ const tools = [
       'the element\'s own text — leaf elements only; rich tags b/strong/i/em/u/mark/code/sup/' +
       'sub/br/a[href] and the block set p/h2/h3/h4/blockquote/ul/ol/li/hr are kept (sanitized), ' +
       'everything else is stripped; "" clears it back to the placeholder. `src` (image/video only) takes a /media/… path, https URL, or data: URL. ' +
+      '`icon` (icon elements only) names a bundled icon from list_icons; `svg` takes custom markup instead. ' +
       '`background` (any element) layers background media behind its content, same URL rules; ' +
       '"" clears. `htmlId` sets the html id (anchor target); "" clears. A non-default `locale` ' +
       'writes content/src as per-locale overrides instead. Per-edit failures are reported in the ' +
@@ -4111,6 +4204,20 @@ const tools = [
                   },
                 },
                 additionalProperties: false,
+              },
+              icon: {
+                type: 'string',
+                description:
+                  'icon only: the name of a bundled Lucide icon ("arrow-right") — find one ' +
+                  'with list_icons. It follows the text colour and takes size classes ' +
+                  '(size-4). "" clears back to the placeholder',
+              },
+              svg: {
+                type: 'string',
+                description:
+                  'icon only: custom inline <svg> markup, for a mark the bundled set lacks. ' +
+                  'Sanitized to shapes and recoloured to currentColor; scripts, styles, ' +
+                  'links and external references are dropped. "" clears',
               },
               slider: {
                 type: ['object', 'null'],
@@ -4328,6 +4435,7 @@ const tools = [
           pageResults.push({ pageId: page.id, saved: false, reason: 'no-edits' })
           continue
         }
+        if (job.edits.some((e) => e?.icon)) await loadIcons()
         const { changed, results } = applyPageEdits(project, page, job.edits, locale, defaultLocale)
         anyChanged = anyChanged || changed
         // terse by default: a 140-edit call used to echo ~14 KB of what the
