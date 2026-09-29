@@ -22,6 +22,7 @@ import { useLocale } from './useLocale'
 import { SAFE_SRC } from '@/lib/shared/urls.js'
 import { DEFAULT_ICON_SVG, parseInlineSvg, sanitizeInlineSvg } from '@/lib/shared/svg.js'
 import { isNodeHidden } from '@/lib/instances'
+import { variantClassesFor } from './useVariants'
 import type {
   CollectionEntry,
   ElementNode,
@@ -386,7 +387,9 @@ export function useRenderNode(
   // --- classes (shared core; renderers append their own chrome) ---
 
   const baseClasses = computed(() => {
-    const own = (mapping.value ? mapping.value.master.classes : node.value.classes) ?? ''
+    // the master's classes inside an instance, with the instance's variant
+    // options layered on (lib/variants) — or the node's own
+    const own = variantClassesFor(node.value, mapping.value)
     const interactionCls = mapping.value
       ? scopedClassesFor(
           mapping.value.master.id,

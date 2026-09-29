@@ -13,6 +13,7 @@ import ButtonUI from '@/components/ui/ButtonUI.vue'
 import InputUI from '@/components/ui/InputUI.vue'
 import DrawerField from './DrawerField.vue'
 import DrawerSection from './DrawerSection.vue'
+import VariantAxesEditor from './VariantAxesEditor.vue'
 import { useComponents } from '@/composables/useComponents'
 import { useBranches } from '@/composables/useBranches'
 import { useModal } from '@/composables/useModal'
@@ -157,6 +158,10 @@ async function onDelete() {
             <option v-for="name in categories" :key="name" :value="name" />
           </datalist>
         </DrawerField>
+      </DrawerSection>
+
+      <DrawerSection title="Variants">
+        <VariantAxesEditor :component-id="component.id" />
       </DrawerSection>
 
       <DrawerSection v-if="usage" title="Usage">

@@ -128,6 +128,10 @@ export function createToolSet({ api, runtime, elicit }) {
     lucideNameOf,
     buildInstanceMap: sharedInstanceMap,
     rewriteInstanceBlock,
+    setVariantAxes,
+    setInstancePick,
+    setVariantClasses,
+    mergeClassLayers,
     setNodeHidden,
     isNodeHidden,
   } = runtime
@@ -756,6 +760,7 @@ function elementSummary(project, page, opts = {}) {
       ...(n.entryId ? { entryId: n.entryId } : {}),
       ...(n.slider ? { slider: n.slider } : {}),
       ...(n.hidden !== undefined ? { hidden: n.hidden } : {}),
+      ...(n.variants ? { variants: n.variants } : {}),
       // the bundled icon's name when there is one — the markup itself is noise
       ...(n.svg ? { icon: lucideNameOf(n.svg) ?? 'custom svg' } : {}),
     }
@@ -1143,6 +1148,39 @@ function applyPageEdits(project, page, edits, locale, defaultLocale) {
         errors.push('classes are not localizable — omit locale for class edits')
       } else if (!styleTarget) {
         errors.push('classes refused: this instance node has no master counterpart (structure diverged)')
+      } else if (edit.variant !== undefined) {
+        // a variant option's OVERRIDES: only what differs from the base classes.
+        // They live on the master, so this needs an element inside a component.
+        const owner = inComponent
+          ? (buildInstanceMap(project, page).get(node.id)?.def ?? null)
+          : ((project.components ?? []).find((c) => findNode([c.root], node.id)) ?? null)
+        const [axisName, optionName] = String(edit.variant).split(':')
+        const axis = owner?.variants?.find((a) => a.name === axisName)
+        if (!owner) {
+          errors.push('variant refused: this element is not part of a component')
+        } else if (!axis || !axis.options.includes(optionName)) {
+          const known = (owner.variants ?? []).flatMap((a) => a.options.map((o) => `${a.name}:${o}`))
+          errors.push(
+            `variant "${edit.variant}" is not an option of ${owner.name} — ` +
+              (known.length ? `it has ${known.join(', ')}` : 'it has no variant axes (set_component_variants)'),
+          )
+        } else {
+          const removeSet = new Set(edit.removeClasses ?? [])
+          let tokens = (styleTarget.variantClasses?.[edit.variant] ?? '')
+            .split(/\s+/)
+            .filter(Boolean)
+            .filter((t) => !removeSet.has(t))
+          for (const cls of edit.addClasses ?? []) {
+            if (tokens.includes(cls)) continue
+            // no flex/grid prerequisite here: the base classes carry the display
+            const result = applyClass(cls, tokens, { prerequisites: false })
+            if (result.error !== undefined) errors.push(`class "${cls}": ${result.error}`)
+            else tokens = mergeClassLayers(result.tokens.join(' '), cls).split(/\s+/).filter(Boolean)
+          }
+          setVariantClasses(owner, styleTarget, edit.variant, tokens.join(' '))
+          applied.push(`classes (${owner.name} · ${edit.variant} — every instance wearing it)`)
+          changed = true
+        }
       } else {
         // removes run FIRST so remove+add of the same class nets to the add
         // (a re-apply), not a silent removal
@@ -1217,6 +1255,30 @@ function applyPageEdits(project, page, edits, locale, defaultLocale) {
         }
         applied.push(edit.onMaster ? 'src (on component master — all instances)' : 'src')
         changed = true
+      }
+    }
+
+    // --- variant picks (a component instance's :Name wrapper) ---
+    if (edit.variants !== undefined) {
+      const owner = (project.components ?? []).find((c) => c.name === node.type)
+      if (!isComponentType(node.type) || !owner) {
+        errors.push(
+          `variants refused: ':${node.type}' is not a component instance — address the ':Name' line of the instance`,
+        )
+      } else if (edit.variants !== null && (typeof edit.variants !== 'object' || Array.isArray(edit.variants))) {
+        errors.push('variants must be an object of axis → option, or null to clear every pick')
+      } else {
+        const picks = edit.variants ?? Object.fromEntries((owner.variants ?? []).map((a) => [a.name, null]))
+        let landed = false
+        for (const [axis, option] of Object.entries(picks)) {
+          const result = setInstancePick(owner, node, axis, option)
+          if (result.ok) landed = true
+          else errors.push(`variants: ${result.error}`)
+        }
+        if (landed) {
+          applied.push('variants')
+          changed = true
+        }
       }
     }
 
@@ -3078,6 +3140,9 @@ const tools = [
                 id: n.id,
                 type: n.type,
                 ...(n.classes ? { classes: n.classes } : {}),
+                ...(n.variantClasses ? { variantClasses: n.variantClasses } : {}),
+                ...(n.hidden !== undefined ? { hidden: n.hidden } : {}),
+                ...(n.svg ? { icon: lucideNameOf(n.svg) ?? 'custom svg' } : {}),
                 ...(n.content ? { content: n.content } : {}),
                 ...(n.src ? { src: n.src } : {}),
                 ...(n.background ? { background: n.background } : {}),
@@ -3123,6 +3188,7 @@ const tools = [
             name: def.name,
             ...(def.category ? { category: def.category } : {}),
             ...(def.source ? { source: def.source } : {}),
+            ...(def.variants?.length ? { variants: def.variants } : {}),
             instances,
             structure: [`:${def.name}`, ...def.root.children.flatMap((c) => serializeNode(c, '\t')), `${def.name}:`].join('\n'),
             ...(nodes ? { nodes } : {}),
@@ -3396,6 +3462,55 @@ const tools = [
         ...(adopt.orphaned.length ? { orphaned: adopt.orphaned } : {}),
         ...(notes.length ? { notes } : {}),
       }
+    },
+  },
+  {
+    name: 'set_component_variants',
+    description:
+      'Declare the axes a component\'s instances can differ along — how ONE Button comes in ' +
+      'default/outline/ghost and sm/md/lg instead of being six components. Pass the full list ' +
+      'of axes: [{name: "variant", options: ["default", "outline"], default: "default"}, ' +
+      '{name: "size", options: ["sm", "md", "lg"], default: "md"}]. Names are lowercase ' +
+      'letters, digits and dashes. Variants are STYLE ONLY: an option is a set of class ' +
+      'overrides, written with edit_elements {variant: "size:sm", addClasses: [...]} on the ' +
+      'component\'s elements; an instance wears one with edit_elements {variants: {size: ' +
+      '"sm"}} on its :Name line. Replacing the list keeps the overrides and picks of every ' +
+      'name that survives and drops the rest — so a rename is a remove + add, and loses ' +
+      'them. An empty list removes all axes. Requires a target.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        componentId: { type: 'string' },
+        axes: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              name: { type: 'string' },
+              options: { type: 'array', items: { type: 'string' }, minItems: 1 },
+              default: { type: 'string', description: 'one of `options`; the first when omitted' },
+            },
+            required: ['name', 'options'],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ['componentId', 'axes'],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const { project } = await loadTargetProject()
+      const def = (project.components ?? []).find((c) => c.id === args.componentId)
+      if (!def) throw new Error(`no component with id "${args.componentId}" (use list_components)`)
+      const axes = (args.axes ?? []).map((a) => ({
+        name: String(a.name),
+        options: (a.options ?? []).map(String),
+        default: String(a.default ?? a.options?.[0] ?? ''),
+      }))
+      const result = setVariantAxes(project, def, axes)
+      if (!result.ok) return { saved: false, reason: 'invalid-axes', message: result.error }
+      await saveTargetProject(project)
+      return { saved: true, componentId: def.id, name: def.name, variants: def.variants ?? [] }
     },
   },
   {
@@ -4116,6 +4231,23 @@ const tools = [
               },
               addClasses: { type: 'array', items: { type: 'string' } },
               removeClasses: { type: 'array', items: { type: 'string' } },
+              variant: {
+                type: 'string',
+                description:
+                  'with addClasses/removeClasses, inside a component: write the OVERRIDES of ' +
+                  'one variant option ("size:sm") instead of the base classes. Give only ' +
+                  'what differs from the base — a class on the same property replaces the ' +
+                  'base one for instances wearing the option. Axes come from ' +
+                  'set_component_variants',
+              },
+              variants: {
+                type: ['object', 'null'],
+                description:
+                  'a component instance\'s `:Name` line only: the option it wears per axis, ' +
+                  '{"variant": "outline", "size": "sm"}. An axis left out is unchanged; an ' +
+                  'option of null goes back to the default; null clears every pick',
+                additionalProperties: { type: ['string', 'null'] },
+              },
               content: { type: 'string' },
               src: { type: 'string' },
               background: { type: 'string' },

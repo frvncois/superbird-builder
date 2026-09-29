@@ -155,6 +155,15 @@ export interface ElementNode {
    * a custom SVG, ALWAYS the output of shared/svg.sanitizeInlineSvg. Node-only
    * state like `src`, and per-instance inside a component the same way. */
   svg?: string
+  /** INSTANCE WRAPPER only (`:Button`): the option this instance picks per
+   * variant axis, by name — `{ variant: 'outline', size: 'sm' }`. An axis left
+   * out means the component's default, and a pick equal to the default is
+   * never stored. */
+  variants?: Record<string, string>
+  /** MASTER node only: class overrides per variant option, keyed
+   * `'<axis>:<option>'`. Layered over `classes` for an instance that picks the
+   * option — later wins per property (see lib/variants). */
+  variantClasses?: Record<string, string>
   /** not rendered and not exported. Node-only state, and per-instance inside a
    * component: an instance hides a part for itself, or — with an explicit
    * `false` — shows one its component hides by default. Omitted = inherit. */
@@ -342,6 +351,21 @@ export interface Comment {
   replies: CommentReply[]
 }
 
+/**
+ * One way a component's instances can differ in LOOK — `variant`
+ * (default/outline/ghost), `size` (sm/md/lg). Style only: an option is a set of
+ * class overrides on the master's nodes, never a different structure.
+ *
+ * Axes and options are addressed by NAME, in the document and by agents;
+ * renaming one rewrites every use (lib/variantOps).
+ */
+export interface VariantAxis {
+  name: string
+  options: string[]
+  /** the option an instance gets when it picks none */
+  default: string
+}
+
 export interface ComponentDef {
   id: string
   /** Capitalized, unique — used as the :Name: syntax token */
@@ -354,6 +378,9 @@ export interface ComponentDef {
    * components drawer. A copy is a plain component from here on: nothing
    * follows the catalog. */
   source?: string
+  /** the axes its instances can differ along. Written ONLY through
+   * `setComponentMeta`, like the two keys above. */
+  variants?: VariantAxis[]
 }
 
 export interface DesignToken {

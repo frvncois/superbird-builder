@@ -12,7 +12,11 @@ import {
   sliderAllowNegative,
   isPropertyRelevant,
   hasDisplayClass,
+  mergeClassLayers,
 } from '@/lib/styles'
+import { pickedKeys } from '@/lib/variants'
+import { setVariantClasses } from '@/lib/variantOps'
+import { useVariants } from '@/composables/useVariants'
 import { classToText, textToClass, nearestStepIndex, sizeClassToText, namedTextToClass } from '@/lib/valueClass'
 import { isPaletteColor } from '@/lib/colors'
 import type { StyleProperty, Control, StyleSection, RelevanceContext } from '@/lib/styles'
@@ -73,14 +77,67 @@ const nextLargerWidth = computed(() => {
 // inside a component instance, style edits land on the shared master
 const styleTarget = editTarget
 
+// --- the variant layer ---
+//
+// A component with variant axes has more than one class string per element:
+// the base every option shares, and an override per option. The panel writes
+// ONE of them at a time — `layer`, picked at the top — and this is the only
+// place that knows. Everything below reads and writes a plain class string,
+// exactly as it did before variants existed.
+
+const { activeLayer, layer, layerOptions, selectionContext } = useVariants()
+
+const split = (classes: string | undefined) => (classes ?? '').split(/\s+/).filter(Boolean)
+
+/** in a layer: what the element wears from everything BUT that layer — the
+ *  base, and the options worn on the other axes. Null while writing the base. */
+const layerContext = computed(() => {
+  const ctx = selectionContext.value
+  const target = styleTarget.value
+  if (!layer.value || !ctx || !target) return null
+  const others = pickedKeys(ctx.def, ctx.picks)
+    .filter((key) => key !== layer.value)
+    .map((key) => target.variantClasses?.[key])
+  return mergeClassLayers(target.classes ?? '', ...others)
+})
+const contextTokens = computed(() => new Set(split(layerContext.value ?? '')))
+
+const layerChoices = computed(() => [
+  { label: 'Base', value: '' },
+  ...layerOptions.value.map((l) => ({ label: `${l.axis}: ${l.option}`, value: l.key })),
+])
+
+// a layer belongs to a component: moving to another one starts from its base
+watch(
+  () => selectionContext.value?.def.id,
+  () => (activeLayer.value = null),
+)
+
 // the element's class string is the single source of truth. Controls edit one
 // breakpoint at a time: they see/write the "effective view" for the active
 // breakpoint (base values + this breakpoint's overrides, prefix stripped) and
 // the wrapper folds edits back into the stored string as max-width variants.
 const { tokens: rawTokens, setTokens: setRawTokens } = useClassField({
-  get: () => styleTarget.value?.classes ?? '',
+  get: () => {
+    const target = styleTarget.value
+    if (!target) return ''
+    if (layerContext.value === null) return target.classes ?? ''
+    // what the element WEARS with this option on: the controls then show real
+    // values, inherited ones included, rather than an empty panel
+    return mergeClassLayers(layerContext.value, target.variantClasses?.[layer.value!])
+  },
   set: (value) => {
-    if (styleTarget.value) styleTarget.value.classes = value
+    const target = styleTarget.value
+    if (!target) return
+    const ctx = selectionContext.value
+    if (layerContext.value === null || !ctx || !layer.value) {
+      target.classes = value
+      return
+    }
+    // the override is what differs from the rest. A value set back to what the
+    // base already says drops out of the override on its own.
+    const own = split(value).filter((token) => !contextTokens.value.has(token))
+    setVariantClasses(ctx.def, target, layer.value, own.join(' '))
   },
 })
 // cascaded view for the active breakpoint (Mobile inherits Tablet, not just base)
@@ -92,6 +149,9 @@ function setTokens(next: string[]) {
 function removeToken(cls: string) {
   // removing an inherited value on a smaller breakpoint scopes it so it drops
   // here and below while larger breakpoints keep it (base-inherited case only)
+  // a class the layer merely inherits is not the layer's to remove: an override
+  // can replace a value, it cannot take one away
+  if (layerInherited.value.includes(cls)) return
   if (activeWidth.value !== null && inheritedTokens.value.includes(cls)) {
     const larger = nextLargerWidth.value
     if (larger !== null) {
@@ -105,13 +165,24 @@ function removeToken(cls: string) {
 
 // on a smaller breakpoint, the tokens inherited from a larger breakpoint (not
 // this breakpoint's own override) — shown dimmed in the class panel
-const inheritedTokens = computed(() => view.value.inherited)
+/** in a layer, the classes that come from the base (or another axis) rather
+ *  than from the option being written */
+const layerInherited = computed(() =>
+  layerContext.value === null ? [] : tokens.value.filter((t) => contextTokens.value.has(t)),
+)
+const inheritedTokens = computed(() => [
+  ...new Set([...view.value.inherited, ...layerInherited.value]),
+])
 
 // inherited tokens that come straight from the base (unprefixed) token, so they
 // can be removed (scoped away) here — others (overridden by a larger non-base
 // breakpoint) stay non-removable for now
 const removableInherited = computed(() =>
-  activeWidth.value === null ? [] : inheritedTokens.value.filter((t) => rawTokens.value.includes(t)),
+  activeWidth.value === null
+    ? []
+    : view.value.inherited.filter(
+        (t) => rawTokens.value.includes(t) && !layerInherited.value.includes(t),
+      ),
 )
 
 function classFor(prop: StyleProperty): string | undefined {
@@ -147,13 +218,9 @@ function remove(prop: StyleProperty) {
 const baseline = ref<string[]>([])
 const backgroundBaseline = ref<string>('')
 watch(
-  [() => styleTarget.value?.id, activeWidth],
+  [() => styleTarget.value?.id, activeWidth, layer],
   () => {
-    baseline.value = breakpointView(
-      (styleTarget.value?.classes ?? '').split(/\s+/).filter(Boolean),
-      activeWidth.value,
-      baseWidth.value,
-    ).tokens
+    baseline.value = breakpointView(rawTokens.value, activeWidth.value, baseWidth.value).tokens
     backgroundBaseline.value = styleTarget.value?.background ?? ''
   },
   { immediate: true },
@@ -427,6 +494,17 @@ watch(pendingFocus, consumeFocus)
 
 <template>
   <div class="flex flex-col">
+    <!-- which class string the panel writes: the base, or one option's override -->
+    <div v-if="layerOptions.length" class="border-b border-input p-3" data-style-layer>
+      <RowUI label="Editing">
+        <SelectUI
+          :options="layerChoices"
+          :model-value="layer ?? ''"
+          @update:model-value="(v) => (activeLayer = v || null)"
+        />
+      </RowUI>
+    </div>
+
     <div class="flex flex-col gap-1.5 p-3 border-b border-input">
       <p class="text-[10px] font-medium tracking-wide text-muted-foreground uppercase">Classes</p>
       <ClassInput

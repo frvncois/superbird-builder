@@ -989,6 +989,7 @@ var NODE_STATE_KEYS = [
 	"src",
 	"svg",
 	"hidden",
+	"variants",
 	"background",
 	"htmlId",
 	"attributes",
@@ -1303,12 +1304,33 @@ function buildInstanceMap(roots, components) {
 			pair(node, def.root, {
 				def,
 				instanceId: node.id,
-				picks: {}
+				picks: resolvePicks(def, node, [])
 			});
 		}
 	};
 	visit(roots);
 	return map;
+}
+/**
+* The option an instance picks on each of its component's axes: its wrapper's
+* own pick, else one from the components it is nested in, else the axis
+* default. A pick naming an option that no longer exists falls through —
+* a stale name must never leave an instance wearing nothing.
+*/
+function resolvePicks(def, wrapper, mirrors) {
+	const picks = {};
+	for (const axis of def.variants ?? []) {
+		let pick;
+		for (const source of [wrapper, ...mirrors ?? []]) {
+			const value = source?.variants?.[axis.name];
+			if (value !== void 0 && axis.options.includes(value)) {
+				pick = value;
+				break;
+			}
+		}
+		picks[axis.name] = pick ?? axis.default;
+	}
+	return picks;
 }
 /**
 * The first DEFINED value of `key` along a node's chain: its own, then each
@@ -1343,184 +1365,6 @@ function isNodeHidden(node, mapping) {
 function setNodeHidden(node, mapping, hidden) {
 	if (hidden === (inheritedInstanceValue(mapping, "hidden") === true)) delete node.hidden;
 	else node.hidden = hidden;
-}
-//#endregion
-//#region src/lib/componentOps.ts
-var indentOf = (line) => line.match(/^\t*/)[0];
-/** `:Card:` leaf instances can sit unexpanded in stored code (nothing expands
-* them until someone types in that page). Detaching one means materializing
-* the master's structure first, so there are nodes to bake onto. Only THIS
-* component's leaves are touched. */
-function expandLeafInstances(page, def) {
-	const lineMap = [];
-	const next = expandComponentInstances(page.code, [def], lineMap);
-	if (next === page.code) return;
-	const map = /* @__PURE__ */ new Map();
-	lineMap.forEach((out, input) => map.set(out, input));
-	const before = page.code;
-	page.code = next;
-	page.elements = reconcile(before, next, page.elements, map);
-}
-/**
-* Pushes a master's current structure out to every instance of it, on every
-* page. Returns how many instance blocks were rewritten.
-*
-* Every CLOSED instance is rewritten unconditionally — deliberately NOT gated
-* on a structure signature the way `syncStructure` is, because that signature
-* is type-only: an arg or link change leaves it identical and would never
-* reach the instances.
-*/
-function pushMasterStructure(project, def) {
-	if (!project.components.some((c) => c.id === def.id)) return 0;
-	let rewritten = 0;
-	for (const page of project.pages) {
-		expandLeafInstances(page, def);
-		const ids = [];
-		walkNodes(page.elements, (n) => {
-			if (n.type === def.name) ids.push(n.id);
-		});
-		const ordered = ids.map((id) => findNode(page.elements, id)).filter((n) => !!n && n.line !== void 0).sort((a, b) => b.line - a.line).map((n) => n.id);
-		for (const id of ordered) {
-			const node = findNode(page.elements, id);
-			if (node && isClosedBlock(page, node, def.name) && rewriteInstanceBlock(page, node, def)) rewritten++;
-		}
-		const marked = applyNodeMarkers(page.code, page.elements);
-		if (marked !== page.code) page.code = marked;
-	}
-	return rewritten;
-}
-/**
-* Regenerates one instance's inner code lines from its master.
-*
-* Lifted out of `useComponents` so the master-first operations above can reuse
-* it; it closed over nothing.
-*/
-function rewriteInstanceBlock(page, node, def) {
-	if (node.line === void 0) return false;
-	const lines = page.code.split("\n");
-	const start = node.line;
-	const end = node.endLine ?? node.line;
-	if (end <= start) return false;
-	const indent = indentOf(lines[start]);
-	const inner = def.root.children.flatMap((c) => serializeNode(c, `${indent}\t`));
-	const oldInnerLength = end - start - 1;
-	const rest = [
-		...lines.slice(0, start + 1),
-		...inner,
-		...lines.slice(end)
-	];
-	const align = alignInstanceLines(lines.slice(start + 1, end), inner);
-	const map = /* @__PURE__ */ new Map();
-	for (let i = 0; i < rest.length; i++) if (i <= start) map.set(i, i);
-	else if (i < start + 1 + inner.length) {
-		const oldInner = align.get(i - (start + 1));
-		if (oldInner !== void 0) map.set(i, start + 1 + oldInner);
-	} else map.set(i, i - inner.length + oldInnerLength);
-	const before = page.code;
-	page.code = rest.join("\n");
-	page.elements = reconcile(before, page.code, page.elements, map);
-	return true;
-}
-/** a block only counts once its close line exists — while an edit is mid-flight
-* the parser sees an unclosed block that swallows whatever follows, and syncing
-* from that would corrupt the master */
-function isClosedBlock(page, node, name) {
-	if (node.line === void 0 || node.endLine === void 0 || node.endLine <= node.line) return false;
-	return page.code.split("\n")[node.endLine]?.trim() === `${name}:`;
-}
-//#endregion
-//#region src/lib/shared/slug.js
-/**
-* normalizes a string into a url slug segment
-* @param {string} value
-* @returns {string}
-*/
-function slugify(value) {
-	return value.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-}
-//#endregion
-//#region src/lib/document.ts
-/**
-* Canonical page document: a protected @setup block, then the :body
-* wrap — body: is always the last line. Only the setup values and the
-* body content are editable; an empty body keeps one indented line so
-* there is always somewhere to type.
-*/
-function buildDocument(meta, bodyLines, bodyArg, bodyDecor) {
-	const body = bodyLines.some((l) => l.trim()) ? bodyLines : ["	"];
-	return [
-		"@setup",
-		`\tname: ${meta.name}`,
-		`\tslug: ${meta.slug}`,
-		`\tstatus: ${meta.status}`,
-		`\tlocale: ${meta.locale}`,
-		(bodyArg ? `:body[${bodyArg}]` : ":body") + (bodyDecor ?? ""),
-		...body,
-		"body:"
-	].join("\n");
-}
-/** the collection bound to the page body, from :body[post] (markers after
-* the arg are tolerated: ':body[post](+)') */
-function extractBodyArg(code) {
-	return code.match(/^:body\[([a-z0-9-]+)\](?:[({].*)?$/m)?.[1];
-}
-/** the style/interaction markers on the :body line — possibly mid-typing
-* ('(', '(+'…) — round-tripped through rebuilds so typing '(' on body (which
-* opens the Style panel) and the synced '(+)'/'{+}' markers survive the
-* scaffold enforcement instead of respawning a fresh :body */
-function extractBodyDecor(code) {
-	return code.split("\n").map((l) => l.trim()).find(isBodyOpenLine)?.match(/^:body(?:\[[a-z0-9-]*\]?)?((?:\(\+?\)?)?(?:\{\+?\}?)?)$/)?.[1] || void 0;
-}
-/** rebuilds a document with new @setup values but the same body */
-function replaceSetup(code, meta) {
-	return buildDocument(meta, extractBodyLines(code), extractBodyArg(code), extractBodyDecor(code));
-}
-/** The editable lines between :body and body: */
-function extractBodyLines(code) {
-	const lines = code.split("\n");
-	const trimmed = lines.map((l) => l.trim());
-	const start = trimmed.findIndex(isBodyOpenLine);
-	const end = trimmed.lastIndexOf("body:");
-	if (start !== -1 && end > start) return lines.slice(start + 1, end);
-	return lines.filter((l) => {
-		const t = l.trim();
-		return t && !t.startsWith("@") && !/^(name|slug|status|locale):/.test(t) && !isBodyOpenLine(t) && t !== "body:";
-	});
-}
-/**
-* Rebuilds the canonical document from whatever the user typed:
-* the scaffold always comes back, setup values and body content
-* survive. Returns the enforced code plus the parsed meta.
-*/
-/** reads the @setup values out of a document */
-function parseSetup(value) {
-	return {
-		name: value.match(/^\s*name: ?(.*)$/m)?.[1] ?? "",
-		slug: value.match(/^\s*slug: ?(.*)$/m)?.[1] ?? "",
-		status: value.match(/^\s*status: ?(.*)$/m)?.[1] || "published",
-		locale: value.match(/^\s*locale: ?(.*)$/m)?.[1] || "en"
-	};
-}
-/**
-* Rewrites the locale value on the @setup line only — never body lines
-* (a body line could trim to `locale: x`). Zero line-count change.
-*/
-function setSetupLocale(code, locale) {
-	const lines = code.split("\n");
-	const bodyOpen = lines.findIndex((l) => isBodyOpenLine(l.trim()));
-	const end = bodyOpen === -1 ? lines.length : bodyOpen;
-	for (let i = 1; i < end; i++) if (/^\s*locale:/.test(lines[i])) {
-		lines[i] = lines[i].replace(/^(\s*locale: ?).*$/, `$1${locale}`);
-		return lines.join("\n");
-	}
-	return code;
-}
-function enforceDocument(value) {
-	const meta = parseSetup(value);
-	return {
-		code: buildDocument(meta, normalizeSyntax(extractBodyLines(value).join("\n")).split("\n").map((l) => l.trim() && !l.startsWith("	") ? "	" + l : l), extractBodyArg(value), extractBodyDecor(value)),
-		meta
-	};
 }
 //#endregion
 //#region src/lib/colors.ts
@@ -3782,6 +3626,106 @@ function sameProperty(a, b) {
 	const ka = propKey(a);
 	return ka !== void 0 && ka === propKey(b);
 }
+/**
+* What `prefix-…` means when it is NOT a colour, per prefix that doubles as
+* one. Defined by the non-colours because those are a closed set, while a
+* colour is a palette name, a project token, a keyword or an arbitrary value —
+* and a project's tokens are not known to every caller of this module.
+*/
+var NOT_A_PAINT = {
+	text: /^(?:xs|sm|base|lg|xl|\dxl|left|center|right|justify|start|end|wrap|nowrap|balance|pretty|ellipsis|clip|\[[\d.].*\])$/,
+	border: /^(?:\d+|[xytrblse](?:-\d+)?|solid|dashed|dotted|double|hidden|none|collapse|separate|spacing-.*|\[[\d.].*\])$/,
+	ring: /^(?:\d+|inset|offset-.*|\[[\d.].*\])$/,
+	outline: /^(?:\d+|none|hidden|solid|dashed|dotted|double|offset-.*|\[[\d.].*\])$/,
+	decoration: /^(?:\d+|auto|from-font|solid|double|dotted|dashed|wavy|slice|clone)$/,
+	divide: /^(?:[xy](?:-\d+|-reverse)?|solid|dashed|dotted|double|none)$/,
+	stroke: /^(?:\d+|\[[\d.].*\])$/,
+	fill: /^$/,
+	accent: /^$/,
+	caret: /^$/
+};
+/** `text:paint` for a colour class on a prefix that doubles as one, else undefined */
+function paintFamily(base) {
+	const dash = base.indexOf("-");
+	if (dash === -1) return void 0;
+	const prefix = base.slice(0, dash);
+	const not = NOT_A_PAINT[prefix];
+	if (!not || not.test(base.slice(dash + 1))) return void 0;
+	return `${prefix}:paint`;
+}
+/** sides and modes that are part of a utility's NAME, not its value: `border-t`
+* is a different property from `border`, where `border-2` is the same one */
+var NAME_TAILS = /* @__PURE__ */ new Set([
+	"x",
+	"y",
+	"t",
+	"r",
+	"b",
+	"l",
+	"s",
+	"e",
+	"inset",
+	"reverse"
+]);
+/** a class minus its value: `px-4` → `px`, `underline-offset-2` →
+* `underline-offset`, `-mt-4` → `mt`, `border-t` → `border-t` */
+function headOf(base) {
+	const bare = base.startsWith("-") ? base.slice(1) : base;
+	if (/^flex-(?:no)?wrap/.test(bare)) return "flex-wrap";
+	const bracket = bare.endsWith("]") ? bare.lastIndexOf("-[") : -1;
+	const at = bracket !== -1 ? bracket : bare.lastIndexOf("-");
+	if (at <= 0) return bare;
+	return NAME_TAILS.has(bare.slice(at + 1)) ? bare : bare.slice(0, at);
+}
+/**
+* Do two bare classes set the same property, for the purpose of LAYERING one
+* class string over another?
+*
+* Wider than `sameProperty`, which answers from the style catalog and so has
+* no answer for what the catalog does not list — side spacing (`px-4`), rings,
+* outlines, token colours on `text-`. There that is harmless: a class it
+* cannot place is simply added. Here a missed conflict leaves `px-4 px-3` on
+* one element, and which of the two wins is decided by stylesheet order.
+*
+* So: colours first (by prefix), then the catalog where it knows BOTH classes,
+* then the class's own name.
+*/
+function sameLayerProperty(a, b) {
+	if (a === b) return true;
+	const pa = paintFamily(a);
+	const pb = paintFamily(b);
+	if (pa || pb) return pa === pb;
+	const ka = propKey(a);
+	const kb = propKey(b);
+	if (ka !== void 0 && kb !== void 0) return ka === kb;
+	return headOf(a) === headOf(b);
+}
+/**
+* Layer class strings, later wins per property: `mergeClassLayers('h-9 px-4
+* bg-primary', 'h-8 px-3')` is `bg-primary h-8 px-3`.
+*
+* A base class an override replaces is REMOVED, not left beside it. Two
+* Tailwind classes on one property do not resolve by their order in the class
+* attribute but by their order in the stylesheet — so `h-9 h-8` is whichever
+* Tailwind happened to emit last, which is not a thing to build variants on.
+*
+* Conflicts are per variant, like everywhere else here: `hover:bg-accent` does
+* not evict `bg-primary`. NOT the published runtime's heuristic
+* (shared/interactionClasses.js), which cannot tell `rounded-lg` from
+* `rounded-md` or `text-sm` from `text-xs` — exactly what a size axis changes.
+*/
+function mergeClassLayers(base, ...layers) {
+	let tokens = base.split(/\s+/).filter(Boolean);
+	for (const layer of layers) for (const cls of (layer ?? "").split(/\s+/).filter(Boolean)) {
+		const { variant, base: bare } = splitVariant(cls);
+		tokens = tokens.filter((t) => {
+			const s = splitVariant(t);
+			return !(s.variant === variant && sameLayerProperty(s.base, bare));
+		});
+		tokens.push(cls);
+	}
+	return tokens.join(" ");
+}
 /** families where an off-scale value really is expressible as `prefix-[value]`.
 * The old hint split ANY class at its last dash and offered the arbitrary form,
 * which produced invalid advice for keyword utilities — `origin-top-left` became
@@ -3827,6 +3771,241 @@ function applyClass(cls, tokens, opts = {}) {
 		if (prereq && !next.includes(prereq)) next.unshift(prereq);
 	}
 	return { tokens: next };
+}
+//#endregion
+//#region src/lib/variants.ts
+/**
+* Variants — how one component's instances differ in look.
+*
+* A component declares axes (`variant`, `size`); each master node may carry
+* class overrides per option (`node.variantClasses['size:sm']`); an instance
+* picks one option per axis (`node.variants` on its wrapper). What an element
+* wears is its base classes with the picked options layered on, in axis order.
+*
+* Which options an instance picks is resolved with the rest of its chain, in
+* `shared/instances.js`. This module is the other half — turning picks into a
+* class string — and lives in TS because it needs the full style catalog. It
+* is bundled into the MCP runtime, which is also where the exporter gets it.
+*/
+/** the key an option's overrides are stored under on a master node */
+var variantKey = (axis, option) => `${axis}:${option}`;
+/** the name rule for an axis or an option: what reads well in a key and a select */
+var VARIANT_NAME_RE = /^[a-z][a-z0-9-]*$/;
+/** the option `picks` selects on each of a component's axes, defaults filled in */
+function pickedKeys(def, picks) {
+	return (def?.variants ?? []).map((axis) => variantKey(axis.name, axis.options.includes(picks[axis.name] ?? "") ? picks[axis.name] : axis.default));
+}
+/**
+* The classes a master node wears for an instance with these picks. A node
+* with no overrides — most of them — costs nothing.
+*/
+function effectiveClasses(node, def, picks) {
+	const base = node.classes ?? "";
+	const overrides = node.variantClasses;
+	if (!overrides || !def?.variants?.length) return base;
+	return mergeClassLayers(base, ...pickedKeys(def, picks).map((key) => overrides[key]));
+}
+//#endregion
+//#region src/lib/componentOps.ts
+var indentOf = (line) => line.match(/^\t*/)[0];
+/**
+* The ONE writer of the optional keys, so their JSON key order is the same
+* everywhere. `computeMerge` compares whole-object `JSON.stringify`, which is
+* key-order sensitive: a def built `{id,name,category,root}` and one built
+* `{id,name,root,category}` are equal in every way that matters and would
+* still read as a conflict. Deleting them all and re-adding them puts them
+* last, in one order, always.
+*
+* `meta` is the WHOLE set: a key left out is a key removed. Pass what the def
+* already has for the ones that are not changing.
+*/
+function setComponentMeta(def, meta) {
+	delete def.category;
+	delete def.source;
+	delete def.variants;
+	const category = meta.category?.trim();
+	if (category) def.category = category;
+	if (meta.source) def.source = meta.source;
+	if (meta.variants?.length) def.variants = meta.variants.map((axis) => ({
+		name: axis.name,
+		options: [...axis.options],
+		default: axis.default
+	}));
+}
+/** `:Card:` leaf instances can sit unexpanded in stored code (nothing expands
+* them until someone types in that page). Detaching one means materializing
+* the master's structure first, so there are nodes to bake onto. Only THIS
+* component's leaves are touched. */
+function expandLeafInstances(page, def) {
+	const lineMap = [];
+	const next = expandComponentInstances(page.code, [def], lineMap);
+	if (next === page.code) return;
+	const map = /* @__PURE__ */ new Map();
+	lineMap.forEach((out, input) => map.set(out, input));
+	const before = page.code;
+	page.code = next;
+	page.elements = reconcile(before, next, page.elements, map);
+}
+/**
+* Pushes a master's current structure out to every instance of it, on every
+* page. Returns how many instance blocks were rewritten.
+*
+* Every CLOSED instance is rewritten unconditionally — deliberately NOT gated
+* on a structure signature the way `syncStructure` is, because that signature
+* is type-only: an arg or link change leaves it identical and would never
+* reach the instances.
+*/
+function pushMasterStructure(project, def) {
+	if (!project.components.some((c) => c.id === def.id)) return 0;
+	let rewritten = 0;
+	for (const page of project.pages) {
+		expandLeafInstances(page, def);
+		const ids = [];
+		walkNodes(page.elements, (n) => {
+			if (n.type === def.name) ids.push(n.id);
+		});
+		const ordered = ids.map((id) => findNode(page.elements, id)).filter((n) => !!n && n.line !== void 0).sort((a, b) => b.line - a.line).map((n) => n.id);
+		for (const id of ordered) {
+			const node = findNode(page.elements, id);
+			if (node && isClosedBlock(page, node, def.name) && rewriteInstanceBlock(page, node, def)) rewritten++;
+		}
+		const marked = applyNodeMarkers(page.code, page.elements);
+		if (marked !== page.code) page.code = marked;
+	}
+	return rewritten;
+}
+/**
+* Regenerates one instance's inner code lines from its master.
+*
+* Lifted out of `useComponents` so the master-first operations above can reuse
+* it; it closed over nothing.
+*/
+function rewriteInstanceBlock(page, node, def) {
+	if (node.line === void 0) return false;
+	const lines = page.code.split("\n");
+	const start = node.line;
+	const end = node.endLine ?? node.line;
+	if (end <= start) return false;
+	const indent = indentOf(lines[start]);
+	const inner = def.root.children.flatMap((c) => serializeNode(c, `${indent}\t`));
+	const oldInnerLength = end - start - 1;
+	const rest = [
+		...lines.slice(0, start + 1),
+		...inner,
+		...lines.slice(end)
+	];
+	const align = alignInstanceLines(lines.slice(start + 1, end), inner);
+	const map = /* @__PURE__ */ new Map();
+	for (let i = 0; i < rest.length; i++) if (i <= start) map.set(i, i);
+	else if (i < start + 1 + inner.length) {
+		const oldInner = align.get(i - (start + 1));
+		if (oldInner !== void 0) map.set(i, start + 1 + oldInner);
+	} else map.set(i, i - inner.length + oldInnerLength);
+	const before = page.code;
+	page.code = rest.join("\n");
+	page.elements = reconcile(before, page.code, page.elements, map);
+	return true;
+}
+/** a block only counts once its close line exists — while an edit is mid-flight
+* the parser sees an unclosed block that swallows whatever follows, and syncing
+* from that would corrupt the master */
+function isClosedBlock(page, node, name) {
+	if (node.line === void 0 || node.endLine === void 0 || node.endLine <= node.line) return false;
+	return page.code.split("\n")[node.endLine]?.trim() === `${name}:`;
+}
+//#endregion
+//#region src/lib/shared/slug.js
+/**
+* normalizes a string into a url slug segment
+* @param {string} value
+* @returns {string}
+*/
+function slugify(value) {
+	return value.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+//#endregion
+//#region src/lib/document.ts
+/**
+* Canonical page document: a protected @setup block, then the :body
+* wrap — body: is always the last line. Only the setup values and the
+* body content are editable; an empty body keeps one indented line so
+* there is always somewhere to type.
+*/
+function buildDocument(meta, bodyLines, bodyArg, bodyDecor) {
+	const body = bodyLines.some((l) => l.trim()) ? bodyLines : ["	"];
+	return [
+		"@setup",
+		`\tname: ${meta.name}`,
+		`\tslug: ${meta.slug}`,
+		`\tstatus: ${meta.status}`,
+		`\tlocale: ${meta.locale}`,
+		(bodyArg ? `:body[${bodyArg}]` : ":body") + (bodyDecor ?? ""),
+		...body,
+		"body:"
+	].join("\n");
+}
+/** the collection bound to the page body, from :body[post] (markers after
+* the arg are tolerated: ':body[post](+)') */
+function extractBodyArg(code) {
+	return code.match(/^:body\[([a-z0-9-]+)\](?:[({].*)?$/m)?.[1];
+}
+/** the style/interaction markers on the :body line — possibly mid-typing
+* ('(', '(+'…) — round-tripped through rebuilds so typing '(' on body (which
+* opens the Style panel) and the synced '(+)'/'{+}' markers survive the
+* scaffold enforcement instead of respawning a fresh :body */
+function extractBodyDecor(code) {
+	return code.split("\n").map((l) => l.trim()).find(isBodyOpenLine)?.match(/^:body(?:\[[a-z0-9-]*\]?)?((?:\(\+?\)?)?(?:\{\+?\}?)?)$/)?.[1] || void 0;
+}
+/** rebuilds a document with new @setup values but the same body */
+function replaceSetup(code, meta) {
+	return buildDocument(meta, extractBodyLines(code), extractBodyArg(code), extractBodyDecor(code));
+}
+/** The editable lines between :body and body: */
+function extractBodyLines(code) {
+	const lines = code.split("\n");
+	const trimmed = lines.map((l) => l.trim());
+	const start = trimmed.findIndex(isBodyOpenLine);
+	const end = trimmed.lastIndexOf("body:");
+	if (start !== -1 && end > start) return lines.slice(start + 1, end);
+	return lines.filter((l) => {
+		const t = l.trim();
+		return t && !t.startsWith("@") && !/^(name|slug|status|locale):/.test(t) && !isBodyOpenLine(t) && t !== "body:";
+	});
+}
+/**
+* Rebuilds the canonical document from whatever the user typed:
+* the scaffold always comes back, setup values and body content
+* survive. Returns the enforced code plus the parsed meta.
+*/
+/** reads the @setup values out of a document */
+function parseSetup(value) {
+	return {
+		name: value.match(/^\s*name: ?(.*)$/m)?.[1] ?? "",
+		slug: value.match(/^\s*slug: ?(.*)$/m)?.[1] ?? "",
+		status: value.match(/^\s*status: ?(.*)$/m)?.[1] || "published",
+		locale: value.match(/^\s*locale: ?(.*)$/m)?.[1] || "en"
+	};
+}
+/**
+* Rewrites the locale value on the @setup line only — never body lines
+* (a body line could trim to `locale: x`). Zero line-count change.
+*/
+function setSetupLocale(code, locale) {
+	const lines = code.split("\n");
+	const bodyOpen = lines.findIndex((l) => isBodyOpenLine(l.trim()));
+	const end = bodyOpen === -1 ? lines.length : bodyOpen;
+	for (let i = 1; i < end; i++) if (/^\s*locale:/.test(lines[i])) {
+		lines[i] = lines[i].replace(/^(\s*locale: ?).*$/, `$1${locale}`);
+		return lines.join("\n");
+	}
+	return code;
+}
+function enforceDocument(value) {
+	const meta = parseSetup(value);
+	return {
+		code: buildDocument(meta, normalizeSyntax(extractBodyLines(value).join("\n")).split("\n").map((l) => l.trim() && !l.startsWith("	") ? "	" + l : l), extractBodyArg(value), extractBodyDecor(value)),
+		meta
+	};
 }
 //#endregion
 //#region src/lib/shared/urls.js
@@ -4139,6 +4318,199 @@ function lucideNameOf(markup) {
 	return icon?.startsWith("lucide:") ? icon.slice(7) : void 0;
 }
 lucideSvg("circle", "<circle cx=\"12\" cy=\"12\" r=\"10\"/>");
+//#endregion
+//#region src/lib/variantOps.ts
+var fail$2 = (error) => ({
+	ok: false,
+	error
+});
+var OK = { ok: true };
+function nameError(kind, name) {
+	if (VARIANT_NAME_RE.test(name)) return null;
+	return `An ${kind} name is lowercase letters, digits and dashes, starting with a letter`;
+}
+/** every instance wrapper of `def`, on every page and inside every other master */
+function instancesOf(project, def) {
+	const out = [];
+	const collect = (nodes) => walkNodes(nodes, (n) => {
+		if (n.type === def.name) out.push(n);
+	});
+	for (const page of project.pages) collect(page.elements);
+	for (const other of project.components) if (other !== def) collect(other.root.children);
+	return out;
+}
+/**
+* Apply new axes to the project: the def, the master's overrides, and every
+* instance's picks.
+*
+* An instance keeps the look it HAD. Its old pick is read against the old
+* axes (an axis it never picked on meant the old default), carried through
+* the renames, and stored only where it differs from the new default — so
+* changing which option is the default never restyles an existing instance.
+*/
+function rewrite(project, def, next, renames = {}) {
+	const before = def.variants ?? [];
+	const oldAxisName = (axis) => renames.axes?.[axis] ?? axis;
+	const oldOptionName = (axis, option) => renames.options?.[axis]?.[option] ?? option;
+	setComponentMeta(def, {
+		category: def.category,
+		source: def.source,
+		variants: next
+	});
+	walkNodes([def.root], (node) => {
+		const old = node.variantClasses;
+		if (!old) return;
+		const kept = {};
+		for (const axis of next) for (const option of axis.options) {
+			const classes = old[variantKey(oldAxisName(axis.name), oldOptionName(axis.name, option))]?.trim();
+			if (classes) kept[variantKey(axis.name, option)] = classes;
+		}
+		if (Object.keys(kept).length) node.variantClasses = kept;
+		else delete node.variantClasses;
+	});
+	for (const instance of instancesOf(project, def)) {
+		const old = instance.variants ?? {};
+		const kept = {};
+		for (const axis of next) {
+			const was = before.find((a) => a.name === oldAxisName(axis.name));
+			const wore = was ? old[was.name] ?? was.default : void 0;
+			const now = axis.options.find((option) => oldOptionName(axis.name, option) === wore);
+			if (now !== void 0 && now !== axis.default) kept[axis.name] = now;
+		}
+		if (Object.keys(kept).length) instance.variants = kept;
+		else delete instance.variants;
+	}
+}
+var axesOf = (def) => (def.variants ?? []).map((a) => ({
+	name: a.name,
+	options: [...a.options],
+	default: a.default
+}));
+function addVariantAxis(project, def, name, options = ["default"]) {
+	const axes = axesOf(def);
+	const bad = nameError("axis", name) ?? options.map((o) => nameError("option", o)).find(Boolean);
+	if (bad) return fail$2(bad);
+	if (axes.some((a) => a.name === name)) return fail$2(`This component already has a "${name}" axis`);
+	if (!options.length) return fail$2("An axis needs at least one option");
+	if (new Set(options).size !== options.length) return fail$2("Option names must be unique");
+	rewrite(project, def, [...axes, {
+		name,
+		options: [...options],
+		default: options[0]
+	}]);
+	return OK;
+}
+function renameVariantAxis(project, def, from, to) {
+	const axes = axesOf(def);
+	const axis = axes.find((a) => a.name === from);
+	if (!axis) return fail$2(`No "${from}" axis`);
+	if (from === to) return OK;
+	const bad = nameError("axis", to);
+	if (bad) return fail$2(bad);
+	if (axes.some((a) => a.name === to)) return fail$2(`This component already has a "${to}" axis`);
+	axis.name = to;
+	rewrite(project, def, axes, { axes: { [to]: from } });
+	return OK;
+}
+function removeVariantAxis(project, def, name) {
+	const axes = axesOf(def);
+	if (!axes.some((a) => a.name === name)) return fail$2(`No "${name}" axis`);
+	rewrite(project, def, axes.filter((a) => a.name !== name));
+	return OK;
+}
+function addVariantOption(project, def, axisName, option) {
+	const axes = axesOf(def);
+	const axis = axes.find((a) => a.name === axisName);
+	if (!axis) return fail$2(`No "${axisName}" axis`);
+	const bad = nameError("option", option);
+	if (bad) return fail$2(bad);
+	if (axis.options.includes(option)) return fail$2(`"${axisName}" already has a "${option}" option`);
+	axis.options.push(option);
+	rewrite(project, def, axes);
+	return OK;
+}
+function renameVariantOption(project, def, axisName, from, to) {
+	const axes = axesOf(def);
+	const axis = axes.find((a) => a.name === axisName);
+	if (!axis || !axis.options.includes(from)) return fail$2(`No "${from}" option on "${axisName}"`);
+	if (from === to) return OK;
+	const bad = nameError("option", to);
+	if (bad) return fail$2(bad);
+	if (axis.options.includes(to)) return fail$2(`"${axisName}" already has a "${to}" option`);
+	axis.options = axis.options.map((o) => o === from ? to : o);
+	if (axis.default === from) axis.default = to;
+	rewrite(project, def, axes, { options: { [axisName]: { [to]: from } } });
+	return OK;
+}
+/** Removing an option moves the instances wearing it to the axis default. */
+function removeVariantOption(project, def, axisName, option) {
+	const axes = axesOf(def);
+	const axis = axes.find((a) => a.name === axisName);
+	if (!axis || !axis.options.includes(option)) return fail$2(`No "${option}" option on "${axisName}"`);
+	if (axis.options.length === 1) return fail$2("An axis needs at least one option — remove the axis instead");
+	axis.options = axis.options.filter((o) => o !== option);
+	if (axis.default === option) axis.default = axis.options[0];
+	rewrite(project, def, axes);
+	return OK;
+}
+function setVariantDefault(project, def, axisName, option) {
+	const axes = axesOf(def);
+	const axis = axes.find((a) => a.name === axisName);
+	if (!axis || !axis.options.includes(option)) return fail$2(`No "${option}" option on "${axisName}"`);
+	axis.default = option;
+	rewrite(project, def, axes);
+	return OK;
+}
+/** Replace a component's axes wholesale (the agent path, and the catalog). Names
+*  that survive keep their overrides and picks; the rest are dropped. */
+function setVariantAxes(project, def, axes) {
+	const seen = /* @__PURE__ */ new Set();
+	for (const axis of axes) {
+		const bad = nameError("axis", axis.name) ?? axis.options.map((o) => nameError("option", o)).find(Boolean);
+		if (bad) return fail$2(bad);
+		if (seen.has(axis.name)) return fail$2(`Two axes are named "${axis.name}"`);
+		seen.add(axis.name);
+		if (!axis.options.length) return fail$2(`"${axis.name}" needs at least one option`);
+		if (new Set(axis.options).size !== axis.options.length) return fail$2(`"${axis.name}" has two options with the same name`);
+		if (!axis.options.includes(axis.default)) return fail$2(`"${axis.name}": the default "${axis.default}" is not one of its options`);
+	}
+	rewrite(project, def, axes);
+	return OK;
+}
+/**
+* An instance's pick on one axis. Stored only where it differs from the
+* default, and re-seated in axis order — see the header.
+*/
+function setInstancePick(def, wrapper, axisName, option) {
+	const axis = def.variants?.find((a) => a.name === axisName);
+	if (!axis) return fail$2(`"${def.name}" has no "${axisName}" axis`);
+	if (option !== null && !axis.options.includes(option)) return fail$2(`"${axisName}" has no "${option}" option — it has ${axis.options.join(", ")}`);
+	const picks = { ...wrapper.variants ?? {} };
+	if (option === null || option === axis.default) delete picks[axisName];
+	else picks[axisName] = option;
+	const kept = {};
+	for (const a of def.variants ?? []) if (picks[a.name] !== void 0) kept[a.name] = picks[a.name];
+	if (Object.keys(kept).length) wrapper.variants = kept;
+	else delete wrapper.variants;
+	return OK;
+}
+/**
+* The override classes of one option on a master node. Empty removes the key,
+* and the record itself when it was the last one.
+*/
+function setVariantClasses(def, node, key, classes) {
+	const next = {
+		...node.variantClasses ?? {},
+		[key]: classes.trim()
+	};
+	const kept = {};
+	for (const axis of def.variants ?? []) for (const option of axis.options) {
+		const k = variantKey(axis.name, option);
+		if (next[k]) kept[k] = next[k];
+	}
+	if (Object.keys(kept).length) node.variantClasses = kept;
+	else delete node.variantClasses;
+}
 //#endregion
 //#region src/lib/shared/attributes.js
 /** attribute names allowed verbatim */
@@ -5169,4 +5541,4 @@ function createProject(name) {
 	};
 }
 //#endregion
-export { APPEAR_MODES, BUILTIN_LIST_SOURCES, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MOTION_PROPS, NODE_STATE_KEYS, REF_SLOT, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, SCROLL_LERP_MAX, SCROLL_LERP_MIN, SLIDER_DEFAULTS, STYLE_SECTIONS, TOKEN_NAME_RE, TRANSITION_DEFAULTS, TRANSITION_PRESET_IDS, adoptStructure, alignInstanceLines, applyClass, buildDocument, buildInstanceMap, cloneForMaster, compileAnimation, countLocaleSeo, createNode, createPage, createProject, dataMarkerOf, deepClone, defaultBreakpoints, defaultSettings, elementBlockLines, enforceDocument, expandComponentInstances, extractBodyArg, extractBodyDecor, extractBodyLines, findNode, findParent, fontError, fontFormatForUrl, hasAncestorOfType, hasNodeState, hasOpenArgBracket, hoistBlockRef, inheritedInstanceValue, interactionGroupKey, interactionMarkerOf, interactionStateKey, isAllowedAttribute, isBodyOpenLine, isClosedBlock, isComponentType, isEmittableToken, isKnownElement, isLeafElement, isNodeHidden, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isValidClass, isValidToken, lexLine, lucideNameOf, lucideSvg, matchClass, normalizeComponentName, normalizeSyntax, parseSetup, parseSyntax, purgeLocaleSeo, pushMasterStructure, reconcile, refOf, replaceSetup, resolveInstanceValue, resolveSliderConfig, rewriteInstanceBlock, sameProperty, sanitizeAttributes, sanitizeInlineSvg, sanitizeRich, serializeNode, setNodeHidden, setSetupLocale, setStyleTokens, slugify, stripExtractedInstanceState, stripNodeState, styleMarkerOf, tokenError, typeOptionsFor, validateAnimation, validateBinding, validateDocument, validateMotionSettings, validateSliderConfig, walkNodes, withDataMarker, withInteractionMarker, withStyleMarker, withoutRef };
+export { APPEAR_MODES, BUILTIN_LIST_SOURCES, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MOTION_PROPS, NODE_STATE_KEYS, REF_SLOT, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, SCROLL_LERP_MAX, SCROLL_LERP_MIN, SLIDER_DEFAULTS, STYLE_SECTIONS, TOKEN_NAME_RE, TRANSITION_DEFAULTS, TRANSITION_PRESET_IDS, VARIANT_NAME_RE, addVariantAxis, addVariantOption, adoptStructure, alignInstanceLines, applyClass, buildDocument, buildInstanceMap, cloneForMaster, compileAnimation, countLocaleSeo, createNode, createPage, createProject, dataMarkerOf, deepClone, defaultBreakpoints, defaultSettings, effectiveClasses, elementBlockLines, enforceDocument, expandComponentInstances, extractBodyArg, extractBodyDecor, extractBodyLines, findNode, findParent, fontError, fontFormatForUrl, hasAncestorOfType, hasNodeState, hasOpenArgBracket, hoistBlockRef, inheritedInstanceValue, interactionGroupKey, interactionMarkerOf, interactionStateKey, isAllowedAttribute, isBodyOpenLine, isClosedBlock, isComponentType, isEmittableToken, isKnownElement, isLeafElement, isNodeHidden, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isValidClass, isValidToken, lexLine, lucideNameOf, lucideSvg, matchClass, mergeClassLayers, normalizeComponentName, normalizeSyntax, parseSetup, parseSyntax, pickedKeys, purgeLocaleSeo, pushMasterStructure, reconcile, refOf, removeVariantAxis, removeVariantOption, renameVariantAxis, renameVariantOption, replaceSetup, resolveInstanceValue, resolvePicks, resolveSliderConfig, rewriteInstanceBlock, sameLayerProperty, sameProperty, sanitizeAttributes, sanitizeInlineSvg, sanitizeRich, serializeNode, setInstancePick, setNodeHidden, setSetupLocale, setStyleTokens, setVariantAxes, setVariantClasses, setVariantDefault, slugify, stripExtractedInstanceState, stripNodeState, styleMarkerOf, tokenError, typeOptionsFor, validateAnimation, validateBinding, validateDocument, validateMotionSettings, validateSliderConfig, variantKey, walkNodes, withDataMarker, withInteractionMarker, withStyleMarker, withoutRef };

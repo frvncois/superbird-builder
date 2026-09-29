@@ -66,11 +66,33 @@ export function buildInstanceMap(roots, components) {
       }
       // the instance block itself maps to the master root. Its subtree is
       // paired, not walked: whatever sits inside belongs to this instance.
-      pair(node, def.root, { def, instanceId: node.id, picks: {} })
+      pair(node, def.root, { def, instanceId: node.id, picks: resolvePicks(def, node, []) })
     }
   }
   visit(roots)
   return map
+}
+
+/**
+ * The option an instance picks on each of its component's axes: its wrapper's
+ * own pick, else one from the components it is nested in, else the axis
+ * default. A pick naming an option that no longer exists falls through —
+ * a stale name must never leave an instance wearing nothing.
+ */
+export function resolvePicks(def, wrapper, mirrors) {
+  const picks = {}
+  for (const axis of def.variants ?? []) {
+    let pick
+    for (const source of [wrapper, ...(mirrors ?? [])]) {
+      const value = source?.variants?.[axis.name]
+      if (value !== undefined && axis.options.includes(value)) {
+        pick = value
+        break
+      }
+    }
+    picks[axis.name] = pick ?? axis.default
+  }
+  return picks
 }
 
 /**

@@ -16,6 +16,7 @@ interface NodeProps {
   src?: string
   svg?: string
   hidden?: boolean
+  variants?: Record<string, string>
   link?: string
   locales?: ElementNode['locales']
   interactions?: InteractionBinding[]
@@ -40,6 +41,7 @@ function captureProps(n: ElementNode): NodeProps {
     src: n.src,
     svg: n.svg,
     hidden: n.hidden,
+    variants: n.variants ? { ...n.variants } : undefined,
     link: n.link,
     locales: n.locales ? deepClone(n.locales) : undefined,
     interactions: n.interactions ? deepClone(n.interactions) : undefined,
@@ -334,6 +336,7 @@ export function useElement() {
         if (p.src) n.src = p.src
         if (p.svg) n.svg = p.svg
         if (p.hidden !== undefined) n.hidden = p.hidden
+        if (p.variants) n.variants = { ...p.variants }
         if (p.link) n.link = p.link
         if (p.locales) n.locales = deepClone(p.locales)
         if (p.interactions) {

@@ -117,9 +117,27 @@ export { SAFE_HREF, SAFE_SRC } from './shared/urls.js'
 // and the tools import it on demand (see loadIcons in mcp/tools.mjs)
 export { sanitizeInlineSvg, lucideSvg, lucideNameOf } from './shared/svg.js'
 
+// variants: picks → classes. The exporter takes `effectiveClasses` from this
+// bundle too — it needs the full style catalog, which is TypeScript
+export { effectiveClasses, pickedKeys, variantKey, VARIANT_NAME_RE } from './variants'
+export {
+  addVariantAxis,
+  renameVariantAxis,
+  removeVariantAxis,
+  addVariantOption,
+  renameVariantOption,
+  removeVariantOption,
+  setVariantDefault,
+  setVariantAxes,
+  setInstancePick,
+  setVariantClasses,
+} from './variantOps'
+export { mergeClassLayers, sameLayerProperty } from './styles'
+
 // component instances — the one pairing walk, and the chain it resolves
 export {
   buildInstanceMap,
+  resolvePicks,
   resolveInstanceValue,
   inheritedInstanceValue,
   isNodeHidden,

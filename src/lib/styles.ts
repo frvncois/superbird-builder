@@ -706,6 +706,108 @@ export function sameProperty(a: string, b: string): boolean {
   return ka !== undefined && ka === propKey(b)
 }
 
+// --- layering (variants) ---
+
+/**
+ * What `prefix-…` means when it is NOT a colour, per prefix that doubles as
+ * one. Defined by the non-colours because those are a closed set, while a
+ * colour is a palette name, a project token, a keyword or an arbitrary value —
+ * and a project's tokens are not known to every caller of this module.
+ */
+const NOT_A_PAINT: Record<string, RegExp> = {
+  text: /^(?:xs|sm|base|lg|xl|\dxl|left|center|right|justify|start|end|wrap|nowrap|balance|pretty|ellipsis|clip|\[[\d.].*\])$/,
+  border: /^(?:\d+|[xytrblse](?:-\d+)?|solid|dashed|dotted|double|hidden|none|collapse|separate|spacing-.*|\[[\d.].*\])$/,
+  ring: /^(?:\d+|inset|offset-.*|\[[\d.].*\])$/,
+  outline: /^(?:\d+|none|hidden|solid|dashed|dotted|double|offset-.*|\[[\d.].*\])$/,
+  decoration: /^(?:\d+|auto|from-font|solid|double|dotted|dashed|wavy|slice|clone)$/,
+  divide: /^(?:[xy](?:-\d+|-reverse)?|solid|dashed|dotted|double|none)$/,
+  stroke: /^(?:\d+|\[[\d.].*\])$/,
+  fill: /^$/,
+  accent: /^$/,
+  caret: /^$/,
+}
+
+/** `text:paint` for a colour class on a prefix that doubles as one, else undefined */
+function paintFamily(base: string): string | undefined {
+  const dash = base.indexOf('-')
+  if (dash === -1) return undefined
+  const prefix = base.slice(0, dash)
+  const not = NOT_A_PAINT[prefix]
+  if (!not || not.test(base.slice(dash + 1))) return undefined
+  return `${prefix}:paint`
+}
+
+/** sides and modes that are part of a utility's NAME, not its value: `border-t`
+ * is a different property from `border`, where `border-2` is the same one */
+const NAME_TAILS = new Set(['x', 'y', 't', 'r', 'b', 'l', 's', 'e', 'inset', 'reverse'])
+
+/** a class minus its value: `px-4` → `px`, `underline-offset-2` →
+ * `underline-offset`, `-mt-4` → `mt`, `border-t` → `border-t` */
+function headOf(base: string): string {
+  const bare = base.startsWith('-') ? base.slice(1) : base
+  // `flex-wrap` shares a prefix with direction and grow, and none of its values
+  if (/^flex-(?:no)?wrap/.test(bare)) return 'flex-wrap'
+  const bracket = bare.endsWith(']') ? bare.lastIndexOf('-[') : -1
+  const at = bracket !== -1 ? bracket : bare.lastIndexOf('-')
+  if (at <= 0) return bare
+  return NAME_TAILS.has(bare.slice(at + 1)) ? bare : bare.slice(0, at)
+}
+
+/**
+ * Do two bare classes set the same property, for the purpose of LAYERING one
+ * class string over another?
+ *
+ * Wider than `sameProperty`, which answers from the style catalog and so has
+ * no answer for what the catalog does not list — side spacing (`px-4`), rings,
+ * outlines, token colours on `text-`. There that is harmless: a class it
+ * cannot place is simply added. Here a missed conflict leaves `px-4 px-3` on
+ * one element, and which of the two wins is decided by stylesheet order.
+ *
+ * So: colours first (by prefix), then the catalog where it knows BOTH classes,
+ * then the class's own name.
+ */
+export function sameLayerProperty(a: string, b: string): boolean {
+  if (a === b) return true
+  const pa = paintFamily(a)
+  const pb = paintFamily(b)
+  // `bg-` is not in the table: the catalog already groups it, arbitrary values
+  // included
+  if (pa || pb) return pa === pb
+  const ka = propKey(a)
+  const kb = propKey(b)
+  if (ka !== undefined && kb !== undefined) return ka === kb
+  return headOf(a) === headOf(b)
+}
+
+/**
+ * Layer class strings, later wins per property: `mergeClassLayers('h-9 px-4
+ * bg-primary', 'h-8 px-3')` is `bg-primary h-8 px-3`.
+ *
+ * A base class an override replaces is REMOVED, not left beside it. Two
+ * Tailwind classes on one property do not resolve by their order in the class
+ * attribute but by their order in the stylesheet — so `h-9 h-8` is whichever
+ * Tailwind happened to emit last, which is not a thing to build variants on.
+ *
+ * Conflicts are per variant, like everywhere else here: `hover:bg-accent` does
+ * not evict `bg-primary`. NOT the published runtime's heuristic
+ * (shared/interactionClasses.js), which cannot tell `rounded-lg` from
+ * `rounded-md` or `text-sm` from `text-xs` — exactly what a size axis changes.
+ */
+export function mergeClassLayers(base: string, ...layers: (string | undefined)[]): string {
+  let tokens = base.split(/\s+/).filter(Boolean)
+  for (const layer of layers) {
+    for (const cls of (layer ?? '').split(/\s+/).filter(Boolean)) {
+      const { variant, base: bare } = splitVariant(cls)
+      tokens = tokens.filter((t) => {
+        const s = splitVariant(t)
+        return !(s.variant === variant && sameLayerProperty(s.base, bare))
+      })
+      tokens.push(cls)
+    }
+  }
+  return tokens.join(' ')
+}
+
 /** families where an off-scale value really is expressible as `prefix-[value]`.
  * The old hint split ANY class at its last dash and offered the arbitrary form,
  * which produced invalid advice for keyword utilities — `origin-top-left` became

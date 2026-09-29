@@ -16,6 +16,7 @@ import { useComponentBoard, useComponentBoardSession } from '@/composables/useCo
 import type { BoardCard } from '@/composables/useComponentBoard'
 import { useElement } from '@/composables/useElement'
 import { useSettings } from '@/composables/useSettings'
+import { useVariants } from '@/composables/useVariants'
 import { useThemeTokens } from '@/composables/useThemeTokens'
 
 void import('@tailwindcss/browser')
@@ -25,6 +26,11 @@ useComponentBoardSession()
 const { groups, focusRequest, focusedKey } = useComponentBoard()
 const { selectElement } = useElement()
 const { settings } = useSettings()
+const { picksOnBoard, setPreviewPick } = useVariants()
+
+function onPick(card: BoardCard, axis: string, e: Event) {
+  setPreviewPick(card.def, axis, (e.target as HTMLSelectElement).value)
+}
 
 // cards are far smaller than page frames, so the board opens closer in
 const INITIAL_CAMERA = { x: 60, y: 60, zoom: 0.6 }
@@ -93,6 +99,31 @@ function onBoardClick() {
                 <span v-if="card.preview" class="rounded-full bg-input px-1.5 py-0.5 text-[9px]">
                   Library
                 </span>
+                <!-- which option of each axis the card is WEARING. View state,
+                     never on the component: changing it must not count as an
+                     edit, or browsing a library entry would add it. A native
+                     select: this label is counter-scaled inside the canvas's
+                     transformed world, where SelectUI's own dropdown would be
+                     positioned in the wrong space -->
+                <label
+                  v-for="axis in card.def.variants ?? []"
+                  :key="axis.name"
+                  class="flex items-center gap-1"
+                  @click.stop
+                  @pointerdown.stop
+                >
+                  <span>{{ axis.name }}</span>
+                  <select
+                    class="rounded-md bg-input px-1 py-0.5 text-[10px] text-foreground outline-none"
+                    :data-board-pick="`${card.def.name}:${axis.name}`"
+                    :value="picksOnBoard(card.def)[axis.name]"
+                    @change="onPick(card, axis.name, $event)"
+                  >
+                    <option v-for="option in axis.options" :key="option" :value="option">
+                      {{ option }}
+                    </option>
+                  </select>
+                </label>
               </div>
               <!-- `contain: layout` makes the card the containing block for
                    position:fixed, so a dialog's overlay covers its own card

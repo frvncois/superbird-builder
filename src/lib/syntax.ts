@@ -592,6 +592,10 @@ export const NODE_STATE_KEYS = [
   'src',
   'svg',
   'hidden',
+  // an instance's picks. NOT part of the `[+]` marker: they sit on a `:Name`
+  // wrapper line, which has never carried a marker and is matched bare in
+  // several places
+  'variants',
   'background',
   'htmlId',
   'attributes',

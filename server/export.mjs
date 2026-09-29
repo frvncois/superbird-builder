@@ -159,6 +159,51 @@ const entryValue = (entry, field, locale, def) => {
   )
 }
 
+// ---------- variants ----------
+
+// Turning an instance's variant picks into classes needs the full style
+// catalog, which is TypeScript — so it comes from the committed editor-logic
+// bundle, the same one the server seeds projects from. Loaded only for a
+// project that actually uses variants, and resolved for both layouts (the
+// repo, and the packed npm package).
+let effectiveClasses = null
+async function loadVariants() {
+  if (effectiveClasses) return
+  try {
+    const mod = await import(
+      new URL('../packages/guano/runtime/mcp-runtime.mjs', import.meta.url).href
+    ).catch(() => import(new URL('../runtime/mcp-runtime.mjs', import.meta.url).href))
+    effectiveClasses = mod.effectiveClasses
+  } catch {
+    // swallowed: reported below, with what to do about it
+  }
+  if (typeof effectiveClasses !== 'function') {
+    effectiveClasses = null
+    throw new Error(
+      'editor-logic bundle missing — this project uses component variants, which the ' +
+        'exporter resolves with it. Run `npm run build:mcp-runtime`.',
+    )
+  }
+}
+
+function usesVariants(project) {
+  let found = false
+  for (const component of project.components ?? []) {
+    walkNodes([component.root], (n) => {
+      if (n.variantClasses) found = true
+    })
+  }
+  return found
+}
+
+/** the classes a node wears: the master's inside an instance, with the
+ * instance's variant options layered on */
+function ownClasses(node, mapping) {
+  if (!mapping) return node.classes ?? ''
+  if (!mapping.master.variantClasses || !effectiveClasses) return mapping.master.classes ?? ''
+  return effectiveClasses(mapping.master, mapping.def, mapping.picks)
+}
+
 // ---------- component master pairing ----------
 
 // the SAME walk the editor's masterMap runs (shared/instances.js) — it used to
@@ -261,6 +306,8 @@ function collectCandidates(project) {
   }
   const scanNode = (node) => {
     add(node.classes)
+    // every option's overrides, whether or not an instance picks it today
+    for (const classes of Object.values(node.variantClasses ?? {})) add(classes)
     // a slider's track/slide/chrome classes are emitted by the renderer, not
     // authored — without this they never reach the compiled stylesheet
     if (node.type === 'slider') add(sliderCandidateClasses(node.slider, project.breakpoints))
@@ -301,9 +348,7 @@ async function buildCss(candidates, settings) {
 
 function classFor(node, ctx) {
   const mapping = ctx.mm.get(node.id)
-  const own = ((mapping ? mapping.master.classes : node.classes) ?? '')
-    .split(/\s+/)
-    .filter(Boolean)
+  const own = ownClasses(node, mapping).split(/\s+/).filter(Boolean)
   const bindings = mapping
     ? scopedTargets(mapping.root, mapping.master.id)
     : (ctx.plainTargets.get(node.id) ?? [])
@@ -667,7 +712,9 @@ function renderNode(node, ctx) {
   if (/^[A-Z]/.test(node.type)) {
     const master = ctx.mm.get(node.id)?.master ?? node
     const bare =
-      !master.classes?.trim() && !master.background && !(master.interactions?.length)
+      !ownClasses(node, ctx.mm.get(node.id)).trim() &&
+      !master.background &&
+      !(master.interactions?.length)
     if (bare) return node.children.map((child) => renderNode(child, ctx)).join('')
   }
 
@@ -1165,6 +1212,7 @@ function enumerateRoutes(project) {
 // ---------- top level ----------
 
 export async function exportSite(project, outDir) {
+  if (usesVariants(project)) await loadVariants()
   const media = await extractMedia(project)
   const css = await buildCss(collectCandidates(project), project.settings)
   const runtime = await readFile(RUNTIME)

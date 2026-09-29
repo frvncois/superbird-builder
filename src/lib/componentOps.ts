@@ -1,4 +1,4 @@
-import type { ComponentDef, ElementNode, Page, Project } from '@/types/editor'
+import type { ComponentDef, ElementNode, Page, Project, VariantAxis } from '@/types/editor'
 import { applyNodeMarkers, reconcile, refOf } from './syntax'
 import {
   alignInstanceLines,
@@ -11,6 +11,7 @@ import {
 import { createNode, isLeafElement, seedChildFor } from './elements'
 import { deepClone, findNode, findParent, walkNodes } from './tree'
 import { buildInstanceMap } from './instances'
+import { effectiveClasses } from './variants'
 
 /**
  * Whole-project operations on components — rename, duplicate, categorize,
@@ -34,22 +35,34 @@ const openToken = (name: string) => new RegExp(`^(\\s*:)${name}(?![a-zA-Z0-9-])`
 const indentOf = (line: string) => line.match(/^\t*/)![0]
 
 /**
- * The ONE writer of the two optional keys, so their JSON key order is the same
+ * The ONE writer of the optional keys, so their JSON key order is the same
  * everywhere. `computeMerge` compares whole-object `JSON.stringify`, which is
  * key-order sensitive: a def built `{id,name,category,root}` and one built
  * `{id,name,root,category}` are equal in every way that matters and would
- * still read as a conflict. Deleting both and re-adding them puts them last,
- * always.
+ * still read as a conflict. Deleting them all and re-adding them puts them
+ * last, in one order, always.
+ *
+ * `meta` is the WHOLE set: a key left out is a key removed. Pass what the def
+ * already has for the ones that are not changing.
  */
 export function setComponentMeta(
   def: ComponentDef,
-  meta: { category?: string; source?: string },
+  meta: { category?: string; source?: string; variants?: VariantAxis[] },
 ): void {
   delete def.category
   delete def.source
+  delete def.variants
   const category = meta.category?.trim()
   if (category) def.category = category
   if (meta.source) def.source = meta.source
+  if (meta.variants?.length) {
+    // rebuilt key by key: an axis object's own key order is part of the signature
+    def.variants = meta.variants.map((axis) => ({
+      name: axis.name,
+      options: [...axis.options],
+      default: axis.default,
+    }))
+  }
 }
 
 export interface ComponentUsage {
@@ -143,7 +156,7 @@ export function duplicateComponent(project: Project, id: string): ComponentDef |
   const copy: ComponentDef = { id: crypto.randomUUID(), name, root: cloned }
   // the category carries over; `source` deliberately does not — a copy made to
   // be edited is no longer the library entry it came from
-  setComponentMeta(copy, { category: def.category })
+  setComponentMeta(copy, { category: def.category, variants: def.variants })
   project.components.push(copy)
   return copy
 }
@@ -151,7 +164,7 @@ export function duplicateComponent(project: Project, id: string): ComponentDef |
 export function setComponentCategory(project: Project, id: string, category: string): boolean {
   const def = project.components.find((c) => c.id === id)
   if (!def) return false
-  setComponentMeta(def, { category, source: def.source })
+  setComponentMeta(def, { category, source: def.source, variants: def.variants })
   return true
 }
 
@@ -160,6 +173,9 @@ export function setComponentCategory(project: Project, id: string, category: str
 interface Pair {
   node: ElementNode
   master: ElementNode
+  /** what the node WEARS: the master's classes with this instance's variant
+   * options layered on */
+  classes: string
 }
 
 /**
@@ -174,7 +190,11 @@ function pairWithMaster(instance: ElementNode, def: ComponentDef) {
   walkNodes([instance], (node) => {
     const mapping = map.get(node.id)
     if (!mapping) return
-    pairs.push({ node, master: mapping.master })
+    pairs.push({
+      node,
+      master: mapping.master,
+      classes: effectiveClasses(mapping.master, mapping.def, mapping.picks),
+    })
     masterToInstance.set(mapping.master.id, node.id)
   })
   return { pairs, masterToInstance }
@@ -184,8 +204,11 @@ function pairWithMaster(instance: ElementNode, def: ComponentDef) {
 function bakeMasterState(pairs: Pair[], masterToInstance: Map<string, string>): void {
   const retarget = (targetId: string | null) =>
     targetId ? (masterToInstance.get(targetId) ?? targetId) : null
-  for (const { node, master } of pairs) {
-    if (master.classes) node.classes = master.classes
+  for (const { node, master, classes } of pairs) {
+    // the look this instance HAD, variants resolved: a detached element has no
+    // component left to pick an option on
+    if (classes) node.classes = classes
+    delete node.variants
     if (master.attributes) node.attributes = deepClone(master.attributes)
     // fresh binding ids: the master's bindings keep running on the instances
     // that are still attached, and two bindings sharing an id would key the

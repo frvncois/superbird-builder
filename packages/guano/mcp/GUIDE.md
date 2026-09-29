@@ -860,6 +860,35 @@ Shared blocks (header, footer, cards) so a nav change is ONE edit, not one per p
   into plain elements first — so a page never loses content, but a `:Name` token you
   cached may be gone. `delete_component` here still refuses while instances exist.
 
+## Variants
+
+A component comes in more than one look **without being more than one component**. It
+declares **axes** — `variant` (default / outline / ghost), `size` (sm / md / lg) — and
+each instance wears one option per axis. This is what shadcn calls `variant` and `size`.
+
+Variants are **style only**: an option is a set of class overrides on the component's
+elements, layered over their base classes. Structure never changes with an option — to
+drop a part for one instance, hide it (`hidden`, see Content).
+
+1. **Declare the axes** — `set_component_variants`:
+   `{componentId, axes: [{name: "size", options: ["sm", "md", "lg"], default: "md"}]}`.
+2. **Style an option** — `edit_elements` on an element of the component, with `variant`:
+   `{id: <button id>, variant: "size:sm", addClasses: ["h-8", "px-3", "text-xs"]}`.
+   Give **only what differs** from the base. A class on the same property as a base class
+   replaces it for instances wearing the option (`h-8` evicts `h-9`), so never repeat the
+   base and never try to "undo" one — an override replaces a value, it cannot remove one.
+   Without `variant`, `addClasses` writes the base, shared by every option.
+3. **Wear it** — `edit_elements` on the instance's `:Name` line:
+   `{line: <the :Button line>, variants: {size: "sm", variant: "outline"}}`.
+   An axis left out keeps its pick; `null` for an option returns to the default.
+
+Options layer in axis order, later axes winning where two touch the same property. Keep
+axes orthogonal (colour on one, dimensions on another) and the order never matters.
+
+`list_components {includeNodes: true}` shows the axes (`variants`) and each element's
+overrides (`variantClasses`); `get_page` shows an instance's picks on its `:Name` row.
+The default option usually needs no overrides at all — it IS the base classes.
+
 ## Icons
 
 `:icon:` renders an **inline `<svg>`**. Because the markup is in the page rather than

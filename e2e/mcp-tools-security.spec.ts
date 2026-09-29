@@ -354,3 +354,82 @@ test('an agent sets an icon by name, and custom markup is sanitized at write', a
   })
   expect(JSON.stringify(refused)).toContain('not an icon element')
 })
+
+test('an agent declares variant axes, styles an option, and an instance wears it', async () => {
+  const { store, api } = fixture()
+  const runtime = await runtimePromise
+  test.skip(!runtime, 'runtime bundle missing')
+  const project = JSON.parse(store.get('guano-project:main')!)
+  const n = (id: string, type: string, children: unknown[] = [], extra = {}) => ({
+    id, type, content: '', children, ...extra,
+  })
+  project.components = [
+    {
+      id: 'c-button',
+      name: 'Button',
+      root: n('m0', 'Button', [
+        n('m1', 'button', [n('m2', 'span', [], { content: 'Go' })], { classes: 'h-9 px-4 bg-primary' }),
+      ]),
+    },
+  ]
+  project.pages[0].code =
+    '@setup\n  name: Home\n  slug: /\n  status: published\n:body\n  :Button\n    :button\n      :span:\n    button:\n  Button:\nbody:'
+  project.pages[0].elements = runtime.parseSyntax(project.pages[0].code)
+  store.set('guano-project:main', JSON.stringify(project))
+  const call = await toolset(api)
+  const stored = () => JSON.parse(store.get('guano-project:main')!)
+
+  // a bad axis is refused with the reason, and nothing is written
+  const bad = await call('set_component_variants', {
+    componentId: 'c-button',
+    axes: [{ name: 'Size', options: ['sm'] }],
+  })
+  expect(bad.saved).toBe(false)
+  expect(stored().components[0].variants).toBeUndefined()
+
+  const axes = await call('set_component_variants', {
+    componentId: 'c-button',
+    axes: [{ name: 'size', options: ['md', 'sm'] }],
+  })
+  expect(axes.variants).toEqual([{ name: 'size', options: ['md', 'sm'], default: 'md' }])
+
+  // style the option: the override holds only what differs
+  let page = await call('get_page', { pageId: 'home' })
+  let result = await call('edit_elements', {
+    pageId: 'home',
+    version: page.version,
+    edits: [{ line: 6, expectType: 'button', variant: 'size:sm', addClasses: ['h-8', 'px-3'] }],
+  })
+  expect(result.saved).toBe(true)
+  const master = stored().components[0].root.children[0]
+  expect(master.classes).toBe('h-9 px-4 bg-primary') // the base is untouched
+  expect(master.variantClasses).toEqual({ 'size:sm': 'h-8 px-3' })
+
+  // an option that does not exist names the ones that do
+  page = await call('get_page', { pageId: 'home' })
+  result = await call('edit_elements', {
+    pageId: 'home',
+    version: page.version,
+    edits: [{ line: 6, variant: 'size:xl', addClasses: ['h-12'] }],
+  })
+  expect(JSON.stringify(result)).toContain('size:md, size:sm')
+
+  // the instance wears it — on its :Name line, and nowhere else
+  page = await call('get_page', { pageId: 'home' })
+  result = await call('edit_elements', {
+    pageId: 'home',
+    version: page.version,
+    edits: [{ line: 5, expectType: 'Button', variants: { size: 'sm' } }],
+  })
+  expect(result.saved).toBe(true)
+  expect(stored().pages[0].elements[0].children[0].variants).toEqual({ size: 'sm' })
+
+  // back to the default leaves no trace
+  page = await call('get_page', { pageId: 'home' })
+  await call('edit_elements', {
+    pageId: 'home',
+    version: page.version,
+    edits: [{ line: 5, variants: { size: 'md' } }],
+  })
+  expect(stored().pages[0].elements[0].children[0].variants).toBeUndefined()
+})

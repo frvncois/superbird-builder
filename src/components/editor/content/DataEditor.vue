@@ -12,7 +12,8 @@ import MediaPickerControl from '@/components/editor/content/MediaPickerControl.v
 import RichTextInput from '@/components/editor/content/RichTextInput.vue'
 import IconPickerControl from '@/components/editor/content/IconPickerControl.vue'
 import { ELEMENTS, typeOptionsFor } from '@/lib/elements'
-import { hasAncestorOfType } from '@/lib/tree'
+import { hasAncestorOfType, walkNodes } from '@/lib/tree'
+import { setInstancePick } from '@/lib/variantOps'
 import { sanitizeAttributes, isAllowedAttribute } from '@/lib/shared/attributes.js'
 import { useElement } from '@/composables/useElement'
 import { useStructure } from '@/composables/useStructure'
@@ -27,7 +28,7 @@ import { useAuth } from '@/composables/useAuth'
 import { useComponents } from '@/composables/useComponents'
 import type { CollectionEntry, CollectionField } from '@/types/editor'
 
-const { selectedElement } = useElement()
+const { selectedElement, getElement } = useElement()
 // structural writes go through the backend so they land on the page or on a
 // component master, depending on what is being edited
 const { backend } = useStructure()
@@ -619,7 +620,60 @@ const contentPlaceholder = computed(() => {
 // --- icon ---
 
 const { canBuild } = useAuth()
-const { masterFor } = useComponents()
+const { masterFor, isHidden, setHidden } = useComponents()
+
+// --- the component instance the selection sits in ---
+//
+// Shown for the instance wrapper AND for anything inside it: a click on the
+// canvas selects the innermost element, so a section that only appeared on the
+// wrapper would be one nobody finds. It always acts on the nearest instance.
+
+const instance = computed(() => {
+  const node = selectedElement.value
+  const mapping = node && canBuild.value ? masterFor(node.id) : null
+  const wrapper = mapping ? getElement(mapping.instanceId) : null
+  return mapping && wrapper ? { def: mapping.def, picks: mapping.picks, wrapper } : null
+})
+
+const instanceAxes = computed(() =>
+  (instance.value?.def.variants ?? []).map((axis) => ({
+    name: axis.name,
+    value: instance.value!.picks[axis.name] ?? axis.default,
+    options: axis.options.map((option) => ({
+      label: option === axis.default ? `${option} (default)` : option,
+      value: option,
+    })),
+  })),
+)
+
+function pickVariant(axis: string, option: string | undefined) {
+  const at = instance.value
+  if (at && option) setInstancePick(at.def, at.wrapper, axis, option)
+}
+
+/** the instance's optional parts: every element whose visibility is decided
+ *  somewhere — hidden by the component, or hidden/shown by this instance */
+const instanceParts = computed(() => {
+  const at = instance.value
+  if (!at) return []
+  const parts: { node: (typeof at)['wrapper']; label: string; shown: boolean }[] = []
+  walkNodes(at.wrapper.children, (node) => {
+    const master = masterFor(node.id)?.master
+    if (node.hidden === undefined && master?.hidden === undefined) return
+    const text = (node.content || master?.content || '').replace(/<[^>]*>/g, ' ').trim()
+    parts.push({ node, label: text || node.type, shown: !isHidden(node) })
+  })
+  // two parts of one type and no text to tell them apart: number them in order
+  const seen = new Map<string, number>()
+  const total = new Map<string, number>()
+  for (const p of parts) total.set(p.label, (total.get(p.label) ?? 0) + 1)
+  return parts.map((p) => {
+    if (total.get(p.label) === 1) return p
+    const n = (seen.get(p.label) ?? 0) + 1
+    seen.set(p.label, n)
+    return { ...p, label: `${p.label} ${n}` }
+  })
+})
 
 /** an icon's markup is not content a contributor may change: the server keeps
  *  it out of the contributor allowlist, so offering the picker would only
@@ -761,6 +815,28 @@ const src = computed({
 
     <GroupPopover v-if="hasContent && !boundIsRef">
       <RichTextInput ref="contentField" v-model="content" :placeholder="contentPlaceholder" />
+    </GroupPopover>
+
+    <GroupPopover
+      v-if="instance && (instanceAxes.length || instanceParts.length)"
+      :label="instance.def.name"
+      data-instance-section
+    >
+      <RowUI v-for="axis in instanceAxes" :key="axis.name" :label="axis.name">
+        <SelectUI
+          :options="axis.options"
+          :model-value="axis.value"
+          :data-instance-pick="axis.name"
+          @update:model-value="(v) => pickVariant(axis.name, v)"
+        />
+      </RowUI>
+      <RowUI v-for="part in instanceParts" :key="part.node.id" :label="part.label">
+        <ToggleUI
+          :model-value="part.shown"
+          :data-instance-part="part.label"
+          @update:model-value="(v) => setHidden(part.node, !v)"
+        />
+      </RowUI>
     </GroupPopover>
 
     <GroupPopover v-if="isIcon" label="Icon">
