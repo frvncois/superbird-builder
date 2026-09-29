@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue'
 import { usePage } from './usePage'
-import { REF_SLOT, dataMarkerOf, hasOpenArgBracket, interactionMarkerOf, reconcile, styleMarkerOf, withDataMarker, withInteractionMarker, withStyleMarker } from '@/lib/syntax'
+import { REF_SLOT, applyNodeMarkers, reconcile } from '@/lib/syntax'
 import { isKnownElement } from '@/lib/elements'
 import { isComponentType } from '@/lib/components'
 import { deepClone, findNode, walkNodes } from '@/lib/tree'
@@ -163,46 +163,8 @@ export function useElement() {
   function syncNodeMarkers() {
     const page = activePage.value
     if (!page) return
-    const lines = page.code.split('\n')
-    let changed = false
-    const visit = (nodes: ElementNode[]) => {
-      for (const node of nodes) {
-        if (node.line !== undefined && lines[node.line] !== undefined) {
-          let line = lines[node.line]!
-          // an unclosed '[' is an arg edit in progress — the marker heads
-          // can't anchor past it, so a write would land mid-token; skip
-          if (!hasOpenArgBracket(line)) {
-            // '[+]' marks own content/media; a real '[arg]' binding owns the
-            // slot (withDataMarker no-ops on it). Body never carries one —
-            // its slot is page-owned (collection template binding).
-            if (node.type !== 'body' && node.arg === undefined) {
-              const data = dataMarkerOf(line)
-              // a slider's carousel config lives in the Data panel too, so it
-              // earns the same marker as own content/media
-              const want = !!node.content || !!node.src || !!node.slider
-              if (want !== (data === '[+]')) line = withDataMarker(line, want)
-            }
-            const style = styleMarkerOf(line)
-            if (style === undefined || style === '(+)') {
-              const want = !!node.classes?.trim()
-              if (want !== (style === '(+)')) line = withStyleMarker(line, want)
-            }
-            const inter = interactionMarkerOf(line)
-            if (inter === undefined || inter === '{+}') {
-              const want = !!node.interactions?.length || !!node.animations?.length
-              if (want !== (inter === '{+}')) line = withInteractionMarker(line, want)
-            }
-            if (line !== lines[node.line]) {
-              lines[node.line] = line
-              changed = true
-            }
-          }
-        }
-        if (!isComponentType(node.type)) visit(node.children)
-      }
-    }
-    visit(page.elements)
-    if (changed) page.code = lines.join('\n')
+    const next = applyNodeMarkers(page.code, page.elements)
+    if (next !== page.code) page.code = next
   }
 
   /** a valid client ref: same charset as an element name */

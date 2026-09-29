@@ -13,6 +13,14 @@ import {
   stripExtractedInstanceState,
   alignInstanceLines,
 } from '@/lib/components'
+import {
+  componentUsage,
+  deleteComponent as deleteComponentFromProject,
+  detachInstance,
+  duplicateComponent as duplicateComponentInProject,
+  renameComponent as renameComponentInProject,
+  setComponentCategory,
+} from '@/lib/componentOps'
 import { findNode, walkNodes } from '@/lib/tree'
 import type { ComponentDef, ElementNode, Page } from '@/types/editor'
 
@@ -87,7 +95,7 @@ const editTarget = computed(() => {
 })
 
 export function useComponents() {
-  const { selectElement, changeElementType } = useElement()
+  const { selectElement } = useElement()
 
   // --- structural sync: edits inside one instance reshape the master
   // and every other instance follows ---
@@ -267,51 +275,40 @@ export function useComponents() {
   }
 
   /**
-   * Unlinks a component instance: the shared master's style and
-   * interactions are baked onto the (already plain) inner page nodes,
-   * then the :Name … Name: wrapper becomes a plain :div. The block is
-   * now independent — editing it no longer touches other instances.
+   * Unlinks a component instance: the shared master's style, interactions and
+   * content are baked onto the inner page nodes and the `:Name … Name:`
+   * wrapper is dissolved. The block is now independent — editing it no longer
+   * touches other instances.
    */
   function detachComponent(instanceId: string) {
-    const page = activePage.value
-    const instance = findNode(page.elements, instanceId)
-    if (!instance || !isComponentType(instance.type) || !findComponent(instance.type)) return
+    if (detachInstance(project.value, activePage.value, instanceId)) selectElement(instanceId)
+  }
 
-    // pair each instance node with its master, and remember master→instance
-    // ids so interaction targets can be rewired to this instance
-    const pairs: { node: ElementNode; master: ElementNode }[] = []
-    const masterToInstance = new Map<string, string>()
-    walkNodes([instance], (node) => {
-      const mapping = masterFor(node.id)
-      if (mapping) {
-        pairs.push({ node, master: mapping.master })
-        masterToInstance.set(mapping.master.id, node.id)
-      }
-    })
+  /** Renames a component and every instance token in the project. */
+  function renameComponent(id: string, rawName: string): string | null {
+    return renameComponentInProject(project.value, id, rawName)
+  }
 
-    for (const { node, master } of pairs) {
-      if (master.classes) node.classes = master.classes
-      if (master.interactions?.length) {
-        node.interactions = master.interactions.map((i) => ({
-          ...i,
-          id: crypto.randomUUID(),
-          targetId: i.targetId ? (masterToInstance.get(i.targetId) ?? i.targetId) : null,
-        }))
-      }
-      if (master.attributes) node.attributes = JSON.parse(JSON.stringify(master.attributes))
-    }
+  /** Copies a component under a new name; the copy has no instances yet. */
+  function duplicateComponent(id: string): ComponentDef | null {
+    return duplicateComponentInProject(project.value, id)
+  }
 
-    // the wrapper becomes a real element; its children are already plain
-    changeElementType(instanceId, 'div')
-    // re-derive the tree from the (now consistent) code so the canvas's
-    // component mapping recomputes cleanly for THIS block only — other
-    // instances keep their identity (same code → identity line map)
-    activePage.value.elements = reconcile(
-      activePage.value.code,
-      activePage.value.code,
-      activePage.value.elements,
-    )
-    selectElement(instanceId)
+  function setCategory(id: string, category: string) {
+    setComponentCategory(project.value, id, category)
+  }
+
+  /** Where a component is used — the numbers the delete confirm quotes. */
+  function usageOf(name: string) {
+    return componentUsage(project.value, name)
+  }
+
+  /**
+   * Deletes a component. Every instance is detached first, so pages keep the
+   * elements and their look — nothing vanishes from the site.
+   */
+  function deleteComponent(id: string): boolean {
+    return deleteComponentFromProject(project.value, id)
   }
 
   return {
@@ -322,5 +319,10 @@ export function useComponents() {
     findMasterNode,
     createComponent,
     detachComponent,
+    renameComponent,
+    duplicateComponent,
+    setCategory,
+    usageOf,
+    deleteComponent,
   }
 }

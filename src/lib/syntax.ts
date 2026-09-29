@@ -221,6 +221,60 @@ export function withDataMarker(line: string, on: boolean): string {
 }
 
 /**
+ * Brings every token line's three display-only markers — '[+]' own data, '(+)'
+ * styled, '{+}' interactions — back in step with the node state they mirror,
+ * and returns the code (the SAME string when nothing moved).
+ *
+ * Pure, so it serves both the editor's live truth-sync on the active page and
+ * whole-project operations on pages nobody has open. Component instance
+ * subtrees are skipped: their style and interactions live on the master, so
+ * these nodes carry none of their own to mark.
+ */
+export function applyNodeMarkers(code: string, elements: ElementNode[]): string {
+  const lines = code.split('\n')
+  let changed = false
+  const visit = (nodes: ElementNode[]) => {
+    for (const node of nodes) {
+      const at = node.line
+      if (at !== undefined && lines[at] !== undefined) {
+        let line = lines[at]!
+        // an unclosed '[' is an arg edit in progress — the marker heads
+        // can't anchor past it, so a write would land mid-token; skip
+        if (!hasOpenArgBracket(line)) {
+          // '[+]' marks own content/media; a real '[arg]' binding owns the
+          // slot (withDataMarker no-ops on it). Body never carries one —
+          // its slot is page-owned (collection template binding).
+          if (node.type !== 'body' && node.arg === undefined) {
+            const data = dataMarkerOf(line)
+            // a slider's carousel config lives in the Data panel too, so it
+            // earns the same marker as own content/media
+            const want = !!node.content || !!node.src || !!node.slider
+            if (want !== (data === '[+]')) line = withDataMarker(line, want)
+          }
+          const style = styleMarkerOf(line)
+          if (style === undefined || style === '(+)') {
+            const want = !!node.classes?.trim()
+            if (want !== (style === '(+)')) line = withStyleMarker(line, want)
+          }
+          const inter = interactionMarkerOf(line)
+          if (inter === undefined || inter === '{+}') {
+            const want = !!node.interactions?.length || !!node.animations?.length
+            if (want !== (inter === '{+}')) line = withInteractionMarker(line, want)
+          }
+          if (line !== lines[at]) {
+            lines[at] = line
+            changed = true
+          }
+        }
+      }
+      if (!isComponentType(node.type)) visit(node.children)
+    }
+  }
+  visit(elements)
+  return changed ? lines.join('\n') : code
+}
+
+/**
  * Enforces one syntax token per line AND forces indentation from the token
  * structure: every line is re-indented to its nesting depth — one deeper
  * after an open, one shallower before a close — so whatever tabs the author

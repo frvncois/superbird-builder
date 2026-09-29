@@ -340,6 +340,12 @@ export interface ComponentDef {
   name: string
   /** master tree; node ids are the "master ids" instances override by */
   root: ElementNode
+  /** drawer grouping; omitted = "Uncategorized" */
+  category?: string
+  /** the library entry this was copied from — drives the "Added" state in the
+   * components drawer. A copy is a plain component from here on: nothing
+   * follows the catalog. */
+  source?: string
 }
 
 export interface DesignToken {
