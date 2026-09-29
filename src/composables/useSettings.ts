@@ -1,6 +1,12 @@
 import { computed, watchEffect } from 'vue'
 import { useProject } from './useProject'
-import { isEmittableToken, parseFontFaces, stripFontFaces, fontFormatForUrl } from '@/lib/settings'
+import {
+  isEmittableToken,
+  parseFontFaces,
+  stripFontFaces,
+  fontFormatForUrl,
+  tokenError,
+} from '@/lib/settings'
 import { setColorTokens } from '@/lib/colors'
 import { setStyleTokens } from '@/lib/styles'
 import type { CustomFont, DesignToken, ProjectSettings } from '@/types/editor'
@@ -31,6 +37,21 @@ export function useSettings() {
 
   function removeToken(id: string) {
     settings.value.tokens = settings.value.tokens.filter((t) => t.id !== id)
+  }
+
+  /**
+   * Adds any of these tokens the project doesn't have yet, and returns the
+   * names actually created. An existing token is never touched — a library
+   * component must adopt the project's palette, not overwrite it.
+   *
+   * Pushed in one go: every token change triggers a full Tailwind recompile
+   * (debounced, but still), so a per-token loop would pay for it repeatedly.
+   */
+  function ensureTokens(wanted: DesignToken[]): string[] {
+    const have = new Set(settings.value.tokens.map((t) => t.name))
+    const missing = wanted.filter((t) => !have.has(t.name) && !tokenError(t))
+    if (missing.length) settings.value.tokens.push(...missing)
+    return missing.map((t) => t.name)
   }
 
   // --- site-wide motion ---
@@ -121,6 +142,7 @@ export function useSettings() {
     validTokens,
     addToken,
     removeToken,
+    ensureTokens,
     customFonts,
     addFont,
     removeFont,

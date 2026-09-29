@@ -21,6 +21,8 @@ import {
   renameComponent as renameComponentInProject,
   setComponentCategory,
 } from '@/lib/componentOps'
+import { catalogEntry, materializeCatalogEntry } from '@/lib/catalog'
+import { useSettings } from './useSettings'
 import { findNode, walkNodes } from '@/lib/tree'
 import type { ComponentDef, ElementNode, Page } from '@/types/editor'
 
@@ -284,6 +286,23 @@ export function useComponents() {
     if (detachInstance(project.value, activePage.value, instanceId)) selectElement(instanceId)
   }
 
+  /**
+   * Copies a library entry into the project as an ordinary component, adding
+   * the design tokens and shared effects it needs. Nothing links back to the
+   * catalog afterwards. Returns what was created, so the drawer can say so.
+   */
+  function addFromCatalog(key: string): { def: ComponentDef; tokens: string[] } | null {
+    const entry = catalogEntry(key)
+    if (!entry) return null
+    const made = materializeCatalogEntry(entry, project.value)
+    // one synchronous tick: tokens first, so the classes referencing them are
+    // valid the moment the component exists, and one undo step for the lot
+    const tokens = useSettings().ensureTokens(made.tokens)
+    if (made.interactions.length) project.value.interactions.push(...made.interactions)
+    project.value.components.push(made.def)
+    return { def: made.def, tokens }
+  }
+
   /** Renames a component and every instance token in the project. */
   function renameComponent(id: string, rawName: string): string | null {
     return renameComponentInProject(project.value, id, rawName)
@@ -319,6 +338,7 @@ export function useComponents() {
     findMasterNode,
     createComponent,
     detachComponent,
+    addFromCatalog,
     renameComponent,
     duplicateComponent,
     setCategory,

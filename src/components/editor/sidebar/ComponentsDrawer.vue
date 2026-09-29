@@ -11,11 +11,14 @@ const expanded = ref<Record<string, boolean>>({})
 // the one track beside the rail with Pages and the code editor. It lists the
 // project's own components, grouped by category: click a row to insert it at
 // the selection, drag it onto the canvas, or open its settings from the kebab.
-import { computed } from 'vue'
-import { ChevronRight, Component as ComponentIcon, Copy, Search, Settings, Trash2 } from 'lucide-vue-next'
+import { computed, onBeforeUnmount } from 'vue'
+import {
+  Check, ChevronRight, Component as ComponentIcon, Copy, Plus, Search, Settings, Trash2,
+} from 'lucide-vue-next'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import MenuUI from '@/components/ui/MenuUI.vue'
 import ComponentSettingsEditor from './ComponentSettingsEditor.vue'
+import { catalogCategories } from '@/lib/catalog'
 import { useComponents } from '@/composables/useComponents'
 import { useCommandPalette } from '@/composables/useCommandPalette'
 import { useInsertDrag } from '@/composables/useInsertDrag'
@@ -24,7 +27,7 @@ import { useDrawerEscape } from '@/composables/useDrawerEscape'
 import { useModal } from '@/composables/useModal'
 import type { ComponentDef } from '@/types/editor'
 
-const { components, duplicateComponent, usageOf, deleteComponent } = useComponents()
+const { components, addFromCatalog, duplicateComponent, usageOf, deleteComponent } = useComponents()
 const { insertComponent } = useCommandPalette()
 const { startInsertDrag } = useInsertDrag()
 const { requestEditorFocus } = useElement()
@@ -62,7 +65,41 @@ const groups = computed<{ name: string; items: ComponentDef[] }[]>(() => {
     })
 })
 
-const noResults = computed(() => searching.value && !groups.value.length)
+// --- the bundled library ---
+/** catalog keys already copied into this project */
+const added = computed(() => new Set(components.value.map((c) => c.source).filter(Boolean)))
+
+const libraryGroups = computed(() =>
+  catalogCategories()
+    .map(({ name, items }) => ({
+      name,
+      items:
+        searching.value && !matches(name)
+          ? items.filter((e) => matches(e.name) || matches(e.description))
+          : items,
+    }))
+    .filter((g) => g.items.length),
+)
+
+const noResults = computed(
+  () => searching.value && !groups.value.length && !libraryGroups.value.length,
+)
+
+/** what the last add created, shown for a moment under the Library heading —
+ * adding tokens quietly would leave the user wondering where they came from */
+const justAdded = ref<string | null>(null)
+let addedTimer: ReturnType<typeof setTimeout> | undefined
+
+function onAdd(key: string) {
+  const made = addFromCatalog(key)
+  if (!made) return
+  justAdded.value = made.tokens.length
+    ? `Added ${made.def.name} · created ${made.tokens.length} design ${made.tokens.length === 1 ? 'token' : 'tokens'}`
+    : `Added ${made.def.name}`
+  clearTimeout(addedTimer)
+  addedTimer = setTimeout(() => (justAdded.value = null), 2500)
+}
+onBeforeUnmount(() => clearTimeout(addedTimer))
 
 // while filtering every group is forced open (without touching the stored state)
 const isExpanded = (name: string) => searching.value || expanded.value[name] !== false
@@ -135,7 +172,8 @@ useDrawerEscape(panel, {
             </div>
 
             <p v-if="!components.length" class="px-2.5 py-1 text-[10px] text-muted-foreground">
-              No components yet. Select an element on the canvas and choose “Create component”.
+              Nothing yet. Add one from the library below, or select an element on the canvas and
+              choose “Create component”.
             </p>
 
             <div v-for="group in groups" :key="group.name">
@@ -191,6 +229,66 @@ useDrawerEscape(panel, {
                       </button>
                     </template>
                   </MenuUI>
+                </div>
+              </div>
+            </div>
+
+            <!-- the bundled library: adding COPIES an entry into the project,
+                 after which nothing follows the catalog -->
+            <div class="flex items-center gap-1 px-2.5 pt-4 pb-1">
+              <span class="flex-1 text-[9px] font-medium tracking-wide text-muted-foreground uppercase">
+                Library
+              </span>
+            </div>
+            <p v-if="justAdded" class="px-2.5 pb-1 text-[10px] text-muted-foreground">
+              {{ justAdded }}
+            </p>
+
+            <div v-for="group in libraryGroups" :key="`lib-${group.name}`">
+              <div class="group/row mx-1 flex h-7 items-center rounded-lg pr-0.5 pl-1 hover:bg-accent/15">
+                <button
+                  type="button"
+                  class="flex h-full min-w-0 flex-1 items-center gap-1 text-left outline-none"
+                  @click="toggleGroup(`lib-${group.name}`)"
+                >
+                  <ChevronRight
+                    class="size-3 shrink-0 text-muted-foreground transition-transform"
+                    :class="isExpanded(`lib-${group.name}`) && 'rotate-90'"
+                  />
+                  <span class="truncate text-xs font-medium">{{ group.name }}</span>
+                  <span class="shrink-0 text-[10px] text-muted-foreground">{{ group.items.length }}</span>
+                </button>
+              </div>
+
+              <div v-if="isExpanded(`lib-${group.name}`)" class="mt-0.5 mb-1 ml-3.5 border-l border-input pl-1">
+                <div
+                  v-for="entry in group.items"
+                  :key="entry.key"
+                  class="group/row mr-1 flex h-7 items-center rounded-lg pr-0.5 pl-1.5 hover:bg-accent/15"
+                >
+                  <span
+                    v-tooltip="{ text: entry.description, side: 'right' }"
+                    class="flex h-full min-w-0 flex-1 items-center gap-1.5"
+                  >
+                    <ComponentIcon class="size-3 shrink-0 text-muted-foreground" />
+                    <span class="truncate text-xs text-muted-foreground">{{ entry.name }}</span>
+                  </span>
+                  <span
+                    v-if="added.has(entry.key)"
+                    v-tooltip="'Already in this project'"
+                    class="flex size-6 items-center justify-center text-muted-foreground"
+                  >
+                    <Check class="size-3.5" />
+                  </span>
+                  <ButtonUI
+                    v-else
+                    variant="icon"
+                    size="xs"
+                    :icon="Plus"
+                    tooltip="Add to project"
+                    class="w-6 shrink-0 text-muted-foreground opacity-0 group-hover/row:opacity-100"
+                    @click="onAdd(entry.key)"
+                  />
                 </div>
               </div>
             </div>
