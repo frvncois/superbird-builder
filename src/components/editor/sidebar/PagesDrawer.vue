@@ -13,7 +13,7 @@ const expanded = ref<Record<string, boolean>>({})
 // search field, the scrollable Pages + Collections tree, and the locale
 // switcher pinned at the bottom. Row overflow actions
 // (settings/duplicate/delete) live in a per-row kebab.
-import { computed, onBeforeUnmount, onMounted } from 'vue'
+import { computed, onMounted } from 'vue'
 import {
   Plus, Copy, Trash2, Settings, Languages, ChevronDown, ChevronRight, Check,
   House, Search, Layers,
@@ -29,6 +29,7 @@ import { useHeaderNav } from '@/composables/useHeaderNav'
 import { useLocale } from '@/composables/useLocale'
 import { useLocaleQuickAdd } from '@/composables/useLocaleQuickAdd'
 import { useModal } from '@/composables/useModal'
+import { useDrawerEscape } from '@/composables/useDrawerEscape'
 import { walkNodes } from '@/lib/tree'
 import type { Collection, CollectionEntry, ElementNode, Page } from '@/types/editor'
 
@@ -44,7 +45,7 @@ const {
   addingLocale, newLocale, newLocaleInput,
   startAddLocale, confirmAddLocale,
 } = useLocaleQuickAdd()
-const { openModal, confirm, stack } = useModal()
+const { openModal, confirm } = useModal()
 
 // when set, the drawer swaps its list for the page/item settings panel
 const settingsTarget = ref<SettingsTarget | null>(null)
@@ -212,43 +213,15 @@ async function confirmDeleteLocale(loc: string) {
 
 const panel = ref<HTMLElement>()
 
-// The column is persistent, so it may only claim Escape while the user is
-// actually working in it — otherwise it would swallow the key from the canvas,
-// the code editor and the right panel for as long as it is open. "Working in
-// it" is the last press or focus having landed inside: focus alone isn't
-// enough, because clicking a row that swaps the pane drops focus to <body>.
-let engaged = false
-function onEngage(e: Event) {
-  engaged = !!panel.value?.contains(e.target as Node)
-}
-
-// Capture-phase Escape so a layer peels before SettingsEditor's window
-// handler (bubble phase) pulls focus back to the code editor.
-function onKeydownCapture(e: KeyboardEvent) {
-  if (!engaged || e.key !== 'Escape') return
-  // an open row kebab owns Escape first — let it bubble to MenuUI's own handler
-  if (panel.value?.querySelector('[data-open]')) return
-  // a modal opened from inside the drawer (the media library) owns Escape:
-  // ModalStackHost listens in BUBBLE phase, so without this the capture
-  // handler here would peel the detail view and leave the modal up
-  if (stack.value.length) return
-  // nothing to peel: the key belongs to whoever else wants it. Escape never
-  // closes the column itself — like the code editor, only the rail does.
-  if (!searching.value && !settingsTarget.value) return
-  e.stopPropagation()
-  // peel back one layer at a time: filter → settings view
-  if (searching.value) query.value = ''
-  else settingsTarget.value = null
-}
-onMounted(() => {
-  window.addEventListener('keydown', onKeydownCapture, true)
-  window.addEventListener('pointerdown', onEngage, true)
-  window.addEventListener('focusin', onEngage, true)
-})
-onBeforeUnmount(() => {
-  window.removeEventListener('keydown', onKeydownCapture, true)
-  window.removeEventListener('pointerdown', onEngage, true)
-  window.removeEventListener('focusin', onEngage, true)
+// Escape peels one layer at a time — filter, then the settings view — and
+// never closes the column itself; only the rail does. See useDrawerEscape for
+// why a persistent column can't just claim the key.
+useDrawerEscape(panel, {
+  canPeel: () => searching.value || !!settingsTarget.value,
+  peel: () => {
+    if (searching.value) query.value = ''
+    else settingsTarget.value = null
+  },
 })
 </script>
 

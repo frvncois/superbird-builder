@@ -3,12 +3,13 @@
 // (breakpoint canvas + full inspector) and Preview (full-site render,
 // restricted sidebar). The code editor is a separate column Build opens
 // beside the canvas — off by default, toggled by the rail's Code button. The
-// pages drawer is a column of the same kind, available on both surfaces; the
-// two share one slot, so opening either closes the other.
+// pages and components drawers are columns of the same kind; all three share
+// one slot, so opening any closes the others.
 // Contributors are pinned to Preview.
 import EditorLayout from '@/layouts/EditorLayout.vue'
 import AppRail from '@/components/editor/sidebar/AppRail.vue'
 import PagesDrawer from '@/components/editor/sidebar/PagesDrawer.vue'
+import ComponentsDrawer from '@/components/editor/sidebar/ComponentsDrawer.vue'
 import CanvasEditor from '@/components/editor/canvas/CanvasEditor.vue'
 import CodeEditor from '@/components/editor/code/CodeEditor.vue'
 import SettingsEditor from '@/components/editor/sidebar/SettingsEditor.vue'
@@ -25,7 +26,7 @@ import { useViewMode } from '@/composables/useViewMode'
 useEditorShortcuts()
 
 const { ready, bootError, reloadPage } = useEditorBoot()
-const { isBuild, showCode, pagesOpen } = useViewMode()
+const { isBuild, visibleColumn } = useViewMode()
 </script>
 
 <template>
@@ -38,16 +39,20 @@ const { isBuild, showCode, pagesOpen } = useViewMode()
   </div>
 
   <template v-else-if="ready">
-    <EditorLayout :left="showCode" :pages="pagesOpen" :framed="isBuild">
+    <EditorLayout :column="visibleColumn" :framed="isBuild">
       <template #rail>
         <AppRail />
       </template>
 
-      <template v-if="pagesOpen" #pages>
+      <template v-if="visibleColumn === 'pages'" #pages>
         <PagesDrawer />
       </template>
 
-      <template v-if="showCode" #left>
+      <template v-if="visibleColumn === 'components'" #components>
+        <ComponentsDrawer />
+      </template>
+
+      <template v-if="visibleColumn === 'code'" #code>
         <div class="h-full">
           <CodeEditor />
         </div>

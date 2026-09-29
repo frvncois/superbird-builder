@@ -9,16 +9,18 @@ import { useMotion } from './useMotion'
 // Contributors are content-only: they can never enter Build, so the mode is
 // pinned to 'preview' for them (the Code rail button is also hidden).
 const mode = ref<'build' | 'preview'>('build')
-// The code column is a toggle ON the Build surface, not the surface itself:
-// Build opens on the bare canvas and the rail's Code button reveals the
-// editor beside it. Off by default, runtime-only like `mode`.
-const codeOpen = ref(false)
-// The pages column works the same way — a docked column the rail's Pages
-// button toggles — but it belongs to the shell rather than to Build: it works
-// on both surfaces, and contributors get it too. The two columns share ONE
-// slot beside the rail: opening either closes the other, so `codeOpen` and
-// `pagesOpen` are never both true.
-const pagesOpen = ref(false)
+
+/**
+ * The three docked columns beside the rail — pages, code and components — share
+ * ONE 16rem track, so at most one is open. That is why this is a single ref
+ * rather than three booleans: with three flags every toggle would have to clear
+ * the other two by hand, and the invariant would live in six places instead of
+ * one. `null` is the bare canvas.
+ *
+ * Pages belongs to the shell (both surfaces, contributors included); code and
+ * components are Build-only building tools.
+ */
+const column = ref<'pages' | 'code' | 'components' | null>(null)
 let pinStarted = false
 
 export function useViewMode() {
@@ -31,7 +33,8 @@ export function useViewMode() {
     watch(canBuild, (can) => {
       if (!can) {
         mode.value = 'preview'
-        codeOpen.value = false
+        // only the build-only columns close: a contributor still gets Pages
+        if (column.value === 'code' || column.value === 'components') column.value = null
       }
     }, { immediate: true })
   }
@@ -46,44 +49,56 @@ export function useViewMode() {
   }
 
   /**
-   * The rail's Code button. From Preview it brings you back to the Build
-   * surface WITH the editor open (one click, not two); on Build it just flips
-   * the column. Contributors never get here (the button is hidden and
+   * A Build-only column button (Code, Components). From Preview it brings you
+   * back to the Build surface WITH the column open (one click, not two); on
+   * Build it flips it. Contributors never get here (the buttons are hidden and
    * `setMode` refuses Build anyway).
    */
-  function toggleCode() {
+  function toggleBuildColumn(which: 'code' | 'components') {
     if (!canBuild.value) return
     if (mode.value !== 'build') {
       setMode('build')
-      codeOpen.value = true
-    } else {
-      codeOpen.value = !codeOpen.value
+      column.value = which
+      return
     }
-    if (codeOpen.value) pagesOpen.value = false
+    column.value = column.value === which ? null : which
   }
 
-  /** The rail's Pages button: flips the pages column, on either surface —
-   *  taking the slot from the code column when it opens. */
+  const toggleCode = () => toggleBuildColumn('code')
+  const toggleComponents = () => toggleBuildColumn('components')
+
+  /** The rail's Pages button: flips the pages column, on either surface. */
   function togglePages() {
-    pagesOpen.value = !pagesOpen.value
-    if (pagesOpen.value) codeOpen.value = false
+    column.value = column.value === 'pages' ? null : 'pages'
   }
 
   /** The rail's App/logo button: the default surface — the bare Build canvas,
-   *  neither column open. */
+   *  no column open. */
   function showApp() {
-    codeOpen.value = false
-    pagesOpen.value = false
+    column.value = null
     setMode('build')
   }
 
   const isPreview = computed(() => mode.value === 'preview')
   const isBuild = computed(() => mode.value === 'build')
-  /** the code column renders only on Build, and only when toggled on */
-  const showCode = computed(() => mode.value === 'build' && codeOpen.value)
+  const pagesOpen = computed(() => column.value === 'pages')
+  const codeOpen = computed(() => column.value === 'code')
+  const componentsOpen = computed(() => column.value === 'components')
+  /** the build-only columns render only on Build, and only when toggled on */
+  const showCode = computed(() => isBuild.value && codeOpen.value)
+  const showComponents = computed(() => isBuild.value && componentsOpen.value)
+  /**
+   * What the shell actually renders in the shared track. Crossing into Preview
+   * hides code/components without forgetting them, so returning to Build brings
+   * the column back.
+   */
+  const visibleColumn = computed(() =>
+    column.value === 'pages' || isBuild.value ? column.value : null,
+  )
 
   return {
-    mode, isPreview, isBuild, codeOpen, showCode, pagesOpen,
-    setMode, toggleCode, togglePages, showApp,
+    mode, isPreview, isBuild,
+    column, visibleColumn, pagesOpen, codeOpen, componentsOpen, showCode, showComponents,
+    setMode, toggleCode, togglePages, toggleComponents, showApp,
   }
 }
