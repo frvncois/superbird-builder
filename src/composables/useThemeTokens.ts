@@ -19,8 +19,6 @@ const CHROME_COLOR_VARS = [
   'secondary', 'secondary-foreground',
   'accent', 'accent-foreground',
   'success', 'pending', 'danger',
-  'editor-fg', 'editor-comment', 'editor-keyword', 'editor-arg',
-  'editor-string', 'editor-punct', 'editor-component',
   'state-class',
 ]
 

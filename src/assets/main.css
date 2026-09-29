@@ -19,15 +19,6 @@
   --pending: oklch(82.444% 0.12144 90.081);
   --danger: oklch(64.087% 0.17546 20.635);
 
-  /* Code editor syntax — VS Code "Moonlight" palette */
-  --editor-fg: #c8d3f5;
-  --editor-comment: #7a88cf;
-  --editor-keyword: #c099ff;
-  --editor-arg: #ff966c;
-  --editor-string: #c3e88d;
-  --editor-punct: #86e1fc;
-  --editor-component: #ffc777;
-  --editor-ref: #fca7ea;
 
   /* state/variant class badges (hover:, focus:…) — keyword hue, new names */
   --state-class: #c099ff;
@@ -49,15 +40,6 @@
   --pending: oklch(0.681 0.162 75.83);
   --danger: oklch(60.49% 0.08577 16.016);
 
-  /* Moonlight hues darkened for a white background */
-  --editor-fg: #3b4261;
-  --editor-comment: #8489b3;
-  --editor-keyword: #8d5bd6;
-  --editor-arg: #c65f3d;
-  --editor-string: #587f3a;
-  --editor-punct: #1e88b0;
-  --editor-component: #b8862b;
-  --editor-ref: #a8409a;
 
   --state-class: #8d5bd6;
 }
@@ -85,14 +67,6 @@
   --color-pending: var(--pending);
   --color-danger: var(--danger);
 
-  --color-editor-fg: var(--editor-fg);
-  --color-editor-comment: var(--editor-comment);
-  --color-editor-keyword: var(--editor-keyword);
-  --color-editor-arg: var(--editor-arg);
-  --color-editor-string: var(--editor-string);
-  --color-editor-punct: var(--editor-punct);
-  --color-editor-component: var(--editor-component);
-  --color-editor-ref: var(--editor-ref);
 
   --color-state-class: var(--state-class);
 }

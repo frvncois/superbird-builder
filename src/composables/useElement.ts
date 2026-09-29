@@ -70,9 +70,9 @@ const selectionAnchorId = ref<string | null>(null)
 // without changing the real selection (which would swap the settings panel)
 const highlightedElementId = ref<string | null>(null)
 
-// bumped to ask the code editor to focus the caret on the current
-// selection's line (e.g. after inserting from the ⌘E dock)
-const editorFocusTick = ref(0)
+// bumped to ask the Layers tree to bring the current selection into view
+// (e.g. after inserting from the ⌘E dock)
+const revealTick = ref(0)
 
 export type DropPosition = 'before' | 'after' | 'inside'
 
@@ -427,9 +427,9 @@ export function useElement() {
     highlightedElementId.value = id
   }
 
-  /** ask the code editor to move focus + caret onto the selection's line */
-  function requestEditorFocus() {
-    editorFocusTick.value++
+  /** ask the Layers tree to scroll the selection's row into view */
+  function requestReveal() {
+    revealTick.value++
   }
 
   function selectByLine(line: number) {
@@ -733,7 +733,7 @@ export function useElement() {
     wrapSelectionInDiv,
     highlightedElement,
     highlightElement,
-    editorFocusTick,
-    requestEditorFocus,
+    revealTick,
+    requestReveal,
   }
 }

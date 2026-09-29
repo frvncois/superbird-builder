@@ -27,7 +27,7 @@ import type { ElementNode } from '@/types/editor'
 
 const props = defineProps<{ node: ElementNode }>()
 
-const { selectedElement, selectedElementIds, selectElement, draggingId, dropTarget, highlightedElement, requestEditorFocus } = useElement()
+const { selectedElement, selectedElementIds, selectElement, draggingId, dropTarget, highlightedElement, requestReveal } = useElement()
 const { backend } = useStructure()
 const { pickingFor, pickTarget } = useInteraction()
 const { openMenu } = useContextMenu()
@@ -166,7 +166,7 @@ const { editing, editEl, startEditing, finishEditing, onEditKeydown } = useInlin
   initialText: inlineInitialText,
   commit: commitInlineText,
   escBehavior: 'cancel',
-  onExit: () => requestEditorFocus(), // Esc/Enter returns the caret to the code editor line
+  onExit: () => requestReveal(), // Esc/Enter returns the caret to the code editor line
 })
 
 const handlers = {
@@ -182,7 +182,7 @@ const handlers = {
     }
     fireClickInteractions()
     selectElement(props.node.id)
-    requestEditorFocus() // land the caret on this element's line in the code editor
+    requestReveal() // land the caret on this element's line in the code editor
   },
   contextmenu(e: MouseEvent) {
     e.stopPropagation()

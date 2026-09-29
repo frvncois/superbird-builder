@@ -141,14 +141,6 @@ remains:
 
 ## Refactors
 
-- **Q4 — split `CodeEditor.vue` (2,034 lines, ~7 subsystems).** All subsystems share
-  the single textarea ref and the folding display↔real line mapping (`d2r`/`r2d`,
-  referenced ~29×). The e2e suite is green now, so the gate this was waiting on is
-  satisfied. Safe order: (1) `useCodeFolding(code, foldRanges)` — owns `d2r`/`r2d`/
-  fold state, the one dependency everything else consumes; (2) `useGutterReorder` —
-  drag/keyboard reorder + ghost animation (self-contained after 1, talks to
-  useElement's explicit-map reconcile); (3) the status mini-dropdown + validation
-  display into a small child component. Each step type-checks and ships separately.
 - **D4 — some exported symbols are single-file** (drop the `export` keyword).
   Re-grepped 2026-09-15; the live list is `linkFromToken`, `suggestNextLine`
   (`src/lib/syntax.ts` — read-only per the reconcile invariant, so left alone),
@@ -297,6 +289,29 @@ action on media-library SVGs.
 - **C8 — `scripts/generate-demo.ts` needs `npx tsx` but `tsx` isn't a
   devDependency** and there's no npm script; output path is cwd-relative. Fix: add
   `tsx` to devDependencies and a `gen:demo` script.
+
+## Layers / structure
+
+- **The `?demo` fixture has 8 unclosed `:div` blocks** (`public/demo-project.json`, Home
+  page — 58 `:div` opens against 50 `div:` closes), so the Layers column's issues footer
+  reports 21 diagnostics on the showcase project. The parser is lenient, so it renders,
+  but each unclosed div swallows the siblings that follow it — the nesting is not what
+  `scripts/generate-demo.ts` intends. Pre-existing and newly VISIBLE: the code editor only
+  surfaced diagnostics while its column was open. Fixing means emitting `div:` for a
+  childless container in the generator and regenerating the fixture, which changes the
+  demo's rendered structure — so check the UI specs that assert on demo content.
+
+
+- **The element clipboard does not cross between a page and a component.** ⌘C on the
+  board and ⌘V on a page (or the reverse) does nothing: the page clipboard is dedented
+  code plus per-node props, and a master has no code. Either side alone works.
+- **Deleting or retyping a node in a component master drops any per-instance content on
+  that node.** The push maps instance lines by `alignInstanceLines`, which cannot match a
+  line that no longer exists or whose type changed. Undo restores it.
+- **Multi-selection is still one contiguous run of siblings** (`selectedElementIds`), so
+  the tree offers no ctrl-click across branches.
+- **`parentIndex` (`useRenderNode`) and `targetIndex` (`useInteraction`) remain
+  active-page only**, so they are wrong for a node rendered on the components board.
 
 ## Components library
 

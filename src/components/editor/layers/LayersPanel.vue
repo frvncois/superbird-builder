@@ -31,7 +31,7 @@ const { components } = useComponents()
 const { activeCard } = useComponentBoard()
 const {
   selectedElement, selectedElementIds, selectElement, extendSelection,
-  draggingId, dropTarget, getElement, elementAtLine,
+  draggingId, dropTarget, getElement, elementAtLine, revealTick,
 } = useElement()
 const { backend } = useStructure()
 const { registerDropResolver } = useInsertDrag()
@@ -80,10 +80,12 @@ function ancestorsOf(id: string): string[] {
 }
 
 // a selection made anywhere else — the canvas, a shortcut, the interactions
-// panel's target picker — has to become visible here
+// panel's target picker — has to become visible here. `revealTick` is the
+// explicit ask (after a dock insert, or Escape from the panels); the id watch
+// covers every other selection change.
 watch(
-  () => selectedElement.value?.id,
-  async (id) => {
+  [() => selectedElement.value?.id, revealTick],
+  async ([id]) => {
     if (!id || !findNode(roots.value, id)) return
     reveal(ancestorsOf(id))
     await new Promise(requestAnimationFrame)

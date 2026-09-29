@@ -14,7 +14,7 @@ import { CATALOG } from '@/lib/catalog'
 const { components } = useComponents()
 const { open, closePalette, togglePalette, insertElement, insertComponent, insertCatalog } =
   useCommandPalette()
-const { requestEditorFocus } = useElement()
+const { requestReveal } = useElement()
 const { backend } = useStructure()
 const { startInsertDrag } = useInsertDrag()
 
@@ -169,7 +169,7 @@ onBeforeUnmount(() => {
 
 function pick(item: DockItem) {
   item.run() // stays open — add several in a row
-  requestEditorFocus() // drop the caret on the new element's line
+  requestReveal() // drop the caret on the new element's line
 }
 
 // spatial navigation over the wrapping card grid: from the active card,

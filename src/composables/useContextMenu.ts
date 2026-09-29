@@ -10,10 +10,6 @@ const menu = ref<{ x: number; y: number; targetId: string } | null>(null)
 // the element clipboard lives in useStructure with the ops that use it
 const copiedClasses = ref<string | null>(null)
 const copiedInteractions = ref<InteractionBinding[] | null>(null)
-// tracks whether the most recent copy/cut was an element (vs. text) so the
-// code editor can decide between element-paste and native text-paste on ⌘V
-const clipboardIsElement = ref(false)
-
 export function useContextMenu() {
   const { selectedElement, selectedElementIds, getElement, selectElement } = useElement()
   const { backend, clipboard } = useStructure()
@@ -26,7 +22,6 @@ export function useContextMenu() {
 
   function copySelection() {
     backend.value.copy(selectedElementIds.value)
-    if (clipboard.value) clipboardIsElement.value = true
   }
 
   function pasteOnSelection() {
@@ -68,9 +63,7 @@ export function useContextMenu() {
   }
 
   function copy() {
-    if (!menu.value) return
-    backend.value.copy([menu.value.targetId])
-    if (clipboard.value) clipboardIsElement.value = true
+    if (menu.value) backend.value.copy([menu.value.targetId])
   }
 
   function paste() {
@@ -112,7 +105,6 @@ export function useContextMenu() {
     copiedBlock,
     copiedClasses,
     copiedInteractions,
-    clipboardIsElement,
     openMenu,
     closeMenu,
     duplicate,

@@ -16,8 +16,9 @@ list, it does not exist yet: **report it as a limitation instead of working arou
    `edit_elements` call edits many elements at once.
 3. **Markers are automatic — never type them.** In the code you may see `(+)` (styled),
    `[+]` (own content), `{+}` (interactions) after element tokens. These are display-only
-   indicators the server maintains for the human's editor. Writing them yourself does
-   nothing; removing them does nothing. Write clean tokens and let them appear.
+   indicators the server maintains FOR YOU — the human's editor is a layers tree and shows
+   the same three facts as row badges. Writing them yourself does nothing; removing them
+   does nothing. Write clean tokens and let them appear.
 4. **Never touch the instance's files or store directly.** If you can see the server's
    `data/` directory or the raw `/api/store` keys, do not edit them: structural edits are
    *reconciled* so elements keep their identity (styles, content, comments, interaction

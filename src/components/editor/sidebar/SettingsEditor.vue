@@ -52,7 +52,7 @@ const { activePanelId, togglePanel, closePanel } = usePanel()
 const activePanel = computed(() => panels.value.find((p) => p.id === activePanelId.value))
 const { pickingFor } = useInteraction()
 const { detail } = useEffectDetail()
-const { selectedElement, isMultiSelect, requestEditorFocus } = useElement()
+const { selectedElement, isMultiSelect, requestReveal } = useElement()
 
 // Escape always returns to the code editor with the caret on the current
 // selection: it closes an open panel first, and otherwise pulls focus back from
@@ -66,9 +66,9 @@ function onWindowKeydown(e: KeyboardEvent) {
   if (pickingFor.value) return // target picking cancels first
   if (activePanelId.value) {
     closePanel()
-    requestEditorFocus()
+    requestReveal()
   } else if (!isEditable(document.activeElement)) {
-    requestEditorFocus()
+    requestReveal()
   }
 }
 onMounted(() => window.addEventListener('keydown', onWindowKeydown))
