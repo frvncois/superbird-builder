@@ -7,6 +7,7 @@ import { hydrateStore, storeGet } from '@/lib/store'
 import { hydratePublishState, PUBLISHED_BASELINE_KEY, PUBLISHED_INFO_KEY } from './usePublish'
 import { useMedia } from './useMedia'
 import { useLiveSync } from './useLiveSync'
+import { useMarkerSync } from './useMarkerSync'
 
 // Shared admin-zone boot: hydrate the server-backed store and start
 // persistence. Lives at module scope so it runs exactly once no matter
@@ -60,6 +61,7 @@ export function useEditorBoot() {
 
       usePersistence().init() // sync, runs against the warm cache
       startEditTracking() // stamp updatedAt/updatedBy on edited pages/entries
+      useMarkerSync() // keep the agent-facing code markers true to node state
       useLiveSync().start() // live-apply + hard-lock for MCP agent sessions
       ready.value = true
 

@@ -51,6 +51,9 @@ const isSlider = computed(() => selectedElement.value?.type === 'slider')
 /** both elements that repeat a child template per entry — they share the whole
  * source / order / filter / hand-pick UI. A slider's source is optional. */
 const isList = computed(() => isCollectionList.value || isSlider.value)
+/** :collection-item[name] picks ONE entry to render through its template — its
+ *  source was only ever settable by typing the arg in code */
+const hasSource = computed(() => isList.value || isCollectionItem.value)
 
 // --- tag ---
 
@@ -188,6 +191,8 @@ const listOptions = computed(() => {
   const options = collections.value.map((c) => ({ label: c.name, value: c.name }))
   // a slider works with no source at all — then each child block is one slide
   if (isSlider.value) options.unshift({ label: 'None (manual slides)', value: '' })
+  // one picked entry comes from a collection, never from a repeating field
+  if (isCollectionItem.value) return options
   for (const f of activeCollection.value?.fields ?? []) {
     // a gallery field repeats over its images, exactly like a multi-reference
     // field repeats over the entries it points to
@@ -826,11 +831,13 @@ const src = computed({
       </p>
     </GroupPopover>
 
-    <GroupPopover v-if="isList" label="Source">
+    <GroupPopover v-if="hasSource" label="Source">
       <SelectUI :options="listOptions" v-model="listSource" />
       <p class="text-[10px] text-muted-foreground">
         {{
-          isSlider
+          isCollectionItem
+            ? 'The collection this renders one entry of, through its template.'
+            : isSlider
             ? 'With a source each entry becomes a slide; with none, each block inside is one slide.'
             : 'A collection repeats all entries; a multi-reference field repeats the entries it points to.'
         }}

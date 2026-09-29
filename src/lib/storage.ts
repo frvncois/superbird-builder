@@ -1,6 +1,6 @@
 import type { Interaction, InteractionBinding, Project } from '@/types/editor'
 import { parseSetup, replaceSetup, slugify } from './document'
-import { reconcile } from './syntax'
+import { applyNodeMarkers, reconcile } from './syntax'
 import { defaultSettings } from './settings'
 import { walkNodes } from './tree'
 import { storeGet } from './store'
@@ -130,6 +130,14 @@ export function migrateStoredProject(parsed: Project): Project | null {
         changed = true
       })
       if (changed) page.code = lines.join('\n')
+    }
+    // The display-only markers used to be kept in step by a watcher that only
+    // ran while the code editor was mounted, so any styling done with that
+    // column closed left them stale. The watcher is app-level now — normalize
+    // once HERE, before history starts, or merely opening an old project would
+    // write, autosave, add an undo step and stamp it as edited.
+    for (const page of parsed.pages) {
+      page.code = applyNodeMarkers(page.code, page.elements)
     }
     return parsed
   } catch {

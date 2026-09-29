@@ -7,7 +7,7 @@
  * backend and the collapse state through every level of a deep tree costs
  * more than it documents.
  */
-import { computed } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { ChevronRight, Palette, Paperclip, Zap } from 'lucide-vue-next'
 import { elementIcon } from '@/lib/elementIcons'
 import { isComponentType } from '@/lib/components'
@@ -21,14 +21,17 @@ import { useLayerState } from './layerState'
 import type { ElementNode } from '@/types/editor'
 
 const props = defineProps<{ node: ElementNode; depth: number }>()
+const emit = defineEmits<{ 'row-pointerdown': [e: PointerEvent, id: string] }>()
 
-const { selectedElementIds, selectElement, highlightElement, highlightedElement } = useElement()
+const {
+  selectedElementIds, selectElement, highlightElement, highlightedElement, dropTarget,
+} = useElement()
 const { masterFor } = useComponents()
 const { openMenu } = useContextMenu()
 const { pickingFor, pickTarget } = useInteraction()
 const { backend } = useStructure()
 const { togglePanel } = usePanel()
-const { isCollapsed, toggle } = useLayerState()
+const { isCollapsed, toggle, editingRefId } = useLayerState()
 
 const selected = computed(() => selectedElementIds.value.includes(props.node.id))
 const highlighted = computed(() => highlightedElement.value?.id === props.node.id)
@@ -89,9 +92,48 @@ function onClick(e: MouseEvent) {
   selectElement(props.node.id)
 }
 
-const canDrop = computed(
-  () => backend.value.isContainer(props.node) || props.node.children.length > 0,
+/** where a drag currently wants to land relative to THIS row */
+const dropHere = computed(() =>
+  dropTarget.value?.id === props.node.id ? dropTarget.value.position : null,
 )
+
+// --- inline ref rename: the only way a human can set a #ref now ---
+
+const editing = computed(() => editingRefId.value === props.node.id)
+const refDraft = ref('')
+const refError = ref('')
+const refInput = ref<HTMLInputElement>()
+
+watch(editing, async (on) => {
+  if (!on) return
+  refDraft.value = props.node.ref ?? ''
+  refError.value = ''
+  await nextTick()
+  refInput.value?.focus()
+  refInput.value?.select()
+})
+
+function startRename() {
+  if (backend.value.can(props.node, 'ref')) editingRefId.value = props.node.id
+}
+
+function commitRef() {
+  if (!editing.value) return
+  const next = refDraft.value.trim()
+  if (next === (props.node.ref ?? '')) {
+    editingRefId.value = null
+    return
+  }
+  if (backend.value.setRef(props.node.id, next || null)) {
+    editingRefId.value = null
+    return
+  }
+  // setRef refuses a bad charset, the body, and a name already used on this
+  // page — say which, rather than just snapping back
+  refError.value = /^[a-zA-Z][a-zA-Z0-9-]*$/.test(next)
+    ? 'Already used on this page'
+    : 'Letters, digits and dashes; must start with a letter'
+}
 </script>
 
 <template>
@@ -99,16 +141,21 @@ const canDrop = computed(
     <div
       :data-layer-row="node.id"
       class="group/row flex h-7 items-center gap-1 rounded-lg pr-1 text-xs"
-      :class="
+      :class="[
         selected
           ? 'bg-accent/30 text-foreground'
           : highlighted
             ? 'bg-accent/15 text-foreground'
-            : 'text-muted-foreground hover:bg-accent/15'
-      "
+            : 'text-muted-foreground hover:bg-accent/15',
+        dropHere === 'before' && 'shadow-[inset_0_2px_0_0_#0ea5e9]',
+        dropHere === 'after' && 'shadow-[inset_0_-2px_0_0_#0ea5e9]',
+        dropHere === 'inside' && 'ring-1 ring-sky-500',
+      ]"
       :style="{ paddingLeft: `${depth * 12 + 4}px` }"
       @click="onClick"
+      @dblclick="startRename"
       @contextmenu="openMenu($event, node.id)"
+      @pointerdown="emit('row-pointerdown', $event, node.id)"
       @pointerenter="highlightElement(node.id)"
       @pointerleave="highlightElement(null)"
     >
@@ -125,7 +172,23 @@ const canDrop = computed(
       <span v-else class="size-4 shrink-0" />
 
       <component :is="elementIcon(node.type)" class="size-3 shrink-0" />
-      <span class="min-w-0 flex-1 truncate" :class="selected && 'font-medium'">
+      <input
+        v-if="editing"
+        ref="refInput"
+        v-model="refDraft"
+        v-tooltip="refError ? { text: refError, side: 'bottom' } : ''"
+        type="text"
+        spellcheck="false"
+        placeholder="ref"
+        class="min-w-0 flex-1 rounded bg-input px-1 text-xs outline-none"
+        :class="refError && 'ring-1 ring-danger'"
+        @click.stop
+        @pointerdown.stop
+        @blur="commitRef"
+        @keydown.enter.stop.prevent="commitRef"
+        @keydown.esc.stop.prevent="editingRefId = null"
+      />
+      <span v-else class="min-w-0 flex-1 truncate" :class="selected && 'font-medium'">
         {{ label }}
         <span v-if="secondary" class="ml-1 text-[10px] opacity-50">{{ secondary }}</span>
       </span>
@@ -145,7 +208,13 @@ const canDrop = computed(
     </div>
 
     <template v-if="open">
-      <LayerRow v-for="child in node.children" :key="child.id" :node="child" :depth="depth + 1" />
+      <LayerRow
+        v-for="child in node.children"
+        :key="child.id"
+        :node="child"
+        :depth="depth + 1"
+        @row-pointerdown="(e, id) => emit('row-pointerdown', e, id)"
+      />
     </template>
   </div>
 </template>

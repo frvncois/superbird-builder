@@ -1,0 +1,188 @@
+import { test, expect, type Page } from '@playwright/test'
+
+// The Layers tree — the surface that replaced the code editor.
+//
+// What matters here is what the editor was the ONLY way to do, and what no
+// unit check reaches: moving an element INTO another container (the canvas
+// drag has only ever offered before/after), naming a ref, and the keyboard
+// route into the panels. Assertions land on the published export where they
+// can, so this keeps its value through a reskin.
+//
+// Named to sort AFTER smoke.spec: smoke owns the first-run flow and needs a
+// server with no admin account yet, so any spec that logs in has to run later.
+
+const ADMIN = { email: 'smoke@example.com', password: 'supersecret1' }
+
+async function openEditor(page: Page) {
+  await page.goto('/admin/')
+  const projectName = page.getByPlaceholder('Project name')
+  const email = page.getByPlaceholder('Email')
+  const preview = page.getByRole('button', { name: 'Preview' })
+  await expect(projectName.or(email).or(preview).first()).toBeVisible({ timeout: 30_000 })
+
+  if (await projectName.isVisible()) {
+    await projectName.fill('Smoke Co')
+    await email.fill(ADMIN.email)
+    await page.getByPlaceholder('Password (min. 8 characters)').fill(ADMIN.password)
+    await page.getByPlaceholder('Confirm password').fill(ADMIN.password)
+    await page.getByRole('button', { name: 'Setup project' }).click()
+  } else if (await email.isVisible()) {
+    await email.fill(ADMIN.email)
+    await page.getByPlaceholder('Password', { exact: true }).fill(ADMIN.password)
+    await page.getByRole('button', { name: 'Sign in' }).click()
+  }
+  await page.waitForURL(/\/admin(\?.*)?$/, { timeout: 30_000 })
+  await page.goto('/admin?demo')
+  await expect(preview).toBeVisible({ timeout: 30_000 })
+}
+
+async function publish(page: Page) {
+  await page.keyboard.press('ControlOrMeta+p')
+  await expect(page.getByText('Published!')).toBeVisible({ timeout: 30_000 })
+}
+
+const rail = (page: Page, name: string) => page.getByRole('button', { name, exact: true })
+const rows = (page: Page) => page.locator('[data-layer-row]')
+
+async function openLayers(page: Page) {
+  await rail(page, 'Layers').click()
+  await expect(rows(page).first()).toBeVisible({ timeout: 15_000 })
+}
+
+/** insert one element from the ⌘E dock at the current selection */
+async function insertFromDock(page: Page, key: string) {
+  await page.keyboard.press('ControlOrMeta+e')
+  await page.locator(`[data-dock-item="${key}"]`).click()
+  await page.keyboard.press('Escape')
+}
+
+/** drag one row onto another, landing in the given zone of the target row */
+async function dragRow(page: Page, from: string, to: string, zone: 'before' | 'after' | 'inside') {
+  const a = await page.locator(`[data-layer-row="${from}"]`).boundingBox()
+  const b = await page.locator(`[data-layer-row="${to}"]`).boundingBox()
+  if (!a || !b) throw new Error('row not found')
+  const y = b.y + b.height * (zone === 'before' ? 0.1 : zone === 'after' ? 0.9 : 0.5)
+  await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(b.x + b.width / 2, y, { steps: 12 })
+  await page.mouse.up()
+}
+
+/** the node id of the row at `index` */
+const idAt = async (page: Page, index: number) =>
+  (await rows(page).nth(index).getAttribute('data-layer-row'))!
+
+test('the layers column lists the page and follows the canvas selection', async ({ page }) => {
+  await openEditor(page)
+  await openLayers(page)
+
+  // the body is the root row, and the tree is deep enough to be real
+  await expect(rows(page).first()).toContainText('body')
+  expect(await rows(page).count()).toBeGreaterThan(5)
+
+  // selecting on the canvas reveals and highlights the row
+  await page.locator('[data-node-id]').nth(6).click()
+  const id = await page.locator('[data-node-id]').nth(6).getAttribute('data-node-id')
+  await expect(page.locator(`[data-layer-row="${id}"]`)).toHaveClass(/bg-accent\/30/)
+})
+
+test('dragging a row INTO a container re-parents it, and it publishes that way', async ({
+  page,
+}) => {
+  await openEditor(page)
+  await openLayers(page)
+
+  // build a known shape at the end of the body: a section, then a heading
+  // beside it (not inside it)
+  await rows(page).first().click() // the body
+  await insertFromDock(page, 'section')
+  const sectionId = await idAt(page, (await rows(page).count()) - 1)
+  await rows(page).first().click()
+  await insertFromDock(page, 'heading')
+  const headingId = await idAt(page, (await rows(page).count()) - 1)
+
+  // they are siblings — the heading is NOT inside the section
+  await expect(page.locator(`[data-layer-row="${sectionId}"]`)).toBeVisible()
+  const depthOf = async (id: string) =>
+    Number(
+      (await page.locator(`[data-layer-row="${id}"]`).evaluate(
+        (el) => (el as HTMLElement).style.paddingLeft,
+      )).replace('px', ''),
+    )
+  expect(await depthOf(headingId)).toBe(await depthOf(sectionId))
+
+  // re-parenting by dragging into the middle of a container: the one thing
+  // only the code editor could do
+  await dragRow(page, headingId, sectionId, 'inside')
+  await expect
+    .poll(async () => (await depthOf(headingId)) > (await depthOf(sectionId)))
+    .toBe(true)
+
+  await publish(page)
+  await page.goto('/')
+  // the published markup carries the nesting, so it really moved in the tree
+  const nested = await page.locator('section').filter({ has: page.locator('h2') }).count()
+  expect(nested).toBeGreaterThan(0)
+})
+
+test('a row names a ref, and refuses one already used on the page', async ({ page }) => {
+  await openEditor(page)
+  await openLayers(page)
+
+  await rows(page).first().click()
+  await insertFromDock(page, 'section')
+  const first = await idAt(page, (await rows(page).count()) - 1)
+  await rows(page).first().click()
+  await insertFromDock(page, 'section')
+  const second = await idAt(page, (await rows(page).count()) - 1)
+
+  // Enter on the selected row opens the inline rename (the ref had no UI at
+  // all before this — it could only be typed in code)
+  await page.locator(`[data-layer-row="${first}"]`).dblclick()
+  const input = page.locator(`[data-layer-row="${first}"] input`)
+  await input.fill('hero')
+  await input.press('Enter')
+  await expect(page.locator(`[data-layer-row="${first}"]`)).toContainText('#hero')
+
+  // the same ref twice on one page is refused, and says why
+  await page.locator(`[data-layer-row="${second}"]`).dblclick()
+  const dup = page.locator(`[data-layer-row="${second}"] input`)
+  await dup.fill('hero')
+  await dup.press('Enter')
+  await expect(dup).toBeVisible() // still editing: the write was refused
+  await expect(page.locator(`[data-layer-row="${second}"]`)).not.toContainText('#hero')
+})
+
+test('S, D and I open the panels for the selected row', async ({ page }) => {
+  await openEditor(page)
+  await openLayers(page)
+
+  // the code editor's typed '(' / '[' / '{' were the only keyboard way in
+  await rows(page).nth(3).click()
+  await page.keyboard.press('s')
+  await expect(page.getByText('CLASSES')).toBeVisible()
+  await page.keyboard.press('i')
+  await expect(page.getByText('CLASSES')).toBeHidden()
+  await page.keyboard.press('d')
+  await expect(page.getByText('CLASSES')).toBeHidden()
+})
+
+test('the columns share one slot, and Layers works on either canvas', async ({ page }) => {
+  await openEditor(page)
+  await openLayers(page)
+
+  await rail(page, 'Pages').click()
+  await expect(page.getByPlaceholder('Search pages, items…')).toBeVisible()
+  await expect(rows(page)).toHaveCount(0)
+
+  // Components puts the board on the canvas AND takes the column
+  await rail(page, 'Components').click()
+  await expect(page.getByPlaceholder('Search components…')).toBeVisible()
+  await expect(page.locator('[data-board-card]').first()).toBeVisible()
+
+  // Layers takes the column back; the board stays, because the canvas and the
+  // column are independent
+  await rail(page, 'Layers').click()
+  await expect(page.getByPlaceholder('Search components…')).toBeHidden()
+  await expect(page.locator('[data-board-card]').first()).toBeVisible()
+})

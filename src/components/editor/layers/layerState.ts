@@ -12,6 +12,9 @@ import { ref } from 'vue'
  */
 const collapsed = ref(new Set<string>())
 
+/** the row whose ref is being renamed inline, if any */
+const editingRefId = ref<string | null>(null)
+
 export function useLayerState() {
   const isCollapsed = (id: string) => collapsed.value.has(id)
 
@@ -34,5 +37,5 @@ export function useLayerState() {
     collapsed.value = next
   }
 
-  return { collapsed, isCollapsed, toggle, setCollapsed, reveal }
+  return { collapsed, isCollapsed, toggle, setCollapsed, reveal, editingRefId }
 }
