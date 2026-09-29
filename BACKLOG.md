@@ -332,6 +332,12 @@ element (`src/lib/shared/svg.js`).
   clip path needs one) and ids are document-wide, so two custom SVGs defining `#a` on
   one page resolve to whichever comes first. Bundled icons carry none. A fix would
   prefix ids per node at sanitize time.
+- **A variant cannot hide a part.** Variants are style only, so Button's `size: icon`
+  squares the button but leaves its label in — the drawing on the board shows the text
+  clipped. An instance hides the label itself (`button(…, {iconOnly: true})` does in
+  the library). The day an option needs to decide visibility, that is a second kind of
+  override beside `variantClasses`, with a rule for who wins against an instance's own
+  `hidden`.
 - **Variant options layer in axis order.** Two axes overriding the same property is
   resolved by which axis is declared last, which nothing in the UI says. Keep axes
   orthogonal.

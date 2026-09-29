@@ -4,6 +4,7 @@ import { useElement } from '@/composables/useElement'
 import { useProject } from '@/composables/useProject'
 import { resolveClassesForWidth } from '@/lib/responsive'
 import { FRAME_BREAKPOINT } from '@/components/editor/canvas/frameScope'
+import { VARIANT_ACTIVE } from '@/components/editor/canvas/variantScope'
 import { useStructure } from '@/composables/useStructure'
 import EntryScope from '@/components/shared/EntryScope.vue'
 import { useInteraction } from '@/composables/useInteraction'
@@ -114,7 +115,11 @@ const canvasDotCount = computed(() => {
 // selection/highlight outlines only render in the frame being edited, so one
 // selection doesn't light up every breakpoint at once. Always true when the
 // element isn't in a multi-frame canvas.
+// …and, on the components board, only in the drawing being edited: a
+// component with variants is drawn once per option
+const variantActive = inject(VARIANT_ACTIVE, null)
 const inActiveFrame = computed(() => {
+  if (variantActive && !variantActive.value) return false
   if (frameBreakpointId === null) return true
   return frameBreakpointId === (activeBreakpointId.value ?? baseBreakpoint.value?.id ?? null)
 })

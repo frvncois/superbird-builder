@@ -11,6 +11,7 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import CanvasViewport from '@/components/editor/canvas/CanvasViewport.vue'
 import ElementRenderer from '@/components/editor/canvas/ElementRenderer.vue'
+import VariantScope from '@/components/editor/canvas/VariantScope.vue'
 import InsertDock from '@/components/editor/canvas/InsertDock.vue'
 import { useComponentBoard, useComponentBoardSession } from '@/composables/useComponentBoard'
 import type { BoardCard } from '@/composables/useComponentBoard'
@@ -26,10 +27,26 @@ useComponentBoardSession()
 const { groups, focusRequest, focusedKey } = useComponentBoard()
 const { selectElement } = useElement()
 const { settings } = useSettings()
-const { picksOnBoard, setPreviewPick } = useVariants()
+const { picksFor, activeDrawing, wear } = useVariants()
 
-function onPick(card: BoardCard, axis: string, e: Event) {
-  setPreviewPick(card.def, axis, (e.target as HTMLSelectElement).value)
+const isActive = (card: BoardCard, axis: string, option: string) =>
+  activeDrawing(card.def) === `${axis}:${option}`
+
+// A drawing is as wide as its component needs. Page furniture gets a desktop
+// width; something that sizes itself (a button, a badge) gets no width at all,
+// so six of them sit in a row instead of six columns of white; the rest gets
+// the narrow card.
+const SELF_SIZED = /(^| )(inline-flex|inline-block|inline|w-fit)( |$)/
+function surfaceStyle(card: BoardCard) {
+  const root = card.def.root.children[0]
+  const classes = root?.classes ?? ''
+  const selfSized =
+    !!card.def.variants?.length && SELF_SIZED.test(classes) && !/(^| )w-full( |$)/.test(classes)
+  return {
+    width: isWide(card) ? `${WIDE}px` : selfSized ? undefined : `${NARROW}px`,
+    fontFamily: settings.value.fonts.family || undefined,
+    contain: 'layout',
+  }
 }
 
 // cards are far smaller than page frames, so the board opens closer in
@@ -99,45 +116,72 @@ function onBoardClick() {
                 <span v-if="card.preview" class="rounded-full bg-input px-1.5 py-0.5 text-[9px]">
                   Library
                 </span>
-                <!-- which option of each axis the card is WEARING. View state,
-                     never on the component: changing it must not count as an
-                     edit, or browsing a library entry would add it. A native
-                     select: this label is counter-scaled inside the canvas's
-                     transformed world, where SelectUI's own dropdown would be
-                     positioned in the wrong space -->
-                <label
-                  v-for="axis in card.def.variants ?? []"
-                  :key="axis.name"
-                  class="flex items-center gap-1"
-                  @click.stop
-                  @pointerdown.stop
-                >
-                  <span>{{ axis.name }}</span>
-                  <select
-                    class="rounded-md bg-input px-1 py-0.5 text-[10px] text-foreground outline-none"
-                    :data-board-pick="`${card.def.name}:${axis.name}`"
-                    :value="picksOnBoard(card.def)[axis.name]"
-                    @change="onPick(card, axis.name, $event)"
-                  >
-                    <option v-for="option in axis.options" :key="option" :value="option">
-                      {{ option }}
-                    </option>
-                  </select>
-                </label>
               </div>
               <!-- `contain: layout` makes the card the containing block for
                    position:fixed, so a dialog's overlay covers its own card
                    rather than the whole editor -->
+              <!-- a component with variants is drawn once per option, side by
+                   side: what it comes in is something to SEE, and the drawing
+                   pointed at is the one the panels edit -->
               <div
+                v-for="axis in card.def.variants ?? []"
+                :key="axis.name"
+                class="flex flex-col gap-3"
+              >
+                <span
+                  class="origin-bottom-left text-[10px] whitespace-nowrap text-muted-foreground select-none"
+                  :style="{ transform: `scale(${1 / zoom})` }"
+                >
+                  {{ axis.name }}
+                </span>
+                <div class="flex items-start gap-8" :class="isWide(card) && 'flex-col'">
+                  <div
+                    v-for="option in axis.options"
+                    :key="option"
+                    :data-board-variant="`${card.def.name}:${axis.name}:${option}`"
+                    :data-board-variant-active="isActive(card, axis.name, option) || undefined"
+                    class="flex flex-col gap-2"
+                    @pointerdown.capture="wear(card.def, axis.name, option)"
+                  >
+                    <span
+                      class="origin-bottom-left text-[10px] whitespace-nowrap select-none"
+                      :class="
+                        isActive(card, axis.name, option)
+                          ? 'font-medium text-foreground'
+                          : 'text-muted-foreground'
+                      "
+                      :style="{ transform: `scale(${1 / zoom})` }"
+                    >
+                      {{ option }}
+                    </span>
+                    <div
+                      data-site-scope
+                      data-board-card-surface
+                      class="bg-white text-black shadow-lg"
+                      :class="[
+                        isWide(card) ? '' : 'p-6',
+                        isActive(card, axis.name, option) && 'ring-2 ring-accent',
+                      ]"
+                      :style="surfaceStyle(card)"
+                      @click.stop="focusedKey = card.key"
+                    >
+                      <VariantScope
+                        :picks="picksFor(card.def, axis.name, option)"
+                        :active="isActive(card, axis.name, option)"
+                      >
+                        <ElementRenderer :node="card.def.root" />
+                      </VariantScope>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div
+                v-if="!card.def.variants?.length"
                 data-site-scope
                 data-board-card-surface
                 class="bg-white text-black shadow-lg"
                 :class="isWide(card) ? '' : 'p-6'"
-                :style="{
-                  width: `${isWide(card) ? WIDE : NARROW}px`,
-                  fontFamily: settings.fonts.family || undefined,
-                  contain: 'layout',
-                }"
+                :style="surfaceStyle(card)"
                 @click.stop="focusedKey = card.key"
               >
                 <ElementRenderer :node="card.def.root" />

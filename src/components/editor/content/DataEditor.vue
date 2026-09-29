@@ -639,10 +639,7 @@ const instanceAxes = computed(() =>
   (instance.value?.def.variants ?? []).map((axis) => ({
     name: axis.name,
     value: instance.value!.picks[axis.name] ?? axis.default,
-    options: axis.options.map((option) => ({
-      label: option === axis.default ? `${option} (default)` : option,
-      value: option,
-    })),
+    options: axis.options.map((option) => ({ label: option, value: option })),
   })),
 )
 
@@ -827,14 +824,33 @@ const src = computed({
       :label="instance.def.name"
       data-instance-section
     >
-      <RowUI v-for="axis in instanceAxes" :key="axis.name" :label="axis.name">
-        <SelectUI
-          :options="axis.options"
-          :model-value="axis.value"
-          :data-instance-pick="axis.name"
-          @update:model-value="(v) => pickVariant(axis.name, v)"
-        />
-      </RowUI>
+      <!-- every option in sight, one click each: a dropdown would hide what
+           the component comes in behind a click -->
+      <div
+        v-for="axis in instanceAxes"
+        :key="axis.name"
+        class="flex flex-col gap-1"
+        :data-instance-pick="axis.name"
+      >
+        <span class="text-[10px] text-muted-foreground">{{ axis.name }}</span>
+        <div class="flex flex-wrap gap-1">
+          <button
+            v-for="option in axis.options"
+            :key="option.value"
+            type="button"
+            class="h-6 rounded-md px-2 text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent"
+            :class="
+              axis.value === option.value
+                ? 'bg-accent/30 font-medium text-foreground'
+                : 'bg-input text-muted-foreground hover:text-foreground'
+            "
+            :aria-pressed="axis.value === option.value"
+            @click="pickVariant(axis.name, option.value)"
+          >
+            {{ option.value }}
+          </button>
+        </div>
+      </div>
       <RowUI v-for="part in instanceParts" :key="part.node.id" :label="part.label">
         <ToggleUI
           :model-value="part.shown"

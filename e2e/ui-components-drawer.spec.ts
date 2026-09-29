@@ -118,7 +118,7 @@ test('the board shows every component, and editing a library one adds it', async
   // must leave a library entry out of the project. (It used to add it — the
   // panel wrote a stray `flex` beside `inline-flex` just for being opened.)
   const button = boardCard(page, 'catalog:button')
-  await button.locator('button').click() // the rendered element, not the card label
+  await button.locator('button').first().click() // the rendered element, not the card label
   await page.getByRole('button', { name: 'Style', exact: true }).click()
   await expect(page.getByText('CLASSES')).toBeVisible()
   await page.keyboard.press('Escape')

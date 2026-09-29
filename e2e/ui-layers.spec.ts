@@ -340,7 +340,7 @@ test('removing an element from a component removes it from the page instance', a
   // delete the heading on the board — the instance on the page loses it too
   await rail(page, 'Components').click()
   await page.locator('[data-board-card]').filter({ hasText: 'Heads up' }).first()
-    .getByText('Heads up').click()
+    .getByText('Heads up').first().click()
   await page.keyboard.press('Backspace')
 
   await publish(page)

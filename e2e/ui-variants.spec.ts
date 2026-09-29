@@ -1,4 +1,4 @@
-import { test, expect, type Page, type Locator } from '@playwright/test'
+import { test, expect, type Page } from '@playwright/test'
 import { loadFixture } from './fixtures/project'
 
 // Variants — how ONE component comes in several looks.
@@ -87,12 +87,6 @@ async function insertFromDock(page: Page, key: string) {
 }
 
 
-/** pick an option in a SelectUI — the app's own panel, not a native select */
-async function choose(select: Locator, label: string) {
-  await select.getByRole('button').first().click()
-  await select.getByRole('button', { name: label, exact: true }).click()
-}
-
 test('an axis is named, an option styled, and one instance of two wears it', async ({ page }) => {
   await openEditor(page)
   await openLayers(page)
@@ -135,29 +129,32 @@ test('an axis is named, an option styled, and one instance of two wears it', asy
   await expect(page.locator('[data-variant-error]')).toContainText('already has')
   await page.getByRole('button', { name: 'Back', exact: true }).click()
 
-  // --- wear the option on the board, then style it
-  const pick = page.locator('[data-board-pick="Button:tone"]')
-  await pick.selectOption('loud')
-  await componentRow(page, 'Button').locator('[data-row-toggle]').click()
-  await rows(page).first().click() // the master's <button>
+  // --- the board draws the component once per option: point at one, style it
+  const drawing = (option: string) => page.locator(`[data-board-variant="Button:tone:${option}"]`)
+  await expect(page.locator('[data-board-variant^="Button:variant:"]')).toHaveCount(6)
+  await expect(page.locator('[data-board-variant^="Button:tone:"]')).toHaveCount(2)
+  // by its edge: its centre is the span holding its words, which is what a
+  // click there would select
+  await drawing('loud').locator('button[data-node-id]').click({ position: { x: 3, y: 3 } })
+  await expect(drawing('loud')).toHaveAttribute('data-board-variant-active', 'true')
   await page.getByRole('button', { name: 'Style', exact: true }).click()
 
+  // pointing at the drawing is what chose the layer: nothing to pick
   const layer = page.locator('[data-style-layer]')
-  await choose(layer, 'tone: loud')
+  await expect(layer.getByRole('button', { name: 'tone: loud' })).toHaveAttribute('aria-pressed', 'true')
   const classes = page.getByPlaceholder('Add class')
   await classes.fill('h-8')
   await page.keyboard.press('Enter')
   await classes.fill('px-3')
   await page.keyboard.press('Enter')
 
-  // the card wears it at once…
-  const onBoard = page.locator('[data-board-card] button[data-node-id]').first()
-  await expect(onBoard).toHaveClass(/(^| )h-8( |$)/)
-  await expect(onBoard).not.toHaveClass(/(^| )h-9( |$)/)
-  // …and taking the option off shows the base again: the override is its own
-  await pick.selectOption('default')
-  await expect(onBoard).toHaveClass(/(^| )h-9( |$)/)
-  await expect(onBoard).not.toHaveClass(/(^| )h-8( |$)/)
+  // that drawing wears it at once, and the others do not: the override is its own
+  const loud = drawing('loud').locator('button[data-node-id]')
+  const plain = drawing('default').locator('button[data-node-id]')
+  await expect(loud).toHaveClass(/(^| )h-8( |$)/)
+  await expect(loud).not.toHaveClass(/(^| )h-9( |$)/)
+  await expect(plain).toHaveClass(/(^| )h-9( |$)/)
+  await expect(plain).not.toHaveClass(/(^| )h-8( |$)/)
   await page.keyboard.press('Escape')
 
   // --- one instance of the two wears it
@@ -165,7 +162,7 @@ test('an axis is named, an option styled, and one instance of two wears it', asy
   await openLayers(page)
   await instances.first().click()
   await page.getByRole('button', { name: 'Data', exact: true }).click()
-  await choose(page.locator('[data-instance-pick="tone"]'), 'loud')
+  await page.locator('[data-instance-pick="tone"]').getByRole('button', { name: 'loud' }).click()
   await page.keyboard.press('Escape')
 
   await publish(page)

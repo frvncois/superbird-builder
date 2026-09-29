@@ -9,6 +9,7 @@ import { useMotion } from './useMotion'
 import { appearRootMargin, composeMotionStyle, effectiveAppearMode } from '@/lib/motion'
 import { useProject } from './useProject'
 import { FRAME_BREAKPOINT } from '@/components/editor/canvas/frameScope'
+import { VARIANT_PICKS } from '@/components/editor/canvas/variantScope'
 import { entryKey } from '@/components/shared/EntryScope.vue'
 import { refDisplay, resolveBinding, resolveListScope, applyListQuery, mediaUrls } from '@/lib/shared/fields.js'
 import { isRich, sanitizeRich } from '@/lib/shared/richtext.js'
@@ -92,6 +93,8 @@ export function useRenderNode(
   // canvas, else the live viewport (Preview / published site). Drives which
   // breakpoint-scoped interactions contribute their classes.
   const frameBreakpointId = inject(FRAME_BREAKPOINT, null)
+  // on the components board: the variant options this drawing wears
+  const shownPicks = inject(VARIANT_PICKS, null)
   const renderBreakpointId = computed(() => frameBreakpointId ?? liveBreakpointId.value)
   /** the fixed width of the canvas frame this node renders in, null outside the
    * multi-frame canvas (Preview and the published site have a real viewport) */
@@ -401,7 +404,7 @@ export function useRenderNode(
   const baseClasses = computed(() => {
     // the master's classes inside an instance, with the instance's variant
     // options layered on (lib/variants) — or the node's own
-    const own = variantClassesFor(node.value, mapping.value)
+    const own = variantClassesFor(node.value, mapping.value, shownPicks?.value)
     const interactionCls = mapping.value
       ? scopedClassesFor(
           mapping.value.master.id,

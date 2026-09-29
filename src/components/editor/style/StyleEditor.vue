@@ -107,11 +107,9 @@ const layerChoices = computed(() => [
   ...layerOptions.value.map((l) => ({ label: `${l.axis}: ${l.option}`, value: l.key })),
 ])
 
-// a layer belongs to a component: moving to another one starts from its base
-watch(
-  () => selectionContext.value?.def.id,
-  () => (activeLayer.value = null),
-)
+function pickLayer(key: string) {
+  activeLayer.value = key || null
+}
 
 // the element's class string is the single source of truth. Controls edit one
 // breakpoint at a time: they see/write the "effective view" for the active
@@ -495,14 +493,29 @@ watch(pendingFocus, consumeFocus)
 <template>
   <div class="flex flex-col">
     <!-- which class string the panel writes: the base, or one option's override -->
-    <div v-if="layerOptions.length" class="border-b border-input p-3" data-style-layer>
-      <RowUI label="Editing">
-        <SelectUI
-          :options="layerChoices"
-          :model-value="layer ?? ''"
-          @update:model-value="(v) => (activeLayer = v || null)"
-        />
-      </RowUI>
+    <div
+      v-if="layerOptions.length"
+      class="flex flex-col gap-1.5 border-b border-input p-3"
+      data-style-layer
+    >
+      <p class="text-[10px] font-medium tracking-wide text-muted-foreground uppercase">Editing</p>
+      <div class="flex flex-wrap gap-1">
+        <button
+          v-for="choice in layerChoices"
+          :key="choice.value"
+          type="button"
+          class="h-6 rounded-md px-2 text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent"
+          :class="
+            (layer ?? '') === choice.value
+              ? 'bg-accent/30 font-medium text-foreground'
+              : 'bg-input text-muted-foreground hover:text-foreground'
+          "
+          :aria-pressed="(layer ?? '') === choice.value"
+          @click="pickLayer(choice.value)"
+        >
+          {{ choice.label }}
+        </button>
+      </div>
     </div>
 
     <div class="flex flex-col gap-1.5 p-3 border-b border-input">
