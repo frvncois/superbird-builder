@@ -53,10 +53,18 @@ const canHide = computed(() => canBuild.value && props.node.type !== 'body')
  */
 /** the words of a seeded container (a button, a link) live in its child, so
  *  the row would otherwise read `button` — which says nothing on a page of them */
+/** a node's text: its own, else what its hosts say, else its master's */
+function textOf(node: ElementNode): string {
+  if (node.content) return node.content
+  const mapping = masterFor(node.id)
+  if (!mapping) return ''
+  return [...mapping.mirrors, mapping.master].find((source) => source.content)?.content ?? ''
+}
+
 function seedText(node: ElementNode): string {
   if (!ELEMENTS[node.type]?.seed) return ''
   for (const child of node.children) {
-    const own = child.content || masterFor(child.id)?.master.content || ''
+    const own = textOf(child)
     if (own) return own
   }
   return ''
@@ -68,7 +76,7 @@ const label = computed(() => {
   if (isInstance.value) return n.type
   // inside an instance the node's own content is empty by design — the master
   // holds it, and the master is what renders
-  const text = (n.content || masterFor(n.id)?.master.content || seedText(n) || '')
+  const text = (textOf(n) || seedText(n) || '')
     .replace(/<[^>]*>/g, ' ')
     .trim()
   if (text) return text.length > 28 ? `${text.slice(0, 28)}…` : text

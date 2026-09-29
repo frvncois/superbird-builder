@@ -433,3 +433,59 @@ test('an agent declares variant axes, styles an option, and an instance wears it
   })
   expect(stored().pages[0].elements[0].children[0].variants).toBeUndefined()
 })
+
+test('an agent nests a component, and a component can never hold itself', async () => {
+  const { store, api } = fixture()
+  const runtime = await runtimePromise
+  test.skip(!runtime, 'runtime bundle missing')
+  const project = JSON.parse(store.get('guano-project:main')!)
+  const n = (id: string, type: string, children: unknown[] = [], extra = {}) => ({
+    id, type, content: '', children, ...extra,
+  })
+  project.components = [
+    { id: 'c-button', name: 'Button', root: n('b0', 'Button', [n('b1', 'button', [n('b2', 'span', [], { content: 'Go' })], { classes: 'h-9' })]) },
+    { id: 'c-card', name: 'Card', root: n('k0', 'Card', [n('k1', 'div', [n('k2', 'h3', [], { content: 'Title' })], { classes: 'rounded-xl' })]) },
+  ]
+  project.pages[0].code =
+    '@setup\n  name: Home\n  slug: /\n  status: published\n:body\n\t:Card\n\t\t:div\n\t\t\t:h3:\n\t\tdiv:\n\tCard:\nbody:'
+  project.pages[0].elements = runtime.parseSyntax(project.pages[0].code)
+  store.set('guano-project:main', JSON.stringify(project))
+  const call = await toolset(api)
+  const stored = () => JSON.parse(store.get('guano-project:main')!)
+
+  // `:Button:` is all the agent writes; it arrives as the component's block
+  const nested = await call('update_component', {
+    componentId: 'c-card',
+    code: ':Card\n\t:div\n\t\t:h3:\n\t\t:Button:\n\tdiv:\nCard:',
+  })
+  expect(nested.saved).toBe(true)
+  expect(nested.updatedInstances).toBe(1)
+
+  const card = stored().components[1]
+  const held = card.root.children[0].children[1]
+  expect(held.type).toBe('Button')
+  // a mirror: Button's structure, none of its look — that stays Button's
+  expect(held.children[0].type).toBe('button')
+  expect(held.children[0].classes).toBeUndefined()
+  expect(held.children[0].children[0].type).toBe('span')
+  // the host kept what it had
+  expect(card.root.children[0].classes).toBe('rounded-xl')
+  expect(card.root.children[0].children[0].content).toBe('Title')
+  // and the page followed
+  expect(stored().pages[0].code).toContain(':Button\n')
+  expect(stored().pages[0].code).toContain('Button:\n')
+
+  // the other way round would make each hold the other
+  const cycle = await call('update_component', {
+    componentId: 'c-button',
+    code: ':Button\n\t:button\n\t\t:span:\n\t\t:Card:\n\tbutton:\nButton:',
+  })
+  expect(cycle.saved).toBe(false)
+  expect(cycle.message).toContain('already holds')
+  expect(stored().components[0].root.children[0].children).toHaveLength(1)
+
+  // and a component something holds cannot be deleted from under it
+  const refused = await call('delete_component', { componentId: 'c-button' })
+  expect(refused.saved).toBe(false)
+  expect(refused.reason).toBe('in-use')
+})

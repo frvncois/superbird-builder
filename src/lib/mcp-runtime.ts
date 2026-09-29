@@ -62,7 +62,12 @@ export type { AdoptResult, OrphanedNode } from './components'
 
 // whole-project component operations. Pure and DOM-free, so the agent path
 // runs the editor's own code instead of a copy that has to be kept in step.
-export { rewriteInstanceBlock, isClosedBlock, pushMasterStructure } from './componentOps'
+export {
+  rewriteInstanceBlock,
+  isClosedBlock,
+  pushMasterStructure,
+  alignMirrors,
+} from './componentOps'
 
 // --- canonical page document scaffold (src/lib/document.ts)
 export {
@@ -137,6 +142,11 @@ export { mergeClassLayers, sameLayerProperty } from './styles'
 // component instances — the one pairing walk, and the chain it resolves
 export {
   buildInstanceMap,
+  canNest,
+  componentReaches,
+  dependencyOrder,
+  nestedComponentNames,
+  isInstanceWrapper,
   resolvePicks,
   resolveInstanceValue,
   inheritedInstanceValue,

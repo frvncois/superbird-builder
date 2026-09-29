@@ -2,10 +2,17 @@ import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useProject } from './useProject'
 import { setPreviewTokens, useSettings } from './useSettings'
 import { setSelectionScope, useElement } from './useElement'
-import { findNode } from '@/lib/tree'
-import { CATALOG, CATALOG_TOKENS, materializeCatalogEntry } from '@/lib/catalog'
+import { findNode, walkNodes } from '@/lib/tree'
+import {
+  CATALOG,
+  CATALOG_TOKENS,
+  catalogDependencies,
+  catalogEntry,
+  materializeCatalogEntry,
+} from '@/lib/catalog'
 import type { CatalogEntry, MaterializedEntry } from '@/lib/catalog'
-import { normalizeComponentName } from '@/lib/components'
+import { alignHostMirrors, normalizeComponentName } from '@/lib/components'
+import { dependencyOrder } from '@/lib/instances'
 import type { ComponentDef, DesignToken } from '@/types/editor'
 
 /**
@@ -62,10 +69,20 @@ export function useComponentBoard() {
   const { project } = useProject()
   const { selectedElement } = useElement()
 
+  /** what an entry's instance of another entry resolves to on the board: the
+   *  project's component, else THAT entry's own preview — the same object its
+   *  card shows, so the two are one component and promote as one */
+  function heldComponent(key: string): ComponentDef | null {
+    const own = project.value.components.find((c) => c.source === key)
+    if (own) return own
+    const entry = catalogEntry(key)
+    return entry ? previewFor(entry).def : null
+  }
+
   function previewFor(entry: CatalogEntry): MaterializedEntry {
     const cached = previews.get(entry.key)
     if (cached) return cached.made
-    const made = materializeCatalogEntry(entry, project.value)
+    const made = materializeCatalogEntry(entry, project.value, heldComponent)
     made.def = reactive(made.def) as ComponentDef
     previews.set(entry.key, { made, pristine: signature(made.def) })
     return made
@@ -115,6 +132,22 @@ export function useComponentBoard() {
     if (!cached) return
     previews.delete(entry.key)
     const { def, interactions } = cached.made
+
+    // what it holds goes in first: a component whose nested instances resolve
+    // to nothing would render, and publish, as empty boxes
+    for (const key of catalogDependencies(entry)) {
+      const held = catalogEntry(key)
+      if (!held || !previews.has(key)) continue
+      const before = previews.get(key)!.made.def.name
+      promote(held)
+      const after = project.value.components.find((c) => c.source === key)?.name
+      // its name was taken in the meantime: the instances follow
+      if (after && after !== before) {
+        walkNodes(def.root.children, (n) => {
+          if (n.type === before) n.type = after
+        })
+      }
+    }
 
     // the name was checked when the preview was made; a component created
     // since could have taken it
@@ -175,6 +208,38 @@ export function useComponentBoardSession() {
     Object.entries(CATALOG_TOKENS).map(([name, value]) => ({ id: `preview:${name}`, name, value })),
   )
 
+  // A preview holds mirrors of the components it nests, and those components
+  // can change under it — restructured, or renamed. Keeping the mirrors in
+  // step is housekeeping, not an edit: a preview that was pristine before is
+  // pristine after, or browsing the library would add half of it.
+  const { project } = useProject()
+  const stopRealign = watch(
+    () => JSON.stringify(project.value.components.map((c) => [c.id, c.name, c.root.children])),
+    () => {
+      const held = [...previews.values()].map((p) => p.made.def)
+      const all = [...project.value.components, ...held]
+      for (const def of dependencyOrder(held)) {
+        const cached = [...previews.values()].find((p) => p.made.def === def)
+        if (!cached) continue
+        const wasPristine = cached.pristine === signature(def)
+        // a project component this preview nests may have been renamed: it is
+        // found again by the entry it came from
+        if (cached.made.dependencies) {
+          for (const [key, name] of Object.entries(cached.made.dependencies)) {
+            const now = project.value.components.find((c) => c.source === key)?.name
+            if (!now || now === name) continue
+            walkNodes(def.root.children, (n) => {
+              if (n.type === name) n.type = now
+            })
+            cached.made.dependencies[key] = now
+          }
+        }
+        alignHostMirrors(def, all)
+        if (wasPristine) cached.pristine = signature(def)
+      }
+    },
+  )
+
   // a preview that no longer matches what was materialized has been edited
   const stop = watch(
     () =>
@@ -191,6 +256,7 @@ export function useComponentBoardSession() {
 
   onBeforeUnmount(() => {
     stop()
+    stopRealign()
     boardActive.value = false
     focusedKey.value = null
     setPreviewTokens([])

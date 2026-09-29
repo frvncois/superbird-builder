@@ -10,6 +10,7 @@ import { expandComponentInstances, isComponentType } from '@/lib/components'
 import {
   canDropInMaster,
   duplicateInMaster,
+  enclosingNestedInstance,
   insertInMaster,
   masterAcceptsChildren,
   moveInMaster,
@@ -19,6 +20,8 @@ import {
   wrapInMaster,
 } from '@/lib/componentOps'
 import { findNode, findParent } from '@/lib/tree'
+import { canNest } from '@/lib/instances'
+import { catalogEntry } from '@/lib/catalog'
 import type { ComponentDef, ElementNode } from '@/types/editor'
 
 /**
@@ -97,6 +100,21 @@ export function useStructure() {
   const pageIsContainer = (node: ElementNode) =>
     node.line !== undefined && (node.endLine ?? node.line) > node.line
 
+  /**
+   * The component whose instance a block dropped here would land INSIDE, if
+   * any. It is where the block lands that counts, not what the target is: a
+   * Button dropped AFTER a Button is beside it, not in it.
+   */
+  function landingHost(target: ElementNode, position: DropPosition): string | null {
+    const into = target.type === 'body' || (position === 'inside' && pageIsContainer(target))
+    const holder = into ? target : findParent(el.elements.value, target.id)
+    return (holder && masterFor(holder.id)?.def.name) || null
+  }
+
+  /** the component name a library entry has, or will have once it is added */
+  const catalogName = (key: string) =>
+    components.value.find((c) => c.source === key)?.name ?? catalogEntry(key)?.name ?? null
+
   /** the code lines a payload expands to, or null when it can't be placed */
   function blockFor(payload: InsertPayload): string[] | null {
     if (payload.kind === 'element') return elementBlockLines(payload.type)
@@ -143,10 +161,12 @@ export function useStructure() {
     insert(payload, targetId, position) {
       const target = targetId ? el.getElement(targetId) : el.selectedElement.value
       if (!target) return null
-      // components cannot nest: refuse a component landing inside an instance
+      // a component may land inside an instance of another — that is nesting —
+      // but never where it would end up holding itself, at any distance
       if (payload.kind !== 'element') {
-        const mapping = masterFor(target.id)
-        if (mapping || isComponentType(target.type)) return null
+        const host = landingHost(target, position)
+        const inner = payload.kind === 'component' ? payload.name : catalogName(payload.key)
+        if (host && inner && !canNest(components.value, host, inner)) return null
       }
       const block = blockFor(payload)
       if (!block) return null
@@ -297,6 +317,11 @@ export function useStructure() {
     return true
   }
 
+  /** what a name resolves to while editing `def` — the project's components,
+   *  and `def` itself when it is still a library preview */
+  const nestable = (def: ComponentDef) =>
+    components.value.includes(def) ? components.value : [...components.value, def]
+
   const masterRoot = () => activeDef.value?.root ?? null
   const isMasterRoot = (node: ElementNode) => node.id === masterRoot()?.id
 
@@ -309,7 +334,16 @@ export function useStructure() {
       // the wrapper IS the component: it is renamed, never restructured, and
       // it carries no ref (a master's nodes never reach a page's ref space)
       if (isMasterRoot(node)) return false
-      return action !== 'ref'
+      if (action === 'ref') return false
+      const def = activeDef.value
+      if (!def) return false
+      // inside a nested instance the structure is another component's: it is
+      // edited there, in its own card
+      if (enclosingNestedInstance(def, node.id)) return false
+      // the nested instance itself moves, duplicates and goes like any node,
+      // but it has no tag, binding or link of its own to change
+      if (isComponentType(node.type)) return ['move', 'remove', 'duplicate', 'wrap'].includes(action)
+      return true
     },
 
     canDrop(ids, targetId, position) {
@@ -318,11 +352,21 @@ export function useStructure() {
     },
 
     insert(payload, targetId, position) {
-      // components cannot nest, so only built-in elements land here
-      if (payload.kind !== 'element') return null
+      const target = targetId ?? el.selectedElement.value?.id ?? null
       let made: ElementNode | null = null
       onMaster((def) => {
-        made = insertInMaster(def, payload.type, targetId ?? el.selectedElement.value?.id ?? null, position)
+        let type: string | null
+        if (payload.kind === 'element') type = payload.type
+        else {
+          // an instance of another component. Checked BEFORE a library entry is
+          // copied in: a refused insert must not leave a component behind
+          const name = payload.kind === 'component' ? payload.name : catalogName(payload.key)
+          if (!name || !canNest(nestable(def), def.name, name)) return false
+          type =
+            payload.kind === 'catalog' ? (addFromCatalog(payload.key)?.def.name ?? null) : name
+        }
+        if (!type) return false
+        made = insertInMaster(def, type, target, position, nestable(def))
         return !!made
       })
       if (made) el.selectElement((made as ElementNode).id)

@@ -13,6 +13,7 @@ import {
 } from '@/lib/components'
 import {
   componentUsage,
+  alignMirrors,
   isClosedBlock,
   rewriteInstanceBlock,
   deleteComponent as deleteComponentFromProject,
@@ -24,8 +25,15 @@ import {
 import { catalogEntry, materializeCatalogEntry } from '@/lib/catalog'
 import { useSettings } from './useSettings'
 import { findNode, walkNodes } from '@/lib/tree'
-import { buildInstanceMap, isNodeHidden, setNodeHidden, type InstanceMapping } from '@/lib/instances'
+import {
+  buildInstanceMap,
+  dependencyOrder,
+  isNodeHidden,
+  setNodeHidden,
+  type InstanceMapping,
+} from '@/lib/instances'
 import { useAuth } from './useAuth'
+import { useComponentBoard } from './useComponentBoard'
 import type { ComponentDef, ElementNode, Page } from '@/types/editor'
 
 let syncStarted = false
@@ -44,8 +52,19 @@ const { selectedElement } = useElement()
 
 const components = computed(() => project.value.components)
 
+const { cards, boardActive } = useComponentBoard()
+
+/** what a name can resolve to right now: the project's components, plus — on
+ *  the board — the library previews it shows, which hold instances of each
+ *  other by name exactly as project components do */
+const resolvable = computed(() =>
+  boardActive.value
+    ? [...components.value, ...cards.value.filter((c) => c.preview).map((c) => c.def)]
+    : components.value,
+)
+
 function findComponent(name: string): ComponentDef | null {
-  return components.value.find((c) => c.name === name) ?? null
+  return resolvable.value.find((c) => c.name === name) ?? null
 }
 
 /**
@@ -54,7 +73,16 @@ function findComponent(name: string): ComponentDef | null {
  * render/edit the shared master's style and interactions while
  * keeping their own content.
  */
-const masterMap = computed(() => buildInstanceMap(activePage.value.elements, components.value))
+// On the board the trees on screen are the masters themselves, so what needs
+// mapping there is what they HOLD: the instances nested in them.
+const masterMap = computed(() =>
+  boardActive.value
+    ? buildInstanceMap(
+        cards.value.flatMap((card) => card.def.root.children),
+        resolvable.value,
+      )
+    : buildInstanceMap(activePage.value.elements, components.value),
+)
 
 function masterFor(nodeId: string): MasterMapping | null {
   return masterMap.value.get(nodeId) ?? null
@@ -97,9 +125,13 @@ export function useComponents() {
   // --- structural sync: edits inside one instance reshape the master
   // and every other instance follows ---
 
-  function structureSig(node: ElementNode): string {
+  // a nested instance is OPAQUE in its host's signature: what is inside it is
+  // another component's structure, and a change there must not make every
+  // host look divergent (it would be adopted straight back over the change)
+  function structureSig(node: ElementNode, top = true): string {
+    if (!top && isComponentType(node.type)) return node.type
     return node.children.length
-      ? `${node.type}(${node.children.map(structureSig).join()})`
+      ? `${node.type}(${node.children.map((child) => structureSig(child, false)).join()})`
       : node.type
   }
 
@@ -113,7 +145,9 @@ export function useComponents() {
    * master, then rewrite every other closed instance (all pages) to match.
    */
   function syncStructure() {
-    for (const def of components.value) {
+    // inner components first: a host adopts a nested block's structure along
+    // with its own, so that block has to be current by the time it does
+    for (const def of dependencyOrder(components.value)) {
       const instances: { page: Page; node: ElementNode }[] = []
       for (const page of project.value.pages) {
         walkNodes(page.elements, (n) => {
@@ -132,7 +166,13 @@ export function useComponents() {
       const source = divergent.find(
         (i) => i.node.children.length > 0 || def.root.children.length === 0,
       )
-      if (source) adoptStructure(def.root, source.node, def.name)
+      if (source) {
+        adoptStructure(def.root, source.node, def.name)
+        // a nested instance that arrived this way came in as plain nodes; what
+        // the master holds has to be a mirror of its component, and every
+        // OTHER host's mirror of this one has to follow its new shape
+        alignMirrors(components.value)
+      }
 
       const nextSig = structureSig(def.root)
       for (const { page, node } of closed) {
@@ -249,7 +289,17 @@ export function useComponents() {
   function addFromCatalog(key: string): { def: ComponentDef; tokens: string[] } | null {
     const entry = catalogEntry(key)
     if (!entry) return null
-    const made = materializeCatalogEntry(entry, project.value)
+    // what the entry holds comes first: the component the project already made
+    // from it, else that entry added right here — so the whole family lands in
+    // one tick, and one undo step
+    const made = materializeCatalogEntry(
+      entry,
+      project.value,
+      (held) =>
+        project.value.components.find((c) => c.source === held) ??
+        addFromCatalog(held)?.def ??
+        null,
+    )
     // one synchronous tick: tokens first, so the classes referencing them are
     // valid the moment the component exists, and one undo step for the lot
     const tokens = useSettings().ensureTokens(made.tokens)

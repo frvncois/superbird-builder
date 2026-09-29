@@ -506,7 +506,9 @@ function attrsFor(node, ctx, bg, { wrapLink = true, extraClass = '' } = {}) {
     src = mediaUrls(binding.entry, binding.field.name)[0]
   }
   src ||= nodeSrc(node, ctx.locale, ctx.defaultLocale)
-  if (!src && mapping) src = nodeSrc(mapping.master, ctx.locale, ctx.defaultLocale)
+  for (const source of mapping ? [...mapping.mirrors, mapping.master] : []) {
+    src ||= nodeSrc(source, ctx.locale, ctx.defaultLocale)
+  }
   const rawSrc = src // pre-rewrite value — library alt lookup keys on it
   src = ctx.rewrite(src)
   // only media tags carry src — a :collection-list[gallery] div resolved the
@@ -830,7 +832,9 @@ function renderNode(node, ctx) {
   // HERE, whatever was stored: this is the line where markup becomes a page.
   if (node.type === 'icon') {
     const mapping = ctx.mm.get(node.id)
-    const stored = node.svg || mapping?.master.svg
+    const stored = [node, ...(mapping ? [...mapping.mirrors, mapping.master] : [])].find(
+      (source) => source.svg,
+    )?.svg
     const icon = parseInlineSvg((stored && sanitizeInlineSvg(stored)) || DEFAULT_ICON_SVG)
     const own = attrsFor(node, ctx)
     // the author's attributes win over the markup's (an aria-label over the
@@ -874,7 +878,9 @@ function renderNode(node, ctx) {
     } else {
       text =
         nodeContent(node, ctx.locale, ctx.defaultLocale) ||
-        (mapping ? nodeContent(mapping.master, ctx.locale, ctx.defaultLocale) : undefined) ||
+        (mapping ? [...mapping.mirrors, mapping.master] : [])
+          .map((source) => nodeContent(source, ctx.locale, ctx.defaultLocale))
+          .find(Boolean) ||
         def?.defaultContent ||
         ''
     }

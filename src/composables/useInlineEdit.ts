@@ -39,6 +39,12 @@ export function useInlineEdit(opts: {
       if (opts.rich?.value) target.innerHTML = sanitizeRich(initial)
       else target.textContent = initial
       editStart = initial
+      // Typing a space inside a <button> or a <summary> "clicks" it on keyup —
+      // the browser's keyboard activation — and that click ends the edit
+      // mid-word. The listener dies with the span, which is unmounted on exit.
+      target.addEventListener('keyup', (event) => {
+        if (event.key === ' ') event.preventDefault()
+      })
       target.focus()
       const range = document.createRange()
       range.selectNodeContents(target)

@@ -128,6 +128,10 @@ export function createToolSet({ api, runtime, elicit }) {
     lucideNameOf,
     buildInstanceMap: sharedInstanceMap,
     rewriteInstanceBlock,
+    pushMasterStructure,
+    alignMirrors,
+    canNest,
+    nestedComponentNames,
     setVariantAxes,
     setInstancePick,
     setVariantClasses,
@@ -3354,6 +3358,10 @@ const tools = [
       '`created` and any `orphaned` master nodes (id, type, whether they had classes/' +
       'interactions) so a dropped binding is never silent. Every instance block on every page ' +
       'is rewritten to match. Use edit_elements on any instance to style shared elements. ' +
+      'The block may hold instances of OTHER components — write `:Button:` and it expands to ' +
+      'that component\'s structure; what is inside belongs to Button (restyle Button and ' +
+      'every Card follows), while its text, `variants` and `hidden` parts are set per host ' +
+      'or per page with edit_elements. A component can never end up holding itself. ' +
       'A component master is not page code, so there is no `version` to pass: the only ' +
       'concurrency protection is the whole-project guard (a save is refused if the project ' +
       'blob changed since this handler loaded it). Re-read with list_components right before ' +
@@ -3371,7 +3379,15 @@ const tools = [
       const { project } = await loadTargetProject()
       const def = (project.components ?? []).find((c) => c.id === args.componentId)
       if (!def) throw new Error(`no component with id "${args.componentId}" (use list_components)`)
-      const blockLines = String(args.code ?? '').split('\n').filter((l) => l.trim())
+      // a `:Button:` inside the block is an instance of another component:
+      // expanded here to the full block its master has, exactly as it would be
+      // on a page
+      const blockLines = expandComponentInstances(
+        String(args.code ?? ''),
+        (project.components ?? []).filter((c) => c !== def),
+      )
+        .split('\n')
+        .filter((l) => l.trim())
       if (blockLines[0]?.trim() !== `:${def.name}` || blockLines[blockLines.length - 1]?.trim() !== `${def.name}:`) {
         return {
           saved: false,
@@ -3379,6 +3395,25 @@ const tools = [
           message: `the code must open with ':${def.name}' and close with '${def.name}:'`,
         }
       }
+      // cycles first, and by name: the validator would catch one too, but only
+      // as "can't contain itself" on some line of the expanded block
+      {
+        const editedRoot = parseSyntax(blockLines.join('\n')).find((n) => n.type === def.name)
+        if (editedRoot) {
+          const held = nestedComponentNames({ root: editedRoot })
+          const cycle = held.find((name) => !canNest(project.components ?? [], def.name, name))
+          if (cycle) {
+            return {
+              saved: false,
+              reason: 'invalid-block',
+              message:
+                `':${cycle}' cannot go inside ':${def.name}': ${cycle} already holds ${def.name} ` +
+                '(directly or through another component), so each would contain the other',
+            }
+          }
+        }
+      }
+
       // validate the inner structure through the normal document validator.
       // normalizeSyntax re-indents the block from its TOKEN structure (depth
       // starts at 1, i.e. one level inside :body) so the indentation-
@@ -3391,7 +3426,7 @@ const tools = [
       const { collectionNames, listFieldNames, dataOnlyCollections } = knownNames(project)
       const diagnostics = validateDocument(
         doc,
-        [def.name],
+        (project.components ?? []).map((c) => c.name),
         collectionNames,
         listFieldNames,
         dataOnlyCollections,
@@ -3400,40 +3435,17 @@ const tools = [
       const parsed = parseSyntax(blockLines.join('\n'))
       const editedRoot = parsed.find((n) => n.type === def.name)
       if (!editedRoot) return { saved: false, reason: 'invalid-block', message: 'could not parse the block' }
-      let nested = false
-      walkNodes(editedRoot.children, (n) => {
-        if (isComponentType(n.type)) nested = true
-      })
-      if (nested) {
-        return { saved: false, reason: 'invalid-block', message: 'components cannot contain other components' }
-      }
-
       // adopt the new shape into the master (identity carried by code
-      // signature + LCS), then rewrite every closed instance block. The
-      // adopt result surfaces any master node that lost its place — so
-      // dropped classes/interaction bindings are never a silent success.
+      // signature + LCS), then push it to every instance. The adopt result
+      // surfaces any master node that lost its place — so dropped
+      // classes/interaction bindings are never a silent success.
       const adopt = adoptStructure(def.root, editedRoot, def.name)
-      let updatedInstances = 0
-      const touchedPages = []
-      for (const p of project.pages ?? []) {
-        const instances = []
-        walkNodes(p.elements ?? [], (n) => {
-          if (n.type === def.name) instances.push(n)
-        })
-        if (instances.length) touchedPages.push(p)
-        for (const inst of instances) {
-          const codeLines = p.code.split('\n')
-          const closed =
-            inst.line !== undefined &&
-            inst.endLine !== undefined &&
-            inst.endLine > inst.line &&
-            codeLines[inst.endLine]?.trim() === `${def.name}:`
-          if (closed) {
-            rewriteInstanceBlock(p, inst, def)
-            updatedInstances++
-          }
-        }
-      }
+      const codeBefore = new Map((project.pages ?? []).map((p) => [p.id, p.code]))
+      // the push brings every mirror back in step first (a nested instance
+      // adopted from code arrives as plain nodes), then rewrites the blocks —
+      // the editor's own code, from the runtime bundle
+      const updatedInstances = pushMasterStructure(project, def)
+      const touchedPages = (project.pages ?? []).filter((p) => codeBefore.get(p.id) !== p.code)
       await saveTargetProject(project)
       const notes = []
       if (adopt.orphaned.length) {
@@ -3542,6 +3554,18 @@ const tools = [
         .map((p) => ({ pageId: p.id, name: p.name }))
       if (usedOn.length) {
         return { saved: false, reason: 'in-use', message: `":${def.name}:" still has instances`, usedOn }
+      }
+      // a component HOLDING it is a use too, even with no instance on any page
+      const heldBy = (project.components ?? [])
+        .filter((c) => c !== def && nestedComponentNames(c).includes(def.name))
+        .map((c) => ({ componentId: c.id, name: c.name }))
+      if (heldBy.length) {
+        return {
+          saved: false,
+          reason: 'in-use',
+          message: `":${def.name}:" is held by ${heldBy.map((c) => c.name).join(', ')} — remove it from there first (update_component)`,
+          heldBy,
+        }
       }
       project.components = project.components.filter((c) => c.id !== def.id)
       await saveTargetProject(project)

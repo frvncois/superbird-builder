@@ -1,16 +1,20 @@
 import type { ComponentDef, ElementNode, Page, Project, VariantAxis } from '@/types/editor'
 import { applyNodeMarkers, reconcile, refOf } from './syntax'
 import {
+  alignHostMirrors,
   alignInstanceLines,
   cloneForMaster,
+  createMirror,
   expandComponentInstances,
   isComponentType,
+  nestedWrappers,
   normalizeComponentName,
   serializeNode,
 } from './components'
 import { createNode, isLeafElement, seedChildFor } from './elements'
 import { deepClone, findNode, findParent, walkNodes } from './tree'
-import { buildInstanceMap } from './instances'
+import { buildInstanceMap, canNest, dependencyOrder, nestedComponentNames } from './instances'
+import { resolvePicks } from './shared/instances.js'
 import { effectiveClasses } from './variants'
 
 /**
@@ -69,6 +73,8 @@ export interface ComponentUsage {
   /** instances across every page */
   count: number
   pages: { id: string; name: string }[]
+  /** the components that hold an instance of it in their own master */
+  hosts: string[]
 }
 
 /** where a component is actually used — the number the delete confirm quotes */
@@ -84,7 +90,10 @@ export function componentUsage(project: Project, name: string): ComponentUsage {
     count += onPage
     pages.push({ id: page.id, name: page.name })
   }
-  return { count, pages }
+  const hosts = project.components
+    .filter((c) => c.name !== name && nestedComponentNames(c).includes(name))
+    .map((c) => c.name)
+  return { count, pages, hosts }
 }
 
 /**
@@ -110,6 +119,13 @@ export function renameComponent(project: Project, id: string, rawName: string): 
   // page block that no longer matches it.
   def.name = name
   def.root.type = name
+  // …and every master holding an instance of it: a mirror is typed by the
+  // component it mirrors, at any depth
+  for (const host of project.components) {
+    walkNodes(host.root.children, (node) => {
+      if (node.type === old) node.type = name
+    })
+  }
 
   const open = openToken(old)
   for (const page of project.pages) {
@@ -178,18 +194,39 @@ interface Pair {
   classes: string
 }
 
+/** what a host says about a nested instance — the state a mirror carries */
+const MIRROR_KEYS = ['content', 'src', 'svg', 'background', 'locales', 'hidden', 'variants'] as const
+
+/** `node` takes, for each key it does not set itself, the first mirror's value */
+function inheritFromMirrors(node: ElementNode, mirrors: ElementNode[]): void {
+  for (const key of MIRROR_KEYS) {
+    if (node[key] !== undefined && node[key] !== '') continue
+    const from = mirrors.find((m) => m[key] !== undefined && m[key] !== '')
+    if (from) (node as unknown as Record<string, unknown>)[key] = deepClone(from[key])
+  }
+}
+
 /**
  * One instance's nodes with their masters — the shared pairing
  * (lib/instances), over any page rather than only the active one, plus the
  * master → instance direction a detach needs to retarget bindings.
+ *
+ * Only the nodes that belong to THIS component are paired. An instance nested
+ * inside it stays an instance when its host is detached, so its nodes are not
+ * baked — they only take over what the host's master said about them, which
+ * is about to stop being reachable.
  */
-function pairWithMaster(instance: ElementNode, def: ComponentDef) {
+function pairWithMaster(instance: ElementNode, def: ComponentDef, components: ComponentDef[]) {
   const pairs: Pair[] = []
   const masterToInstance = new Map<string, string>()
-  const map = buildInstanceMap([instance], [def])
+  const map = buildInstanceMap([instance], [def, ...components.filter((c) => c !== def)])
   walkNodes([instance], (node) => {
     const mapping = map.get(node.id)
     if (!mapping) return
+    if (mapping.def !== def) {
+      inheritFromMirrors(node, mapping.mirrors)
+      return
+    }
     pairs.push({
       node,
       master: mapping.master,
@@ -275,11 +312,16 @@ const withRef = (line: string, ref: string) =>
   line.replace(/^(\s*:[a-zA-Z][a-zA-Z0-9-]*)/, `$1#${ref}`)
 
 /** Detaches one already-expanded instance block. */
-function detachOne(page: Page, def: ComponentDef, instanceId: string): boolean {
+function detachOne(
+  page: Page,
+  def: ComponentDef,
+  instanceId: string,
+  components: ComponentDef[],
+): boolean {
   const instance = findNode(page.elements, instanceId)
   if (!instance || instance.type !== def.name || instance.line === undefined) return false
 
-  const { pairs, masterToInstance } = pairWithMaster(instance, def)
+  const { pairs, masterToInstance } = pairWithMaster(instance, def, components)
   bakeMasterState(pairs, masterToInstance)
 
   const lines = page.code.split('\n')
@@ -342,7 +384,7 @@ export function detachComponentInstances(project: Project, def: ComponentDef): n
     // bottom-up: unwrapping a block shifts every line after it, so working
     // upwards keeps the ids we haven't reached yet on the lines we read
     const ordered = [...instances].sort((a, b) => b.line! - a.line!).map((n) => n.id)
-    for (const id of ordered) if (detachOne(page, def, id)) detached++
+    for (const id of ordered) if (detachOne(page, def, id, project.components)) detached++
     // the baked classes and bindings need their '(+)' / '{+}' markers, and the
     // editor's own truth-sync only ever runs on the page someone has open
     const marked = applyNodeMarkers(page.code, page.elements)
@@ -359,7 +401,7 @@ export function detachInstance(project: Project, page: Page, instanceId: string)
   // the instance keeps its id through expansion (reconcile adopts it), though
   // its line may have moved
   expandLeafInstances(page, def)
-  if (!detachOne(page, def, instanceId)) return false
+  if (!detachOne(page, def, instanceId, project.components)) return false
   const marked = applyNodeMarkers(page.code, page.elements)
   if (marked !== page.code) page.code = marked
   return true
@@ -381,11 +423,41 @@ export type DropPosition = 'before' | 'after' | 'inside'
  *  a childless `:div` is still a container, while `serializeNode` emits a leaf
  *  in leaf form and would silently drop anything put inside it. */
 export function masterAcceptsChildren(node: ElementNode): boolean {
-  return !isLeafElement(node.type)
+  // a nested instance takes nothing: what is inside it is another component's
+  // structure, edited in that component
+  return !isComponentType(node.type) && !isLeafElement(node.type)
+}
+
+/** the same question for a node of THIS master, whose root is component-typed
+ *  and is the one place that always takes children */
+const acceptsChildren = (def: ComponentDef, node: ElementNode) =>
+  isRoot(def, node) || masterAcceptsChildren(node)
+
+/**
+ * The nested instance a node of this master sits INSIDE, or null. Such a node
+ * is part of a mirror: its structure is another component's, so nothing here
+ * may move, remove or reshape it.
+ */
+export function enclosingNestedInstance(def: ComponentDef, id: string): ElementNode | null {
+  let found: ElementNode | null = null
+  const visit = (nodes: ElementNode[], host: ElementNode | null) => {
+    for (const node of nodes) {
+      if (found) return
+      if (node.id === id) {
+        found = host
+        return
+      }
+      visit(node.children, host ?? (isComponentType(node.type) ? node : null))
+    }
+  }
+  visit(def.root.children, null)
+  return found
 }
 
 /** the wrapper node is the component itself — it is renamed, never restructured */
-const isRoot = (def: ComponentDef, node: ElementNode) => node.id === def.root.id
+function isRoot(def: ComponentDef, node: ElementNode) {
+  return node.id === def.root.id
+}
 
 function masterParentOf(def: ComponentDef, id: string): ElementNode | null {
   return findParent([def.root], id)
@@ -403,7 +475,7 @@ function resolveSlot(
   // the root only ever takes children; so does any before/after on it, since
   // it has no siblings
   if (isRoot(def, target) || position === 'inside') {
-    if (!masterAcceptsChildren(target)) {
+    if (!acceptsChildren(def, target)) {
       // a leaf can't hold it — fall back to "after the leaf", as the page's
       // insertElementBlock coerces
       const parent = masterParentOf(def, target.id)
@@ -432,27 +504,47 @@ export function canDropInMaster(
 ): boolean {
   const target = findNode([def.root], targetId)
   if (!target) return false
-  if (position === 'inside' && !masterAcceptsChildren(target)) return false
+  if (position === 'inside' && !acceptsChildren(def, target)) return false
   if (isRoot(def, target) && position !== 'inside') return false
+  // nothing lands inside a nested instance, and nothing leaves one
+  if (enclosingNestedInstance(def, targetId)) return false
   for (const id of ids) {
     if (id === targetId) return false
+    if (enclosingNestedInstance(def, id)) return false
     if (isRoot(def, findNode([def.root], id) ?? target)) return false
     if (isWithin(def.root, id, targetId)) return false // into its own subtree
   }
   return true
 }
 
-/** Inserts a fresh element. Component payloads are refused — components
- *  cannot nest — so this only ever takes a built-in element type. */
+/**
+ * Inserts a fresh element — or, given a component's name, an instance of it.
+ * `components` is what the name resolves against and what the cycle check
+ * reads; a component that would end up holding itself is refused.
+ */
 export function insertInMaster(
   def: ComponentDef,
   type: string,
   targetId: string | null,
   position: DropPosition,
+  components: ComponentDef[] = [],
 ): ElementNode | null {
-  if (isComponentType(type)) return null
+  // a target inside a nested instance cannot take it: land after that instance
+  const host = targetId ? enclosingNestedInstance(def, targetId) : null
+  if (host) {
+    targetId = host.id
+    position = 'after'
+  }
   const slot = resolveSlot(def, targetId, position)
   if (!slot) return null
+  if (isComponentType(type)) {
+    const inner = components.find((c) => c.name === type)
+    const known = components.includes(def) ? components : [...components, def]
+    if (!inner || !canNest(known, def.name, inner.name)) return null
+    const instance = createMirror(inner.root)
+    slot.parent.children.splice(slot.index, 0, instance)
+    return instance
+  }
   const node = createNode(type)
   // a seeded container (button, link) is born holding its words, exactly as
   // the page backend's `elementBlockLines` + `applySeedContent` pair does
@@ -468,7 +560,7 @@ function detachNodes(def: ComponentDef, ids: string[]): ElementNode[] {
   const taken: ElementNode[] = []
   for (const id of ids) {
     const node = findNode([def.root], id)
-    if (!node || isRoot(def, node)) continue
+    if (!node || isRoot(def, node) || enclosingNestedInstance(def, id)) continue
     const parent = masterParentOf(def, id)
     if (!parent) continue
     const at = parent.children.indexOf(node)
@@ -527,7 +619,7 @@ export function duplicateInMaster(def: ComponentDef, ids: string[]): ElementNode
   const made: ElementNode[] = []
   for (const id of ids) {
     const node = findNode([def.root], id)
-    if (!node || isRoot(def, node)) continue
+    if (!node || isRoot(def, node) || enclosingNestedInstance(def, id)) continue
     const parent = masterParentOf(def, id)
     if (!parent) continue
     // fresh ids and internal targetIds remapped, exactly as a component copy
@@ -542,7 +634,7 @@ export function duplicateInMaster(def: ComponentDef, ids: string[]): ElementNode
 export function wrapInMaster(def: ComponentDef, ids: string[]): ElementNode | null {
   const nodes = ids
     .map((id) => findNode([def.root], id))
-    .filter((n): n is ElementNode => !!n && !isRoot(def, n))
+    .filter((n): n is ElementNode => !!n && !isRoot(def, n) && !enclosingNestedInstance(def, n.id))
   if (!nodes.length) return null
   const parent = masterParentOf(def, nodes[0]!.id)
   if (!parent || nodes.some((n) => masterParentOf(def, n.id) !== parent)) return null
@@ -557,6 +649,8 @@ export function wrapInMaster(def: ComponentDef, ids: string[]): ElementNode | nu
 export function retypeInMaster(def: ComponentDef, id: string, type: string): boolean {
   const node = findNode([def.root], id)
   if (!node || isRoot(def, node) || isComponentType(type)) return false
+  // a nested instance is what it is, and so is everything inside it
+  if (isComponentType(node.type) || enclosingNestedInstance(def, id)) return false
   // changing a container into a leaf would orphan its children
   if (node.children.length && isLeafElement(type)) return false
   node.type = type
@@ -571,12 +665,18 @@ export function retypeInMaster(def: ComponentDef, id: string, type: string): boo
  * on a structure signature the way `syncStructure` is, because that signature
  * is type-only: an arg or link change leaves it identical and would never
  * reach the instances.
+ *
+ * "Every instance" includes the ones NESTED in other components: their blocks
+ * on the pages are rewritten like any other (at any depth), and the mirrors
+ * those components hold in their own masters are brought back in step first —
+ * inner components before the hosts that mirror them.
  */
 export function pushMasterStructure(project: Project, def: ComponentDef): number {
   // a library preview is not in the project; instances match by NAME, so
   // pushing one would rewrite blocks belonging to a real component of the
   // same name
   if (!project.components.some((c) => c.id === def.id)) return 0
+  alignMirrors(project.components)
   let rewritten = 0
   for (const page of project.pages) {
     // legacy `:Card:` leaves carry no block to rewrite — materialize them
@@ -602,6 +702,14 @@ export function pushMasterStructure(project: Project, def: ComponentDef): number
     if (marked !== page.code) page.code = marked
   }
   return rewritten
+}
+
+/**
+ * Bring every mirror in step with the component it mirrors, inner components
+ * first so a host two levels up mirrors an already-current structure.
+ */
+export function alignMirrors(components: ComponentDef[]): void {
+  for (const host of dependencyOrder(components)) alignHostMirrors(host, components)
 }
 
 /**
@@ -659,7 +767,66 @@ export function isClosedBlock(page: Page, node: ElementNode, name: string): bool
 export function deleteComponent(project: Project, id: string): boolean {
   const def = project.components.find((c) => c.id === id)
   if (!def) return false
+  // the components HOLDING it first: each bakes it into its own master and
+  // pushes that out, which turns the nested blocks on the pages into plain
+  // elements too — the per-instance text on them carried across by the push's
+  // line alignment. Inner hosts before outer ones, so a host two levels up
+  // mirrors a master that has already let go of it.
+  for (const host of dependencyOrder(project.components)) {
+    if (host === def) continue
+    const held = nestedWrappers(host, def.name)
+    if (!held.length) continue
+    for (const wrapper of held) detachInMaster(host, wrapper, def)
+    pushMasterStructure(project, host)
+  }
   detachComponentInstances(project, def)
   project.components = project.components.filter((c) => c.id !== id)
   return true
+}
+
+/**
+ * Turns one nested instance, in a host's MASTER, into plain elements that look
+ * the same: the inner component's structure and look, with what the host said
+ * about it on top. The tree-form twin of `detachOne`, same bare-wrapper rule.
+ */
+function detachInMaster(host: ComponentDef, wrapper: ElementNode, inner: ComponentDef): void {
+  const parent = findParent([host.root], wrapper.id)
+  if (!parent) return
+  const picks = resolvePicks(inner, wrapper, []) as Record<string, string>
+  // fresh ids, and the inner master's own bindings re-aimed inside the copy
+  const { cloned } = cloneForMaster(inner.root)
+
+  const bake = (node: ElementNode, master: ElementNode, mirror: ElementNode | undefined, held: boolean) => {
+    // inside an instance the inner component itself holds, the copy STAYS an
+    // instance: what the inner master said about it becomes what the host
+    // says, and nothing is baked
+    if (!held) {
+      const classes = effectiveClasses(master, inner, picks)
+      if (classes) node.classes = classes
+      else delete node.classes
+      delete node.variantClasses
+    }
+    if (mirror) inheritFromMirrors(clearForOverlay(node, mirror), [mirror])
+    if (node.hidden === false) delete node.hidden
+    node.children.forEach((child, i) => {
+      const below = master.children[i]
+      if (!below) return
+      bake(child, below, mirror?.children[i], held || isComponentType(child.type))
+    })
+  }
+  bake(cloned, inner.root, wrapper, false)
+  delete cloned.variants
+
+  const bare = !cloned.classes?.trim() && !cloned.background && !cloned.interactions?.length
+  const at = parent.children.indexOf(wrapper)
+  if (bare) parent.children.splice(at, 1, ...cloned.children)
+  else parent.children.splice(at, 1, { ...cloned, type: 'div' })
+}
+
+/** what the mirror sets wins over what the clone inherited from the master */
+function clearForOverlay(node: ElementNode, mirror: ElementNode): ElementNode {
+  for (const key of MIRROR_KEYS) {
+    if (mirror[key] !== undefined && mirror[key] !== '') delete node[key]
+  }
+  return node
 }

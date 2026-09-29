@@ -10,12 +10,15 @@ import { useInsertDrag, type InsertPayload } from '@/composables/useInsertDrag'
 import { ELEMENT_GROUPS } from '@/lib/elementPalette'
 import { fuzzyScore } from '@/lib/fuzzy'
 import { CATALOG } from '@/lib/catalog'
+import { canNest } from '@/lib/instances'
+import { useComponentBoard } from '@/composables/useComponentBoard'
 
 const { components } = useComponents()
 const { open, closePalette, togglePalette, insertElement, insertComponent, insertCatalog } =
   useCommandPalette()
 const { requestReveal } = useElement()
 const { backend } = useStructure()
+const { activeCard } = useComponentBoard()
 const { startInsertDrag } = useInsertDrag()
 
 const query = ref('')
@@ -56,11 +59,18 @@ const allGroups = computed<{ title: string; items: DockItem[] }[]>(() => {
       run: () => insertElement(item.type),
     })),
   }))
-  // components cannot nest, so a master gets built-in elements only
-  if (backend.value.kind === 'page' && components.value.length) {
+  // on the board the insert lands in a component, so what it offers is what
+  // that component may HOLD: anything but itself, and anything that does not
+  // already hold it
+  const card = backend.value.kind === 'master' ? activeCard.value : null
+  const host = card?.def ?? null
+  const known = host && !components.value.includes(host) ? [...components.value, host] : components.value
+  const fits = (name: string) => !host || canNest(known, host.name, name)
+  const offered = components.value.filter((c) => fits(c.name))
+  if (offered.length) {
     base.push({
       title: 'Components',
-      items: components.value.map((c) => ({
+      items: offered.map((c) => ({
         key: `component:${c.id}`,
         label: c.name,
         keywords: [],
@@ -74,7 +84,11 @@ const allGroups = computed<{ title: string; items: DockItem[] }[]>(() => {
   // every library entry is available without an "add" step: inserting one
   // copies it into the project, after which it lists under Components
   const added = new Set(components.value.map((c) => c.source).filter(Boolean))
-  const library = backend.value.kind === 'page' ? CATALOG.filter((e) => !added.has(e.key)) : []
+  // a library entry being previewed on the board IS the host when it is the
+  // card being edited — it cannot go inside itself
+  const library = CATALOG.filter((e) => !added.has(e.key) && e.key !== card?.preview?.key).filter(
+    (e) => fits(e.name),
+  )
   if (library.length) {
     base.push({
       title: 'Library',

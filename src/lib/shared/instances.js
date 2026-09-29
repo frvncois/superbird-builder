@@ -31,6 +31,14 @@ export const isComponentType = (type) => /^[A-Z]/.test(type)
  * structural position (index + type): the instance block on the page mirrors
  * the master's tree, so the n-th child stands for the master's n-th child.
  *
+ * COMPONENTS NEST. A master's tree may hold a node typed as another component
+ * — a nested instance, whose subtree there is a MIRROR: the inner component's
+ * structure, carrying only what this host says about it (its text, its picks,
+ * its hidden parts). So a page node inside `Card > Button` stands for a node
+ * of BUTTON's master — that is where its classes and interactions live — and
+ * the Card master's mirror of it sits in between, as the first place to look
+ * for anything the page node does not set itself.
+ *
  * `roots` are the trees to walk — a page's elements, or (on the components
  * board) each master's own children. `components` is the project's list; a
  * name resolves to the FIRST component carrying it, as `findComponent` does.
@@ -43,34 +51,130 @@ export function buildInstanceMap(roots, components) {
 
   const map = new Map()
 
-  const pair = (inst, master, scope) => {
+  // `mirrors` run parallel to `inst`: the nodes standing for it in the masters
+  // of the components it is nested in, outermost host first — which is also
+  // most specific first, since the outermost host is the one placed on the page
+  const walk = (inst, master, mirrors, scope) => {
     if (inst.type !== master.type) return
     map.set(inst.id, {
       master,
       root: scope.def.root,
       def: scope.def,
       instanceId: scope.instanceId,
-      mirrors: [],
+      mirrors,
       picks: scope.picks,
     })
     const length = Math.min(inst.children.length, master.children.length)
-    for (let i = 0; i < length; i++) pair(inst.children[i], master.children[i], scope)
+    for (let i = 0; i < length; i++) {
+      const child = inst.children[i]
+      const below = master.children[i]
+      const childMirrors = mirrors
+        .map((mirror) => mirror.children?.[i])
+        .filter((mirror) => mirror && mirror.type === child.type)
+      const inner = isComponentType(below.type) ? byName.get(below.type) : undefined
+      if (inner && inner !== scope.def && child.type === below.type) {
+        // `below` is this master's own mirror of the nested instance: the last
+        // and least specific of the places its state can come from
+        instance(child, inner, [...childMirrors, below])
+      } else {
+        walk(child, below, childMirrors, scope)
+      }
+    }
+  }
+
+  // the instance block itself maps to the master root, and takes its picks
+  // from its own wrapper first, then from its hosts' mirrors of that wrapper
+  const instance = (wrapper, def, mirrors) => {
+    walk(wrapper, def.root, mirrors, {
+      def,
+      instanceId: wrapper.id,
+      picks: resolvePicks(def, wrapper, mirrors),
+    })
   }
 
   const visit = (nodes) => {
     for (const node of nodes ?? []) {
       const def = isComponentType(node.type) ? byName.get(node.type) : undefined
-      if (!def) {
-        visit(node.children)
-        continue
-      }
-      // the instance block itself maps to the master root. Its subtree is
-      // paired, not walked: whatever sits inside belongs to this instance.
-      pair(node, def.root, { def, instanceId: node.id, picks: resolvePicks(def, node, []) })
+      // an instance's subtree is paired, not walked: whatever sits inside it —
+      // nested instances included — belongs to it
+      if (def) instance(node, def, [])
+      else visit(node.children)
     }
   }
   visit(roots)
   return map
+}
+
+/** is this mapped node the `:Name` wrapper of its instance, rather than
+ * something inside it? */
+export const isInstanceWrapper = (mapping) => !!mapping && mapping.master === mapping.root
+
+/**
+ * The components a component's master holds, directly — by name, each once.
+ */
+export function nestedComponentNames(def) {
+  const names = new Set()
+  const visit = (nodes) => {
+    for (const node of nodes ?? []) {
+      // a nested instance's own subtree is a mirror of ANOTHER master: what it
+      // holds is that component's business, not this one's
+      if (isComponentType(node.type)) names.add(node.type)
+      else visit(node.children)
+    }
+  }
+  visit(def.root.children)
+  return [...names]
+}
+
+/** can `from` reach `to` by following what each component holds? */
+export function componentReaches(components, from, to) {
+  const byName = new Map()
+  for (const def of components ?? []) if (!byName.has(def.name)) byName.set(def.name, def)
+  const seen = new Set()
+  const visit = (name) => {
+    if (name === to) return true
+    if (seen.has(name)) return false
+    seen.add(name)
+    const def = byName.get(name)
+    return !!def && nestedComponentNames(def).some(visit)
+  }
+  return visit(from)
+}
+
+/**
+ * May an instance of `inner` be placed inside `host`'s master? Not when that
+ * would make a component hold itself, at any distance: `Card` in `Card`, or
+ * `Card` in a `Button` that a `Card` already holds.
+ */
+export function canNest(components, host, inner) {
+  return host !== inner && !componentReaches(components, inner, host)
+}
+
+/**
+ * The components ordered so that each comes AFTER everything it holds. Work
+ * that flows outward from a change — an inner component's new structure, then
+ * the hosts that mirror it — has to run in this order.
+ */
+export function dependencyOrder(components) {
+  const byName = new Map()
+  for (const def of components ?? []) if (!byName.has(def.name)) byName.set(def.name, def)
+  const out = []
+  const state = new Map() // name → 'open' | 'done'
+  const visit = (def) => {
+    if (state.has(def.name)) return // done, or a cycle: either way, not again
+    state.set(def.name, 'open')
+    for (const name of nestedComponentNames(def)) {
+      const inner = byName.get(name)
+      if (inner) visit(inner)
+    }
+    state.set(def.name, 'done')
+    out.push(def)
+  }
+  for (const def of components ?? []) visit(def)
+  // components sharing a name with an earlier one were never visited; keep
+  // them, last, so nothing the caller passed goes missing
+  for (const def of components ?? []) if (!out.includes(def)) out.push(def)
+  return out
 }
 
 /**

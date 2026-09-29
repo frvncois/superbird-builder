@@ -108,6 +108,14 @@ export function useRenderNode(
   // shared master node; content stays this node's own
   const mapping = computed(() => masterFor(node.value.id))
 
+  /** where this node's own state can come from, in order: itself, the mirrors
+   *  held by the components it is nested in, then its master */
+  const chain = computed<ElementNode[]>(() =>
+    mapping.value
+      ? [node.value, ...mapping.value.mirrors, mapping.value.master]
+      : [node.value],
+  )
+
   // --- collections / entry scope ---
 
   const scope = inject(entryKey, null)
@@ -246,10 +254,12 @@ export function useRenderNode(
       if (info?.value) return { value: info.value, untranslated: !info.translated }
       return { value: opts?.fieldPlaceholders ? `{${boundField.value.name}}` : '', untranslated: false }
     }
-    const own = nodeContent(node.value)
-    if (own.value) return { value: own.value, untranslated: !own.translated }
-    const master = mapping.value ? nodeContent(mapping.value.master) : null
-    if (master?.value) return { value: master.value, untranslated: !master.translated }
+    // own, then what each component this one is nested in says about it, then
+    // its master — the first that says anything
+    for (const source of chain.value) {
+      const text = nodeContent(source)
+      if (text.value) return { value: text.value, untranslated: !text.translated }
+    }
     return { value: def.value?.defaultContent, untranslated: false }
   })
   const displayContent = computed(() => contentInfo.value.value)
@@ -275,8 +285,10 @@ export function useRenderNode(
     // inside a component instance, fall back to the mapped master's src —
     // same own-then-master precedence as content, so shared chrome (a logo)
     // is set once on the master and renders in every instance
-    const master = mapping.value ? nodeSrc(mapping.value.master) : null
-    if (master?.value) return { value: master.value, untranslated: !master.translated }
+    for (const source of chain.value.slice(1)) {
+      const inherited = nodeSrc(source)
+      if (inherited.value) return { value: inherited.value, untranslated: !inherited.translated }
+    }
     return { value: undefined, untranslated: false }
   })
   const srcAttr = computed(() => {
@@ -303,7 +315,7 @@ export function useRenderNode(
   // arrive by import, by merge or from an agent without passing any writer.
   const iconInfo = computed(() => {
     if (node.value.type !== 'icon') return null
-    const stored = node.value.svg || mapping.value?.master.svg
+    const stored = chain.value.find((source) => source.svg)?.svg
     const safe = stored ? sanitizeInlineSvg(stored) : ''
     return parseInlineSvg(safe || DEFAULT_ICON_SVG)
   })

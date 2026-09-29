@@ -69,6 +69,108 @@ export function isComponentType(type: string): boolean {
   return /^[A-Z]/.test(type)
 }
 
+// --- nesting: mirrors ---
+//
+// A component's master may hold an instance of another component. What it
+// holds there is a MIRROR: the inner component's structure, node for node,
+// carrying only what this host says about that instance — its text, its
+// variant picks, its hidden parts. The classes, the interactions and the
+// structure itself stay the inner component's, which is what makes restyling
+// Button restyle the Button inside every Card.
+//
+// The one rule everything below keeps: a mirror is structurally identical to
+// the master it mirrors. `serializeNode` relies on it (it writes an instance
+// block from the host's tree alone), and so does the positional pairing in
+// shared/instances.js.
+
+/** a fresh mirror of a master subtree: its structure, none of its state */
+export function createMirror(master: ElementNode): ElementNode {
+  const node: ElementNode = {
+    id: crypto.randomUUID(),
+    type: master.type,
+    content: '',
+    children: master.children.map(createMirror),
+  }
+  // arg + link are code-owned: a mirror that lacked them would serialize a
+  // different block from the master's
+  if (master.arg) node.arg = master.arg
+  if (master.link) node.link = master.link
+  return node
+}
+
+/**
+ * Reshape a mirror to its master's current structure, KEEPING what the host
+ * said about each node that survives. Matched like `adoptStructure` matches —
+ * by code signature, aligned, then by type for what that left over — so
+ * inserting an icon in Button does not slide every Card's button text onto
+ * the wrong node.
+ */
+export function alignMirror(mirror: ElementNode, master: ElementNode): void {
+  if (master.arg) mirror.arg = master.arg
+  else delete mirror.arg
+  if (master.link) mirror.link = master.link
+  else delete mirror.link
+
+  const old = mirror.children
+  const matches = lcsAlign(old.map(nodeSignature), master.children.map(nodeSignature))
+  const used = new Set(matches.values())
+  const freeOld = old.map((_, i) => i).filter((i) => !used.has(i))
+  const freeNew = master.children.map((_, i) => i).filter((i) => !matches.has(i))
+  if (freeOld.length && freeNew.length) {
+    const weak = lcsAlign(
+      freeOld.map((i) => old[i]!.type),
+      freeNew.map((i) => master.children[i]!.type),
+    )
+    for (const [nj, oj] of weak) matches.set(freeNew[nj]!, freeOld[oj]!)
+  }
+
+  const next = master.children.map((child, i) => {
+    const at = matches.get(i)
+    const node = at !== undefined ? old[at]! : createMirror(child)
+    alignMirror(node, child)
+    return node
+  })
+  // untouched when nothing moved: a mirror that was already in step must come
+  // out byte-identical, or every push would read as an edit to the host
+  if (next.length !== old.length || next.some((node, i) => node !== old[i])) mirror.children = next
+}
+
+/**
+ * Bring every mirror a host holds back in step with the component it mirrors.
+ * Returns whether anything changed.
+ */
+export function alignHostMirrors(host: ComponentDef, components: ComponentDef[]): boolean {
+  const before = JSON.stringify(host.root.children)
+  const visit = (nodes: ElementNode[]) => {
+    for (const node of nodes) {
+      if (!isComponentType(node.type)) {
+        visit(node.children)
+        continue
+      }
+      const inner = components.find((c) => c.name === node.type)
+      // the inner master already holds ITS mirrors in step (callers go inner
+      // first), so aligning to it brings the deeper levels along
+      if (inner && inner !== host) alignMirror(node, inner.root)
+    }
+  }
+  visit(host.root.children)
+  return JSON.stringify(host.root.children) !== before
+}
+
+/** every nested-instance wrapper a master holds directly (not the ones inside
+ *  a mirror, which belong to the component being mirrored) */
+export function nestedWrappers(def: ComponentDef, name?: string): ElementNode[] {
+  const out: ElementNode[] = []
+  const visit = (nodes: ElementNode[]) => {
+    for (const node of nodes) {
+      if (!isComponentType(node.type)) visit(node.children)
+      else if (!name || node.type === name) out.push(node)
+    }
+  }
+  visit(def.root.children)
+  return out
+}
+
 /** turns raw user input into a valid, unique component name ('my card' → 'MyCard') */
 export function normalizeComponentName(raw: string, taken: string[]): string {
   const cleaned = raw

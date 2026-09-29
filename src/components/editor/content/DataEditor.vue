@@ -658,9 +658,12 @@ const instanceParts = computed(() => {
   if (!at) return []
   const parts: { node: (typeof at)['wrapper']; label: string; shown: boolean }[] = []
   walkNodes(at.wrapper.children, (node) => {
-    const master = masterFor(node.id)?.master
-    if (node.hidden === undefined && master?.hidden === undefined) return
-    const text = (node.content || master?.content || '').replace(/<[^>]*>/g, ' ').trim()
+    const mapping = masterFor(node.id)
+    const sources = mapping ? [node, ...mapping.mirrors, mapping.master] : [node]
+    if (sources.every((source) => source.hidden === undefined)) return
+    const text = (sources.find((source) => source.content)?.content ?? '')
+      .replace(/<[^>]*>/g, ' ')
+      .trim()
     parts.push({ node, label: text || node.type, shown: !isHidden(node) })
   })
   // two parts of one type and no text to tell them apart: number them in order
@@ -685,7 +688,9 @@ const svg = computed({
   get: () => {
     const node = selectedElement.value
     if (!node) return ''
-    return node.svg || masterFor(node.id)?.master.svg || ''
+    if (node.svg) return node.svg
+    const mapping = masterFor(node.id)
+    return (mapping ? [...mapping.mirrors, mapping.master] : []).find((n) => n.svg)?.svg ?? ''
   },
   set: (value: string) => {
     const node = selectedElement.value

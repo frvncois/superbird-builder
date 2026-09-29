@@ -19,6 +19,14 @@ const componentInstanceId = computed(() =>
   target.value ? (masterFor(target.value.id)?.instanceId ?? null) : null,
 )
 
+/** an instance held by ANOTHER component's instance. Detaching it here would
+ *  be an edit to that component — every Card would lose its Button — which is
+ *  not what "detach this one" says. It is detached in the component instead. */
+const instanceIsNested = computed(() => {
+  const id = componentInstanceId.value
+  return !!id && (masterFor(id)?.mirrors.length ?? 0) > 0
+})
+
 const {
   menu,
   target,
@@ -81,7 +89,8 @@ const items = computed<Item[]>(() => [
     label: 'Detach from component',
     icon: Unlink,
     run: () => componentInstanceId.value && detachComponent(componentInstanceId.value),
-    disabled: backend.value.kind !== 'page' || !componentInstanceId.value,
+    disabled:
+      backend.value.kind !== 'page' || !componentInstanceId.value || instanceIsNested.value,
   },
 ])
 

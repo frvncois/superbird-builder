@@ -368,6 +368,66 @@ function stripExtractedInstanceState(source) {
 function isComponentType(type) {
 	return /^[A-Z]/.test(type);
 }
+/** a fresh mirror of a master subtree: its structure, none of its state */
+function createMirror(master) {
+	const node = {
+		id: crypto.randomUUID(),
+		type: master.type,
+		content: "",
+		children: master.children.map(createMirror)
+	};
+	if (master.arg) node.arg = master.arg;
+	if (master.link) node.link = master.link;
+	return node;
+}
+/**
+* Reshape a mirror to its master's current structure, KEEPING what the host
+* said about each node that survives. Matched like `adoptStructure` matches —
+* by code signature, aligned, then by type for what that left over — so
+* inserting an icon in Button does not slide every Card's button text onto
+* the wrong node.
+*/
+function alignMirror(mirror, master) {
+	if (master.arg) mirror.arg = master.arg;
+	else delete mirror.arg;
+	if (master.link) mirror.link = master.link;
+	else delete mirror.link;
+	const old = mirror.children;
+	const matches = lcsAlign(old.map(nodeSignature), master.children.map(nodeSignature));
+	const used = new Set(matches.values());
+	const freeOld = old.map((_, i) => i).filter((i) => !used.has(i));
+	const freeNew = master.children.map((_, i) => i).filter((i) => !matches.has(i));
+	if (freeOld.length && freeNew.length) {
+		const weak = lcsAlign(freeOld.map((i) => old[i].type), freeNew.map((i) => master.children[i].type));
+		for (const [nj, oj] of weak) matches.set(freeNew[nj], freeOld[oj]);
+	}
+	const next = master.children.map((child, i) => {
+		const at = matches.get(i);
+		const node = at !== void 0 ? old[at] : createMirror(child);
+		alignMirror(node, child);
+		return node;
+	});
+	if (next.length !== old.length || next.some((node, i) => node !== old[i])) mirror.children = next;
+}
+/**
+* Bring every mirror a host holds back in step with the component it mirrors.
+* Returns whether anything changed.
+*/
+function alignHostMirrors(host, components) {
+	const before = JSON.stringify(host.root.children);
+	const visit = (nodes) => {
+		for (const node of nodes) {
+			if (!isComponentType(node.type)) {
+				visit(node.children);
+				continue;
+			}
+			const inner = components.find((c) => c.name === node.type);
+			if (inner && inner !== host) alignMirror(node, inner.root);
+		}
+	};
+	visit(host.root.children);
+	return JSON.stringify(host.root.children) !== before;
+}
 /** turns raw user input into a valid, unique component name ('my card' → 'MyCard') */
 function normalizeComponentName(raw, taken) {
 	const cleaned = raw.split(/[^a-zA-Z0-9]+/).filter(Boolean).map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join("");
@@ -1271,6 +1331,14 @@ var isComponentType$1 = (type) => /^[A-Z]/.test(type);
 * structural position (index + type): the instance block on the page mirrors
 * the master's tree, so the n-th child stands for the master's n-th child.
 *
+* COMPONENTS NEST. A master's tree may hold a node typed as another component
+* — a nested instance, whose subtree there is a MIRROR: the inner component's
+* structure, carrying only what this host says about it (its text, its picks,
+* its hidden parts). So a page node inside `Card > Button` stands for a node
+* of BUTTON's master — that is where its classes and interactions live — and
+* the Card master's mirror of it sits in between, as the first place to look
+* for anything the page node does not set itself.
+*
 * `roots` are the trees to walk — a page's elements, or (on the components
 * board) each master's own children. `components` is the project's list; a
 * name resolves to the FIRST component carrying it, as `findComponent` does.
@@ -1281,35 +1349,103 @@ function buildInstanceMap(roots, components) {
 	const byName = /* @__PURE__ */ new Map();
 	for (const def of components ?? []) if (!byName.has(def.name)) byName.set(def.name, def);
 	const map = /* @__PURE__ */ new Map();
-	const pair = (inst, master, scope) => {
+	const walk = (inst, master, mirrors, scope) => {
 		if (inst.type !== master.type) return;
 		map.set(inst.id, {
 			master,
 			root: scope.def.root,
 			def: scope.def,
 			instanceId: scope.instanceId,
-			mirrors: [],
+			mirrors,
 			picks: scope.picks
 		});
 		const length = Math.min(inst.children.length, master.children.length);
-		for (let i = 0; i < length; i++) pair(inst.children[i], master.children[i], scope);
+		for (let i = 0; i < length; i++) {
+			const child = inst.children[i];
+			const below = master.children[i];
+			const childMirrors = mirrors.map((mirror) => mirror.children?.[i]).filter((mirror) => mirror && mirror.type === child.type);
+			const inner = isComponentType$1(below.type) ? byName.get(below.type) : void 0;
+			if (inner && inner !== scope.def && child.type === below.type) instance(child, inner, [...childMirrors, below]);
+			else walk(child, below, childMirrors, scope);
+		}
+	};
+	const instance = (wrapper, def, mirrors) => {
+		walk(wrapper, def.root, mirrors, {
+			def,
+			instanceId: wrapper.id,
+			picks: resolvePicks(def, wrapper, mirrors)
+		});
 	};
 	const visit = (nodes) => {
 		for (const node of nodes ?? []) {
 			const def = isComponentType$1(node.type) ? byName.get(node.type) : void 0;
-			if (!def) {
-				visit(node.children);
-				continue;
-			}
-			pair(node, def.root, {
-				def,
-				instanceId: node.id,
-				picks: resolvePicks(def, node, [])
-			});
+			if (def) instance(node, def, []);
+			else visit(node.children);
 		}
 	};
 	visit(roots);
 	return map;
+}
+/** is this mapped node the `:Name` wrapper of its instance, rather than
+* something inside it? */
+var isInstanceWrapper = (mapping) => !!mapping && mapping.master === mapping.root;
+/**
+* The components a component's master holds, directly — by name, each once.
+*/
+function nestedComponentNames(def) {
+	const names = /* @__PURE__ */ new Set();
+	const visit = (nodes) => {
+		for (const node of nodes ?? []) if (isComponentType$1(node.type)) names.add(node.type);
+		else visit(node.children);
+	};
+	visit(def.root.children);
+	return [...names];
+}
+/** can `from` reach `to` by following what each component holds? */
+function componentReaches(components, from, to) {
+	const byName = /* @__PURE__ */ new Map();
+	for (const def of components ?? []) if (!byName.has(def.name)) byName.set(def.name, def);
+	const seen = /* @__PURE__ */ new Set();
+	const visit = (name) => {
+		if (name === to) return true;
+		if (seen.has(name)) return false;
+		seen.add(name);
+		const def = byName.get(name);
+		return !!def && nestedComponentNames(def).some(visit);
+	};
+	return visit(from);
+}
+/**
+* May an instance of `inner` be placed inside `host`'s master? Not when that
+* would make a component hold itself, at any distance: `Card` in `Card`, or
+* `Card` in a `Button` that a `Card` already holds.
+*/
+function canNest(components, host, inner) {
+	return host !== inner && !componentReaches(components, inner, host);
+}
+/**
+* The components ordered so that each comes AFTER everything it holds. Work
+* that flows outward from a change — an inner component's new structure, then
+* the hosts that mirror it — has to run in this order.
+*/
+function dependencyOrder(components) {
+	const byName = /* @__PURE__ */ new Map();
+	for (const def of components ?? []) if (!byName.has(def.name)) byName.set(def.name, def);
+	const out = [];
+	const state = /* @__PURE__ */ new Map();
+	const visit = (def) => {
+		if (state.has(def.name)) return;
+		state.set(def.name, "open");
+		for (const name of nestedComponentNames(def)) {
+			const inner = byName.get(name);
+			if (inner) visit(inner);
+		}
+		state.set(def.name, "done");
+		out.push(def);
+	};
+	for (const def of components ?? []) visit(def);
+	for (const def of components ?? []) if (!out.includes(def)) out.push(def);
+	return out;
 }
 /**
 * The option an instance picks on each of its component's axes: its wrapper's
@@ -1366,6 +1502,10 @@ function setNodeHidden(node, mapping, hidden) {
 	if (hidden === (inheritedInstanceValue(mapping, "hidden") === true)) delete node.hidden;
 	else node.hidden = hidden;
 }
+//#endregion
+//#region src/lib/instances.ts
+/** each component after everything it holds */
+var dependencyOrder$1 = dependencyOrder;
 //#endregion
 //#region src/lib/colors.ts
 var TAILWIND_SHADES = [
@@ -3854,9 +3994,15 @@ function expandLeafInstances(page, def) {
 * on a structure signature the way `syncStructure` is, because that signature
 * is type-only: an arg or link change leaves it identical and would never
 * reach the instances.
+*
+* "Every instance" includes the ones NESTED in other components: their blocks
+* on the pages are rewritten like any other (at any depth), and the mirrors
+* those components hold in their own masters are brought back in step first —
+* inner components before the hosts that mirror them.
 */
 function pushMasterStructure(project, def) {
 	if (!project.components.some((c) => c.id === def.id)) return 0;
+	alignMirrors(project.components);
 	let rewritten = 0;
 	for (const page of project.pages) {
 		expandLeafInstances(page, def);
@@ -3873,6 +4019,13 @@ function pushMasterStructure(project, def) {
 		if (marked !== page.code) page.code = marked;
 	}
 	return rewritten;
+}
+/**
+* Bring every mirror in step with the component it mirrors, inner components
+* first so a host two levels up mirrors an already-current structure.
+*/
+function alignMirrors(components) {
+	for (const host of dependencyOrder$1(components)) alignHostMirrors(host, components);
 }
 /**
 * Regenerates one instance's inner code lines from its master.
@@ -5541,4 +5694,4 @@ function createProject(name) {
 	};
 }
 //#endregion
-export { APPEAR_MODES, BUILTIN_LIST_SOURCES, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MOTION_PROPS, NODE_STATE_KEYS, REF_SLOT, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, SCROLL_LERP_MAX, SCROLL_LERP_MIN, SLIDER_DEFAULTS, STYLE_SECTIONS, TOKEN_NAME_RE, TRANSITION_DEFAULTS, TRANSITION_PRESET_IDS, VARIANT_NAME_RE, addVariantAxis, addVariantOption, adoptStructure, alignInstanceLines, applyClass, buildDocument, buildInstanceMap, cloneForMaster, compileAnimation, countLocaleSeo, createNode, createPage, createProject, dataMarkerOf, deepClone, defaultBreakpoints, defaultSettings, effectiveClasses, elementBlockLines, enforceDocument, expandComponentInstances, extractBodyArg, extractBodyDecor, extractBodyLines, findNode, findParent, fontError, fontFormatForUrl, hasAncestorOfType, hasNodeState, hasOpenArgBracket, hoistBlockRef, inheritedInstanceValue, interactionGroupKey, interactionMarkerOf, interactionStateKey, isAllowedAttribute, isBodyOpenLine, isClosedBlock, isComponentType, isEmittableToken, isKnownElement, isLeafElement, isNodeHidden, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isValidClass, isValidToken, lexLine, lucideNameOf, lucideSvg, matchClass, mergeClassLayers, normalizeComponentName, normalizeSyntax, parseSetup, parseSyntax, pickedKeys, purgeLocaleSeo, pushMasterStructure, reconcile, refOf, removeVariantAxis, removeVariantOption, renameVariantAxis, renameVariantOption, replaceSetup, resolveInstanceValue, resolvePicks, resolveSliderConfig, rewriteInstanceBlock, sameLayerProperty, sameProperty, sanitizeAttributes, sanitizeInlineSvg, sanitizeRich, serializeNode, setInstancePick, setNodeHidden, setSetupLocale, setStyleTokens, setVariantAxes, setVariantClasses, setVariantDefault, slugify, stripExtractedInstanceState, stripNodeState, styleMarkerOf, tokenError, typeOptionsFor, validateAnimation, validateBinding, validateDocument, validateMotionSettings, validateSliderConfig, variantKey, walkNodes, withDataMarker, withInteractionMarker, withStyleMarker, withoutRef };
+export { APPEAR_MODES, BUILTIN_LIST_SOURCES, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MOTION_PROPS, NODE_STATE_KEYS, REF_SLOT, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, SCROLL_LERP_MAX, SCROLL_LERP_MIN, SLIDER_DEFAULTS, STYLE_SECTIONS, TOKEN_NAME_RE, TRANSITION_DEFAULTS, TRANSITION_PRESET_IDS, VARIANT_NAME_RE, addVariantAxis, addVariantOption, adoptStructure, alignInstanceLines, alignMirrors, applyClass, buildDocument, buildInstanceMap, canNest, cloneForMaster, compileAnimation, componentReaches, countLocaleSeo, createNode, createPage, createProject, dataMarkerOf, deepClone, defaultBreakpoints, defaultSettings, dependencyOrder, effectiveClasses, elementBlockLines, enforceDocument, expandComponentInstances, extractBodyArg, extractBodyDecor, extractBodyLines, findNode, findParent, fontError, fontFormatForUrl, hasAncestorOfType, hasNodeState, hasOpenArgBracket, hoistBlockRef, inheritedInstanceValue, interactionGroupKey, interactionMarkerOf, interactionStateKey, isAllowedAttribute, isBodyOpenLine, isClosedBlock, isComponentType, isEmittableToken, isInstanceWrapper, isKnownElement, isLeafElement, isNodeHidden, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isValidClass, isValidToken, lexLine, lucideNameOf, lucideSvg, matchClass, mergeClassLayers, nestedComponentNames, normalizeComponentName, normalizeSyntax, parseSetup, parseSyntax, pickedKeys, purgeLocaleSeo, pushMasterStructure, reconcile, refOf, removeVariantAxis, removeVariantOption, renameVariantAxis, renameVariantOption, replaceSetup, resolveInstanceValue, resolvePicks, resolveSliderConfig, rewriteInstanceBlock, sameLayerProperty, sameProperty, sanitizeAttributes, sanitizeInlineSvg, sanitizeRich, serializeNode, setInstancePick, setNodeHidden, setSetupLocale, setStyleTokens, setVariantAxes, setVariantClasses, setVariantDefault, slugify, stripExtractedInstanceState, stripNodeState, styleMarkerOf, tokenError, typeOptionsFor, validateAnimation, validateBinding, validateDocument, validateMotionSettings, validateSliderConfig, variantKey, walkNodes, withDataMarker, withInteractionMarker, withStyleMarker, withoutRef };
