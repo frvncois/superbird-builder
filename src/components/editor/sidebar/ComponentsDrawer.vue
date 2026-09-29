@@ -197,6 +197,7 @@ useDrawerEscape(panel, {
                 <div
                   v-for="def in group.items"
                   :key="def.id"
+                  :data-component="def.name"
                   class="group/row mr-1 flex h-7 items-center rounded-lg pr-0.5 pl-1.5 hover:bg-accent/15"
                 >
                   <!-- click inserts, drag drops onto the canvas: the same two
@@ -264,6 +265,7 @@ useDrawerEscape(panel, {
                 <div
                   v-for="entry in group.items"
                   :key="entry.key"
+                  :data-catalog="entry.key"
                   class="group/row mr-1 flex h-7 items-center rounded-lg pr-0.5 pl-1.5 hover:bg-accent/15"
                 >
                   <span

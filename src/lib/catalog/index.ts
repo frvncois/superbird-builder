@@ -1,4 +1,6 @@
 import { PRIMITIVES } from './entries/primitives'
+import { CONTENT } from './entries/content'
+import { INTERACTIVE } from './entries/interactive'
 import type { CatalogEntry } from './types'
 
 export type { CatalogEntry, CatalogNode, CatalogBinding, CatalogInteraction } from './types'
@@ -15,7 +17,7 @@ export type { MaterializedEntry } from './materialize'
  * Ships with the app rather than being fetched, so it works offline and is
  * versioned with the editor that renders it.
  */
-export const CATALOG: CatalogEntry[] = [...PRIMITIVES]
+export const CATALOG: CatalogEntry[] = [...PRIMITIVES, ...CONTENT, ...INTERACTIVE]
 
 export function catalogEntry(key: string): CatalogEntry | null {
   return CATALOG.find((e) => e.key === key) ?? null

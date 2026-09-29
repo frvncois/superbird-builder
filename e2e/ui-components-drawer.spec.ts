@@ -1,0 +1,185 @@
+import { test, expect, type Page } from '@playwright/test'
+
+// The Components column: the shared-slot rail behaviour, and the bundled
+// library's round trip — add an entry, insert it, publish, and check the real
+// exported page.
+//
+// The interactive entries are the reason this spec exists. Tabs and Dialog are
+// built out of class-toggle interactions with groups and forced on/off states,
+// wired by data in src/lib/catalog; nothing short of driving the published page
+// proves that wiring is right. The headless catalog gate checks every entry is
+// well-formed — it cannot tell you a click shows the right panel.
+//
+// Named to sort AFTER smoke.spec: smoke owns the first-run flow and needs a
+// server with no admin account yet, so any spec that logs in has to run later.
+
+const ADMIN = { email: 'smoke@example.com', password: 'supersecret1' }
+
+async function openEditor(page: Page) {
+  await page.goto('/admin/')
+  const projectName = page.getByPlaceholder('Project name')
+  const email = page.getByPlaceholder('Email')
+  const preview = page.getByRole('button', { name: 'Preview' })
+  await expect(projectName.or(email).or(preview).first()).toBeVisible({ timeout: 30_000 })
+
+  if (await projectName.isVisible()) {
+    await projectName.fill('Smoke Co')
+    await email.fill(ADMIN.email)
+    await page.getByPlaceholder('Password (min. 8 characters)').fill(ADMIN.password)
+    await page.getByPlaceholder('Confirm password').fill(ADMIN.password)
+    await page.getByRole('button', { name: 'Setup project' }).click()
+  } else if (await email.isVisible()) {
+    await email.fill(ADMIN.email)
+    await page.getByPlaceholder('Password', { exact: true }).fill(ADMIN.password)
+    await page.getByRole('button', { name: 'Sign in' }).click()
+  }
+  await page.waitForURL(/\/admin(\?.*)?$/, { timeout: 30_000 })
+  await page.goto('/admin?demo')
+  await expect(preview).toBeVisible({ timeout: 30_000 })
+}
+
+async function publish(page: Page) {
+  await page.keyboard.press('ControlOrMeta+p')
+  await expect(page.getByText('Published!')).toBeVisible({ timeout: 30_000 })
+}
+
+const rail = (page: Page, name: string) => page.getByRole('button', { name, exact: true })
+
+/** the drawer's rows carry stable hooks — `data-catalog` in the Library,
+ *  `data-component` under Project — so these don't hang off class strings */
+const libraryRow = (page: Page, key: string) => page.locator(`[data-catalog="${key}"]`)
+const projectRow = (page: Page, name: string) => page.locator(`[data-component="${name}"]`)
+
+/** open the drawer, add a library entry, then insert it on the home page */
+async function addAndInsert(page: Page, key: string, name: string) {
+  await rail(page, 'Components').click()
+  const row = libraryRow(page, key)
+  await row.hover()
+  await row.getByRole('button', { name: 'Add to project' }).click()
+  // it now appears under Project; clicking the row inserts at the selection
+  await projectRow(page, name).getByRole('button').first().click()
+}
+
+test('the three left columns share one slot', async ({ page }) => {
+  await openEditor(page)
+
+  await rail(page, 'Components').click()
+  await expect(page.getByPlaceholder('Search components…')).toBeVisible()
+
+  // opening Pages takes the slot from Components
+  await rail(page, 'Pages').click()
+  await expect(page.getByPlaceholder('Search pages, items…')).toBeVisible()
+  await expect(page.getByPlaceholder('Search components…')).toBeHidden()
+
+  // and Components takes it back
+  await rail(page, 'Components').click()
+  await expect(page.getByPlaceholder('Search components…')).toBeVisible()
+  await expect(page.getByPlaceholder('Search pages, items…')).toBeHidden()
+
+  // the App button closes whatever holds it
+  await page.getByRole('button', { name: 'App', exact: true }).click()
+  await expect(page.getByPlaceholder('Search components…')).toBeHidden()
+})
+
+test('a library button reaches the published page, styled by a created token', async ({ page }) => {
+  await openEditor(page)
+  await addAndInsert(page, 'button', 'Button')
+
+  // the Library row flips to "already in this project"
+  await expect(libraryRow(page, 'button').getByRole('button', { name: 'Add to project' })).toHaveCount(0)
+
+  await publish(page)
+  await page.goto('/')
+
+  const button = page.locator('button', { hasText: 'Button' }).first()
+  await expect(button).toBeVisible()
+  await expect(button).toHaveClass(/text-primary-foreground/)
+  // both halves of the token rule, in one element:
+  // · the demo already defines `primary` (#6750A4) — adding a library entry
+  //   must adopt the project's palette, never overwrite it with the default
+  await expect(button).toHaveCSS('background-color', 'rgb(103, 80, 164)')
+  // · it does NOT define `primary-foreground`, so that one was created from the
+  //   catalog default and compiled into the published stylesheet
+  await expect(button).toHaveCSS('color', 'rgb(250, 250, 250)')
+})
+
+test('Tabs: clicking a tab swaps the panel, and tab one restores the default', async ({ page }) => {
+  await openEditor(page)
+  await addAndInsert(page, 'tabs', 'Tabs')
+  await publish(page)
+  await page.goto('/')
+
+  const first = page.getByText('The first panel is the one visible before anything is clicked.')
+  const second = page.getByText('The second panel. Clicking its tab hides the others.')
+  const third = page.getByText('The third panel, same again.')
+
+  // panel 1 is visible with no JS having run — deliberately NOT an `appear`
+  // binding, which the runtime force-fires after 3s
+  await expect(first).toBeVisible()
+  await expect(second).toBeHidden()
+
+  await page.getByRole('button', { name: 'Details' }).click()
+  await expect(second).toBeVisible()
+  await expect(first).toBeHidden()
+
+  // the group makes the panels exclusive
+  await page.getByRole('button', { name: 'Activity' }).click()
+  await expect(third).toBeVisible()
+  await expect(second).toBeHidden()
+  await expect(first).toBeHidden()
+
+  // tab one is the "off" position of every effect
+  await page.getByRole('button', { name: 'Overview' }).click()
+  await expect(first).toBeVisible()
+  await expect(second).toBeHidden()
+  await expect(third).toBeHidden()
+
+  // and the default panel stays put well past the runtime's 3s appear sweep
+  await page.waitForTimeout(3500)
+  await expect(first).toBeVisible()
+})
+
+test('Dialog: opens, dismisses from the overlay, and from Escape', async ({ page }) => {
+  await openEditor(page)
+  await addAndInsert(page, 'dialog', 'Dialog')
+  await publish(page)
+  await page.goto('/')
+
+  const body = page.getByText('This action cannot be undone.')
+  await expect(body).toBeHidden()
+
+  await page.getByRole('button', { name: 'Open dialog' }).click()
+  await expect(body).toBeVisible()
+
+  // the overlay and the buttons all drive ONE effect, keyed by target
+  await page.getByRole('button', { name: 'Cancel' }).click()
+  await expect(body).toBeHidden()
+
+  await page.getByRole('button', { name: 'Open dialog' }).click()
+  await expect(body).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(body).toBeHidden()
+})
+
+test('renaming a component keeps every instance rendering', async ({ page }) => {
+  await openEditor(page)
+  await addAndInsert(page, 'card', 'Card')
+
+  // addAndInsert left the drawer open — clicking the rail again would close it
+  const row = projectRow(page, 'Card')
+  await row.hover()
+  await row.getByRole('button').last().click() // the row kebab
+  // exact: the rail's "Project settings" button matches a loose 'Settings'
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+
+  const name = page.locator('input[placeholder="Card"]')
+  await name.fill('Panel')
+  await name.blur()
+
+  await publish(page)
+  await page.goto('/')
+  // renamed in place: the instance still resolves to its master, so it keeps
+  // the master's classes and copy
+  await expect(page.getByText('Card title')).toBeVisible()
+  await expect(page.locator('.bg-card').first()).toBeVisible()
+})
