@@ -3,6 +3,7 @@ import { usePage } from './usePage'
 import { useProject } from './useProject'
 import { useInteraction } from './useInteraction'
 import { walkNodes } from '@/lib/tree'
+import { masterAnimationsTargeting } from './useMasterBindings'
 import { validateAnimation } from '@/lib/motion'
 import { MOTION_PRESETS, type MotionPresetId } from '@/lib/motionPresets'
 import type { Animation, AnimationBinding, ElementNode } from '@/types/editor'
@@ -59,13 +60,8 @@ export function animBindingActiveAt(
 
 /** bindings inside a component master whose animation moves `masterId` */
 export function scopedAnimBindings(masterId: string, componentRoot: ElementNode): AnimationBinding[] {
-  const list: AnimationBinding[] = []
-  walkNodes([componentRoot], (owner) => {
-    for (const binding of owner.animations ?? []) {
-      if ((binding.targetId ?? owner.id) === masterId) list.push(binding)
-    }
-  })
-  return list
+  // the shared per-master index — a walk here ran once per rendered element
+  return [...masterAnimationsTargeting(masterId, componentRoot)]
 }
 
 export function useAnimation() {

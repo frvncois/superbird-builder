@@ -428,6 +428,17 @@ function alignHostMirrors(host, components) {
 	visit(host.root.children);
 	return JSON.stringify(host.root.children) !== before;
 }
+/** every nested-instance wrapper a master holds directly (not the ones inside
+*  a mirror, which belong to the component being mirrored) */
+function nestedWrappers(def, name) {
+	const out = [];
+	const visit = (nodes) => {
+		for (const node of nodes) if (!isComponentType(node.type)) visit(node.children);
+		else if (!name || node.type === name) out.push(node);
+	};
+	visit(def.root.children);
+	return out;
+}
 /** turns raw user input into a valid, unique component name ('my card' → 'MyCard') */
 function normalizeComponentName(raw, taken) {
 	const cleaned = raw.split(/[^a-zA-Z0-9]+/).filter(Boolean).map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join("");
@@ -591,6 +602,17 @@ function adoptStructure(master, edited, selfName, result = {
 	});
 	return result;
 }
+var instanceTokens = null;
+function instanceMatchers() {
+	if (!instanceTokens) {
+		const head = `:([A-Z][a-zA-Z0-9-]*)(${REF_SLOT})(?:\\[\\+\\])?(?:\\(\\+?\\)?)?(?:\\{\\+?\\}?)?`;
+		instanceTokens = {
+			leaf: new RegExp(`^${head}:$`),
+			open: new RegExp(`^${head}$`)
+		};
+	}
+	return instanceTokens;
+}
 /**
 * Expands freshly typed component references into their full editable
 * block: a `:Card:` leaf, or an empty `:Card` / `Card:` pair, becomes
@@ -601,6 +623,7 @@ function expandComponentInstances(code, components, lineMap) {
 		if (lineMap) code.split("\n").forEach((_, i) => lineMap.push(i));
 		return code;
 	}
+	const { leaf: INSTANCE_LEAF, open: INSTANCE_OPEN } = instanceMatchers();
 	const lines = code.split("\n");
 	const out = [];
 	const mark = () => lineMap?.push(out.length);
@@ -617,16 +640,16 @@ function expandComponentInstances(code, components, lineMap) {
 			out.push(line);
 			continue;
 		}
-		const leaf = trimmed.match(/^:([A-Z][a-zA-Z0-9-]*):$/);
+		const leaf = trimmed.match(INSTANCE_LEAF);
 		const leafDef = leaf ? components.find((c) => c.name === leaf[1]) : null;
 		if (leafDef && !stack.includes(leafDef.name)) {
 			mark();
-			out.push(`${indent}:${leafDef.name}`);
+			out.push(`${indent}:${leafDef.name}${leaf[2] ?? ""}`);
 			out.push(...leafDef.root.children.flatMap((c) => serializeNode(c, `${indent}\t`)));
 			out.push(`${indent}${leafDef.name}:`);
 			continue;
 		}
-		const open = trimmed.match(/^:([A-Z][a-zA-Z0-9-]*)$/);
+		const open = trimmed.match(INSTANCE_OPEN);
 		const openDef = open ? components.find((c) => c.name === open[1]) : null;
 		if (openDef && !stack.includes(openDef.name) && lines[i + 1]?.trim() === `${openDef.name}:`) {
 			mark();
@@ -1504,6 +1527,9 @@ function setNodeHidden(node, mapping, hidden) {
 }
 //#endregion
 //#region src/lib/instances.ts
+var buildInstanceMap$1 = buildInstanceMap;
+/** the components a component's master holds directly, by name */
+var nestedComponentNames$1 = nestedComponentNames;
 /** each component after everything it holds */
 var dependencyOrder$1 = dependencyOrder;
 //#endregion
@@ -3949,6 +3975,23 @@ function effectiveClasses(node, def, picks) {
 }
 //#endregion
 //#region src/lib/componentOps.ts
+/**
+* Whole-project operations on components — rename, duplicate, categorize,
+* detach, delete.
+*
+* These live here rather than in `useComponents` because every one of them
+* spans ALL pages, while the composable's `masterMap` / `detachComponent` are
+* bound to the active page. The structural ones (`rewriteInstanceBlock`,
+* `pushMasterStructure`, …) are re-exported into the committed MCP runtime
+* bundle, so the agent path runs this code rather than a copy of it: rebuild
+* the bundle (`npm run build:mcp-runtime`) after changing them.
+*
+* All of it is pure: a `Project` in, mutations out, no Vue. That is what makes
+* it testable headlessly.
+*/
+/** matches a token line's opening ':Name', refusing a longer name that merely
+* starts with it (':CardHeader' is not an instance of 'Card') */
+var openToken = (name) => new RegExp(`^(\\s*:)${name}(?![a-zA-Z0-9-])`);
 var indentOf = (line) => line.match(/^\t*/)[0];
 /**
 * The ONE writer of the optional keys, so their JSON key order is the same
@@ -3974,6 +4017,187 @@ function setComponentMeta(def, meta) {
 		default: axis.default
 	}));
 }
+/** where a component is actually used — the number the delete confirm quotes */
+function componentUsage(project, name) {
+	let count = 0;
+	const pages = [];
+	for (const page of project.pages) {
+		let onPage = 0;
+		walkNodes(page.elements, (n) => {
+			if (n.type === name) onPage++;
+		});
+		if (!onPage) continue;
+		count += onPage;
+		pages.push({
+			id: page.id,
+			name: page.name
+		});
+	}
+	const hosts = project.components.filter((c) => c.name !== name && nestedComponentNames$1(c).includes(name)).map((c) => c.name);
+	return {
+		count,
+		pages,
+		hosts
+	};
+}
+/**
+* Renames a component and every `:Name … Name:` token that refers to it.
+*
+* Returns the name actually used (normalized and de-duplicated), or null when
+* the id doesn't resolve.
+*/
+function renameComponent(project, id, rawName) {
+	const def = project.components.find((c) => c.id === id);
+	if (!def) return null;
+	const name = normalizeComponentName(rawName, project.components.filter((c) => c.id !== id).map((c) => c.name));
+	if (name === def.name) return name;
+	const old = def.name;
+	def.name = name;
+	def.root.type = name;
+	for (const host of project.components) walkNodes(host.root.children, (node) => {
+		if (node.type === old) node.type = name;
+	});
+	const open = openToken(old);
+	for (const page of project.pages) {
+		const lines = page.code.split("\n");
+		let changed = false;
+		walkNodes(page.elements, (node) => {
+			if (node.type !== old) return;
+			node.type = name;
+			const at = node.line;
+			if (at === void 0) return;
+			const line = lines[at];
+			if (line !== void 0 && open.test(line)) {
+				lines[at] = line.replace(open, `$1${name}`);
+				changed = true;
+			}
+			const end = node.endLine;
+			if (end !== void 0 && end !== at && lines[end]?.trim() === `${old}:`) {
+				lines[end] = `${indentOf(lines[end])}${name}:`;
+				changed = true;
+			}
+		});
+		if (changed) page.code = lines.join("\n");
+	}
+	return name;
+}
+/** An independent copy under a new name. Creates no instances. */
+function duplicateComponent(project, id) {
+	const def = project.components.find((c) => c.id === id);
+	if (!def) return null;
+	const name = normalizeComponentName(`${def.name}Copy`, project.components.map((c) => c.name));
+	const { cloned } = cloneForMaster(def.root);
+	cloned.type = name;
+	const copy = {
+		id: crypto.randomUUID(),
+		name,
+		root: cloned
+	};
+	setComponentMeta(copy, {
+		category: def.category,
+		variants: def.variants
+	});
+	project.components.push(copy);
+	return copy;
+}
+function setComponentCategory(project, id, category) {
+	const def = project.components.find((c) => c.id === id);
+	if (!def) return false;
+	setComponentMeta(def, {
+		category,
+		source: def.source,
+		variants: def.variants
+	});
+	return true;
+}
+/** what a host says about a nested instance — the state a mirror carries */
+var MIRROR_KEYS = [
+	"content",
+	"src",
+	"svg",
+	"background",
+	"locales",
+	"hidden",
+	"variants"
+];
+/** `node` takes, for each key it does not set itself, the first mirror's value */
+function inheritFromMirrors(node, mirrors) {
+	for (const key of MIRROR_KEYS) {
+		if (node[key] !== void 0 && node[key] !== "") continue;
+		const from = mirrors.find((m) => m[key] !== void 0 && m[key] !== "");
+		if (from) node[key] = deepClone(from[key]);
+	}
+}
+/**
+* One instance's nodes with their masters — the shared pairing
+* (lib/instances), over any page rather than only the active one, plus the
+* master → instance direction a detach needs to retarget bindings.
+*
+* Only the nodes that belong to THIS component are paired. An instance nested
+* inside it stays an instance when its host is detached, so its nodes are not
+* baked — they only take over what the host's master said about them, which
+* is about to stop being reachable.
+*/
+function pairWithMaster(instance, def, components) {
+	const pairs = [];
+	const masterToInstance = /* @__PURE__ */ new Map();
+	const map = buildInstanceMap$1([instance], [def, ...components.filter((c) => c !== def)]);
+	walkNodes([instance], (node) => {
+		const mapping = map.get(node.id);
+		if (!mapping) return;
+		if (mapping.def !== def) {
+			inheritFromMirrors(node, mapping.mirrors);
+			return;
+		}
+		pairs.push({
+			node,
+			master: mapping.master,
+			classes: effectiveClasses(mapping.master, mapping.def, mapping.picks)
+		});
+		masterToInstance.set(mapping.master.id, node.id);
+	});
+	return {
+		pairs,
+		masterToInstance
+	};
+}
+/** Copies the master's shared state onto the page nodes that were inheriting it. */
+function bakeMasterState(pairs, masterToInstance) {
+	const retarget = (targetId) => targetId ? masterToInstance.get(targetId) ?? targetId : null;
+	for (const { node, master, classes } of pairs) {
+		if (classes) node.classes = classes;
+		delete node.variants;
+		if (master.attributes) node.attributes = deepClone(master.attributes);
+		if (master.interactions?.length) node.interactions = master.interactions.map((b) => ({
+			...deepClone(b),
+			id: crypto.randomUUID(),
+			targetId: retarget(b.targetId)
+		}));
+		if (master.animations?.length) node.animations = master.animations.map((b) => ({
+			...deepClone(b),
+			id: crypto.randomUUID(),
+			targetId: retarget(b.targetId)
+		}));
+		if (!node.content && master.content) node.content = master.content;
+		if (!node.src && master.src) node.src = master.src;
+		if (!node.svg && master.svg) node.svg = master.svg;
+		if (node.hidden === void 0 && master.hidden) node.hidden = true;
+		else if (node.hidden === false) delete node.hidden;
+		if (!node.background && master.background) node.background = master.background;
+		if (!node.locales && master.locales) node.locales = deepClone(master.locales);
+	}
+}
+/**
+* The exporter's own test (`server/export.mjs`, renderNode): a `:Name` wrapper
+* with nothing of its own emits NO element at all — its children render
+* inline. Such a wrapper has to be UNWRAPPED on detach, not retyped: a `:div`
+* in its place would add a box the published page never had, and with it
+* whatever `space-y-*` / `divide-*` / `first:` rules the real parent applies
+* to its children.
+*/
+function isBareWrapper(root) {
+	return !root.classes?.trim() && !root.background && !root.interactions?.length;
+}
 /** `:Card:` leaf instances can sit unexpanded in stored code (nothing expands
 * them until someone types in that page). Detaching one means materializing
 * the master's structure first, so there are nodes to bake onto. Only THIS
@@ -3987,6 +4211,76 @@ function expandLeafInstances(page, def) {
 	const before = page.code;
 	page.code = next;
 	page.elements = reconcile(before, next, page.elements, map);
+}
+var withRef = (line, ref) => line.replace(/^(\s*:[a-zA-Z][a-zA-Z0-9-]*)/, `$1#${ref}`);
+/** Detaches one already-expanded instance block. */
+function detachOne(page, def, instanceId, components) {
+	const instance = findNode(page.elements, instanceId);
+	if (!instance || instance.type !== def.name || instance.line === void 0) return false;
+	const { pairs, masterToInstance } = pairWithMaster(instance, def, components);
+	bakeMasterState(pairs, masterToInstance);
+	const lines = page.code.split("\n");
+	const start = instance.line;
+	const end = instance.endLine ?? instance.line;
+	if (!isBareWrapper(def.root)) {
+		lines[start] = lines[start].replace(openToken(def.name), "$1div");
+		if (end > start) lines[end] = `${indentOf(lines[end])}div:`;
+		instance.type = "div";
+		page.code = lines.join("\n");
+		return true;
+	}
+	const inner = end > start ? lines.slice(start + 1, end) : [];
+	const dropped = end > start ? 2 : 1;
+	const rest = [
+		...lines.slice(0, start),
+		...inner.map((l) => l.replace(/^\t/, "")),
+		...lines.slice(end + 1)
+	];
+	if (inner.length) {
+		const ref = refOf(lines[start]);
+		if (ref && !refOf(rest[start])) rest[start] = withRef(rest[start], ref);
+		const firstChild = instance.children[0];
+		if (firstChild && instance.htmlId && !firstChild.htmlId) firstChild.htmlId = instance.htmlId;
+	}
+	const map = /* @__PURE__ */ new Map();
+	for (let i = 0; i < rest.length; i++) if (i < start) map.set(i, i);
+	else if (i < start + inner.length) map.set(i, i + 1);
+	else map.set(i, i + dropped);
+	const before = page.code;
+	page.code = rest.join("\n");
+	page.elements = reconcile(before, page.code, page.elements, map);
+	return true;
+}
+/**
+* Turns every instance of a component, on every page, back into plain
+* elements that look exactly the same. Returns how many were detached.
+*/
+function detachComponentInstances(project, def) {
+	let detached = 0;
+	for (const page of project.pages) {
+		expandLeafInstances(page, def);
+		const instances = [];
+		walkNodes(page.elements, (n) => {
+			if (n.type === def.name && n.line !== void 0) instances.push(n);
+		});
+		if (!instances.length) continue;
+		const ordered = [...instances].sort((a, b) => b.line - a.line).map((n) => n.id);
+		for (const id of ordered) if (detachOne(page, def, id, project.components)) detached++;
+		const marked = applyNodeMarkers(page.code, page.elements);
+		if (marked !== page.code) page.code = marked;
+	}
+	return detached;
+}
+/** Detaches a single instance — the canvas context menu's "Detach". */
+function detachInstance(project, page, instanceId) {
+	const node = findNode(page.elements, instanceId);
+	const def = node ? project.components.find((c) => c.name === node.type) : null;
+	if (!def) return false;
+	expandLeafInstances(page, def);
+	if (!detachOne(page, def, instanceId, project.components)) return false;
+	const marked = applyNodeMarkers(page.code, page.elements);
+	if (marked !== page.code) page.code = marked;
+	return true;
 }
 /**
 * Pushes a master's current structure out to every instance of it, on every
@@ -4067,6 +4361,66 @@ function rewriteInstanceBlock(page, node, def) {
 function isClosedBlock(page, node, name) {
 	if (node.line === void 0 || node.endLine === void 0 || node.endLine <= node.line) return false;
 	return page.code.split("\n")[node.endLine]?.trim() === `${name}:`;
+}
+/**
+* Deletes a component, detaching every instance first so no page loses its
+* content. Interactions and design tokens the component used stay in the
+* project — they are shared libraries, and the detached elements still use
+* them.
+*/
+function deleteComponent(project, id) {
+	const def = project.components.find((c) => c.id === id);
+	if (!def) return false;
+	for (const host of dependencyOrder$1(project.components)) {
+		if (host === def) continue;
+		const held = nestedWrappers(host, def.name);
+		if (!held.length) continue;
+		for (const wrapper of held) detachInMaster(host, wrapper, def);
+		pushMasterStructure(project, host);
+	}
+	detachComponentInstances(project, def);
+	project.components = project.components.filter((c) => c.id !== id);
+	return true;
+}
+/**
+* Turns one nested instance, in a host's MASTER, into plain elements that look
+* the same: the inner component's structure and look, with what the host said
+* about it on top. The tree-form twin of `detachOne`, same bare-wrapper rule.
+*/
+function detachInMaster(host, wrapper, inner) {
+	const parent = findParent([host.root], wrapper.id);
+	if (!parent) return;
+	const picks = resolvePicks(inner, wrapper, []);
+	const { cloned } = cloneForMaster(inner.root);
+	const bake = (node, master, mirror, held) => {
+		if (!held) {
+			const classes = effectiveClasses(master, inner, picks);
+			if (classes) node.classes = classes;
+			else delete node.classes;
+			delete node.variantClasses;
+		}
+		if (mirror) inheritFromMirrors(clearForOverlay(node, mirror), [mirror]);
+		if (node.hidden === false) delete node.hidden;
+		node.children.forEach((child, i) => {
+			const below = master.children[i];
+			if (!below) return;
+			bake(child, below, mirror?.children[i], held || isComponentType(child.type));
+		});
+	};
+	bake(cloned, inner.root, wrapper, false);
+	delete cloned.variants;
+	const bare = !cloned.classes?.trim() && !cloned.background && !cloned.interactions?.length;
+	const at = parent.children.indexOf(wrapper);
+	if (bare) parent.children.splice(at, 1, ...cloned.children);
+	else parent.children.splice(at, 1, {
+		...cloned,
+		type: "div"
+	});
+}
+/** what the mirror sets wins over what the clone inherited from the master */
+function clearForOverlay(node, mirror) {
+	for (const key of MIRROR_KEYS) if (mirror[key] !== void 0 && mirror[key] !== "") delete node[key];
+	return node;
 }
 //#endregion
 //#region src/lib/shared/slug.js
@@ -4636,12 +4990,13 @@ function setVariantAxes(project, def, axes) {
 * An instance's pick on one axis. Stored only where it differs from the
 * default, and re-seated in axis order — see the header.
 */
-function setInstancePick(def, wrapper, axisName, option) {
+function setInstancePick(def, wrapper, axisName, option, mirrors = []) {
 	const axis = def.variants?.find((a) => a.name === axisName);
 	if (!axis) return fail$2(`"${def.name}" has no "${axisName}" axis`);
 	if (option !== null && !axis.options.includes(option)) return fail$2(`"${axisName}" has no "${option}" option — it has ${axis.options.join(", ")}`);
 	const picks = { ...wrapper.variants ?? {} };
-	if (option === null || option === axis.default) delete picks[axisName];
+	const inherited = resolvePicks(def, { variants: {} }, mirrors)[axisName];
+	if (option === null || option === inherited) delete picks[axisName];
 	else picks[axisName] = option;
 	const kept = {};
 	for (const a of def.variants ?? []) if (picks[a.name] !== void 0) kept[a.name] = picks[a.name];
@@ -6104,26 +6459,30 @@ var FORMS = [
 		name: "Select",
 		category: "Forms",
 		description: "A dropdown of fixed choices.",
-		tokens: FIELD_TOKENS,
+		tokens: [...FIELD_TOKENS, "muted-foreground"],
 		root: {
-			type: "select",
-			key: "input",
-			classes: `h-9 ${FIELD}`,
-			attributes: { name: "choice" },
-			children: [
-				{
-					type: "option",
-					content: "First option"
-				},
-				{
-					type: "option",
-					content: "Second option"
-				},
-				{
-					type: "option",
-					content: "Third option"
-				}
-			]
+			type: "div",
+			classes: "relative w-full",
+			children: [{
+				type: "select",
+				key: "input",
+				classes: `h-9 appearance-none cursor-pointer pr-9 ${FIELD}`,
+				attributes: { name: "choice" },
+				children: [
+					{
+						type: "option",
+						content: "First option"
+					},
+					{
+						type: "option",
+						content: "Second option"
+					},
+					{
+						type: "option",
+						content: "Third option"
+					}
+				]
+			}, icon("chevron-down", "pointer-events-none absolute top-1/2 right-3 size-4 -translate-y-1/2 text-muted-foreground")]
 		}
 	},
 	{
@@ -7743,4 +8102,4 @@ function materializeCatalogEntry(entry, project, component = (key) => project.co
 	});
 }
 //#endregion
-export { APPEAR_MODES, BUILTIN_LIST_SOURCES, CATALOG, CATALOG_TOKENS, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MOTION_PROPS, NODE_STATE_KEYS, REF_SLOT, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, SCROLL_LERP_MAX, SCROLL_LERP_MIN, SLIDER_DEFAULTS, STYLE_SECTIONS, TOKEN_NAME_RE, TRANSITION_DEFAULTS, TRANSITION_PRESET_IDS, VARIANT_NAME_RE, addVariantAxis, addVariantOption, adoptStructure, alignInstanceLines, alignMirrors, applyClass, buildDocument, buildInstanceMap, canNest, catalogDependencies, catalogEntry, cloneForMaster, compileAnimation, componentReaches, countLocaleSeo, createNode, createPage, createProject, dataMarkerOf, deepClone, defaultBreakpoints, defaultSettings, dependencyOrder, effectiveClasses, elementBlockLines, enforceDocument, expandComponentInstances, extractBodyArg, extractBodyDecor, extractBodyLines, findNode, findParent, fontError, fontFormatForUrl, hasAncestorOfType, hasNodeState, hasOpenArgBracket, hoistBlockRef, inheritedInstanceValue, interactionGroupKey, interactionMarkerOf, interactionStateKey, isAllowedAttribute, isBodyOpenLine, isClosedBlock, isComponentType, isEmittableToken, isInstanceWrapper, isKnownElement, isLeafElement, isNodeHidden, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isValidClass, isValidToken, lexLine, lucideNameOf, lucideSvg, matchClass, materializeCatalogEntry, mergeClassLayers, nestedComponentNames, normalizeComponentName, normalizeSyntax, parseSetup, parseSyntax, pickedKeys, purgeLocaleSeo, pushMasterStructure, reconcile, refOf, removeVariantAxis, removeVariantOption, renameVariantAxis, renameVariantOption, replaceSetup, resolveInstanceValue, resolvePicks, resolveSliderConfig, rewriteInstanceBlock, sameLayerProperty, sameProperty, sanitizeAttributes, sanitizeInlineSvg, sanitizeRich, serializeNode, setInstancePick, setNodeHidden, setSetupLocale, setStyleTokens, setVariantAxes, setVariantClasses, setVariantDefault, slugify, stripExtractedInstanceState, stripNodeState, styleMarkerOf, tokenError, typeOptionsFor, validateAnimation, validateBinding, validateDocument, validateMotionSettings, validateSliderConfig, variantKey, walkNodes, withDataMarker, withInteractionMarker, withStyleMarker, withoutRef };
+export { APPEAR_MODES, BUILTIN_LIST_SOURCES, CATALOG, CATALOG_TOKENS, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MOTION_PROPS, NODE_STATE_KEYS, REF_SLOT, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, SCROLL_LERP_MAX, SCROLL_LERP_MIN, SLIDER_DEFAULTS, STYLE_SECTIONS, TOKEN_NAME_RE, TRANSITION_DEFAULTS, TRANSITION_PRESET_IDS, VARIANT_NAME_RE, addVariantAxis, addVariantOption, adoptStructure, alignInstanceLines, alignMirrors, applyClass, buildDocument, buildInstanceMap, canNest, catalogDependencies, catalogEntry, cloneForMaster, compileAnimation, componentReaches, componentUsage, countLocaleSeo, createNode, createPage, createProject, dataMarkerOf, deepClone, defaultBreakpoints, defaultSettings, deleteComponent, dependencyOrder, detachInstance, duplicateComponent, effectiveClasses, elementBlockLines, enforceDocument, expandComponentInstances, extractBodyArg, extractBodyDecor, extractBodyLines, findNode, findParent, fontError, fontFormatForUrl, hasAncestorOfType, hasNodeState, hasOpenArgBracket, hoistBlockRef, inheritedInstanceValue, interactionGroupKey, interactionMarkerOf, interactionStateKey, isAllowedAttribute, isBodyOpenLine, isClosedBlock, isComponentType, isEmittableToken, isInstanceWrapper, isKnownElement, isLeafElement, isNodeHidden, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isValidClass, isValidToken, lexLine, lucideNameOf, lucideSvg, matchClass, materializeCatalogEntry, mergeClassLayers, nestedComponentNames, normalizeComponentName, normalizeSyntax, parseSetup, parseSyntax, pickedKeys, purgeLocaleSeo, pushMasterStructure, reconcile, refOf, removeVariantAxis, removeVariantOption, renameComponent, renameVariantAxis, renameVariantOption, replaceSetup, resolveInstanceValue, resolvePicks, resolveSliderConfig, rewriteInstanceBlock, sameLayerProperty, sameProperty, sanitizeAttributes, sanitizeInlineSvg, sanitizeRich, serializeNode, setComponentCategory, setComponentMeta, setInstancePick, setNodeHidden, setSetupLocale, setStyleTokens, setVariantAxes, setVariantClasses, setVariantDefault, slugify, stripExtractedInstanceState, stripNodeState, styleMarkerOf, tokenError, typeOptionsFor, validateAnimation, validateBinding, validateDocument, validateMotionSettings, validateSliderConfig, variantKey, walkNodes, withDataMarker, withInteractionMarker, withStyleMarker, withoutRef };

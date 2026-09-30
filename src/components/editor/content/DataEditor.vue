@@ -632,7 +632,9 @@ const instance = computed(() => {
   const node = selectedElement.value
   const mapping = node && canBuild.value ? masterFor(node.id) : null
   const wrapper = mapping ? getElement(mapping.instanceId) : null
-  return mapping && wrapper ? { def: mapping.def, picks: mapping.picks, wrapper } : null
+  return mapping && wrapper
+    ? { def: mapping.def, picks: mapping.picks, wrapper, mirrors: masterFor(wrapper.id)?.mirrors ?? [] }
+    : null
 })
 
 const instanceAxes = computed(() =>
@@ -645,7 +647,7 @@ const instanceAxes = computed(() =>
 
 function pickVariant(axis: string, option: string | undefined) {
   const at = instance.value
-  if (at && option) setInstancePick(at.def, at.wrapper, axis, option)
+  if (at && option) setInstancePick(at.def, at.wrapper, axis, option, at.mirrors)
 }
 
 /** the instance's optional parts: every element whose visibility is decided

@@ -6,8 +6,16 @@ import { useMotion } from './useMotion'
 // full inspector) or the full-site Preview. Runtime-only, shared across the
 // app — deliberately NOT on the project (not persisted, not undoable).
 //
+// In the UI these two are **Edit** and **Play**, switched by `ModeToggle` at
+// the bottom-right of the page canvas (there is no Preview rail button). The
+// internal names stay build/preview — the vocabulary is spelled out in
+// ModeToggle, and nothing else has to know both.
+//
 // Contributors are content-only: they can never enter Build, so the mode is
-// pinned to 'preview' for them (the Build-only rail buttons are hidden too).
+// pinned to 'preview' for them, and they get no toggle at all (the Build-only
+// rail buttons are hidden too). Preview itself is read-only, so what they edit
+// they edit in the Pages drawer — an entry's field values, a page's SEO and
+// status — not on the render.
 const mode = ref<'build' | 'preview'>('build')
 
 /**

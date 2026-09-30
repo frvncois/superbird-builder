@@ -72,16 +72,26 @@ export const FORMS: CatalogEntry[] = [
     name: 'Select',
     category: 'Forms',
     description: 'A dropdown of fixed choices.',
-    tokens: FIELD_TOKENS,
+    tokens: [...FIELD_TOKENS, 'muted-foreground'],
+    // a <select> cannot hold an icon, and left to itself it draws the
+    // browser's chevron and chrome: the native look is turned off and the
+    // wrapper draws the chevron over it
     root: {
-      type: 'select',
-      key: 'input',
-      classes: `h-9 ${FIELD}`,
-      attributes: { name: 'choice' },
+      type: 'div',
+      classes: 'relative w-full',
       children: [
-        { type: 'option', content: 'First option' },
-        { type: 'option', content: 'Second option' },
-        { type: 'option', content: 'Third option' },
+        {
+          type: 'select',
+          key: 'input',
+          classes: `h-9 appearance-none cursor-pointer pr-9 ${FIELD}`,
+          attributes: { name: 'choice' },
+          children: [
+            { type: 'option', content: 'First option' },
+            { type: 'option', content: 'Second option' },
+            { type: 'option', content: 'Third option' },
+          ],
+        },
+        icon('chevron-down', 'pointer-events-none absolute top-1/2 right-3 size-4 -translate-y-1/2 text-muted-foreground'),
       ],
     },
   },

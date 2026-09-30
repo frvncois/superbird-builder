@@ -1,12 +1,13 @@
 <script setup lang="ts">
-// The single editing shell. A rail toggle switches the surface between Build
-// (breakpoint canvas + full inspector) and Preview (full-site render,
-// restricted sidebar).
+// The single editing shell. The bottom-right Edit / Play toggle (`ModeToggle`)
+// switches the surface between Build (breakpoint canvas + full inspector) and
+// Preview (full-site render, restricted sidebar) — shown as Edit and Play, the
+// only names the user sees.
 // The centre is either the open page or the components board (`canvas`), and
 // the 16rem track beside the rail holds Pages or Components (`column`). Layers
 // are edited inside those columns: a page's from its Edit icon in Pages, a
 // component's by expanding its row in Components.
-// Contributors are pinned to Preview.
+// Contributors are pinned to Play.
 import EditorLayout from '@/layouts/EditorLayout.vue'
 import AppRail from '@/components/editor/sidebar/AppRail.vue'
 import PagesDrawer from '@/components/editor/sidebar/PagesDrawer.vue'
@@ -16,10 +17,12 @@ import ComponentsBoard from '@/components/editor/canvas/ComponentsBoard.vue'
 import SettingsEditor from '@/components/editor/sidebar/SettingsEditor.vue'
 import ContextMenu from '@/components/editor/canvas/ContextMenu.vue'
 import InsertDragChip from '@/components/editor/canvas/InsertDragChip.vue'
+import ModeToggle from '@/components/editor/canvas/ModeToggle.vue'
 import SitePreview from '@/components/site/SitePreview.vue'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import { useEditorShortcuts } from '@/composables/useEditorShortcuts'
 import { useEditorBoot } from '@/composables/useEditorBoot'
+import { useAuth } from '@/composables/useAuth'
 import { useViewMode } from '@/composables/useViewMode'
 
 // editor-zone globals: keymaps live here (NOT in App.vue) so the public
@@ -27,6 +30,7 @@ import { useViewMode } from '@/composables/useViewMode'
 useEditorShortcuts()
 
 const { ready, bootError, reloadPage } = useEditorBoot()
+const { canBuild } = useAuth()
 const { isBuild, visibleColumn, showComponents } = useViewMode()
 </script>
 
@@ -53,16 +57,33 @@ const { isBuild, visibleColumn, showComponents } = useViewMode()
         <ComponentsDrawer />
       </template>
 
-      <!-- center: Build canvas or full-site preview -->
-      <template v-if="isBuild">
-        <div class="relative h-full">
+      <!-- center: Build canvas or full-site preview, with the Edit / Play
+           toggle floating over whichever is up -->
+      <div class="relative h-full">
+        <template v-if="isBuild">
           <ComponentsBoard v-if="showComponents" />
           <CanvasEditor v-else />
-        </div>
+        </template>
+        <SitePreview v-else />
+
+        <!-- Bottom RIGHT: the bottom-left corner is the InsertDock's, and the
+             two must not share it — Insert belongs to the canvas, the mode
+             belongs to the whole surface. A page's mode, so the board (nothing
+             to play) doesn't get it, and neither does a contributor, who is
+             pinned to Play with no switch to offer. Switching must not move
+             it, or it slides out from under the pointer that just clicked it:
+             Play's extra 9px pays back the framed pane's my-2 + border, which
+             the unframed one doesn't have. -->
+        <ModeToggle
+          v-if="canBuild && !showComponents"
+          class="absolute right-1 z-40"
+          :class="isBuild ? 'bottom-1' : 'bottom-[13px]'"
+        />
+      </div>
+      <template v-if="isBuild">
         <ContextMenu />
         <InsertDragChip />
       </template>
-      <SitePreview v-else />
 
       <template #right>
         <SettingsEditor />

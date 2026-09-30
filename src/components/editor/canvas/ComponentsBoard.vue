@@ -52,6 +52,13 @@ function surfaceStyle(card: BoardCard) {
 // cards are far smaller than page frames, so the board opens closer in
 const INITIAL_CAMERA = { x: 60, y: 60, zoom: 0.6 }
 
+// Labels hold their on-screen size against the zoom. This reads
+// CanvasViewport's `--cam-inv` instead of the slot's `zoom`, so the camera
+// never touches this component's render: a board of 40-odd component trees
+// costs 11ms to re-render, which is most of a frame. A frozen object, so a
+// re-render for some other reason still patches nothing.
+const COUNTER_SCALE = Object.freeze({ transform: 'scale(var(--cam-inv, 1))' })
+
 // page furniture spans the page, so it gets a desktop-width card; everything
 // else sits in a narrow one and keeps its natural size
 const WIDE_TYPES = ['section', 'header', 'footer', 'main']
@@ -87,7 +94,7 @@ function onBoardClick() {
 
 <template>
   <CanvasViewport ref="canvas" :initial="INITIAL_CAMERA" @click="onBoardClick">
-    <template #default="{ zoom }">
+    <template #default>
       <!-- one row per category: an infinite canvas has no edge to wrap at -->
       <div class="flex w-max flex-col gap-24">
         <section v-for="group in groups" :key="group.name" class="flex flex-col gap-6">
@@ -95,7 +102,7 @@ function onBoardClick() {
                the page canvas's frame labels -->
           <h2
             class="origin-bottom-left text-xs font-medium tracking-wide text-muted-foreground uppercase select-none"
-            :style="{ transform: `scale(${1 / zoom})` }"
+            :style="COUNTER_SCALE"
           >
             {{ group.name }}
           </h2>
@@ -108,7 +115,7 @@ function onBoardClick() {
             >
               <div
                 class="flex origin-bottom-left items-center gap-2 text-[10px] whitespace-nowrap text-muted-foreground select-none"
-                :style="{ transform: `scale(${1 / zoom})` }"
+                :style="COUNTER_SCALE"
               >
                 <span :class="focusedKey === card.key ? 'font-medium text-foreground' : ''">
                   {{ card.def.name }}
@@ -130,7 +137,7 @@ function onBoardClick() {
               >
                 <span
                   class="origin-bottom-left text-[10px] whitespace-nowrap text-muted-foreground select-none"
-                  :style="{ transform: `scale(${1 / zoom})` }"
+                  :style="COUNTER_SCALE"
                 >
                   {{ axis.name }}
                 </span>
@@ -150,7 +157,7 @@ function onBoardClick() {
                           ? 'font-medium text-foreground'
                           : 'text-muted-foreground'
                       "
-                      :style="{ transform: `scale(${1 / zoom})` }"
+                      :style="COUNTER_SCALE"
                     >
                       {{ option }}
                     </span>

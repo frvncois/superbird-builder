@@ -45,6 +45,10 @@ const { tools, toolMap } = createToolSet({
     // a human reading a dialog deserves more than the default 60s RPC timeout
     return server.elicitInput(params, { timeout: 300_000 })
   },
+  hasElicitation: () => {
+    const caps = server.getClientCapabilities()
+    return caps ? !!caps.elicitation : null
+  },
 })
 
 // ---------- wire up the MCP server ----------
@@ -91,6 +95,16 @@ export async function main() {
   } catch (e) {
     console.error(`guano mcp: ${e.message}`)
     process.exit(1)
+  }
+  server.oninitialized = () => {
+    // which consent channel set_target gets is decided here, by the client —
+    // log it, or "no dialog appeared" is undiagnosable from the outside
+    const caps = server.getClientCapabilities() ?? {}
+    const client = server.getClientVersion()
+    console.error(
+      `guano mcp: client ${client?.name ?? '?'} ${client?.version ?? ''} — elicitation ` +
+        `${caps.elicitation ? 'supported (set_target shows a dialog)' : 'NOT declared (set_target asks in chat)'}`,
+    )
   }
   await server.connect(new StdioServerTransport())
   console.error('guano mcp: ready (stdio)')

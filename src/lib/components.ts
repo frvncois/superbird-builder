@@ -1,6 +1,6 @@
 import type { ComponentDef, ElementNode } from '@/types/editor'
 import { isLeafElement } from './elements'
-import { refOf, withoutRef } from './syntax'
+import { REF_SLOT, refOf, withoutRef } from './syntax'
 import { walkNodes } from './tree'
 
 /**
@@ -398,6 +398,19 @@ export function adoptStructure(
   return result
 }
 
+// an instance token with the slots one may carry: a `#ref` and the display-only
+// markers. Matching the bare name alone left `:Button#cta:` an empty leaf.
+// Built on first use, not at load: syntax.ts and this module import each other,
+// so REF_SLOT may not be initialized yet while this file is being evaluated.
+let instanceTokens: { leaf: RegExp; open: RegExp } | null = null
+function instanceMatchers() {
+  if (!instanceTokens) {
+    const head = `:([A-Z][a-zA-Z0-9-]*)(${REF_SLOT})(?:\\[\\+\\])?(?:\\(\\+?\\)?)?(?:\\{\\+?\\}?)?`
+    instanceTokens = { leaf: new RegExp(`^${head}:$`), open: new RegExp(`^${head}$`) }
+  }
+  return instanceTokens
+}
+
 /**
  * Expands freshly typed component references into their full editable
  * block: a `:Card:` leaf, or an empty `:Card` / `Card:` pair, becomes
@@ -414,6 +427,7 @@ export function expandComponentInstances(
     if (lineMap) code.split('\n').forEach((_, i) => lineMap.push(i))
     return code
   }
+  const { leaf: INSTANCE_LEAF, open: INSTANCE_OPEN } = instanceMatchers()
   const lines = code.split('\n')
   const out: string[] = []
   const mark = () => lineMap?.push(out.length)
@@ -433,17 +447,18 @@ export function expandComponentInstances(
       continue
     }
 
-    const leaf = trimmed.match(/^:([A-Z][a-zA-Z0-9-]*):$/)
+    const leaf = trimmed.match(INSTANCE_LEAF)
     const leafDef = leaf ? components.find((c) => c.name === leaf[1]) : null
     if (leafDef && !stack.includes(leafDef.name)) {
       mark()
-      out.push(`${indent}:${leafDef.name}`)
+      // the ref stays on the wrapper — it is how an agent addresses the instance
+      out.push(`${indent}:${leafDef.name}${leaf![2] ?? ''}`)
       out.push(...leafDef.root.children.flatMap((c) => serializeNode(c, `${indent}\t`)))
       out.push(`${indent}${leafDef.name}:`)
       continue
     }
 
-    const open = trimmed.match(/^:([A-Z][a-zA-Z0-9-]*)$/)
+    const open = trimmed.match(INSTANCE_OPEN)
     const openDef = open ? components.find((c) => c.name === open[1]) : null
     if (openDef && !stack.includes(openDef.name) && lines[i + 1]?.trim() === `${openDef.name}:`) {
       mark()

@@ -7,7 +7,7 @@
 // The default slot is the world (it receives `zoom`, for chrome that should
 // stay a constant size on screen); the `overlay` slot is screen-space, for
 // anything that must not move with the camera.
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch, watchEffect } from 'vue'
 import { useKeymap, useShortcut } from '@/composables/useShortcut'
 
 interface Camera {
@@ -191,10 +191,42 @@ function focusElement(el: Element, opts: { maxZoom?: number; padding?: number } 
   centerOn(at.x, at.y, { zoom: Math.min(fit, opts.maxZoom ?? 1), animate: true })
 }
 
-const worldStyle = computed(() => ({
-  transform: `translate(${camera.value.x}px, ${camera.value.y}px) scale(${camera.value.zoom})`,
-  transition: gliding.value ? 'transform 0.3s cubic-bezier(0.16, 1, 0.3, 1)' : undefined,
-}))
+/**
+ * The camera reaches the DOM imperatively, NOT through a `:style` binding.
+ *
+ * A pan replaces `camera.value` on every pointer/wheel event, so a binding
+ * would make this component's render effect depend on it — and re-rendering
+ * re-invokes the default slot, which is the whole world. On the components
+ * board that is 40-odd live component trees: measured at 11ms a frame against
+ * 0.2ms for the page canvas, i.e. most of a frame's budget spent diffing a
+ * tree whose only change is a transform on its root. One style write costs
+ * nothing, and nothing above it re-renders.
+ *
+ * `--cam-inv` (1 / zoom) rides along so chrome inside the world can
+ * counter-scale in pure CSS — `scale(var(--cam-inv))` — rather than being
+ * re-rendered once per zoom step.
+ */
+watchEffect(
+  () => {
+    const el = worldEl.value
+    if (!el) return
+    const { x, y, zoom } = camera.value
+    el.style.transform = `translate(${x}px, ${y}px) scale(${zoom})`
+    el.style.transition = gliding.value ? 'transform 0.3s cubic-bezier(0.16, 1, 0.3, 1)' : ''
+    el.style.setProperty('--cam-inv', String(1 / zoom))
+  },
+  // post, so the world element exists on the first run and the write lands in
+  // the same task as the mount — there is no frame at an untransformed camera
+  { flush: 'post' },
+)
+
+/**
+ * The slot's `zoom` is for chrome that needs the NUMBER in JS (a comment pin).
+ * It tracks the zoom alone, so a pan leaves it untouched and the slot — and
+ * everything in it — does not re-render.
+ */
+const slotZoom = ref(camera.value.zoom)
+watch(() => camera.value.zoom, (z) => (slotZoom.value = z))
 
 defineExpose({ camera, viewportEl, worldEl, centerOn, focusElement })
 </script>
@@ -210,8 +242,10 @@ defineExpose({ camera, viewportEl, worldEl, centerOn, focusElement })
     @pointerup="onPointerUp"
     @pointercancel="onPointerUp"
   >
-    <div ref="worldEl" class="absolute top-0 left-0 origin-top-left" :style="worldStyle">
-      <slot :zoom="camera.zoom" />
+    <!-- no :style here on purpose — the camera is written imperatively above,
+         so panning never re-renders this component or its slot -->
+    <div ref="worldEl" class="absolute top-0 left-0 origin-top-left">
+      <slot :zoom="slotZoom" />
     </div>
     <slot name="overlay" />
   </div>

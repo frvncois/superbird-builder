@@ -1,35 +1,19 @@
-<script lang="ts">
-// One pending link navigation for the whole tree: a single click schedules
-// it, ANY double-click cancels it (clicks bubble — a dblclick on an image
-// inside a link must cancel the link's timer, and stopPropagation on the
-// child's dblclick would otherwise hide it from the parent).
-const NAV_DELAY_MS = 250
-let pendingNav: number | null = null
-function cancelPendingNav() {
-  if (pendingNav !== null) {
-    clearTimeout(pendingNav)
-    pendingNav = null
-  }
-}
-</script>
-
 <script setup lang="ts">
 // Preview-mode renderer: the site rendered like a live preview, navigable by
 // clicking links (state-driven — switches the active page/entry, no URL
-// change), with double-click inline editing of text and image/video src.
-// Built on the shared rendering core (useRenderNode); editing is layered on
-// top. Links follow on single click; double-click edits a link's text.
+// change). Built on the shared rendering core (useRenderNode).
+//
+// Play is READ-ONLY: it shows the site the way a visitor gets it, so nothing
+// here edits the document. Interactions, animations, sliders and links all run
+// for real; content is changed on the Edit surface (or, for a contributor, in
+// the Pages drawer's page/item settings).
 import { computed, nextTick, onBeforeUnmount, watch } from 'vue'
 import EntryScope from '@/components/shared/EntryScope.vue'
 import { useLocale } from '@/composables/useLocale'
 import { useRenderNode } from '@/composables/useRenderNode'
-import { useInlineEdit } from '@/composables/useInlineEdit'
-import { usePreviewEditing } from '@/composables/usePreviewEditing'
 import { useProject } from '@/composables/useProject'
 import { usePage } from '@/composables/usePage'
 import { useCollections } from '@/composables/useCollections'
-import { useMedia } from '@/composables/useMedia'
-import { useMediaLibrary } from '@/composables/useMediaLibrary'
 import { usePageTransition } from '@/composables/usePageTransition'
 import { resolveSitePath } from '@/lib/navigation'
 import { reducedMotion } from '@/lib/motion'
@@ -51,16 +35,14 @@ const props = defineProps<{ node: ElementNode }>()
 const { project } = useProject()
 const { setActivePage } = usePage()
 const { openEntry, activeEntryId } = useCollections()
-const { setNodeSrc, setEntryValue, setActiveLocale } = useLocale()
-const { openMenu, editRequest, consumeEditRequest } = usePreviewEditing()
+const { setActiveLocale } = useLocale()
 const pageTransition = usePageTransition()
 
 const {
   def,
   listCollection, listEntries, itemCollection, itemEntry, itemTemplateChildren, selfNested,
-  boundField, boundEntry, customAttrs, backgroundInfo,
+  customAttrs, backgroundInfo,
   displayContent, richContent, srcAttr, altAttr, iconInfo, hidden, linkRaw, baseClasses,
-  editableText, richEditing, inlineInitialText, commitInlineText,
   hoverHandlers, fireClickInteractions, fireChangeInteractions, el,
   motionStyle,
   sliderBound, sliderResolved, sliderTrackClass, sliderWire,
@@ -115,49 +97,6 @@ if (props.node.type === 'slider') {
   })
 }
 
-const isMedia = computed(() => props.node.type === 'image' || props.node.type === 'video')
-
-// --- inline text editing (Cmd+Click; Esc saves like blur) ---
-// what's editable, what it opens with and where it commits all come from the
-// render core; Preview differs only in Esc committing instead of discarding
-
-const { editing, editEl, startEditing, finishEditing, onEditKeydown } = useInlineEdit({
-  editable: editableText,
-  rich: richEditing,
-  initialText: inlineInitialText,
-  commit: commitInlineText,
-  escBehavior: 'save',
-})
-
-// --- media replace (double-click an image/video → media library picker) ---
-
-async function pickMedia() {
-  const picked = await useMediaLibrary().openSelect([
-    props.node.type === 'video' ? 'video' : 'image',
-  ])
-  if (!picked) return
-  const url = useMedia().mediaUrl(picked)
-  // a collection-bound image writes the entry field; a plain image its src
-  if (boundField.value?.type === 'image' && boundEntry.value) {
-    setEntryValue(boundEntry.value, boundField.value.name, url)
-  } else {
-    setNodeSrc(props.node, url)
-  }
-}
-
-/** the edit action for this node's type */
-function edit(e?: Event) {
-  if (editableText.value) startEditing(e)
-  else if (isMedia.value) pickMedia()
-}
-
-const editable = computed(() => editableText.value || isMedia.value)
-
-// context-menu "Edit content" targets a node by id — claim it here
-watch(editRequest, () => {
-  if (consumeEditRequest(props.node.id)) edit()
-})
-
 // --- links (state-driven navigation) ---
 
 // '@item' resolution + scheme allowlist live in the render core
@@ -166,19 +105,11 @@ const linkTarget = computed(() => {
   return raw ? { raw, internal: raw.startsWith('/') } : null
 })
 
-// hover affordance: a soft accent outline marks anything double-click/click
-// can act on; suppressed while editing so it can't fight the solid ring.
-// Cursor precedence: linked → pointer (click navigates), editable text →
-// text cursor, media → pointer.
-const hoverAffordance = computed(() => {
-  if (editing.value) return null
-  const actionable = editableText.value || isMedia.value || !!linkTarget.value
-  if (!actionable) return null
-  return [
-    'hover:outline hover:outline-2 hover:-outline-offset-2 hover:outline-accent/40',
-    linkTarget.value ? 'cursor-pointer' : editableText.value ? 'cursor-text' : 'cursor-pointer',
-  ]
-})
+// The only affordance a read-only Play owes the viewer is the one the published
+// site gives: a pointer over something a click follows. There is no editor
+// outline, because there is nothing here to edit. Any element can carry a link,
+// not just an <a>, so the cursor is ours to set.
+const linkCursor = computed(() => (linkTarget.value ? 'cursor-pointer' : null))
 
 function navigate(raw: string) {
   const resolved = resolveSitePath(project.value, raw)
@@ -202,33 +133,14 @@ async function followLink(raw: string) {
 }
 
 const handlers = {
-  // single click follows links; double click edits. A dblclick always fires a
-  // click first, so link navigation is deferred one beat and cancelled by any
-  // double-click (shared timer: clicks bubble, so a dblclick on an image
-  // inside a link must cancel the LINK's pending navigation, not its own).
+  // a click follows the link immediately — it used to wait 250ms for a possible
+  // double-click to cancel it, which only existed so dblclick could edit
   click(e: MouseEvent) {
-    if (editing.value) return
     fireClickInteractions()
     if (linkTarget.value?.internal) {
       e.preventDefault()
-      const raw = linkTarget.value.raw
-      cancelPendingNav()
-      pendingNav = window.setTimeout(() => {
-        pendingNav = null
-        void followLink(raw)
-      }, NAV_DELAY_MS)
+      void followLink(linkTarget.value.raw)
     }
-  },
-  dblclick(e: MouseEvent) {
-    cancelPendingNav()
-    if (!editable.value || editing.value) return
-    e.preventDefault()
-    e.stopPropagation()
-    edit(e)
-  },
-  contextmenu(e: MouseEvent) {
-    if (!editable.value) return
-    openMenu(e, props.node.id)
   },
   ...hoverHandlers,
   // both events, mirroring the published runtime: 'input' makes text fields
@@ -367,7 +279,7 @@ const handlers = {
     v-bind="{ ...iconInfo.attrs, ...customAttrs }"
     :id="node.htmlId || undefined"
     :data-node-id="node.id"
-    :class="[classes, hoverAffordance]"
+    :class="[classes, linkCursor]"
     :style="motionStyle"
     v-on="handlers"
     v-html="iconInfo.inner"
@@ -381,7 +293,7 @@ const handlers = {
     :data-node-id="node.id"
     :src="srcAttr"
     :alt="altAttr"
-    :class="[classes, hoverAffordance]"
+    :class="[classes, linkCursor]"
     :style="motionStyle"
     v-on="handlers"
   />
@@ -394,11 +306,7 @@ const handlers = {
     :data-node-id="node.id"
     :src="srcAttr"
     :alt="altAttr"
-    :class="[
-      classes,
-      hoverAffordance,
-      editing && 'cursor-text outline outline-2 -outline-offset-2 outline-accent bg-accent/5',
-    ]"
+    :class="[classes, linkCursor]"
     :style="[backgroundInfo?.style, motionStyle]"
     v-on="handlers"
   >
@@ -411,18 +319,10 @@ const handlers = {
       playsinline
       :class="backgroundInfo.layerClass"
     />
-    <template v-if="!node.children.length && !editing">
+    <template v-if="!node.children.length">
       <span v-if="richContent !== null" v-html="richContent"></span>
       <template v-else>{{ displayContent }}</template>
     </template>
-    <span
-      v-if="editing"
-      ref="editEl"
-      :contenteditable="richEditing ? 'true' : 'plaintext-only'"
-      class="outline-none"
-      @blur="finishEditing(false)"
-      @keydown="onEditKeydown"
-    ></span>
     <PreviewRenderer v-for="child in node.children" :key="child.id" :node="child" />
   </component>
 </template>

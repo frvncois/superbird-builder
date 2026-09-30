@@ -690,7 +690,7 @@ async function onImportFile(e: Event) {
 
       <!-- right pane: section content -->
       <div class="min-w-0 flex-1 overflow-y-auto">
-        <div class="flex max-w-xl flex-col gap-9 p-6">
+        <div class="flex flex-col gap-9 p-6">
           <TabPanelUI class="gap-9" id="general">
             <SettingsGroup title="Project" description="How your project shows up in the editor and in browser tabs.">
               <RowUI label="Name">
@@ -1314,7 +1314,6 @@ async function onImportFile(e: Event) {
             <SettingsGroup
               title="Import"
               description="Restores a project package. Replaces ALL pages, drafts, settings and media, for every user."
-              danger
             >
               <input
                 ref="importInput"
@@ -1326,7 +1325,6 @@ async function onImportFile(e: Event) {
               <ButtonUI
                 variant="outline"
                 size="sm"
-                class="w-full !text-danger"
                 :disabled="importing"
                 @click="importInput?.click()"
               >

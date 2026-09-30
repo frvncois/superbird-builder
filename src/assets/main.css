@@ -22,6 +22,9 @@
 
   /* state/variant class badges (hover:, focus:…) — keyword hue, new names */
   --state-class: #c099ff;
+  /* Layers tree row tints: component instances and CMS-bound elements */
+  --layer-component: #c099ff;
+  --layer-cms: oklch(78% 0.13 180);
 }
 
 .light {
@@ -42,6 +45,8 @@
 
 
   --state-class: #8d5bd6;
+  --layer-component: #8d5bd6;
+  --layer-cms: oklch(55% 0.12 180);
 }
 
 /* NOTE: the --color-* names below are re-asserted at runtime by
@@ -69,6 +74,8 @@
 
 
   --color-state-class: var(--state-class);
+  --color-layer-component: var(--layer-component);
+  --color-layer-cms: var(--layer-cms);
 }
 
 body {

@@ -15,7 +15,7 @@ const expanded = ref<Record<string, boolean>>({})
 // icon that swaps the drawer to that page's LAYERS, and a kebab
 // (settings/duplicate/delete). The list swaps in place for three detail
 // views — layers, page/item settings, collection settings.
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, watch } from 'vue'
 import {
   Plus, Copy, Trash2, Settings, Languages, ChevronDown, ChevronRight, Check,
   House, Search, SquarePen,
@@ -53,7 +53,7 @@ const {
 } = useLocaleQuickAdd()
 const { openModal, confirm } = useModal()
 const { canBuild } = useAuth()
-const { setMode } = useViewMode()
+const { isBuild, setMode } = useViewMode()
 
 // when set, the drawer swaps its list for the page/item settings panel
 const settingsTarget = ref<SettingsTarget | null>(null)
@@ -72,12 +72,19 @@ function closeDetail() {
 
 /** the Edit icon: put the page on the canvas and show its layers */
 function editLayers(pageId: string) {
-  // structure is a Build job: from Preview this brings the canvas back
+  // structure is a Build job: from Play this brings the canvas back
   setMode('build')
   openPage(pageId)
   closeDetail()
   layersOpen.value = true
 }
+
+// Layers are an Edit-surface view, so switching to Play drops back to the
+// list. Page/entry and collection settings are content, valid on both
+// surfaces, and stay open.
+watch(isBuild, (building) => {
+  if (!building) layersOpen.value = false
+})
 // name filter across pages, collections and entries
 const query = ref('')
 
@@ -331,8 +338,9 @@ useDrawerEscape(panel, {
             class="size-1.5 shrink-0 rounded-full bg-pending"
           />
         </button>
+        <!-- structure is an Edit-surface job, so Play doesn't offer the way in -->
         <ButtonUI
-          v-if="canBuild"
+          v-if="canBuild && isBuild"
           variant="icon" size="xs" :icon="SquarePen" tooltip="Edit layers"
           class="w-5 shrink-0 text-muted-foreground opacity-0 group-hover/row:opacity-100"
           @click.stop="editLayers(page.id)"
@@ -394,7 +402,7 @@ useDrawerEscape(panel, {
           </button>
           <!-- a data-only collection has no template page, so no layers to edit -->
           <ButtonUI
-            v-if="canBuild && collection.templatePageId"
+            v-if="canBuild && isBuild && collection.templatePageId"
             variant="icon" size="xs" :icon="SquarePen" tooltip="Edit template layers"
             class="w-5 shrink-0 text-muted-foreground opacity-0 group-hover/row:opacity-100"
             @click.stop="editLayers(collection.templatePageId)"

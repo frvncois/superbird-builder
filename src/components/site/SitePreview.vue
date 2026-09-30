@@ -1,18 +1,17 @@
 <script setup lang="ts">
 // The full-site live preview used inside the editor shell's Preview mode:
 // the site rendered as one navigable full-width column (no breakpoint frames).
-// Double-click text/media to edit in place; hold C and click to drop a comment.
+// It is READ-ONLY — the site as a visitor gets it, with links, interactions and
+// motion running for real. The one thing you do TO it is review: hold C and
+// click to drop a comment. Content is edited on the Edit surface.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import PreviewRenderer from '@/components/site/PreviewRenderer.vue'
 import CommentLayer from '@/components/site/CommentLayer.vue'
 import EntryScope from '@/components/shared/EntryScope.vue'
-import ButtonUI from '@/components/ui/ButtonUI.vue'
-import { PenLine } from 'lucide-vue-next'
 import { usePage } from '@/composables/usePage'
 import { useCollections } from '@/composables/useCollections'
 import { useProject } from '@/composables/useProject'
 import { useThemeTokens } from '@/composables/useThemeTokens'
-import { usePreviewEditing } from '@/composables/usePreviewEditing'
 import { useComments } from '@/composables/useComments'
 import { useCommentMode } from '@/composables/useCommentMode'
 import { anchorFromPoint } from '@/lib/commentAnchor'
@@ -28,7 +27,6 @@ void import('@tailwindcss/browser')
 const { activePage } = usePage()
 const { collections, activeCollection, activeEntry } = useCollections()
 const { project } = useProject()
-const { menu, closeMenu, requestEdit } = usePreviewEditing()
 const { addComment, activeComment, focusTick } = useComments()
 
 // C toggles the comment-drop tool (Esc exits); click drops a comment pinned
@@ -44,7 +42,7 @@ function onPreviewClick(e: MouseEvent) {
   const anchor = anchorFromPoint(e.clientX, e.clientY, mainEl.value)
   if (!anchor) return
   e.preventDefault()
-  e.stopPropagation() // capture-phase: beat the renderer's navigate/edit click
+  e.stopPropagation() // capture-phase: beat the renderer's navigation click
   addComment({ pageId: activePage.value.id, anchor })
 }
 
@@ -235,24 +233,5 @@ const fontStyle = computed(() => ({
 
     <!-- floating comment pins over the preview -->
     <CommentLayer :root="mainEl ?? null" />
-
-    <!-- "Edit content" context menu -->
-    <template v-if="menu">
-      <div class="fixed inset-0 z-[90]" @click="closeMenu" @contextmenu.prevent="closeMenu" />
-      <div
-        class="fixed z-[91] min-w-36 rounded-xl border border-input bg-background p-1 shadow-lg"
-        :style="{ left: `${menu.x}px`, top: `${menu.y}px` }"
-      >
-        <ButtonUI
-          variant="ghost"
-          size="sm"
-          :icon="PenLine"
-          class="w-full justify-start"
-          @click="requestEdit(menu.nodeId)"
-        >
-          Edit content
-        </ButtonUI>
-      </div>
-    </template>
   </div>
 </template>

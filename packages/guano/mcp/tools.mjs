@@ -51,7 +51,7 @@ const GUIDE_HASH = GUIDE
 // connected client never declared the elicitation capability. Only set_target
 // uses it: with a dialog available the target choice is genuinely the human's,
 // instead of an agent-asserted chosenByUser boolean.
-export function createToolSet({ api, runtime, elicit }) {
+export function createToolSet({ api, runtime, elicit, hasElicitation = () => null }) {
   const { whoami, storeGetRaw, storeGetJson, storePutRaw, publish, mediaIndex, mediaUpload } = api
   const {
     validateDocument,
@@ -138,6 +138,19 @@ export function createToolSet({ api, runtime, elicit }) {
     mergeClassLayers,
     setNodeHidden,
     isNodeHidden,
+    inheritedInstanceValue,
+    ELEMENTS,
+    setComponentMeta,
+    componentUsage,
+    renameComponent,
+    duplicateComponent,
+    setComponentCategory,
+    detachInstance,
+    deleteComponent: deleteComponentDetaching,
+    CATALOG,
+    catalogEntry,
+    catalogDependencies,
+    materializeCatalogEntry,
   } = runtime
 
   // ---------- the bundled icon table ----------
@@ -681,7 +694,11 @@ function elementSummary(project, page, opts = {}) {
   }
   const summarize = (n) => {
     if (mode === 'refs') return { line: n.line, id: n.id, type: n.type, ...(n.ref ? { ref: n.ref } : {}) }
-    const master = instMap.get(n.id)?.master
+    const mapping = instMap.get(n.id)
+    const master = mapping?.master
+    // what the node shows when it says nothing itself: the first host that
+    // says something (a Card's own text for its button), else the component
+    const inherit = (key) => (master && master !== n ? inheritedInstanceValue(mapping, key) : undefined)
     const masterInteractions = master && master !== n ? (master.interactions?.length ?? 0) : 0
     // with includeContent: the element's OWN text (or the master's, for an
     // instance element that inherits it) so an agent can READ existing copy
@@ -689,7 +706,7 @@ function elementSummary(project, page, opts = {}) {
     let contentField = {}
     if (opts.includeContent) {
       const own = n.content
-      const inherited = master && master !== n && !own ? master.content : undefined
+      const inherited = !own ? inherit('content') : undefined
       if (own) contentField = { content: fence(own) }
       else if (inherited) contentField = { masterContent: fence(inherited) }
     }
@@ -756,7 +773,7 @@ function elementSummary(project, page, opts = {}) {
       ...(masterInteractions ? { masterInteractionCount: masterInteractions } : {}),
       ...interactionField,
       ...(n.content || n.src || n.background ? { hasOwnContent: true } : {}),
-      ...(master && master !== n && !n.content && master.content ? { inheritsMasterContent: true } : {}),
+      ...(!n.content && inherit('content') ? { inheritsMasterContent: true } : {}),
       ...contentField,
       ...(n.htmlId ? { htmlId: n.htmlId } : {}),
       ...(n.attributes && Object.keys(n.attributes).length ? { attributes: n.attributes } : {}),
@@ -764,10 +781,50 @@ function elementSummary(project, page, opts = {}) {
       ...(n.entryId ? { entryId: n.entryId } : {}),
       ...(n.slider ? { slider: n.slider } : {}),
       ...(n.hidden !== undefined ? { hidden: n.hidden } : {}),
+      // an OPTIONAL part: there, but hidden by the component until an instance
+      // shows it (`hidden: false`). Text set on one renders nowhere until then.
+      ...(n.hidden === undefined && inherit('hidden') === true ? { hiddenByComponent: true } : {}),
       ...(n.variants ? { variants: n.variants } : {}),
       // the bundled icon's name when there is one — the markup itself is noise
       ...(n.svg ? { icon: lucideNameOf(n.svg) ?? 'custom svg' } : {}),
+      ...(!n.svg && inherit('svg') ? { masterIcon: lucideNameOf(inherit('svg')) ?? 'custom svg' } : {}),
     }
+  }
+  // the parts of an instance an agent FILLS: its texts, media and icons, and
+  // the instances it holds. Listed on the collapsed row so that writing a page
+  // full of components needs no second read to learn where the copy goes.
+  const partsOf = (wrapper) => {
+    const parts = []
+    // `hiddenBy`: the nearest hidden element at or above the part — a part in
+    // a hidden footer is as invisible as a hidden part, and that footer is
+    // what has to be shown
+    const walk = (nodes, hiddenBy) => {
+      for (const n of nodes ?? []) {
+        const mapping = instMap.get(n.id)
+        const by = hiddenBy ?? (isNodeHidden(n, mapping) ? n.id : null)
+        const holds = isComponentType(n.type)
+        if (holds || (isLeafElement(n.type) && ELEMENTS[n.type])) {
+          let text = {}
+          if (opts.includeContent && !holds) {
+            const own = n.content
+            const inherited = !own && mapping ? inheritedInstanceValue(mapping, 'content') : undefined
+            if (own) text = { content: fence(own) }
+            else if (inherited) text = { masterContent: fence(inherited) }
+          }
+          parts.push({
+            id: n.id,
+            type: n.type,
+            ...(holds ? { component: n.type } : {}),
+            ...(n.variants ? { variants: n.variants } : {}),
+            ...(by ? { hidden: true, ...(by !== n.id ? { hiddenBy: by } : {}) } : {}),
+            ...text,
+          })
+        }
+        walk(n.children, by)
+      }
+    }
+    walk(wrapper.children, null)
+    return parts
   }
   const visit = (nodes, inComponent) => {
     for (const n of nodes) {
@@ -787,6 +844,9 @@ function elementSummary(project, page, opts = {}) {
           ...(n.ref ? { ref: n.ref } : {}),
           component: n.type,
           childCount: countDescendants(n.children ?? []),
+          ...(n.variants ? { variants: n.variants } : {}),
+          ...(n.hidden !== undefined ? { hidden: n.hidden } : {}),
+          ...(mode === 'own' ? { parts: partsOf(n) } : {}),
         })
         continue // collapse the whole instance subtree
       }
@@ -835,12 +895,12 @@ function nodeAtLine(page, line) {
  * Resolve an edit's element by stable `id` (preferred — survives structural
  * edits) or 0-based `line`. Same component-instance tracking as nodeAtLine.
  */
-function resolveEditNode(page, edit, project = null) {
+function resolveEditNode(page, edit, project = null, scopeDef = null) {
   // a '#ref' typed in the page code is the friendliest address: it survives
   // lines moving, and unlike `line` it can't drift when a component instance
   // expands. Resolved first because it is the most specific thing a caller
   // can have said.
-  if (edit.ref) {
+  if (edit.ref && !scopeDef) {
     const matches = []
     walkNodes(page.elements ?? [], (n) => {
       if (n.ref === edit.ref) matches.push(n)
@@ -887,39 +947,25 @@ function resolveEditNode(page, edit, project = null) {
     }
     visit(page.elements ?? [], false)
     if (found) return { node: found, inComponent: foundInComponent }
-    // a component MASTER id (from list_components / update_component) is a
-    // valid address too: it resolves to the first instance node on this page
-    // mapped to it, and class/binding writes redirect back to the master as
-    // usual — no get_page round trip just to translate master → instance ids
-    const viaMaster = instanceNodeForMaster(project, page, edit.id)
-    if (viaMaster) return { node: viaMaster, inComponent: true }
-    throw new Error(`no element with id "${edit.id}" (use get_page to see ids)`)
+    // a component MASTER id (from list_components) addresses the master node
+    // ITSELF — the component as the board shows it, whether or not any page
+    // holds an instance. It used to resolve to "the first instance on this
+    // page", which failed for a component nothing uses yet and could not reach
+    // what a host says about an instance it holds (its mirror) at all.
+    for (const def of project?.components ?? []) {
+      if (scopeDef && def !== scopeDef) continue
+      const master = findNode([def.root], edit.id)
+      if (master) return { node: master, inComponent: false, masterDef: def }
+    }
+    throw new Error(
+      scopeDef
+        ? `no element with id "${edit.id}" in component "${scopeDef.name}" (list_components {includeNodes: true} lists them)`
+        : `no element with id "${edit.id}" (use get_page to see ids)`,
+    )
   }
+  if (scopeDef) throw new Error('a component\'s elements are addressed by `id` (list_components {includeNodes: true})')
   if (edit.line === undefined) throw new Error('each edit needs a `ref`, an `id` or a `line`')
   return nodeAtLine(page, edit.line)
-}
-
-/** reverse of masterNodeFor: the first instance node on this page that maps to
- * the given MASTER node id (positional pairing, like the render mapping) */
-function instanceNodeForMaster(project, page, masterId) {
-  if (!project) return null
-  let found = null
-  walkNodes(page.elements ?? [], (n) => {
-    if (found || !isComponentType(n.type)) return
-    const def = (project.components ?? []).find((c) => c.name === n.type)
-    if (!def) return
-    const pair = (inst, master) => {
-      if (found || inst.type !== master.type) return
-      if (master.id === masterId) {
-        found = inst
-        return
-      }
-      const len = Math.min(inst.children.length, master.children.length)
-      for (let i = 0; i < len; i++) pair(inst.children[i], master.children[i])
-    }
-    pair(n, def.root)
-  })
-  return found
 }
 
 /**
@@ -988,7 +1034,27 @@ function masterNodeFor(project, page, instanceNode) {
  * translation) apply unchanged. Refs never enter STORED bindings — `targetId`
  * remains the only stored form.
  */
-function resolveBindTarget(project, page, ownerNode, inComponent, rawTarget, rawRef) {
+function resolveBindTarget(project, page, ownerNode, inComponent, rawTarget, rawRef, masterDef = null) {
+  if (masterDef) {
+    // in a master: the target is another element of the SAME component, and
+    // the stored id is already the master's
+    if (rawRef) {
+      return { error: `targetRef "#${rawRef}" refused: refs are page-scope — inside a component, target by \`targetId\`` }
+    }
+    const target = rawTarget === 'null' || rawTarget === '' ? null : (rawTarget ?? null)
+    if (target === null) return { targetId: null }
+    if (!findNode([masterDef.root], target)) {
+      return { error: `bind targetId "${target}" must be another element of ${masterDef.name} (list_components {includeNodes: true})` }
+    }
+    if (sharedInstanceMap(masterDef.root.children ?? [], project.components ?? []).has(target)) {
+      return {
+        error:
+          `bind targetId "${target}" is inside an instance ${masterDef.name} holds — what is in there ` +
+          `belongs to that component. Target an element ${masterDef.name} owns (wrap the instance in a :div).`,
+      }
+    }
+    return { targetId: target }
+  }
   if (rawRef) {
     const matches = []
     walkNodes(page.elements ?? [], (n) => {
@@ -1041,6 +1107,8 @@ function resolveBindTarget(project, page, ownerNode, inComponent, rawTarget, raw
   const instMap = buildInstanceMap(project, page)
   const ownerInfo = instMap.get(ownerNode.id)
   const targetInfo = instMap.get(target)
+  // the target may be given as the MASTER's id (from list_components) too
+  if (!targetInfo && ownerInfo && findNode([ownerInfo.def.root], target)) return { targetId: target }
   if (!targetInfo || targetInfo.instanceId !== ownerInfo?.instanceId) {
     return { error: `bind targetId "${target}" must be another element in the same component instance` }
   }
@@ -1111,15 +1179,33 @@ function purgeLocaleOverrides(project, code) {
   purgeLocaleSeo(project, code)
 }
 
+const HOST_BIND_REFUSED = (host, inner) =>
+  `bind refused: this element is inside the ${inner} that ${host} holds, so a binding here would be ` +
+  `${inner}'s — shared by every ${inner} everywhere. Wrap the instance in a :div ${host} owns ` +
+  '(class `contents`, so it adds no box) and bind on that: the click bubbles up to it.'
+
 /**
  * The edit_elements core for ONE page: applies a batch of edits and returns
  * { changed, results }. Extracted so the tool can run it per page in a
  * multi-page batch (one call, one save) as well as for the single-page form.
  */
-function applyPageEdits(project, page, edits, locale, defaultLocale) {
+function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = null) {
   const localized = locale !== defaultLocale
   let changed = false
   const results = []
+  // one pairing walk per batch, not one per edit: nothing an edit does here
+  // changes structure (arg/setRef reconcile with an identity map, ids kept)
+  let pageMap = null
+  const boardMaps = new Map()
+  const mappingFor = (node, masterDef) => {
+    if (!masterDef) return (pageMap ??= buildInstanceMap(project, page)).get(node.id) ?? null
+    // in a master, only what sits in a NESTED instance is mapped: a mirror,
+    // paired with the inner component's own master
+    if (!boardMaps.has(masterDef)) {
+      boardMaps.set(masterDef, sharedInstanceMap(masterDef.root.children ?? [], project.components ?? []))
+    }
+    return boardMaps.get(masterDef).get(node.id) ?? null
+  }
   for (const edit of edits) {
     const errors = []
     const applied = []
@@ -1127,12 +1213,54 @@ function applyPageEdits(project, page, edits, locale, defaultLocale) {
     // tweaking) never needs a get_page {includeInteractions} round trip
     const bindingIds = []
     const animationBindingIds = []
-    let node, inComponent
+    let node, inComponent, masterDef
     try {
-      ;({ node, inComponent } = resolveEditNode(page, edit, project))
+      ;({ node, inComponent, masterDef = null } = resolveEditNode(page, edit, project, scopeDef))
     } catch (e) {
       results.push({ ...(edit.id ? { id: edit.id } : {}), line: edit.line, errors: [e.message] })
       continue
+    }
+    const mapping = mappingFor(node, masterDef)
+    // SHARED state — classes, attributes, bindings — lives on the master of
+    // the component the node belongs to. In a master that is the node itself,
+    // unless it is a mirror: then it is the inner component's node.
+    const sharedNode = masterDef ? (mapping?.master ?? node) : inComponent ? (mapping?.master ?? null) : node
+    const sharedOwner = masterDef ? (mapping?.def ?? masterDef) : inComponent ? (mapping?.def ?? null) : null
+    const onShared = sharedOwner ? ` (on ${sharedOwner.name} — every instance)` : ''
+    // what a host holds is a mirror of another component
+    const inMirror = !!masterDef && !!mapping
+    // an instance's `:Name` line. It stands for the master's root, which emits
+    // NO element while it is bare — so a class, an attribute or a binding
+    // written there either renders nowhere (the page node's own is never read)
+    // or puts a box around EVERY instance (the master root's is).
+    const isWrapper = isComponentType(node.type) && node !== masterDef?.root
+    if (isWrapper) {
+      const refused = [
+        ['addClasses', edit.addClasses?.length],
+        ['attributes', edit.attributes !== undefined],
+        ['background', edit.background !== undefined && edit.background !== ''],
+        ['htmlId', edit.htmlId !== undefined && edit.htmlId !== ''],
+        ['bindInteractions', edit.bindInteractions?.length],
+        ['bindAnimations', edit.bindAnimations?.length],
+      ]
+        .filter(([, given]) => given)
+        .map(([name]) => name)
+      if (refused.length) {
+        results.push({
+          line: node.line,
+          id: node.id,
+          type: node.type,
+          applied: [],
+          errors: [
+            `${refused.join(', ')} refused: ':${node.type}' is a component instance, which has no box of ` +
+              'its own — it takes `variants`, `hidden` and (on a page) `setRef`. To restyle the ' +
+              `component, edit the element INSIDE it (shared by every ${node.type}) or give it a ` +
+              'variant option; to space or size ONE placement, wrap the instance in a :div and ' +
+              'style that.',
+          ],
+        })
+        continue
+      }
     }
     if (edit.expectType && node.type !== edit.expectType) {
       results.push({
@@ -1147,7 +1275,7 @@ function applyPageEdits(project, page, edits, locale, defaultLocale) {
     // --- classes (never localized; masters own them inside instances —
     //     in-component edits REDIRECT to the mapped master, editor-style) ---
     if (edit.addClasses?.length || edit.removeClasses?.length) {
-      const styleTarget = inComponent ? masterNodeFor(project, page, node) : node
+      const styleTarget = sharedNode
       if (localized) {
         errors.push('classes are not localizable — omit locale for class edits')
       } else if (!styleTarget) {
@@ -1155,9 +1283,7 @@ function applyPageEdits(project, page, edits, locale, defaultLocale) {
       } else if (edit.variant !== undefined) {
         // a variant option's OVERRIDES: only what differs from the base classes.
         // They live on the master, so this needs an element inside a component.
-        const owner = inComponent
-          ? (buildInstanceMap(project, page).get(node.id)?.def ?? null)
-          : ((project.components ?? []).find((c) => findNode([c.root], node.id)) ?? null)
+        const owner = sharedOwner
         const [axisName, optionName] = String(edit.variant).split(':')
         const axis = owner?.variants?.find((a) => a.name === axisName)
         if (!owner) {
@@ -1198,7 +1324,14 @@ function applyPageEdits(project, page, edits, locale, defaultLocale) {
         }
         styleTarget.classes = tokens.join(' ')
         if (!styleTarget.classes) delete styleTarget.classes // keep untouched nodes byte-identical
-        applied.push(inComponent ? 'classes (on component master — all instances)' : 'classes')
+        // classes an earlier write left on an instance's own `:Name` node render
+        // nowhere; a remove is the one class edit a wrapper takes, so clear them
+        if (isWrapper && node !== styleTarget && node.classes) {
+          const own = node.classes.split(/\s+/).filter((t) => t && !removeSet.has(t)).join(' ')
+          if (own) node.classes = own
+          else delete node.classes
+        }
+        applied.push(`classes${onShared}`)
         changed = true
       }
     }
@@ -1206,12 +1339,19 @@ function applyPageEdits(project, page, edits, locale, defaultLocale) {
     // content/src land on the node itself, or — with onMaster, inside an
     // instance — on the shared master (instances without an override then
     // render the master's value, so shared chrome is written ONCE)
-    const dataTarget = edit.onMaster
-      ? inComponent
-        ? masterNodeFor(project, page, node)
-        : null
-      : node
-    const dataTargetError = edit.onMaster
+    // Addressed by a master id, the node IS the component's (or, in a mirror,
+    // what this host says about the instance it holds): `onMaster` adds nothing.
+    const dataTarget = masterDef ? node : edit.onMaster ? (inComponent ? (mapping?.master ?? null) : null) : node
+    const onData = masterDef
+      ? inMirror
+        ? ` (what ${masterDef.name} says about its ${mapping.def.name} — every ${masterDef.name})`
+        : ` (on ${masterDef.name} — every instance)`
+      : edit.onMaster
+        ? ' (on component master — all instances)'
+        : ''
+    const dataTargetError = masterDef
+      ? null
+      : edit.onMaster
       ? !inComponent
         ? 'onMaster refused: this element is not inside a component instance'
         : !dataTarget
@@ -1236,7 +1376,7 @@ function applyPageEdits(project, page, edits, locale, defaultLocale) {
         } else {
           delete dataTarget.content
         }
-        applied.push(edit.onMaster ? 'content (on component master — all instances)' : 'content')
+        applied.push(`content${onData}`)
         changed = true
       }
     }
@@ -1257,7 +1397,7 @@ function applyPageEdits(project, page, edits, locale, defaultLocale) {
         } else {
           delete dataTarget.src
         }
-        applied.push(edit.onMaster ? 'src (on component master — all instances)' : 'src')
+        applied.push(`src${onData}`)
         changed = true
       }
     }
@@ -1265,7 +1405,13 @@ function applyPageEdits(project, page, edits, locale, defaultLocale) {
     // --- variant picks (a component instance's :Name wrapper) ---
     if (edit.variants !== undefined) {
       const owner = (project.components ?? []).find((c) => c.name === node.type)
-      if (!isComponentType(node.type) || !owner) {
+      if (node === masterDef?.root) {
+        errors.push(
+          `variants refused: this is ${masterDef.name} itself, not an instance of it — an option is WORN by ` +
+            "an instance (its ':Name' line on a page, or in a component that holds one). To change what " +
+            'an option looks like, pass `variant: "axis:option"` with addClasses on an element inside.',
+        )
+      } else if (!isComponentType(node.type) || !owner) {
         errors.push(
           `variants refused: ':${node.type}' is not a component instance — address the ':Name' line of the instance`,
         )
@@ -1275,12 +1421,14 @@ function applyPageEdits(project, page, edits, locale, defaultLocale) {
         const picks = edit.variants ?? Object.fromEntries((owner.variants ?? []).map((a) => [a.name, null]))
         let landed = false
         for (const [axis, option] of Object.entries(picks)) {
-          const result = setInstancePick(owner, node, axis, option)
+          // what the wrapper inherits comes from its hosts' mirrors of it, so a
+          // pick equal to the default still has to be stored when a host says otherwise
+          const result = setInstancePick(owner, node, axis, option, mapping?.mirrors ?? [])
           if (result.ok) landed = true
           else errors.push(`variants: ${result.error}`)
         }
         if (landed) {
-          applied.push('variants')
+          applied.push(masterDef ? `variants (every ${masterDef.name})` : 'variants')
           changed = true
         }
       }
@@ -1299,11 +1447,8 @@ function applyPageEdits(project, page, edits, locale, defaultLocale) {
         errors.push(dataTargetError)
       } else {
         if (edit.hidden === null) delete dataTarget.hidden
-        else {
-          const mapping = edit.onMaster ? null : buildInstanceMap(project, page).get(node.id)
-          setNodeHidden(dataTarget, mapping ?? null, edit.hidden)
-        }
-        applied.push(edit.onMaster ? 'hidden (on component master — all instances)' : 'hidden')
+        else setNodeHidden(dataTarget, !masterDef && edit.onMaster ? null : mapping, edit.hidden)
+        applied.push(`hidden${onData}`)
         changed = true
       }
     }
@@ -1340,7 +1485,7 @@ function applyPageEdits(project, page, edits, locale, defaultLocale) {
         } else {
           if (markup) dataTarget.svg = markup
           else delete dataTarget.svg
-          applied.push(edit.onMaster ? 'icon (on component master — all instances)' : 'icon')
+          applied.push(`icon${onData}`)
           changed = true
         }
       }
@@ -1364,7 +1509,22 @@ function applyPageEdits(project, page, edits, locale, defaultLocale) {
     //     reconcile with a same-line identity map; no line count change) ---
     if (edit.arg !== undefined) {
       const value = String(edit.arg)
-      if (node.line === undefined || node.type === 'body') {
+      // an arg on a component's element is STRUCTURE: it changes the component,
+      // and every instance follows (the push rewrites their blocks). Inside an
+      // instance the component holds, it would be the inner component's — and
+      // a per-host binding is not a thing a mirror can carry.
+      const structural = !!masterDef || inComponent
+      const inNested = masterDef ? inMirror : !!mapping?.mirrors?.length
+      if (node.type === 'body' || isWrapper) {
+        errors.push(`arg refused: ':${node.type}' carries no field binding`)
+      } else if (structural && inNested) {
+        errors.push(
+          `arg refused: this element is inside the ${mapping.def.name} that ${sharedOwner === mapping.def ? 'this component' : (masterDef?.name ?? 'the host')} holds, ` +
+            `so a binding here would be ${mapping.def.name}'s — every ${mapping.def.name} everywhere would ` +
+            `show that field. Bind it on ${mapping.def.name} itself (edit_elements {componentId}) if that is ` +
+            'wanted, or put a plain element in the host for a field only it shows.',
+        )
+      } else if (!structural && node.line === undefined) {
         errors.push('arg refused: this element\'s arg is not editable')
       } else if (value && !/^@?[a-z0-9.+-]+$/.test(value)) {
         errors.push('arg refused: lowercase field path ([a-z0-9.-], one dot max for a reference hop)')
@@ -1388,6 +1548,11 @@ function applyPageEdits(project, page, edits, locale, defaultLocale) {
               ? ` (or a built-in source: ${BUILTIN_LIST_SOURCES.join(', ')})`
               : ''),
         )
+      } else if (structural) {
+        sharedNode.arg = value || undefined
+        pushMasterStructure(project, sharedOwner)
+        applied.push(`arg (on ${sharedOwner.name} — every instance)`)
+        changed = true
       } else {
         const lines = page.code.split('\n')
         // group 1 swallows the '#ref' — the arg slot sits AFTER it, so without
@@ -1419,7 +1584,12 @@ function applyPageEdits(project, page, edits, locale, defaultLocale) {
       walkNodes(page.elements ?? [], (n) => {
         if (value && n.ref === value && n.id !== node.id) dup.push(n.id)
       })
-      if (node.line === undefined || node.type === 'body') {
+      if (masterDef) {
+        errors.push(
+          'setRef refused: refs are page-scope — a component cannot carry one. Put it on the ' +
+            "':Name' line of an instance, in a page's code.",
+        )
+      } else if (node.line === undefined || node.type === 'body') {
         errors.push("setRef refused: ':body' is the page root and carries no ref")
       } else if (value && !/^[a-zA-Z][a-zA-Z0-9-]*$/.test(value)) {
         errors.push('setRef refused: a ref starts with a letter, then letters/digits/hyphens')
@@ -1541,9 +1711,11 @@ function applyPageEdits(project, page, edits, locale, defaultLocale) {
 
     // --- interaction bindings (batched; masters own them inside instances) ---
     if (edit.bindInteractions?.length || edit.unbindInteractionIds?.length) {
-      const bindTargetNode = inComponent ? masterNodeFor(project, page, node) : node
+      const bindTargetNode = sharedNode
       if (localized) {
         errors.push('interactions are not localizable — omit locale for binding edits')
+      } else if (inMirror && edit.bindInteractions?.length) {
+        errors.push(HOST_BIND_REFUSED(masterDef.name, mapping.def.name))
       } else if (!bindTargetNode) {
         errors.push('interactions refused: this instance node has no master counterpart (structure diverged)')
       } else {
@@ -1567,7 +1739,7 @@ function applyPageEdits(project, page, edits, locale, defaultLocale) {
             errors.push(`interaction refused: ${shape}`)
             continue
           }
-          const resolved = resolveBindTarget(project, page, node, inComponent, bind.targetId, bind.targetRef)
+          const resolved = resolveBindTarget(project, page, node, inComponent, bind.targetId, bind.targetRef, masterDef)
           if (resolved.error) {
             errors.push(resolved.error)
             continue
@@ -1576,7 +1748,7 @@ function applyPageEdits(project, page, edits, locale, defaultLocale) {
           const binding = buildInteractionBinding(bind, resolved.targetId)
           bindTargetNode.interactions.push(binding)
           bindingIds.push(binding.id)
-          applied.push(inComponent ? 'bind (on component master — all instances)' : 'bind')
+          applied.push(`bind${onShared}`)
           changed = true
         }
       }
@@ -1584,9 +1756,11 @@ function applyPageEdits(project, page, edits, locale, defaultLocale) {
 
     // --- animation bindings (tween engine; same master/locale rules) ---
     if (edit.bindAnimations?.length || edit.unbindAnimationIds?.length) {
-      const bindTargetNode = inComponent ? masterNodeFor(project, page, node) : node
+      const bindTargetNode = sharedNode
       if (localized) {
         errors.push('animations are not localizable — omit locale for binding edits')
+      } else if (inMirror && edit.bindAnimations?.length) {
+        errors.push(HOST_BIND_REFUSED(masterDef.name, mapping.def.name))
       } else if (!bindTargetNode) {
         errors.push('animations refused: this instance node has no master counterpart (structure diverged)')
       } else {
@@ -1609,7 +1783,7 @@ function applyPageEdits(project, page, edits, locale, defaultLocale) {
             errors.push(`animation refused: ${check.error}`)
             continue
           }
-          const resolved = resolveBindTarget(project, page, node, inComponent, bind.targetId, bind.targetRef)
+          const resolved = resolveBindTarget(project, page, node, inComponent, bind.targetId, bind.targetRef, masterDef)
           if (resolved.error) {
             errors.push(resolved.error)
             continue
@@ -1627,7 +1801,7 @@ function applyPageEdits(project, page, edits, locale, defaultLocale) {
             ...(bind.scrub ? { scrub: bind.scrub } : {}),
             ...(bind.breakpoints?.length ? { breakpoints: bind.breakpoints } : {}),
           })
-          applied.push(inComponent ? 'bind animation (on component master — all instances)' : 'bind animation')
+          applied.push(`bind animation${onShared}`)
           changed = true
         }
       }
@@ -1652,7 +1826,7 @@ function applyPageEdits(project, page, edits, locale, defaultLocale) {
     //     master inside an instance, so an instance-side write rendered
     //     nowhere while reporting "applied" (run #3) — redirect to the master.
     if (edit.attributes !== undefined) {
-      const attrTarget = inComponent ? masterNodeFor(project, page, node) : node
+      const attrTarget = sharedNode
       if (localized) {
         errors.push('attributes are not localizable — omit locale for attribute edits')
       } else if (!attrTarget) {
@@ -1678,16 +1852,16 @@ function applyPageEdits(project, page, edits, locale, defaultLocale) {
         }
         if (Object.keys(clean).length) attrTarget.attributes = clean
         else delete attrTarget.attributes
-        applied.push(inComponent ? 'attributes (on component master — all instances)' : 'attributes')
+        applied.push(`attributes${onShared}`)
         changed = true
       }
     }
 
     // marker truth-sync skips component-instance subtrees, like the editor
-    if (!inComponent && syncMarkersForNode(page, node)) changed = true
+    if (!inComponent && !masterDef && syncMarkersForNode(page, node)) changed = true
     // echo the element's identity so a misaddressed edit is visible
     results.push({
-      line: node.line,
+      ...(masterDef ? { component: masterDef.name } : { line: node.line }),
       id: node.id,
       type: node.type,
       applied,
@@ -1697,6 +1871,240 @@ function applyPageEdits(project, page, edits, locale, defaultLocale) {
     })
   }
   return { changed, results }
+}
+
+/** a master's elements in tree order, as addresses: what `edit_elements
+ * {componentId}` takes. A row inside an instance the component HOLDS says so —
+ * its look is that component's, and only its text/variants/hidden are said here */
+function masterNodeRows(project, def) {
+  const held = sharedInstanceMap(def.root.children ?? [], project.components ?? [])
+  const rows = []
+  walkNodes([def.root], (n) => {
+    const mapping = held.get(n.id)
+    rows.push({
+      id: n.id,
+      type: n.type,
+      ...(n === def.root ? { root: true } : {}),
+      ...(mapping ? { in: mapping.def.name } : {}),
+      ...(n.arg ? { arg: n.arg } : {}),
+      ...(n.classes ? { classes: n.classes } : {}),
+      ...(n.variantClasses ? { variantClasses: n.variantClasses } : {}),
+      ...(n.content ? { content: n.content } : {}),
+      ...(n.hidden !== undefined ? { hidden: n.hidden } : {}),
+      ...(n.variants ? { variants: n.variants } : {}),
+      ...(n.svg ? { icon: lucideNameOf(n.svg) ?? 'custom svg' } : {}),
+      ...(n.interactions?.length ? { interactionCount: n.interactions.length } : {}),
+    })
+  })
+  return rows
+}
+
+/**
+ * Replace a component's structure from a `:Name … Name:` block and push it to
+ * every instance. MUTATES `project`; the caller saves. Shared by
+ * update_component and create_component {code}, so a component written from
+ * scratch passes exactly the checks a rewritten one does.
+ */
+function applyComponentCode(project, def, code) {
+  // a `:Button:` inside the block is an instance of another component:
+  // expanded here to the full block its master has, exactly as it would be
+  // on a page
+  const blockLines = expandComponentInstances(
+    String(code ?? ''),
+    (project.components ?? []).filter((c) => c !== def),
+  )
+    .split('\n')
+    .filter((l) => l.trim())
+  if (blockLines[0]?.trim() !== `:${def.name}` || blockLines[blockLines.length - 1]?.trim() !== `${def.name}:`) {
+    return {
+      ok: false,
+      reason: 'invalid-block',
+      message: `the code must open with ':${def.name}' and close with '${def.name}:'`,
+    }
+  }
+  // cycles first, and by name: the validator would catch one too, but only
+  // as "can't contain itself" on some line of the expanded block
+  {
+    const editedRoot = parseSyntax(blockLines.join('\n')).find((n) => n.type === def.name)
+    if (editedRoot) {
+      const held = nestedComponentNames({ root: editedRoot })
+      const cycle = held.find((name) => !canNest(project.components ?? [], def.name, name))
+      if (cycle) {
+        return {
+          ok: false,
+          reason: 'invalid-block',
+          message:
+            `':${cycle}' cannot go inside ':${def.name}': ${cycle} already holds ${def.name} ` +
+            '(directly or through another component), so each would contain the other',
+        }
+      }
+    }
+  }
+
+  // validate the inner structure through the normal document validator.
+  // normalizeSyntax re-indents the block from its TOKEN structure (depth
+  // starts at 1, i.e. one level inside :body) so the indentation-
+  // consistency check never trips on however the agent spaced the block —
+  // the parser is indentation-insensitive, so validation must be too.
+  const doc = [
+    '@setup', '\tname: x', '\tslug: /x', '\tstatus: draft', '\tlocale: en',
+    ':body', normalizeSyntax(blockLines.join('\n')), 'body:',
+  ].join('\n')
+  const { collectionNames, listFieldNames, dataOnlyCollections } = knownNames(project)
+  const diagnostics = libraryHints(
+    project,
+    validateDocument(
+      doc,
+      (project.components ?? []).map((c) => c.name),
+      collectionNames,
+      listFieldNames,
+      dataOnlyCollections,
+    ),
+  )
+  if (diagnostics.length) {
+    return {
+      ok: false,
+      reason: 'invalid-code',
+      // lines of the BLOCK (its `:Name` line is 0), not of the scaffold it was
+      // checked in — after any `:Name:` inside it has expanded
+      diagnostics: diagnostics.map((d) =>
+        typeof d.line === 'number' ? { ...d, line: Math.max(0, d.line - 6) } : d,
+      ),
+    }
+  }
+  const parsed = parseSyntax(blockLines.join('\n'))
+  const editedRoot = parsed.find((n) => n.type === def.name)
+  if (!editedRoot) return { ok: false, reason: 'invalid-block', message: 'could not parse the block' }
+  {
+    const links = instanceLinkDiagnostics(blockLines.slice(1, -1).join('\n')).map((d) => ({ ...d, line: d.line + 1 }))
+    if (links.length) return { ok: false, reason: 'invalid-code', diagnostics: links }
+    const divergent = divergentNestedBlock(editedRoot, project.components ?? [], def)
+    if (divergent) {
+      return {
+        ok: false,
+        reason: 'invalid-block',
+        message:
+          `the ':${divergent.name}' block inside differs from ${divergent.name}'s own structure. What is ` +
+          `inside an instance is ${divergent.name}'s — a field binding, a link or an extra element there ` +
+          `would apply to every ${divergent.name} everywhere, so it is not something ${def.name} can say. ` +
+          `Write it as ':${divergent.name}:' (it expands to the component's block); change ${divergent.name} ` +
+          `itself with update_component/edit_elements {componentId} if every instance should change; or ` +
+          `use plain elements here for what only ${def.name} shows.`,
+      }
+    }
+  }
+  // adopt the new shape into the master (identity carried by code
+  // signature + LCS), then push it to every instance. The adopt result
+  // surfaces any master node that lost its place — so dropped
+  // classes/interaction bindings are never a silent success.
+  const adopt = adoptStructure(def.root, editedRoot, def.name)
+  const codeBefore = new Map((project.pages ?? []).map((p) => [p.id, p.code]))
+  // the push brings every mirror back in step first (a nested instance
+  // adopted from code arrives as plain nodes), then rewrites the blocks —
+  // the editor's own code, from the runtime bundle
+  const updatedInstances = pushMasterStructure(project, def)
+  const touchedPages = (project.pages ?? []).filter((p) => codeBefore.get(p.id) !== p.code)
+  return { ok: true, adopt, updatedInstances, touchedPages }
+}
+
+/** pages whose code an operation rewrote, with the version each now has */
+function touchedVersions(project, codeBefore) {
+  return (project.pages ?? [])
+    .filter((p) => codeBefore.get(p.id) !== p.code)
+    .map((p) => ({ pageId: p.id, version: sha256(p.code) }))
+}
+const pageCodes = (project) => new Map((project.pages ?? []).map((p) => [p.id, p.code]))
+
+// ---------- the bundled library ----------
+
+/** the project component made from a library entry, if it has one */
+const libraryComponent = (project, key) =>
+  (project.components ?? []).find((c) => c.source === key) ?? null
+
+/**
+ * Copy a library entry into the project — what it holds first, then the
+ * design tokens and shared effects it needs. The editor's `addFromCatalog`,
+ * on a plain project. `report` collects what was created along the way.
+ */
+function addLibraryEntry(project, key, report) {
+  const entry = catalogEntry(key)
+  if (!entry) return null
+  project.components = project.components ?? []
+  project.interactions = project.interactions ?? []
+  project.settings = project.settings ?? defaultSettings()
+  project.settings.tokens = project.settings.tokens ?? []
+  const made = materializeCatalogEntry(
+    entry,
+    project,
+    (held) => libraryComponent(project, held) ?? addLibraryEntry(project, held, report),
+  )
+  // never overwrite a token the project already has: the point of the library
+  // is that it restyles from the project's own palette
+  const have = new Set(project.settings.tokens.map((t) => t.name))
+  const tokens = made.tokens.filter((t) => !have.has(t.name) && !tokenError(t))
+  project.settings.tokens.push(...tokens)
+  project.interactions.push(...made.interactions)
+  project.components.push(made.def)
+  report.added.push({ key, def: made.def, holds: catalogDependencies(entry) })
+  report.tokens.push(...tokens.map((t) => t.name))
+  report.interactions += made.interactions.length
+  return made.def
+}
+
+/** an instance token carrying an `@link`. The `:Name` line renders no element
+ * of its own, so the link would be dropped on the floor — say so, with the
+ * two ways that work. Lines are 0-based over `code`. */
+function instanceLinkDiagnostics(code) {
+  const out = []
+  code.split('\n').forEach((line, i) => {
+    const m = /^\s*:([A-Z][a-zA-Z0-9-]*)(?:#[a-zA-Z0-9-]*)?(?:\[[^\]]*\])?(?:\(\+?\)?)?(?:\{\+?\}?)?:?@(\S+)/.exec(line)
+    if (!m) return
+    out.push({
+      line: i,
+      message:
+        `':${m[1]}' cannot carry a link — an instance's own line renders no element, so '@${m[2]}' ` +
+        `would be lost. Wrap it: ':div@${m[2]}' › ':${m[1]}:' › 'div:' (a linked :div renders as the <a>), ` +
+        `or put the link on an element inside ${m[1]} itself if every instance links the same way.`,
+    })
+  })
+  return out
+}
+
+/** types, args and links of a subtree — what a nested instance block must
+ * share with the component it is an instance of */
+const structureSig = (nodes) =>
+  (nodes ?? [])
+    .map((n) => `${n.type}${n.arg ? `[${n.arg}]` : ''}${n.link ? `@${n.link}` : ''}(${structureSig(n.children)})`)
+    .join(',')
+
+/** the first nested instance whose block differs from its component's
+ * structure: what is inside it is that component's, so a per-host arg or link
+ * written there would be silently realigned away */
+function divergentNestedBlock(root, components, self) {
+  let found = null
+  walkNodes(root.children ?? [], (n) => {
+    if (found || !isComponentType(n.type)) return
+    const inner = components.find((c) => c.name === n.type && c !== self)
+    if (!inner) return
+    if (structureSig(n.children) !== structureSig(inner.root.children)) found = inner
+  })
+  return found
+}
+
+/** "Unknown component ':Hero:'" is a dead end when Hero is sitting in the
+ * library: say which tool turns the name into a component */
+function libraryHints(project, diagnostics) {
+  return diagnostics.map((d) => {
+    const m = /^Unknown component ':([A-Z][a-zA-Z0-9-]*)/.exec(d.message ?? '')
+    const entry = m ? CATALOG.find((e) => e.name === m[1]) : null
+    if (!entry || libraryComponent(project, entry.key)) return d
+    return {
+      ...d,
+      message:
+        `${d.message} — the bundled library has a ${entry.name} (${entry.description}). ` +
+        `Copy it into the project first: add_library_components {keys: ["${entry.key}"]}`,
+    }
+  })
 }
 
 /**
@@ -2031,6 +2439,197 @@ function collectPublishWarnings(project) {
         'to make it absolute.',
     })
   }
+  warnings.push(...designWarnings(project))
+  return warnings
+}
+
+/**
+ * Publish-time DESIGN checks — the things a prototype review sends straight
+ * back: browser-drawn controls, a whole-body page transition under an app
+ * shell that flashes the chrome on every screen, entrance animations that
+ * shove the layout around. Each is a pattern the tools accepted one call at a
+ * time and that only shows once the pages are looked at together, so publish
+ * is where it is said. Warnings, never refusals: a landing page may want the
+ * body transition.
+ */
+function designWarnings(project) {
+  const warnings = []
+  const published = (project.pages ?? []).filter((p) => p.status === 'published')
+  const components = project.components ?? []
+  const masterByName = new Map(components.map((c) => [c.name, c]))
+  const classesOf = (n) => n.classes ?? ''
+  /** every node that renders: page nodes outside instances, and masters */
+  const eachRendered = (fn) => {
+    for (const page of published) {
+      const visit = (nodes, inInstance) => {
+        for (const n of nodes) {
+          if (!inInstance) fn(n, `page "${page.name}"`)
+          visit(n.children ?? [], inInstance || isComponentType(n.type))
+        }
+      }
+      visit(page.elements ?? [], false)
+    }
+    // a master's own nodes — not what sits inside an instance it holds, whose
+    // classes are the inner component's
+    for (const c of components) {
+      const visit = (nodes) => {
+        for (const n of nodes) {
+          if (isComponentType(n.type)) continue
+          fn(n, `component ${c.name}`)
+          visit(n.children ?? [])
+        }
+      }
+      visit(c.root.children ?? [])
+    }
+  }
+
+  // 1. native controls left to the browser
+  const nativeSelect = []
+  const bare = []
+  eachRendered((n, where) => {
+    if (n.type === 'select' && !/\bappearance-none\b/.test(classesOf(n))) nativeSelect.push(where)
+    if (['input', 'textarea', 'select', 'button'].includes(n.type) && !classesOf(n).trim()) bare.push(`:${n.type} in ${where}`)
+  })
+  if (nativeSelect.length) {
+    warnings.push({
+      kind: 'native-select',
+      where: [...new Set(nativeSelect)].slice(0, 6),
+      message:
+        `${nativeSelect.length} :select element(s) keep the browser's own look (chevron, chrome) — ` +
+        'a <select> ignores most styling until `appearance-none` is on it. Give it appearance-none ' +
+        'and right padding, and draw the chevron yourself (an :icon: chevron-down, absolute, ' +
+        'pointer-events-none) in a relative wrapper — the library Select is built that way.',
+    })
+  }
+  if (bare.length) {
+    warnings.push({
+      kind: 'unstyled-controls',
+      where: [...new Set(bare)].slice(0, 8),
+      message:
+        `${bare.length} form control(s) carry no classes at all and render in the browser's default ` +
+        'style, which never matches the design. Style them, or use the library Input / Textarea / ' +
+        'Select / Button.',
+    })
+  }
+
+  // 2. a body transition under persistent chrome: fades the whole app every screen
+  const transitions = project.settings?.motion?.transitions?.enabled
+  if (transitions && published.length > 1) {
+    const usedOn = new Map()
+    for (const page of published) {
+      const seen = new Set()
+      walkNodes(page.elements ?? [], (n) => {
+        if (isComponentType(n.type)) seen.add(n.type)
+      })
+      for (const name of seen) usedOn.set(name, (usedOn.get(name) ?? 0) + 1)
+    }
+    const chrome = [...usedOn.entries()]
+      .filter(([name, count]) => {
+        if (count < published.length) return false
+        const def = masterByName.get(name)
+        if (!def) return false
+        let pinned = false
+        walkNodes([def.root], (n) => {
+          if (/\b(sticky|fixed)\b/.test(classesOf(n))) pinned = true
+        })
+        return pinned
+      })
+      .map(([name]) => name)
+    if (chrome.length) {
+      warnings.push({
+        kind: 'body-transition-under-app-shell',
+        chrome,
+        message:
+          `settings.motion.transitions fades the WHOLE page body on every navigation, and ${chrome.join(', ')} ` +
+          `${chrome.length > 1 ? 'are' : 'is'} on every page as persistent chrome — so the sidebar/header ` +
+          'flashes out and back in on each screen, which reads as the app blinking. For an app shell, turn ' +
+          'transitions off (update_settings {motion: {transitions: {enabled: false}}}) and give the CONTENT ' +
+          'region alone a short `load` fade (200–300 ms, opacity only); keep the chrome free of load animations.',
+      })
+    }
+  }
+
+  // 3. entrance animations that move layout containers
+  const moving = []
+  const lib = new Map((project.animations ?? []).map((a) => [a.id, a]))
+  const transformsLayout = (a) =>
+    (a?.steps ?? []).some((st) => (st.tracks ?? []).some((t) => ['x', 'y', 'scale', 'width', 'height'].includes(t.prop)))
+  const countDesc = (n) => (n.children ?? []).reduce((k, c) => k + 1 + countDesc(c), 0)
+  eachRendered((n, where) => {
+    for (const b of n.animations ?? []) {
+      if (b.trigger !== 'load' || b.targetId) continue
+      if (transformsLayout(lib.get(b.animationId)) && countDesc(n) >= 12) {
+        moving.push(`:${n.type} (${countDesc(n)} elements) in ${where}`)
+      }
+    }
+  })
+  if (moving.length) {
+    warnings.push({
+      kind: 'load-animation-moves-layout',
+      where: moving.slice(0, 6),
+      message:
+        `${moving.length} large container(s) enter with a \`load\` animation that moves or scales them — ` +
+        'the whole region shifts on every page load, and the transform it leaves behind traps any fixed ' +
+        'sheet or modal inside. Fade containers (opacity only); reserve movement for small items, ' +
+        'staggered, with `appear`.',
+    })
+  }
+
+  // 3b. an overlay repeated per entry: a sheet/dialog inside a list's row
+  // template ships once per entry — twelve contacts, twelve sheets — and
+  // the editor renders every one of them, three frames deep
+  const repeated = []
+  for (const page of published) {
+    const mm = buildInstanceMap(project, page)
+    const visit = (nodes, list) => {
+      for (const n of nodes) {
+        const own = mm.get(n.id)?.master.classes ?? n.classes ?? ''
+        if (list && /\bfixed\b/.test(own)) {
+          const entries = (project.collections ?? []).find((c) => c.name === list.arg)?.entries?.length ?? 0
+          repeated.push(`:${n.type} in :${list.type}[${list.arg}] on page "${page.name}" (×${entries})`)
+          continue
+        }
+        const opens = n.type === 'collection-list' || n.type === 'slider' ? (n.arg ? n : null) : null
+        visit(n.children ?? [], opens ?? list)
+      }
+    }
+    visit(page.elements ?? [], null)
+  }
+  if (repeated.length) {
+    warnings.push({
+      kind: 'overlay-per-entry',
+      where: repeated.slice(0, 6),
+      message:
+        `${repeated.length} fixed-position overlay(s) (a sheet, a dialog, a menu panel) sit INSIDE a list's ` +
+        'row template, so the page ships one copy per entry and the editor renders all of them. ' +
+        'Keep ONE overlay outside the list and open it from every row (the rows bind the same ' +
+        'target); what differs per row is content, which a prototype can fake with one shared sheet.',
+    })
+  }
+
+  // 4. effects nothing uses
+  const boundInteractions = new Set()
+  const boundAnimations = new Set()
+  const collect = (n) => {
+    for (const b of n.interactions ?? []) boundInteractions.add(b.interactionId)
+    for (const b of n.animations ?? []) boundAnimations.add(b.animationId)
+  }
+  for (const page of project.pages ?? []) walkNodes(page.elements ?? [], collect)
+  for (const c of components) walkNodes([c.root], collect)
+  const t = project.settings?.motion?.transitions
+  for (const id of [t?.exitAnimationId, t?.enterAnimationId]) if (id) boundAnimations.add(id)
+  const unusedI = (project.interactions ?? []).filter((i) => !boundInteractions.has(i.id)).map((i) => i.name)
+  const unusedA = (project.animations ?? []).filter((a) => !boundAnimations.has(a.id)).map((a) => a.name)
+  if (unusedI.length || unusedA.length) {
+    warnings.push({
+      kind: 'unused-effects',
+      ...(unusedI.length ? { interactions: unusedI } : {}),
+      ...(unusedA.length ? { animations: unusedA } : {}),
+      message:
+        'effects nothing is bound to — leftovers a human will find in the Interactions panel. ' +
+        'Delete them (delete_interaction / delete_animation) or bind them.',
+    })
+  }
   return warnings
 }
 
@@ -2252,6 +2851,9 @@ const tools = [
         server: api.base ?? '',
         mcpVersion: MCP_VERSION,
         mcpStartedAt: MCP_STARTED_AT,
+        // whether set_target can put its dialog in front of the human on THIS
+        // client — null until the client has said what it supports
+        elicitation: hasElicitation(),
         serverVersion,
         ...(versionMismatch
           ? {
@@ -2753,13 +3355,19 @@ const tools = [
       // 1. validate what the agent typed — the agent gets a compiler
       const { componentNames, collectionNames, listFieldNames, dataOnlyCollections } =
         knownNames(project)
-      const diagnostics = validateDocument(
-        args.code,
-        componentNames,
-        collectionNames,
-        listFieldNames,
-        dataOnlyCollections,
+      const diagnostics = libraryHints(
+        project,
+        validateDocument(
+          args.code,
+          componentNames,
+          collectionNames,
+          listFieldNames,
+          dataOnlyCollections,
+        ),
       )
+      diagnostics.push(...instanceLinkDiagnostics(args.code).filter((d) => componentNames.includes(
+        /^\s*:([A-Z][a-zA-Z0-9-]*)/.exec(args.code.split('\n')[d.line])?.[1],
+      )))
       if (diagnostics.length) {
         return { saved: false, reason: 'invalid-code', diagnostics }
       }
@@ -2894,7 +3502,9 @@ const tools = [
             'that case strip them with edit_elements removeClasses, or re-send with fresh: true.',
         )
       }
-      const orphaned = statefulBefore.filter((s) => !findNode(page.elements ?? [], s.id))
+      // under `fresh` every node started blank by request: nothing was lost
+      // that the caller wanted, so the orphan note would only be noise
+      const orphaned = args.fresh ? [] : statefulBefore.filter((s) => !findNode(page.elements ?? [], s.id))
       if (orphaned.length) {
         const shown = orphaned.slice(0, 12).map((o) => `${o.id} (:${o.type})`).join(', ')
         notes.push(
@@ -2925,7 +3535,9 @@ const tools = [
           ...(args.fresh ? { fresh: true } : {}),
         },
         ...(stats.reparented.length ? { reparented: stats.reparented.slice(0, 40) } : {}),
-        ...(inherited.length ? { inherited: inherited.slice(0, 40) } : {}),
+        // the note above names the first few; the list is for acting on them,
+        // and a caller who asked for no elements did not ask for 40 of these
+        ...(inherited.length ? { inherited: inherited.slice(0, args.elements === 'none' || args.elements === 'refs' ? 8 : 40) } : {}),
         ...(linesShifted ? { lineShifts } : {}),
         // the fresh per-element summary — proceed straight to edit_elements,
         // no follow-up get_page needed just to harvest ids
@@ -3119,15 +3731,29 @@ const tools = [
           description:
             'per-master-node state: {id, type, classes?, content?, src?, background?, ' +
             'htmlId?, attributes?, interactions?, animations?} — bindings carry their full ' +
-            'options and breakpoints',
+            'options and breakpoints. A node with `in: "Button"` sits inside an instance the ' +
+            'component HOLDS: its look is Button\'s, and what is set on it here is what this ' +
+            'component says about its button (text, icon, hidden; `variants` on the :Button node)',
+        },
+        names: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'only these components (by name) — with includeNodes, keeps a project holding the ' +
+            'whole library from answering with every node of every component',
         },
       },
       additionalProperties: false,
     },
     handler: async (args) => {
       const { project } = await loadTargetProject()
+      const only = args.names?.length ? new Set(args.names.map(String)) : null
+      const unknown = only
+        ? [...only].filter((n) => !(project.components ?? []).some((c) => c.name === n))
+        : []
       return {
-        components: (project.components ?? []).map((def) => {
+        ...(unknown.length ? { unknown } : {}),
+        components: (project.components ?? []).filter((def) => !only || only.has(def.name)).map((def) => {
           let instances = 0
           for (const p of project.pages ?? []) {
             walkNodes(p.elements ?? [], (n) => {
@@ -3137,14 +3763,25 @@ const tools = [
           let nodes
           if (args.includeNodes) {
             nodes = []
+            const held = sharedInstanceMap(def.root.children ?? [], project.components ?? [])
             // master-tree order, so a row lines up with the same line of
             // `structure`; empty fields omitted like the page summary
             walkNodes([def.root], (n) => {
+              const mapping = held.get(n.id)
               nodes.push({
                 id: n.id,
                 type: n.type,
+                ...(n === def.root ? { root: true } : {}),
+                ...(mapping ? { in: mapping.def.name } : {}),
+                ...(n.variants ? { variants: n.variants } : {}),
+                ...(n.arg ? { arg: n.arg } : {}),
+                ...(n.link ? { link: n.link } : {}),
                 ...(n.classes ? { classes: n.classes } : {}),
                 ...(n.variantClasses ? { variantClasses: n.variantClasses } : {}),
+                // the component's DEFAULTS for per-instance state, like content
+                ...(n.listQuery ? { listQuery: n.listQuery } : {}),
+                ...(n.slider ? { slider: n.slider } : {}),
+                ...(n.entryId ? { entryId: n.entryId } : {}),
                 ...(n.hidden !== undefined ? { hidden: n.hidden } : {}),
                 ...(n.svg ? { icon: lucideNameOf(n.svg) ?? 'custom svg' } : {}),
                 ...(n.content ? { content: n.content } : {}),
@@ -3193,6 +3830,7 @@ const tools = [
             ...(def.category ? { category: def.category } : {}),
             ...(def.source ? { source: def.source } : {}),
             ...(def.variants?.length ? { variants: def.variants } : {}),
+            ...(nestedComponentNames(def).length ? { holds: nestedComponentNames(def) } : {}),
             instances,
             structure: [`:${def.name}`, ...def.root.children.flatMap((c) => serializeNode(c, '\t')), `${def.name}:`].join('\n'),
             ...(nodes ? { nodes } : {}),
@@ -3204,8 +3842,12 @@ const tools = [
   {
     name: 'create_component',
     description:
-      'Turn an existing element (and its subtree) into a shared component: the subtree becomes ' +
-      'the master, the original block is wrapped as :Name … Name: (an instance). Reuse it on ' +
+      'Make a shared component. TWO ways: pass `code` to write one from scratch (no page ' +
+      'involved — the response returns its element ids, ready for edit_elements {componentId}); ' +
+      'or pass pageId + id + version to turn an existing element (and its subtree) into one: the subtree becomes ' +
+      'the master, the original block is wrapped as :Name … Name: (an instance). Before making ' +
+      'a common piece (button, card, accordion, navbar, dialog…), check list_library — copying ' +
+      'a library entry and restyling it is less work than building one. Reuse it on ' +
       'other pages by writing :Name: in their code (set_page_code expands it). Styles and ' +
       'interactions on inner elements are SHARED across instances (edit any instance — the ' +
       'edit lands on the master); text content falls back to the master\'s, overridable ' +
@@ -3222,12 +3864,51 @@ const tools = [
             'optional grouping in the editor\'s Components drawer (e.g. "Cards"); omitted = Uncategorized',
         },
         version: { type: 'string' },
+        code: {
+          type: 'string',
+          description:
+            'INSTEAD of pageId + id + version: the component\'s structure as a DSL block, written ' +
+            'from scratch — no page involved. Either the full `:Name … Name:` block or just what ' +
+            'goes inside it. May hold instances of other components (`:Button:`).',
+        },
       },
-      required: ['pageId', 'id', 'name', 'version'],
+      required: ['name'],
       additionalProperties: false,
     },
     handler: async (args) => {
       const { project } = await loadTargetProject()
+      if (args.code !== undefined && !args.pageId) {
+        project.components = project.components ?? []
+        const name = normalizeComponentName(args.name, project.components.map((c) => c.name))
+        const def = { id: randomUUID(), name, root: { id: randomUUID(), type: name, content: '', children: [] } }
+        setComponentMeta(def, { category: args.category })
+        project.components.push(def)
+        const lines = String(args.code).split('\n').filter((l) => l.trim())
+        const wrapped =
+          lines[0]?.trim() === `:${name}`
+            ? lines.join('\n')
+            : [`:${name}`, ...lines, `${name}:`].join('\n')
+        const done = applyComponentCode(project, def, wrapped)
+        if (!done.ok || !def.root.children.length) {
+          project.components = project.components.filter((c) => c !== def)
+          if (done.ok) return { saved: false, reason: 'invalid-block', message: 'the block holds no element' }
+          const { ok: _ok, ...why } = done
+          return { saved: false, ...why }
+        }
+        await saveTargetProject(project)
+        return {
+          saved: true,
+          componentId: def.id,
+          name,
+          structure: [`:${name}`, ...def.root.children.flatMap((c) => serializeNode(c, '\t')), `${name}:`].join('\n'),
+          // the addresses edit_elements {componentId} takes — style it now
+          nodes: masterNodeRows(project, def),
+          usage: `style it with edit_elements {componentId: "${def.id}", edits: [...]}, then write ':${name}:' in any page's code`,
+        }
+      }
+      if (!args.pageId || !args.id || !args.version) {
+        throw new Error('pass pageId + id + version (extract an element of a page) or code (write the component from scratch)')
+      }
       const page = findPage(project, args.pageId)
       const current = sha256(page.code)
       if (args.version !== current) {
@@ -3351,7 +4032,9 @@ const tools = [
   {
     name: 'update_component',
     description:
-      "Replace a component's STRUCTURE by passing its full DSL block (`:Name … Name:`). Master " +
+      "Change a component: its `name`, its `category`, and/or its STRUCTURE — for which, pass its " +
+      "full DSL block as `code` (`:Name … Name:`). To restyle or retext a component, this is NOT " +
+      "the tool — that is edit_elements {componentId}. Master " +
       'nodes keep their identity (styles/interactions/content) wherever the code lines up — ' +
       'matched by signature (type + arg + link + children), so removing or reordering a child ' +
       'no longer re-seats survivors onto the wrong node. The response reports `adopted`/' +
@@ -3371,109 +4054,74 @@ const tools = [
       properties: {
         componentId: { type: 'string' },
         code: { type: 'string', description: 'the full block: :Name\\n\\t… \\nName:' },
+        name: {
+          type: 'string',
+          description:
+            'rename the component — every `:Name … Name:` token on every page, and in every ' +
+            'component holding one, follows. Normalized to CapitalCase and de-duplicated; the ' +
+            'response says what it became. With `code` too, the block uses the NEW name.',
+        },
+        category: {
+          type: 'string',
+          description: 'its grouping in the editor\'s Components drawer; "" = Uncategorized',
+        },
       },
-      required: ['componentId', 'code'],
+      required: ['componentId'],
       additionalProperties: false,
     },
     handler: async (args) => {
       const { project } = await loadTargetProject()
       const def = (project.components ?? []).find((c) => c.id === args.componentId)
       if (!def) throw new Error(`no component with id "${args.componentId}" (use list_components)`)
-      // a `:Button:` inside the block is an instance of another component:
-      // expanded here to the full block its master has, exactly as it would be
-      // on a page
-      const blockLines = expandComponentInstances(
-        String(args.code ?? ''),
-        (project.components ?? []).filter((c) => c !== def),
-      )
-        .split('\n')
-        .filter((l) => l.trim())
-      if (blockLines[0]?.trim() !== `:${def.name}` || blockLines[blockLines.length - 1]?.trim() !== `${def.name}:`) {
-        return {
-          saved: false,
-          reason: 'invalid-block',
-          message: `the code must open with ':${def.name}' and close with '${def.name}:'`,
-        }
+      if (args.code === undefined && args.name === undefined && args.category === undefined) {
+        throw new Error('pass at least one of `code`, `name`, `category`')
       }
-      // cycles first, and by name: the validator would catch one too, but only
-      // as "can't contain itself" on some line of the expanded block
-      {
-        const editedRoot = parseSyntax(blockLines.join('\n')).find((n) => n.type === def.name)
-        if (editedRoot) {
-          const held = nestedComponentNames({ root: editedRoot })
-          const cycle = held.find((name) => !canNest(project.components ?? [], def.name, name))
-          if (cycle) {
-            return {
-              saved: false,
-              reason: 'invalid-block',
-              message:
-                `':${cycle}' cannot go inside ':${def.name}': ${cycle} already holds ${def.name} ` +
-                '(directly or through another component), so each would contain the other',
-            }
+      const codeBefore = pageCodes(project)
+      const out = { saved: true, componentId: def.id }
+
+      // the name first: a block passed along with it is written under the NEW one
+      if (args.name !== undefined) {
+        const was = def.name
+        const name = renameComponent(project, def.id, String(args.name))
+        if (name !== was) out.renamed = { from: was, to: name }
+      }
+      if (args.category !== undefined) setComponentCategory(project, def.id, String(args.category ?? ''))
+      out.name = def.name
+
+      if (args.code !== undefined) {
+        const done = applyComponentCode(project, def, args.code)
+        // nothing is saved on a refused block — the rename above included
+        if (!done.ok) {
+          const { ok: _ok, ...why } = done
+          return { saved: false, ...why }
+        }
+        const { adopt } = done
+        out.updatedInstances = done.updatedInstances
+        out.adopted = adopt.adopted
+        out.created = adopt.created
+        if (adopt.orphaned.length) {
+          out.orphaned = adopt.orphaned
+          const styled = adopt.orphaned.filter((o) => o.hadClasses || o.hadInteractions)
+          if (styled.length) {
+            out.notes = [
+              `${styled.length} master element(s) lost their place in the new structure and their ` +
+                'classes/interaction bindings no longer render — if that was not intended, the ' +
+                'edited block dropped or reordered nodes past what their code signature (type/arg/' +
+                'link/children) could match. Re-check the block.',
+            ]
           }
         }
+        // ids of the new shape — what edit_elements {componentId} addresses
+        out.nodes = masterNodeRows(project, def)
       }
-
-      // validate the inner structure through the normal document validator.
-      // normalizeSyntax re-indents the block from its TOKEN structure (depth
-      // starts at 1, i.e. one level inside :body) so the indentation-
-      // consistency check never trips on however the agent spaced the block —
-      // the parser is indentation-insensitive, so validation must be too.
-      const doc = [
-        '@setup', '\tname: x', '\tslug: /x', '\tstatus: draft', '\tlocale: en',
-        ':body', normalizeSyntax(blockLines.join('\n')), 'body:',
-      ].join('\n')
-      const { collectionNames, listFieldNames, dataOnlyCollections } = knownNames(project)
-      const diagnostics = validateDocument(
-        doc,
-        (project.components ?? []).map((c) => c.name),
-        collectionNames,
-        listFieldNames,
-        dataOnlyCollections,
-      )
-      if (diagnostics.length) return { saved: false, reason: 'invalid-code', diagnostics }
-      const parsed = parseSyntax(blockLines.join('\n'))
-      const editedRoot = parsed.find((n) => n.type === def.name)
-      if (!editedRoot) return { saved: false, reason: 'invalid-block', message: 'could not parse the block' }
-      // adopt the new shape into the master (identity carried by code
-      // signature + LCS), then push it to every instance. The adopt result
-      // surfaces any master node that lost its place — so dropped
-      // classes/interaction bindings are never a silent success.
-      const adopt = adoptStructure(def.root, editedRoot, def.name)
-      const codeBefore = new Map((project.pages ?? []).map((p) => [p.id, p.code]))
-      // the push brings every mirror back in step first (a nested instance
-      // adopted from code arrives as plain nodes), then rewrites the blocks —
-      // the editor's own code, from the runtime bundle
-      const updatedInstances = pushMasterStructure(project, def)
-      const touchedPages = (project.pages ?? []).filter((p) => codeBefore.get(p.id) !== p.code)
       await saveTargetProject(project)
-      const notes = []
-      if (adopt.orphaned.length) {
-        const styled = adopt.orphaned.filter((o) => o.hadClasses || o.hadInteractions)
-        if (styled.length) {
-          notes.push(
-            `${styled.length} master element(s) lost their place in the new structure and their ` +
-              'classes/interaction bindings no longer render — if that was not intended, the ' +
-              'edited block dropped or reordered nodes past what their code signature (type/arg/' +
-              'link/children) could match. Re-check the block.',
-          )
-        }
-      }
-      return {
-        saved: true,
-        componentId: def.id,
-        updatedInstances,
-        adopted: adopt.adopted,
-        created: adopt.created,
-        // instance blocks were rewritten IN the page code, so each touched
-        // page has a new version hash — return them so a cached version from
-        // an earlier get_page is not carried into the next write
-        ...(touchedPages.length
-          ? { versions: touchedPages.map((p) => ({ pageId: p.id, version: sha256(p.code) })) }
-          : {}),
-        ...(adopt.orphaned.length ? { orphaned: adopt.orphaned } : {}),
-        ...(notes.length ? { notes } : {}),
-      }
+      // instance blocks (and, on a rename, instance tokens) were rewritten IN
+      // the page code, so each touched page has a new version hash — return
+      // them so a cached version from an earlier get_page is not carried into
+      // the next write
+      const versions = touchedVersions(project, codeBefore)
+      if (versions.length) out.versions = versions
+      return out
     },
   },
   {
@@ -3482,8 +4130,9 @@ const tools = [
       'Declare the axes a component\'s instances can differ along — how ONE Button comes in ' +
       'default/outline/ghost and sm/md/lg instead of being six components. Pass the full list ' +
       'of axes: [{name: "variant", options: ["default", "outline"], default: "default"}, ' +
-      '{name: "size", options: ["sm", "md", "lg"], default: "md"}]. Names are lowercase ' +
-      'letters, digits and dashes. Variants are STYLE ONLY: an option is a set of class ' +
+      '{name: "size", options: ["sm", "md", "lg"], default: "md"}]. Axis and option names start ' +
+      'with a lowercase letter, then lowercase letters, digits and dashes ("sm", "size-2" — not "10"). ' +
+      'Variants are STYLE ONLY: an option is a set of class ' +
       'overrides, written with edit_elements {variant: "size:sm", addClasses: [...]} on the ' +
       'component\'s elements; an instance wears one with edit_elements {variants: {size: ' +
       '"sm"}} on its :Name line. Replacing the list keeps the overrides and picks of every ' +
@@ -3528,14 +4177,24 @@ const tools = [
   {
     name: 'delete_component',
     description:
-      'Remove a component from the library. Refused while any page still uses it — remove or ' +
-      'inline its instance blocks first (rewrite the pages without the :Name … Name: wrap). ' +
+      'Remove a component from the project. Refused while any page still uses it — unless ' +
+      '`detach: true`, which turns every instance into plain elements first (same look, same ' +
+      'text). ' +
       'That in-use scan IS the guard here (there is no master `version` to pass), so a ' +
       'component somebody is still using can never be deleted out from under them. ' +
       'Requires a target.',
     inputSchema: {
       type: 'object',
-      properties: { componentId: { type: 'string' } },
+      properties: {
+        componentId: { type: 'string' },
+        detach: {
+          type: 'boolean',
+          description:
+            'delete it even though it is used: every instance, on every page and in every ' +
+            'component holding one, is first turned into plain elements that look the same — ' +
+            'no page loses content. What the editor\'s own Delete does.',
+        },
+      },
       required: ['componentId'],
       additionalProperties: false,
     },
@@ -3543,6 +4202,20 @@ const tools = [
       const { project } = await loadTargetProject()
       const def = (project.components ?? []).find((c) => c.id === args.componentId)
       if (!def) throw new Error(`no component with id "${args.componentId}" (use list_components)`)
+      if (args.detach) {
+        const usage = componentUsage(project, def.name)
+        const codeBefore = pageCodes(project)
+        deleteComponentDetaching(project, def.id)
+        await saveTargetProject(project)
+        const versions = touchedVersions(project, codeBefore)
+        return {
+          saved: true,
+          deleted: def.id,
+          detached: usage.count,
+          ...(usage.hosts.length ? { detachedIn: usage.hosts } : {}),
+          ...(versions.length ? { versions } : {}),
+        }
+      }
       const usedOn = (project.pages ?? [])
         .filter((p) => {
           let used = false
@@ -3553,7 +4226,12 @@ const tools = [
         })
         .map((p) => ({ pageId: p.id, name: p.name }))
       if (usedOn.length) {
-        return { saved: false, reason: 'in-use', message: `":${def.name}:" still has instances`, usedOn }
+        return {
+          saved: false,
+          reason: 'in-use',
+          message: `":${def.name}:" still has instances — pass detach: true to turn them into plain elements and delete it`,
+          usedOn,
+        }
       }
       // a component HOLDING it is a use too, even with no instance on any page
       const heldBy = (project.components ?? [])
@@ -3563,13 +4241,278 @@ const tools = [
         return {
           saved: false,
           reason: 'in-use',
-          message: `":${def.name}:" is held by ${heldBy.map((c) => c.name).join(', ')} — remove it from there first (update_component)`,
+          message: `":${def.name}:" is held by ${heldBy.map((c) => c.name).join(', ')} — remove it from there first (update_component), or pass detach: true`,
           heldBy,
         }
       }
       project.components = project.components.filter((c) => c.id !== def.id)
       await saveTargetProject(project)
       return { saved: true, deleted: def.id }
+    },
+  },
+  {
+    name: 'duplicate_component',
+    description:
+      'An independent copy of a component under a new name — for a second piece that starts ' +
+      'from the first (a PricingCard from a Card). The copy has no instances and follows ' +
+      'nothing: restyle it freely. For a second LOOK of the same piece, do not copy it — give ' +
+      'it a variant option (set_component_variants). Requires a target.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        componentId: { type: 'string' },
+        name: { type: 'string', description: 'the copy\'s name; omitted = "<Name>Copy"' },
+      },
+      required: ['componentId'],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const { project } = await loadTargetProject()
+      const copy = duplicateComponent(project, args.componentId)
+      if (!copy) throw new Error(`no component with id "${args.componentId}" (use list_components)`)
+      if (args.name) renameComponent(project, copy.id, String(args.name))
+      await saveTargetProject(project)
+      return {
+        saved: true,
+        componentId: copy.id,
+        name: copy.name,
+        nodes: masterNodeRows(project, copy),
+        usage: `write ':${copy.name}:' in any page's code to add an instance`,
+      }
+    },
+  },
+  {
+    name: 'detach_instance',
+    description:
+      'Turn ONE instance of a component on a page back into plain elements that look exactly ' +
+      'the same — for the one placement that has to differ in STRUCTURE from the component ' +
+      '(a variant covers a different look, `hidden` a missing part). The block keeps its text ' +
+      'and images, takes the component\'s classes and bindings as its own, and no longer ' +
+      'follows the component. Address the instance\'s `:Name` line by `ref`, `id` or `line`. ' +
+      'Requires a target.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        pageId: { type: 'string' },
+        version: { type: 'string' },
+        ref: { type: 'string', description: "the instance's '#ref', without the '#'" },
+        id: { type: 'string' },
+        line: { type: 'integer', description: '0-based source line' },
+        elements: {
+          type: 'string',
+          enum: ['own', 'refs', 'none'],
+          description:
+            'the page summary to return — "refs" (default: line/id/type/ref of every element, ' +
+            'the detached block\'s included), "own" (the full summary), or "none"',
+        },
+      },
+      required: ['pageId', 'version'],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const { project } = await loadTargetProject()
+      const page = findPage(project, args.pageId)
+      const current = sha256(page.code)
+      if (args.version !== current) {
+        return { saved: false, reason: 'stale-version', message: STALE_MESSAGE, currentVersion: current }
+      }
+      const { node, inComponent } = resolveEditNode(page, args)
+      if (!isComponentType(node.type)) {
+        return {
+          saved: false,
+          reason: 'not-an-instance',
+          message: `':${node.type}' is not a component instance — address the ':Name' line of one`,
+        }
+      }
+      if (inComponent) {
+        return {
+          saved: false,
+          reason: 'nested-instance',
+          message:
+            `this ':${node.type}' is held by the component around it — what a component holds is ` +
+            'changed in that component (update_component), for every instance. Detach the OUTER ' +
+            'instance first to change just this page.',
+        }
+      }
+      if (!detachInstance(project, page, node.id)) {
+        return { saved: false, reason: 'not-detached', message: 'the instance block could not be detached (is it closed?)' }
+      }
+      await saveTargetProject(project)
+      return {
+        saved: true,
+        pageId: page.id,
+        detached: node.type,
+        version: sha256(page.code),
+        ...(args.elements === 'none'
+          ? {}
+          : { elements: elementSummary(project, page, { mode: args.elements ?? 'refs' }) }),
+      }
+    },
+  },
+  {
+    name: 'list_library',
+    description:
+      'The BUNDLED component library — ready-made, accessible pieces (button, card, input, ' +
+      'accordion, dialog, tabs, navbar, hero, pricing card, footer…) built on the project\'s ' +
+      'design tokens. LOOK HERE BEFORE BUILDING a common piece from plain elements: copying an ' +
+      'entry (add_library_components) and restyling it is less work, and the interactive ones ' +
+      'arrive with their behaviour wired. Each row: key, name (the `:Name:` token it becomes), ' +
+      'category, description, its variant axes, the entries it `holds`, and whether the project ' +
+      'already has it (`added`, with the component\'s id and name). Pass `keys` to also get an ' +
+      'entry\'s `structure` and the texts it ships with. Requires a target.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        category: { type: 'string', description: 'only this category' },
+        query: { type: 'string', description: 'only entries whose key, name or description contain this' },
+        keys: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'only these entries — and in DETAIL: structure (DSL block), texts, design tokens',
+        },
+      },
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const { project } = await loadTargetProject()
+      const wanted = args.keys?.length ? new Set(args.keys.map(String)) : null
+      const q = String(args.query ?? '').trim().toLowerCase()
+      const category = String(args.category ?? '').trim().toLowerCase()
+      const entries = CATALOG.filter(
+        (e) =>
+          (!wanted || wanted.has(e.key)) &&
+          (!category || e.category.toLowerCase() === category) &&
+          (!q || `${e.key} ${e.name} ${e.description}`.toLowerCase().includes(q)),
+      )
+      // detail is read off a throwaway copy of the entry, made against a
+      // scratch project so that looking never adds anything
+      const detail = (entry) => {
+        const scratch = {
+          ...project,
+          components: [...(project.components ?? [])],
+          interactions: [...(project.interactions ?? [])],
+          settings: { ...(project.settings ?? {}), tokens: [...(project.settings?.tokens ?? [])] },
+        }
+        const def =
+          libraryComponent(project, entry.key) ??
+          addLibraryEntry(scratch, entry.key, { added: [], tokens: [], interactions: 0 })
+        const texts = []
+        const bindings = []
+        walkNodes(def.root.children ?? [], (n) => {
+          if (n.content) texts.push({ type: n.type, text: n.content })
+          for (const b of n.interactions ?? []) {
+            const it = scratch.interactions.find((i) => i.id === b.interactionId)
+            bindings.push({
+              on: n.type,
+              trigger: b.trigger,
+              ...(b.action ? { action: b.action } : {}),
+              ...(b.group ? { group: b.group } : {}),
+              ...(b.closeOn?.length ? { closeOn: b.closeOn } : {}),
+              ...(it ? { interaction: it.name, toClasses: it.toClasses } : {}),
+            })
+          }
+        })
+        return {
+          structure: [`:${def.name}`, ...def.root.children.flatMap((c) => serializeNode(c, '\t')), `${def.name}:`].join('\n'),
+          ...(texts.length ? { texts } : {}),
+          // how the interactive ones work — the recipe, readable without adding
+          // the entry just to look at it
+          ...(bindings.length ? { bindings } : {}),
+          tokens: entry.tokens,
+        }
+      }
+      return {
+        ...(wanted ? { unknown: [...wanted].filter((k) => !catalogEntry(k)) } : {}),
+        categories: [...new Set(CATALOG.map((e) => e.category))],
+        library: entries.map((entry) => {
+          const have = libraryComponent(project, entry.key)
+          return {
+            key: entry.key,
+            name: entry.name,
+            category: entry.category,
+            description: entry.description,
+            ...(entry.variants?.length ? { variants: entry.variants } : {}),
+            ...(catalogDependencies(entry).length ? { holds: catalogDependencies(entry) } : {}),
+            added: !!have,
+            ...(have ? { componentId: have.id, componentName: have.name } : {}),
+            ...(wanted ? detail(entry) : {}),
+          }
+        }),
+      }
+    },
+  },
+  {
+    name: 'add_library_components',
+    description:
+      'Copy bundled library entries into the project as ordinary components (see list_library ' +
+      'for the keys). An entry that holds others (a card holds a button) brings them along. ' +
+      'The design tokens the entries name are created with neutral defaults where the project ' +
+      'has none of that name — an existing token is NEVER overwritten, which is the point: the ' +
+      'library takes the project\'s palette. Set the palette with update_settings {tokens} ' +
+      '(`primary`, `background`, `foreground`, `border`, `muted`…) to restyle every entry at ' +
+      'once. The copy is independent: nothing follows the library afterwards, so restyle and ' +
+      'restructure it freely (edit_elements {componentId}, update_component). An entry the ' +
+      'project already has is reported under `alreadyInProject`, not copied twice. Then write ' +
+      '`:Name:` in a page\'s code. Requires a target.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        keys: { type: 'array', items: { type: 'string' }, minItems: 1 },
+        includeNodes: {
+          type: 'boolean',
+          description: 'return each new component\'s element ids (what edit_elements {componentId} addresses)',
+        },
+      },
+      required: ['keys'],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const { project } = await loadTargetProject()
+      const report = { added: [], tokens: [], interactions: 0 }
+      const alreadyInProject = []
+      const failures = []
+      args.keys.forEach((raw, index) => {
+        // a NAME is an honest mistake for a key ("Footer" for "footer",
+        // "PricingCard" for "pricing-card"): take it rather than cost a round trip
+        const given = String(raw)
+        const key = catalogEntry(given)
+          ? given
+          : (CATALOG.find((e) => e.name.toLowerCase() === given.toLowerCase())?.key ?? given)
+        if (!catalogEntry(key)) {
+          failures.push({ index, key, message: `no library entry with key "${key}" (use list_library)` })
+          return
+        }
+        const have = libraryComponent(project, key)
+        if (have) {
+          // added a moment ago as something another entry holds: not a repeat
+          if (!report.added.some((a) => a.key === key)) {
+            alreadyInProject.push({ key, componentId: have.id, name: have.name })
+          }
+          return
+        }
+        try {
+          addLibraryEntry(project, key, report)
+        } catch (e) {
+          failures.push({ index, key, message: e.message ?? String(e) })
+        }
+      })
+      if (report.added.length) await saveTargetProject(project)
+      return {
+        saved: report.added.length > 0,
+        added: report.added.map(({ key, def, holds }) => ({
+          key,
+          componentId: def.id,
+          name: def.name,
+          token: `:${def.name}:`,
+          ...(def.variants?.length ? { variants: def.variants } : {}),
+          ...(holds.length ? { holds } : {}),
+          ...(args.includeNodes ? { nodes: masterNodeRows(project, def) } : {}),
+        })),
+        ...(alreadyInProject.length ? { alreadyInProject } : {}),
+        ...(report.tokens.length ? { tokensAdded: [...new Set(report.tokens)] } : {}),
+        ...(report.interactions ? { interactionsAdded: report.interactions } : {}),
+        ...(failures.length ? { partial: report.added.length > 0, failures } : {}),
+      }
     },
   },
   {
@@ -4200,7 +5143,10 @@ const tools = [
       'unbind needs no get_page read. Edits with errors ' +
       'are echoed in full under `failures`, and `verbose: true` echoes every edit result. ' +
       'addClasses/removeClasses work like the Style panel (validated; conflicts replaced; ' +
-      'flex/grid prerequisites auto-added; refused inside component instances). `content` is ' +
+      'flex/grid prerequisites auto-added). INSIDE a component instance they land on the ' +
+      'component, shared by every instance; an instance\'s own `:Name` line takes no classes, ' +
+      'attributes or bindings (it has no box) — only `variants`, `hidden` and `setRef`. To edit a ' +
+      'component itself, pass `componentId` + edits instead of a page. `content` is ' +
       'the element\'s own text — leaf elements only; rich tags b/strong/i/em/u/mark/code/sup/' +
       'sub/br/a[href] and the block set p/h2/h3/h4/blockquote/ul/ol/li/hr are kept (sanitized), ' +
       'everything else is stripped; "" clears it back to the placeholder. `src` (image/video only) takes a /media/… path, https URL, or data: URL. ' +
@@ -4214,6 +5160,13 @@ const tools = [
       properties: {
         pageId: { type: 'string' },
         version: { type: 'string', description: 'the version hash from get_page' },
+        componentId: {
+          type: 'string',
+          description:
+            'INSTEAD of pageId + version: edit a COMPONENT ITSELF, as the components board does — ' +
+            'its elements addressed by the `id`s list_components {includeNodes: true} reports. ' +
+            'Needs no instance on any page, so a component can be styled before it is used.',
+        },
         edits: {
           type: 'array',
           minItems: 1,
@@ -4471,7 +5424,8 @@ const tools = [
         pages: {
           type: 'array',
           description:
-            'MULTI-PAGE form: [{pageId, version, edits}] applies batches to several pages in ' +
+            'MULTI-PAGE form: [{pageId, version, edits}] (or {componentId, edits} for a ' +
+            'component itself) applies batches to several pages and components in ' +
             'ONE call (one save; per-page version checks — a stale page fails alone, the rest ' +
             'proceed). Each edits[] entry has the same shape as the top-level `edits`. When ' +
             'present, top-level pageId/version/edits are ignored.',
@@ -4480,9 +5434,13 @@ const tools = [
             properties: {
               pageId: { type: 'string' },
               version: { type: 'string' },
+              componentId: {
+                type: 'string',
+                description: 'INSTEAD of pageId + version: edit this component itself (no version)',
+              },
               edits: { type: 'array', items: { type: 'object' } },
             },
-            required: ['pageId', 'version', 'edits'],
+            required: ['edits'],
             additionalProperties: false,
           },
         },
@@ -4527,26 +5485,52 @@ const tools = [
       if (locale !== defaultLocale && !(project.locales ?? [defaultLocale]).includes(locale)) {
         return { saved: false, reason: 'unknown-locale', locales: project.locales ?? [defaultLocale] }
       }
-      if (!args.pages && !args.pageId) {
-        throw new Error('pass pageId + version + edits (single page) or pages: [{pageId, version, edits}]')
+      if (!args.pages && !args.pageId && !args.componentId) {
+        throw new Error(
+          'pass pageId + version + edits (one page), componentId + edits (a component itself), ' +
+            'or pages: [{pageId, version, edits} | {componentId, edits}]',
+        )
       }
       if (!args.pages && !Array.isArray(args.edits)) {
         throw new Error('pass `edits` (or `editsPath` pointing at a file holding them)')
       }
 
-      const jobs = args.pages ?? [{ pageId: args.pageId, version: args.version, edits: args.edits }]
+      const jobs = args.pages ?? [
+        args.componentId && !args.pageId
+          ? { componentId: args.componentId, edits: args.edits }
+          : { pageId: args.pageId, version: args.version, edits: args.edits },
+      ]
       let anyChanged = false
       const pageResults = []
+      // an `arg` on a component's element rewrites every instance block — on
+      // pages this call never named, whose cached versions are now stale
+      const codeBefore = pageCodes(project)
       for (const job of jobs) {
+        // a COMPONENT job edits the master itself, as the board does: no page,
+        // and so no page version — the whole-project guard covers the save
+        const scopeDef = job.componentId && !job.pageId
+          ? ((project.components ?? []).find((c) => c.id === job.componentId) ?? null)
+          : null
+        if (job.componentId && !job.pageId && !scopeDef) {
+          pageResults.push({
+            componentId: job.componentId,
+            saved: false,
+            reason: 'not-found',
+            message: `no component with id "${job.componentId}" (use list_components)`,
+          })
+          continue
+        }
         let page
         try {
-          page = findPage(project, job.pageId)
+          page = scopeDef ? { id: null, code: '', elements: [] } : findPage(project, job.pageId)
         } catch (e) {
           pageResults.push({ pageId: job.pageId, saved: false, reason: 'not-found', message: e.message })
           continue
         }
         const current = sha256(page.code)
-        if (typeof job.version !== 'string') {
+        if (scopeDef) {
+          // nothing to check
+        } else if (typeof job.version !== 'string') {
           pageResults.push({
             pageId: page.id,
             saved: false,
@@ -4556,7 +5540,7 @@ const tools = [
           })
           continue
         }
-        if (job.version !== current) {
+        if (!scopeDef && job.version !== current) {
           pageResults.push({
             pageId: page.id,
             saved: false,
@@ -4566,12 +5550,13 @@ const tools = [
           })
           continue
         }
+        const where = scopeDef ? { componentId: scopeDef.id, name: scopeDef.name } : { pageId: page.id }
         if (!Array.isArray(job.edits) || !job.edits.length) {
-          pageResults.push({ pageId: page.id, saved: false, reason: 'no-edits' })
+          pageResults.push({ ...where, saved: false, reason: 'no-edits' })
           continue
         }
         if (job.edits.some((e) => e?.icon)) await loadIcons()
-        const { changed, results } = applyPageEdits(project, page, job.edits, locale, defaultLocale)
+        const { changed, results } = applyPageEdits(project, page, job.edits, locale, defaultLocale, scopeDef)
         anyChanged = anyChanged || changed
         // terse by default: a 140-edit call used to echo ~14 KB of what the
         // agent just sent — failures keep their full echo so they stay debuggable
@@ -4590,9 +5575,9 @@ const tools = [
         // partial: 6" — opsApplied says how much actually landed (run #2, F3)
         const opsApplied = results.reduce((n, r) => n + (r.applied?.length ?? 0), 0)
         pageResults.push({
-          pageId: page.id,
+          ...where,
           saved: changed,
-          version: sha256(page.code),
+          ...(scopeDef ? {} : { version: sha256(page.code) }),
           edited: results.length - failures.length,
           failed: hardFailures.length,
           opsApplied,
@@ -4606,9 +5591,11 @@ const tools = [
       }
 
       if (anyChanged) await saveTargetProject(project)
+      const named = new Set(jobs.map((j) => j.pageId).filter(Boolean))
+      const alsoTouched = touchedVersions(project, codeBefore).filter((v) => !named.has(v.pageId))
       // single-page calls keep their original flat response shape
-      if (!args.pages) return pageResults[0]
-      return { saved: anyChanged, pages: pageResults }
+      if (!args.pages) return { ...pageResults[0], ...(alsoTouched.length ? { alsoTouched } : {}) }
+      return { saved: anyChanged, pages: pageResults, ...(alsoTouched.length ? { alsoTouched } : {}) }
     },
   },
   {
@@ -5433,6 +6420,16 @@ const tools = [
         throw new Error(`no interaction with id "${args.interactionId}" (use list_interactions)`)
       }
       const { node, inComponent } = resolveEditNode(page, args)
+      if (isComponentType(node.type)) {
+        return {
+          saved: false,
+          reason: 'component-instance',
+          message:
+            `':${node.type}' is a component instance, which has no box of its own — a binding on it ` +
+            'renders nowhere. Bind on an element inside it (shared by every instance), or wrap the ' +
+            'instance in a :div (class `contents`) and bind on that.',
+        }
+      }
       // in-component bindings redirect to the master (editor parity); a
       // cross-element targetId is translated to the target's master id
       const bindNode = inComponent ? masterNodeFor(project, page, node) : node
@@ -6333,7 +7330,9 @@ const tools = [
       'Publish the CURRENT TARGET as the live static site (server export). Editor+ only ' +
       '(enforced server-side). Returns export stats and the `url` where the site is now live ' +
       '(served at the origin root; the editor lives at /admin), plus `localeUrls` (one per ' +
-      'registered locale) and `warnings` for issues that publish silently (a collection whose ' +
+      'registered locale) and `warnings` — READ THEM AND ACT: design checks a review would send back ' +
+      '(browser-styled selects, unstyled controls, a whole-body page transition under an app shell, ' +
+      'entrance animations that shift the layout, unused effects) and issues that publish silently (a collection whose ' +
       'template page is draft — its entry routes are NOT exported, so every :collection-list ' +
       'card / @item link to it 404s live). Note: this publishes the target you chose — ' +
       'publishing a draft bypasses the merge-into-Main flow. Requires a target.',

@@ -67,6 +67,15 @@ export {
   isClosedBlock,
   pushMasterStructure,
   alignMirrors,
+  // the verbs the Components drawer offers a human — rename, duplicate,
+  // regroup, detach, delete — so an agent is not left with a smaller set
+  setComponentMeta,
+  componentUsage,
+  renameComponent,
+  duplicateComponent,
+  setComponentCategory,
+  detachInstance,
+  deleteComponent,
 } from './componentOps'
 
 // --- canonical page document scaffold (src/lib/document.ts)

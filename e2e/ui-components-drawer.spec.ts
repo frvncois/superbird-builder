@@ -20,8 +20,8 @@ async function openEditor(page: Page) {
   await page.goto('/admin/')
   const projectName = page.getByPlaceholder('Project name')
   const email = page.getByPlaceholder('Email')
-  const preview = page.getByRole('button', { name: 'Preview' })
-  await expect(projectName.or(email).or(preview).first()).toBeVisible({ timeout: 30_000 })
+  const ready = page.getByRole('button', { name: 'Pages', exact: true })
+  await expect(projectName.or(email).or(ready).first()).toBeVisible({ timeout: 30_000 })
 
   if (await projectName.isVisible()) {
     await projectName.fill('Smoke Co')
@@ -36,7 +36,7 @@ async function openEditor(page: Page) {
   }
   await page.waitForURL(/\/admin(\?.*)?$/, { timeout: 30_000 })
   await loadFixture(page)
-  await expect(preview).toBeVisible({ timeout: 30_000 })
+  await expect(ready).toBeVisible({ timeout: 30_000 })
 }
 
 /**

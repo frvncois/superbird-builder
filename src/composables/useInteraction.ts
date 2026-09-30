@@ -2,6 +2,7 @@ import { computed, ref } from 'vue'
 import { usePage } from './usePage'
 import { useProject } from './useProject'
 import { walkNodes } from '@/lib/tree'
+import { masterInteractionsTargeting } from './useMasterBindings'
 import {
   interactionGroupKey,
   interactionStateKey,
@@ -204,19 +205,17 @@ export function useInteraction() {
   ): string {
     const seen = new Set<string>()
     const parts: string[] = []
-    walkNodes([componentRoot], (owner) => {
-      for (const binding of owner.interactions ?? []) {
-        if ((binding.targetId ?? owner.id) !== masterId) continue
-        if (!bindingActiveAt(binding, breakpointId)) continue
-        if (seen.has(binding.interactionId)) continue
-        seen.add(binding.interactionId)
-        const animation = animationIndex.value.get(binding.interactionId)
-        if (!animation) continue
-        const key = interactionStateKey(binding.interactionId, masterId, scope)
-        const base = `transition-all ${animation.duration} ${animation.easing}`
-        parts.push(fired.value.has(key) ? `${base} ${animation.toClasses}` : base)
-      }
-    })
+    // the per-master index, not a walk: this runs once per rendered element
+    for (const binding of masterInteractionsTargeting(masterId, componentRoot)) {
+      if (!bindingActiveAt(binding, breakpointId)) continue
+      if (seen.has(binding.interactionId)) continue
+      seen.add(binding.interactionId)
+      const animation = animationIndex.value.get(binding.interactionId)
+      if (!animation) continue
+      const key = interactionStateKey(binding.interactionId, masterId, scope)
+      const base = `transition-all ${animation.duration} ${animation.easing}`
+      parts.push(fired.value.has(key) ? `${base} ${animation.toClasses}` : base)
+    }
     return parts.join(' ')
   }
 
@@ -237,12 +236,9 @@ export function useInteraction() {
     scope: string,
   ): string[] {
     const keys = new Set<string>()
-    walkNodes([componentRoot], (owner) => {
-      for (const binding of owner.interactions ?? []) {
-        if ((binding.targetId ?? owner.id) !== masterId) continue
-        keys.add(interactionStateKey(binding.interactionId, masterId, scope))
-      }
-    })
+    for (const binding of masterInteractionsTargeting(masterId, componentRoot)) {
+      keys.add(interactionStateKey(binding.interactionId, masterId, scope))
+    }
     return [...keys]
   }
 

@@ -42,6 +42,30 @@ const highlighted = computed(() => highlightedElement.value?.id === props.node.i
 const hasChildren = computed(() => props.node.children.length > 0)
 const open = computed(() => hasChildren.value && !isCollapsed(props.node.id))
 const isInstance = computed(() => isComponentType(props.node.type))
+/** what a `[arg]` means on this element: a CMS binding everywhere but on a
+ *  component wrapper, whose slot is not a field */
+const isCms = computed(() => {
+  const n = props.node
+  return (
+    n.type === 'collection-list' || n.type === 'collection-item' ||
+    (!isInstance.value && n.type !== 'body' && !!n.arg)
+  )
+})
+/**
+ * Rows read by what they are, not only by what they say: a component
+ * instance (and everything inside it, which the master owns) in the
+ * component tint, a CMS list / item / bound field in the CMS tint.
+ */
+const kind = computed<'component' | 'cms' | null>(() => {
+  if (isInstance.value) return 'component'
+  if (isCms.value) return 'cms'
+  return masterFor(props.node.id) ? 'component' : null
+})
+const kindClass = computed(() =>
+  kind.value === 'component' ? 'text-layer-component'
+  : kind.value === 'cms' ? 'text-layer-cms'
+  : '',
+)
 /** hidden rows stay in the tree — it is the only place left to show them again */
 const hidden = computed(() => isHidden(props.node))
 const canHide = computed(() => canBuild.value && props.node.type !== 'body')
@@ -182,7 +206,7 @@ function commitRef() {
         dropHere === 'after' && 'shadow-[inset_0_-2px_0_0_#0ea5e9]',
         dropHere === 'inside' && 'ring-1 ring-sky-500',
       ]"
-      :style="{ paddingLeft: `${depth * 12 + 4}px` }"
+      :style="{ paddingLeft: `${depth * 6 + 4}px` }"
       @click="onClick"
       @dblclick="startRename"
       @contextmenu="openMenu($event, node.id)"
@@ -202,7 +226,7 @@ function commitRef() {
       </button>
       <span v-else class="size-4 shrink-0" />
 
-      <component :is="elementIcon(node.type)" class="size-3 shrink-0" />
+      <component :is="elementIcon(node.type)" class="size-3 shrink-0" :class="kindClass" />
       <input
         v-if="editing"
         ref="refInput"
@@ -219,7 +243,7 @@ function commitRef() {
         @keydown.enter.stop.prevent="commitRef"
         @keydown.esc.stop.prevent="editingRefId = null"
       />
-      <span v-else class="min-w-0 flex-1 truncate" :class="selected && 'font-medium'">
+      <span v-else class="min-w-0 flex-1 truncate" :class="[selected && 'font-medium', kindClass]">
         {{ label }}
         <span v-if="secondary" class="ml-1 text-[10px] opacity-50">{{ secondary }}</span>
       </span>

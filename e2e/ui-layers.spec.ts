@@ -18,8 +18,8 @@ async function openEditor(page: Page) {
   await page.goto('/admin/')
   const projectName = page.getByPlaceholder('Project name')
   const email = page.getByPlaceholder('Email')
-  const preview = page.getByRole('button', { name: 'Preview' })
-  await expect(projectName.or(email).or(preview).first()).toBeVisible({ timeout: 30_000 })
+  const ready = page.getByRole('button', { name: 'Pages', exact: true })
+  await expect(projectName.or(email).or(ready).first()).toBeVisible({ timeout: 30_000 })
 
   if (await projectName.isVisible()) {
     await projectName.fill('Smoke Co')
@@ -34,7 +34,7 @@ async function openEditor(page: Page) {
   }
   await page.waitForURL(/\/admin(\?.*)?$/, { timeout: 30_000 })
   await loadFixture(page)
-  await expect(preview).toBeVisible({ timeout: 30_000 })
+  await expect(ready).toBeVisible({ timeout: 30_000 })
   // wait for the fixture's content to actually be on the canvas
   await expect(page.getByText('Tuesday is roast day.').first()).toBeVisible({ timeout: 30_000 })
 }
@@ -395,4 +395,53 @@ test('a collection has settings: its fields and its URL', async ({ page }) => {
   await prefix.fill('journal')
   await prefix.press('Enter')
   await expect(page.getByText('/journal/my-entry')).toBeVisible()
+})
+
+test('the Edit / Play toggle swaps the surface, and Play edits nothing', async ({
+  page,
+}) => {
+  await openEditor(page)
+
+  // the switch is on the canvas beside Insert, never in the rail
+  const edit = page.getByRole('button', { name: 'Edit', exact: true })
+  const play = page.getByRole('button', { name: 'Play', exact: true })
+  await expect(edit).toBeVisible()
+  await expect(play).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Preview' })).toHaveCount(0)
+
+  // open a page's layers, then leave for Play: layers are an Edit-surface
+  // view, so the drawer drops back to the page list
+  await openLayers(page)
+  await expect(rows(page).first()).toBeVisible()
+  await play.click()
+
+  await expect(page.locator('[data-frame-drop]')).toHaveCount(0) // no frames
+  await expect(rows(page)).toHaveCount(0) // no tree
+  await expect(page.getByPlaceholder('Search pages, items…')).toBeVisible()
+  // and no way back into structure from a row
+  const row = page.locator('[data-page-row="Home"]')
+  await row.hover()
+  await expect(row.getByRole('button', { name: 'Edit layers' })).toHaveCount(0)
+
+  // Play is READ-ONLY: the render has no content editing left on it. The
+  // gestures that used to open one — double-click for text, right-click for
+  // the "Edit content" menu — now do nothing at all.
+  const hero = page.locator('[data-site-scope] h1').first()
+  await expect(hero).toBeVisible({ timeout: 30_000 })
+  await hero.dispatchEvent('dblclick')
+  await expect(page.locator('[data-site-scope] span[contenteditable]')).toHaveCount(0)
+  await hero.dispatchEvent('contextmenu')
+  await expect(page.getByRole('button', { name: 'Edit content' })).toHaveCount(0)
+
+  // Edit brings the frames and the way in back
+  await edit.click()
+  await expect(page.locator('[data-frame-drop]').first()).toBeVisible()
+  await row.hover()
+  await expect(row.getByRole('button', { name: 'Edit layers' })).toHaveCount(1)
+
+  // the board has nothing to play, so it carries no toggle
+  await rail(page, 'Components').click()
+  await expect(page.locator('[data-board-card]').first()).toBeVisible({ timeout: 15_000 })
+  await expect(play).toHaveCount(0)
+  await expect(edit).toHaveCount(0)
 })

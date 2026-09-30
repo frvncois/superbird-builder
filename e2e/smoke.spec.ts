@@ -2,10 +2,10 @@ import { test, expect } from '@playwright/test'
 import { loadFixture } from './fixtures/project'
 
 // End-to-end smoke: first-run setup → load the demo project → edit a text
-// node in the Preview surface → publish → assert the edit on the published route →
-// assert the admin route redirects to login when logged out. Runs against an
-// isolated server (see playwright.config.ts). Not a suite — one happy path
-// plus the auth guard.
+// node on the Edit canvas → see it in Play → publish → assert the edit on the
+// published route → assert the admin route redirects to login when logged out.
+// Runs against an isolated server (see playwright.config.ts). Not a suite —
+// one happy path plus the auth guard.
 
 test('setup, edit content, publish, view live, auth guard', async ({ page, context }) => {
   const marker = `SMOKE-${Date.now()}`
@@ -26,10 +26,9 @@ test('setup, edit content, publish, view live, auth guard', async ({ page, conte
   //    in memory to the published "Brume" coffee site
   await loadFixture(page)
 
-  // 4. edit the home page's hero heading in the Preview surface. Preview is a
-  //    MODE inside the one editor shell, not a route (/admin/preview redirects
-  //    to /admin) — so the assertion is that the site renders, not the URL.
-  await page.getByRole('button', { name: 'Preview' }).click()
+  // 4. edit the home page's hero heading on the Edit canvas — the only surface
+  //    that edits content in place. The shell opens there, so there is nothing
+  //    to switch. The canvas draws one frame per breakpoint, hence `.first()`.
   const hero = page.locator('h1', { hasText: 'Coffee roasted' }).first()
   await expect(hero).toBeVisible({ timeout: 30_000 })
   // dispatch the dblclick directly: a decorative hero layer sits over the h1
@@ -40,8 +39,16 @@ test('setup, edit content, publish, view live, auth guard', async ({ page, conte
   await expect(editSpan).toBeFocused()
   await page.keyboard.press('ControlOrMeta+A')
   await page.keyboard.type(marker)
-  await page.keyboard.press('Escape') // preview inline edit saves on Escape
+  await page.keyboard.press('Enter') // Enter commits; Escape discards
   await expect(page.locator('h1', { hasText: marker }).first()).toBeVisible()
+
+  // 4b. Play renders the edited site. Play (the Preview surface internally) is
+  //     a MODE inside the one editor shell, not a route (/admin/preview
+  //     redirects to /admin) — so the assertion is that the site renders, not
+  //     the URL. The switch is the canvas's Edit / Play toggle, not a rail
+  //     button. It is read-only: what it shows is what publish will emit.
+  await page.getByRole('button', { name: 'Play', exact: true }).click()
+  await expect(page.locator('h1', { hasText: marker }).first()).toBeVisible({ timeout: 30_000 })
 
   // 5. publish — ⌘P opens PublishDialog, which auto-runs the publish on open.
   //    (The header Publish button is gone; the rail's save-status button opens

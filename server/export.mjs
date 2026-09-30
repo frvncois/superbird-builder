@@ -24,7 +24,7 @@ import {
 import { isRich, rewriteRichMedia, sanitizeRich } from '../src/lib/shared/richtext.js'
 import { backgroundRender, backgroundKindFromUrl } from '../src/lib/shared/background.js'
 import { DEFAULT_ICON_SVG, parseInlineSvg, sanitizeInlineSvg } from '../src/lib/shared/svg.js'
-import { buildInstanceMap, isNodeHidden } from '../src/lib/shared/instances.js'
+import { buildInstanceMap, isNodeHidden, resolveInstanceValue } from '../src/lib/shared/instances.js'
 import { conflictingBaseClasses } from '../src/lib/shared/interactionClasses.js'
 import {
   DEFAULT_SCROLL_AT,
@@ -735,7 +735,11 @@ function renderNode(node, ctx) {
     // excludeCurrent means "every page except this one" for free.
     const currentEntryId =
       list?.collection.id === '@pages' ? ctx.pageId : ctx.scope?.entry?.id
-    const listEntries = list ? applyListQuery(list.entries, node.listQuery, { currentEntryId }) : []
+    // per-instance with a component default, resolved along the chain like
+    // content (mirrors useRenderNode) — a list extracted into a component keeps
+    // the filter that moved to its master
+    const listQuery = resolveInstanceValue(node, ctx.mm.get(node.id), 'listQuery')
+    const listEntries = list ? applyListQuery(list.entries, listQuery, { currentEntryId }) : []
     const inner = list
       ? listEntries
           .map((entry, index) => {
@@ -755,7 +759,9 @@ function renderNode(node, ctx) {
   // it repeats per entry like a :collection-list, one slide each; without one,
   // each direct child is a slide.
   if (node.type === 'slider') {
-    const config = resolveSliderConfig(node.slider, ctx.project.breakpoints)
+    // the instance's own config, else its component's (see listQuery above)
+    const sliderConfig = resolveInstanceValue(node, ctx.mm.get(node.id), 'slider')
+    const config = resolveSliderConfig(sliderConfig, ctx.project.breakpoints)
     const list = node.arg
       ? resolveListScope(
           ctx.project.collections,
@@ -769,7 +775,11 @@ function renderNode(node, ctx) {
     let slides = ''
     if (list) {
       const currentEntryId = list.collection.id === '@pages' ? ctx.pageId : ctx.scope?.entry?.id
-      const entries = applyListQuery(list.entries, node.listQuery, { currentEntryId })
+      const entries = applyListQuery(
+        list.entries,
+        resolveInstanceValue(node, ctx.mm.get(node.id), 'listQuery'),
+        { currentEntryId },
+      )
       slides = entries
         .map((entry, index) => {
           const inner = {
@@ -782,7 +792,7 @@ function renderNode(node, ctx) {
     } else if (!node.arg) {
       slides = node.children.map((child) => slide(renderNode(child, ctx))).join('')
     }
-    const track = `<div data-sl-track class="${escapeHtml(sliderTrackClasses(node.slider, ctx.project.breakpoints))}">${slides}</div>`
+    const track = `<div data-sl-track class="${escapeHtml(sliderTrackClasses(sliderConfig, ctx.project.breakpoints))}">${slides}</div>`
     const arrow = (side, cls, svg, label) =>
       `<button type="button" data-sl-${side} aria-label="${label}" class="${escapeHtml(`${SLIDER_ARROW_CLASSES} ${cls}`)}">${svg}</button>`
     const arrows = config.arrows
@@ -793,7 +803,7 @@ function renderNode(node, ctx) {
     const dots = config.dots
       ? `<div data-sl-dots role="tablist" aria-label="Slides" class="${escapeHtml(SLIDER_DOTS_CLASSES)}"></div>`
       : ''
-    const wire = JSON.stringify(sliderWireData(node.slider)).replaceAll('</', '<\\/')
+    const wire = JSON.stringify(sliderWireData(sliderConfig)).replaceAll('</', '<\\/')
     ctx.sliderIds.add(node.id)
     const attrs = attrsFor(node, ctx, undefined, {
       extraClass: sliderHostExtraClass(node.classes),
@@ -809,7 +819,8 @@ function renderNode(node, ctx) {
     const collection = node.arg
       ? ctx.project.collections.find((c) => c.name === node.arg)
       : null
-    const entry = collection?.entries.find((e) => e.id === node.entryId) ?? null
+    const entryId = resolveInstanceValue(node, ctx.mm.get(node.id), 'entryId')
+    const entry = collection?.entries.find((e) => e.id === entryId) ?? null
     const selfNested = !!ctx.scope && !!collection && ctx.scope.collection.id === collection.id
     let inner = ''
     if (collection && entry && !selfNested) {

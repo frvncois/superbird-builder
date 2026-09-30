@@ -19,7 +19,7 @@ const CHROME_COLOR_VARS = [
   'secondary', 'secondary-foreground',
   'accent', 'accent-foreground',
   'success', 'pending', 'danger',
-  'state-class',
+  'state-class', 'layer-component', 'layer-cms',
 ]
 
 let started = false

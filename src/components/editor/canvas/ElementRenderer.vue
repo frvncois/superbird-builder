@@ -165,14 +165,14 @@ const classes = computed(() => [
 
 // --- inline text editing (double-click) ---
 // what's editable, what it opens with and where it commits all come from the
-// render core; Build differs only in the gesture and in Esc discarding
+// render core. This canvas is the ONLY place text is edited in place — Play
+// renders the site read-only.
 
 const { editing, editEl, startEditing, finishEditing, onEditKeydown } = useInlineEdit({
   editable: editableText,
   rich: richEditing,
   initialText: inlineInitialText,
   commit: commitInlineText,
-  escBehavior: 'cancel',
   onExit: () => requestReveal(), // Esc/Enter hands focus back to the Layers tree
 })
 

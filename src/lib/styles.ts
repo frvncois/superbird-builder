@@ -326,6 +326,7 @@ const VOCABULARY = buildVocabulary()
 let TOKEN_CLASSES: string[] = []
 
 export function setStyleTokens(names: string[]) {
+  propForBaseCache.clear()
   // every color-consuming family, so a token works wherever a palette color
   // does (outline-<token> / ring-<token> / accent-<token> used to be refused
   // while bg-<token> passed — an arbitrary exclusion)
@@ -623,14 +624,27 @@ function sizeFamily(base: string): string | undefined {
   return undefined
 }
 
-/** the catalog property a bare class belongs to, if any */
+/** the catalog property a bare class belongs to, if any.
+ *
+ * Memoized: this scans the whole catalog, and `mergeClassLayers` asks it for
+ * every class of every element carrying variant overrides — on a canvas
+ * rendering a few thousand Buttons across three frames that was the second
+ * largest cost of opening a page. The answer depends only on the class and
+ * the token vocabulary, so `setStyleTokens` is what clears it. */
+const propForBaseCache = new Map<string, StyleProperty | undefined>()
 function propForBase(base: string): StyleProperty | undefined {
-  for (const section of STYLE_SECTIONS) {
+  if (propForBaseCache.has(base)) return propForBaseCache.get(base)
+  let found: StyleProperty | undefined
+  outer: for (const section of STYLE_SECTIONS) {
     for (const prop of section.properties) {
-      if (matchClass(prop, [base]) === base) return prop
+      if (matchClass(prop, [base]) === base) {
+        found = prop
+        break outer
+      }
     }
   }
-  return undefined
+  propForBaseCache.set(base, found)
+  return found
 }
 
 /**

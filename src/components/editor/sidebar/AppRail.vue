@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import {
-  Component, Feather, Files, Image, Settings, UserRound, LogOut,
+  Component, Files, Image, Settings, UserRound, LogOut,
 } from 'lucide-vue-next'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import MainLogo from '@/assets/MainLogo.vue'
@@ -14,15 +14,15 @@ const { openLibrary } = useMediaLibrary()
 const { openModal } = useModal()
 const { canBuild, logout } = useAuth()
 const {
-  isPreview, isBuild, canvas, column, showComponents, pagesOpen,
-  setMode, togglePages, toggleComponents, showApp,
+  isBuild, canvas, column, showComponents, pagesOpen,
+  togglePages, toggleComponents, showApp,
 } = useViewMode()
 </script>
 
 <template>
   <aside class="relative z-[60] flex h-full w-12 flex-col items-center gap-1 py-2 bg-background">
     <!-- App: the default surface — the page canvas, no column. Contributors
-         are pinned to Preview, so for them it stays a plain mark. -->
+         are pinned to Play, so for them it stays a plain mark. -->
     <ButtonUI
       v-if="canBuild"
       variant="ghost"
@@ -51,7 +51,8 @@ const {
     />
 
     <!-- A Build-surface tool, so contributors — content-only, pinned to
-         Preview — don't get it -->
+         Play — don't get it. The Edit / Play switch itself is not a rail
+         button: it lives on the canvas (`ModeToggle`), beside Insert. -->
     <ButtonUI
       v-if="canBuild"
       variant="ghost"
@@ -61,15 +62,6 @@ const {
       class="w-7"
       :class="showComponents ? 'text-accent-foreground' : 'text-muted-foreground'"
       @click="toggleComponents"
-    />
-    <ButtonUI
-      variant="ghost"
-      :icon="Feather"
-      tooltip="Preview"
-      tooltip-side="right"
-      class="w-7"
-      :class="isPreview ? 'text-accent-foreground' : 'text-muted-foreground'"
-      @click="setMode('preview')"
     />
     <ButtonUI
       variant="ghost"

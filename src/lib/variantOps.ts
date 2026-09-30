@@ -2,6 +2,7 @@ import type { ComponentDef, ElementNode, Project, VariantAxis } from '@/types/ed
 import { setComponentMeta } from './componentOps'
 import { VARIANT_NAME_RE, variantKey } from './variants'
 import { walkNodes } from './tree'
+import { resolvePicks } from './shared/instances.js'
 
 /**
  * Editing a component's variant axes.
@@ -242,6 +243,9 @@ export function setInstancePick(
   wrapper: ElementNode,
   axisName: string,
   option: string | null,
+  /** the nodes standing for this wrapper in the components it is nested in
+   *  (`Mapping.mirrors`): what it would wear if it said nothing itself */
+  mirrors: ElementNode[] = [],
 ): VariantResult {
   const axis = def.variants?.find((a) => a.name === axisName)
   if (!axis) return fail(`"${def.name}" has no "${axisName}" axis`)
@@ -249,7 +253,11 @@ export function setInstancePick(
     return fail(`"${axisName}" has no "${option}" option — it has ${axis.options.join(', ')}`)
   }
   const picks = { ...(wrapper.variants ?? {}) }
-  if (option === null || option === axis.default) delete picks[axisName]
+  // stored only where it differs from what the wrapper INHERITS — a host's
+  // pick for it, else the axis default. Comparing with the default alone left
+  // an instance unable to wear the default once its host picked otherwise.
+  const inherited = (resolvePicks(def, { variants: {} }, mirrors) as Record<string, string>)[axisName]
+  if (option === null || option === inherited) delete picks[axisName]
   else picks[axisName] = option
   const kept: Record<string, string> = {}
   for (const a of def.variants ?? []) if (picks[a.name] !== undefined) kept[a.name] = picks[a.name]!

@@ -1,4 +1,4 @@
-import { computed, inject, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ELEMENTS } from '@/lib/elements'
 import { usePage } from './usePage'
 import { useCollections } from './useCollections'
@@ -22,7 +22,7 @@ import { DEFAULT_SCROLL_AT } from '@/lib/shared/interactionKeys.js'
 import { useLocale } from './useLocale'
 import { SAFE_SRC } from '@/lib/shared/urls.js'
 import { DEFAULT_ICON_SVG, parseInlineSvg, sanitizeInlineSvg } from '@/lib/shared/svg.js'
-import { isNodeHidden } from '@/lib/instances'
+import { isNodeHidden, resolveInstanceValue } from '@/lib/instances'
 import { variantClassesFor } from './useVariants'
 import type {
   CollectionEntry,
@@ -140,8 +140,14 @@ export function useRenderNode(
       : null,
   )
   const listCollection = computed(() => listScope.value?.collection ?? null)
+  // filter/sort/limit, the slider's chrome and a collection-item's pick are
+  // PER-INSTANCE state with a component default — resolved along the chain
+  // like content is, so a list extracted into a component keeps its filter
+  // (which moved to the master with the rest of the node state) and one
+  // instance can still narrow it differently
+  const listQuery = computed(() => resolveInstanceValue(node.value, mapping.value, 'listQuery'))
   const listEntries = computed<CollectionEntry[]>(() =>
-    applyListQuery(listScope.value?.entries ?? [], node.value.listQuery, {
+    applyListQuery(listScope.value?.entries ?? [], listQuery.value, {
       // for the @pages source the synthetic entry ids ARE page ids, so
       // excludeCurrent means "every page except this one" for free
       currentEntryId:
@@ -153,9 +159,10 @@ export function useRenderNode(
   // --- slider (carousel) ---
 
   const isSlider = computed(() => node.value.type === 'slider')
-  /** the slider's own config — per-instance node state, like listQuery, so it
-   * is read off the node itself and never redirected to a component master */
-  const sliderConfig = computed(() => (isSlider.value ? node.value.slider : undefined))
+  /** the slider's config — the instance's own, else what its component says */
+  const sliderConfig = computed(() =>
+    isSlider.value ? resolveInstanceValue(node.value, mapping.value, 'slider') : undefined,
+  )
   /** true when the arg binds a real source, so slides come from entries */
   const sliderBound = computed(() => isSlider.value && !!listCollection.value)
   const sliderTrackClass = computed(() =>
@@ -174,7 +181,10 @@ export function useRenderNode(
     node.value.type === 'collection-item' && node.value.arg ? collectionByName(node.value.arg) : null,
   )
   const itemEntry = computed(
-    () => itemCollection.value?.entries.find((e) => e.id === node.value.entryId) ?? null,
+    () =>
+      itemCollection.value?.entries.find(
+        (e) => e.id === resolveInstanceValue(node.value, mapping.value, 'entryId'),
+      ) ?? null,
   )
   const itemTemplateChildren = computed(() => {
     const col = itemCollection.value
@@ -331,12 +341,14 @@ export function useRenderNode(
       : undefined,
   )
 
-  // --- inline text editing (shared by both renderers) ---
+  // --- inline text editing ---
   //
   // Which elements can be text-edited, and what an edit reads from and writes
-  // to, is the same question in Build and Preview — only the gesture and the
-  // Esc behaviour differ, and those stay in the renderers. Duplicating this
-  // meant the field-type rules had to be kept in step by hand.
+  // to. Only the Build canvas (`ElementRenderer`) uses these — Play renders the
+  // site read-only — but they live here with the content resolution they depend
+  // on (bound field, entry scope, locale fallback) rather than beside the
+  // gesture, since that is the part the field-type rules have to stay in step
+  // with.
 
   /** text-content elements only; a bound element needs an entry to write to —
    * and a reference bind isn't text, it's picked in the Data panel */
@@ -617,7 +629,14 @@ export function useRenderNode(
   let scrollListener: (() => void) | null = null
   let registeredKeys: string[] = []
 
-  onMounted(() => {
+  /** does anything on this node wait for it to scroll into view? Only then is
+   * an observer worth having: one per rendered element — three frames of a
+   * page holding thousands — was the single largest cost of opening a page */
+  const wantsAppear = computed(
+    () => ofTrigger('appear').length > 0 || animOf('appear').length > 0,
+  )
+  const observe = () => {
+    if (observer || !el.value) return
     // an appearAt threshold delays firing until the element's top has travelled
     // that far down the viewport (0.8 ≈ ScrollTrigger's 'top 80%'); the
     // published runtime uses the same rootMargin
@@ -643,7 +662,19 @@ export function useRenderNode(
         }
       }
     }, at ? { rootMargin: appearRootMargin(at) } : undefined)
-    if (el.value) observer.observe(el.value)
+    observer.observe(el.value)
+  }
+  // a binding added while the element is on screen still gets its observer
+  watch(wantsAppear, (wants) => {
+    if (wants) observe()
+    else {
+      observer?.disconnect()
+      observer = null
+    }
+  })
+
+  onMounted(() => {
+    if (wantsAppear.value) observe()
     // 'load' plays as soon as the element exists
     for (const binding of animOf('load')) playAnim(binding)
 
