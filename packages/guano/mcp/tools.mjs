@@ -1905,9 +1905,11 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
 /** a master's elements in tree order, as addresses: what `edit_elements
  * {componentId}` takes. A row inside an instance the component HOLDS says so —
  * its look is that component's, and only its text/variants/hidden are said here */
-function masterNodeRows(project, def) {
+function masterNodeRows(project, def, opts = {}) {
   const held = sharedInstanceMap(def.root.children ?? [], project.components ?? [])
   const rows = []
+  // master-tree order, so a row lines up with the same line of `structure`;
+  // empty fields omitted like the page summary
   walkNodes([def.root], (n) => {
     const mapping = held.get(n.id)
     rows.push({
@@ -1915,14 +1917,64 @@ function masterNodeRows(project, def) {
       type: n.type,
       ...(n === def.root ? { root: true } : {}),
       ...(mapping ? { in: mapping.def.name } : {}),
+      ...(n.variants ? { variants: n.variants } : {}),
       ...(n.arg ? { arg: n.arg } : {}),
+      ...(n.link ? { link: n.link } : {}),
       ...(n.classes ? { classes: n.classes } : {}),
       ...(n.variantClasses ? { variantClasses: n.variantClasses } : {}),
-      ...(n.content ? { content: n.content } : {}),
+      // the component's DEFAULTS for per-instance state, like content
+      ...(n.listQuery ? { listQuery: n.listQuery } : {}),
+      ...(n.slider ? { slider: n.slider } : {}),
+      ...(n.entryId ? { entryId: n.entryId } : {}),
       ...(n.hidden !== undefined ? { hidden: n.hidden } : {}),
-      ...(n.variants ? { variants: n.variants } : {}),
       ...(n.svg ? { icon: lucideNameOf(n.svg) ?? 'custom svg' } : {}),
-      ...(n.interactions?.length ? { interactionCount: n.interactions.length } : {}),
+      ...(n.content ? { content: n.content } : {}),
+      ...(n.src ? { src: n.src } : {}),
+      ...(n.background ? { background: n.background } : {}),
+      ...(n.htmlId ? { htmlId: n.htmlId } : {}),
+      // the library's own entries carry these (an :input's type, a label's
+      // `for`), and omitting them here is how a field copied from the library
+      // kept shipping the entry's example placeholder unnoticed
+      ...(n.attributes && Object.keys(n.attributes).length ? { attributes: n.attributes } : {}),
+      ...(opts.bindings
+        ? {
+            ...(n.interactions?.length
+              ? {
+                  // FULL binding view (options + breakpoints), so a master's
+                  // state never needs a publish to verify (run #2, F5)
+                  interactions: n.interactions.map((b) => ({
+                    bindingId: b.id,
+                    interactionId: b.interactionId,
+                    trigger: b.trigger,
+                    ...(b.targetId ? { targetId: b.targetId } : {}),
+                    ...(b.action ? { action: b.action } : {}),
+                    ...(b.closeOn?.length ? { closeOn: b.closeOn } : {}),
+                    ...(b.group ? { group: b.group } : {}),
+                    ...(b.once ? { once: b.once } : {}),
+                    ...(b.scrollAt !== undefined ? { scrollAt: b.scrollAt } : {}),
+                    ...(b.breakpoints?.length ? { breakpoints: b.breakpoints } : {}),
+                  })),
+                }
+              : {}),
+            ...(n.animations?.length
+              ? {
+                  animations: n.animations.map((b) => ({
+                    bindingId: b.id,
+                    animationId: b.animationId,
+                    trigger: b.trigger,
+                    ...(b.targetId ? { targetId: b.targetId } : {}),
+                    ...(b.appearMode ? { appearMode: b.appearMode } : {}),
+                    ...(b.appearAt ? { appearAt: b.appearAt } : {}),
+                    ...(b.scrub ? { scrub: b.scrub } : {}),
+                    ...(b.breakpoints?.length ? { breakpoints: b.breakpoints } : {}),
+                  })),
+                }
+              : {}),
+          }
+        : {
+            ...(n.interactions?.length ? { interactionCount: n.interactions.length } : {}),
+            ...(n.animations?.length ? { animationCount: n.animations.length } : {}),
+          }),
     })
   })
   return rows
@@ -2076,7 +2128,7 @@ function addLibraryEntry(project, key, report) {
   project.components.push(made.def)
   report.added.push({ key, def: made.def, holds: catalogDependencies(entry) })
   report.tokens.push(...tokens.map((t) => t.name))
-  report.interactions += made.interactions.length
+  report.interactions.push(...made.interactions.map((i) => ({ id: i.id, name: i.name })))
   return made.def
 }
 
@@ -3816,70 +3868,9 @@ const tools = [
               if (n.type === def.name) instances++
             })
           }
-          let nodes
-          if (args.includeNodes) {
-            nodes = []
-            const held = sharedInstanceMap(def.root.children ?? [], project.components ?? [])
-            // master-tree order, so a row lines up with the same line of
-            // `structure`; empty fields omitted like the page summary
-            walkNodes([def.root], (n) => {
-              const mapping = held.get(n.id)
-              nodes.push({
-                id: n.id,
-                type: n.type,
-                ...(n === def.root ? { root: true } : {}),
-                ...(mapping ? { in: mapping.def.name } : {}),
-                ...(n.variants ? { variants: n.variants } : {}),
-                ...(n.arg ? { arg: n.arg } : {}),
-                ...(n.link ? { link: n.link } : {}),
-                ...(n.classes ? { classes: n.classes } : {}),
-                ...(n.variantClasses ? { variantClasses: n.variantClasses } : {}),
-                // the component's DEFAULTS for per-instance state, like content
-                ...(n.listQuery ? { listQuery: n.listQuery } : {}),
-                ...(n.slider ? { slider: n.slider } : {}),
-                ...(n.entryId ? { entryId: n.entryId } : {}),
-                ...(n.hidden !== undefined ? { hidden: n.hidden } : {}),
-                ...(n.svg ? { icon: lucideNameOf(n.svg) ?? 'custom svg' } : {}),
-                ...(n.content ? { content: n.content } : {}),
-                ...(n.src ? { src: n.src } : {}),
-                ...(n.background ? { background: n.background } : {}),
-                ...(n.htmlId ? { htmlId: n.htmlId } : {}),
-                ...(n.attributes && Object.keys(n.attributes).length ? { attributes: n.attributes } : {}),
-                ...(n.interactions?.length
-                  ? {
-                      // FULL binding view (options + breakpoints), so a master's
-                      // state never needs a publish to verify (run #2, F5)
-                      interactions: n.interactions.map((b) => ({
-                        bindingId: b.id,
-                        interactionId: b.interactionId,
-                        trigger: b.trigger,
-                        ...(b.targetId ? { targetId: b.targetId } : {}),
-                        ...(b.action ? { action: b.action } : {}),
-                        ...(b.closeOn?.length ? { closeOn: b.closeOn } : {}),
-                        ...(b.group ? { group: b.group } : {}),
-                        ...(b.once ? { once: b.once } : {}),
-                        ...(b.scrollAt !== undefined ? { scrollAt: b.scrollAt } : {}),
-                        ...(b.breakpoints?.length ? { breakpoints: b.breakpoints } : {}),
-                      })),
-                    }
-                  : {}),
-                ...(n.animations?.length
-                  ? {
-                      animations: n.animations.map((b) => ({
-                        bindingId: b.id,
-                        animationId: b.animationId,
-                        trigger: b.trigger,
-                        ...(b.targetId ? { targetId: b.targetId } : {}),
-                        ...(b.appearMode ? { appearMode: b.appearMode } : {}),
-                        ...(b.appearAt ? { appearAt: b.appearAt } : {}),
-                        ...(b.scrub ? { scrub: b.scrub } : {}),
-                        ...(b.breakpoints?.length ? { breakpoints: b.breakpoints } : {}),
-                      })),
-                    }
-                  : {}),
-              })
-            })
-          }
+          // the same row shape masterNodeRows gives everywhere else, with the
+          // full binding view this tool is the place to read
+          const nodes = args.includeNodes ? masterNodeRows(project, def, { bindings: true }) : undefined
           return {
             id: def.id,
             name: def.name,
@@ -4451,7 +4442,7 @@ const tools = [
         }
         const def =
           libraryComponent(project, entry.key) ??
-          addLibraryEntry(scratch, entry.key, { added: [], tokens: [], interactions: 0 })
+          addLibraryEntry(scratch, entry.key, { added: [], tokens: [], interactions: [] })
         const texts = []
         const bindings = []
         walkNodes(def.root.children ?? [], (n) => {
@@ -4524,7 +4515,7 @@ const tools = [
     },
     handler: async (args) => {
       const { project } = await loadTargetProject()
-      const report = { added: [], tokens: [], interactions: 0 }
+      const report = { added: [], tokens: [], interactions: [] }
       const alreadyInProject = []
       const failures = []
       args.keys.forEach((raw, index) => {
@@ -4566,7 +4557,7 @@ const tools = [
         })),
         ...(alreadyInProject.length ? { alreadyInProject } : {}),
         ...(report.tokens.length ? { tokensAdded: [...new Set(report.tokens)] } : {}),
-        ...(report.interactions ? { interactionsAdded: report.interactions } : {}),
+        ...(report.interactions.length ? { interactionsAdded: report.interactions } : {}),
         ...(failures.length ? { partial: report.added.length > 0, failures } : {}),
       }
     },

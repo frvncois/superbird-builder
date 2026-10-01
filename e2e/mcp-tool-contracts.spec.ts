@@ -57,3 +57,39 @@ test.describe('get_page', () => {
     expect(page.diagnostics).toEqual([])
   })
 })
+
+test.describe('component node rows', () => {
+  test('add_library_components reports a node’s attributes, like list_components does', async () => {
+    const s = await mcpSession()
+    const added = await s.call('add_library_components', { keys: ['input'], includeNodes: true })
+    const row = added.added[0].nodes.find((n: { type: string }) => n.type === 'input')
+    // the two row shapes had drifted: list_components reported `attributes` and
+    // add_library_components did not, so a field copied from the library kept
+    // the entry's own demo placeholder and nobody saw it until a screenshot
+    expect(row.attributes).toEqual({ type: 'text' })
+
+    const listed = await s.call('list_components', { names: ['Input'], includeNodes: true })
+    const same = listed.components[0].nodes.find((n: { type: string }) => n.type === 'input')
+    expect(same.attributes).toEqual(row.attributes)
+  })
+
+  test('list_components keeps the full binding view the other rows summarize', async () => {
+    const s = await mcpSession()
+    await s.call('add_library_components', { keys: ['sheet'] })
+    const listed = await s.call('list_components', { names: ['Sheet'], includeNodes: true })
+    const bound = listed.components[0].nodes.filter((n: { interactions?: unknown[] }) => n.interactions?.length)
+    expect(bound.length).toBeGreaterThan(0)
+    expect(bound[0].interactions[0]).toHaveProperty('bindingId')
+    expect(bound[0].interactions[0]).toHaveProperty('trigger')
+  })
+
+  test('the library reports the interactions it added by name, not as a count', async () => {
+    const s = await mcpSession()
+    const added = await s.call('add_library_components', { keys: ['sheet'] })
+    // a bare `interactionsAdded: 2` named nothing an agent could then rename,
+    // rebind or delete
+    expect(Array.isArray(added.interactionsAdded)).toBe(true)
+    expect(added.interactionsAdded[0]).toHaveProperty('id')
+    expect(added.interactionsAdded.map((i: { name: string }) => i.name).join(' ')).toContain('Sheet')
+  })
+})
