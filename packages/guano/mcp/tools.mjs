@@ -5855,6 +5855,16 @@ const tools = [
                       field: { type: 'string' },
                       equals: { type: 'string' },
                       notEmpty: { type: 'boolean' },
+                      equalsCurrent: {
+                        type: 'boolean',
+                        description:
+                          'match the ENTRY BEING RENDERED rather than a literal: the field is a ' +
+                          'reference (or multi-reference) pointing back at it. This is how a ' +
+                          "parent's page lists its children — a Conversation page listing the " +
+                          'Messages whose `conversation` field is that conversation. Without it ' +
+                          'the only way was to mirror the relation as a multi-reference on the ' +
+                          'parent and keep both sides in step by hand. Empty outside entry scope.',
+                      },
                     },
                     required: ['field'],
                     additionalProperties: false,

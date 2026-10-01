@@ -882,7 +882,13 @@ slider's `slider` config and a collection-item's `entryId`. The shape:
 skips the first N after sort (so a home page can show hero = limit 1, then lead =
 offset 1 limit 1, then a stack = offset 2 limit 3 — slot placement without a layout
 field in the schema). On a **collection template** page, `excludeCurrent: true` drops the
-entry being viewed (the "related posts / more from" pattern; a no-op elsewhere). Order
+entry being viewed (the "related posts / more from" pattern; a no-op elsewhere), and
+`filter: {field: "<reference field>", equalsCurrent: true}` keeps only the entries whose
+reference points AT it — a Conversation's page listing the Messages whose `convo` field is
+that conversation, a Product's page listing its Reviews. That is the child-collection
+pattern, and the only way to do it before was to mirror the relation as a
+multi-reference on the parent and keep both sides in step by hand. Outside entry scope it
+matches nothing (showing every child would be worse than showing none). Order
 applied: pick → excludeCurrent → filter → sort → offset → limit; base field values compare
 numeric-aware, so ISO dates sort naturally. `null` clears. This is how you build "latest
 3", "featured", "related posts", and curated blocks.

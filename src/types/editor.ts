@@ -194,7 +194,14 @@ export interface ElementNode {
     offset?: number
     sortField?: string
     sortDir?: 'asc' | 'desc'
-    filter?: { field: string; equals?: string; notEmpty?: boolean }
+    filter?: {
+      field: string
+      equals?: string
+      notEmpty?: boolean
+      /** match the entry being rendered (a reference field pointing at it, or a
+       * multi-reference holding it) — how a parent's page lists its children */
+      equalsCurrent?: boolean
+    }
     /** hand-picked entry ids to include; absent = all entries */
     pick?: string[]
     /** in entry scope (a collection template), drop the entry being viewed —

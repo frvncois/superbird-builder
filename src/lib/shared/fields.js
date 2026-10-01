@@ -180,6 +180,17 @@ export function applyListQuery(entries, query, opts) {
   if (f && typeof f.field === 'string') {
     out = out.filter((entry) => {
       const v = entry.values?.[f.field]
+      // `equalsCurrent` matches the entry in scope — the child-collection
+      // pattern: a Conversation's page lists the Messages whose `conversation`
+      // reference IS that conversation. Without it a filter could only compare
+      // against a literal, so the only way to list a child collection was to
+      // mirror the relation as a multi-reference on the parent and keep the two
+      // sides in step by hand. A multi-reference field holds a LIST, so
+      // membership counts.
+      if (f.equalsCurrent) {
+        if (!opts || !opts.currentEntryId) return false
+        return Array.isArray(v) ? v.includes(opts.currentEntryId) : v === opts.currentEntryId
+      }
       const s = typeof v === 'string' ? v : ''
       if (typeof f.equals === 'string') return s === f.equals
       if (f.notEmpty) return s !== ''

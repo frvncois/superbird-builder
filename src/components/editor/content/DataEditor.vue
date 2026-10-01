@@ -428,19 +428,33 @@ const filterFieldOptions = computed(() => [
   { label: 'None', value: '' },
   ...listFields.value.map((f) => ({ label: f.name, value: f.name })),
 ])
-const filterMode = computed(() => (lq.value.filter?.notEmpty ? 'notEmpty' : 'equals'))
+const filterMode = computed(() =>
+  lq.value.filter?.equalsCurrent
+    ? 'equalsCurrent'
+    : lq.value.filter?.notEmpty
+      ? 'notEmpty'
+      : 'equals',
+)
 const filterModeOptions = [
   { label: 'is', value: 'equals' },
   { label: 'is not empty', value: 'notEmpty' },
+  // the child-collection pattern: this page's entry is what the field points at
+  { label: 'is this entry', value: 'equalsCurrent' },
 ]
+/** the filter clause for a mode, so the three stay mutually exclusive */
+function filterFor(mode: string, field: string) {
+  if (mode === 'notEmpty') return { field, notEmpty: true }
+  if (mode === 'equalsCurrent') return { field, equalsCurrent: true }
+  return { field, equals: lq.value.filter?.equals ?? '' }
+}
 function setFilterField(field: string) {
   if (!field) return patchListQuery({ filter: undefined })
-  patchListQuery({ filter: { field, ...(filterMode.value === 'notEmpty' ? { notEmpty: true } : { equals: lq.value.filter?.equals ?? '' }) } })
+  patchListQuery({ filter: filterFor(filterMode.value, field) })
 }
 function setFilterMode(mode: string) {
   const field = lq.value.filter?.field
   if (!field) return
-  patchListQuery({ filter: mode === 'notEmpty' ? { field, notEmpty: true } : { field, equals: lq.value.filter?.equals ?? '' } })
+  patchListQuery({ filter: filterFor(mode, field) })
 }
 function setFilterValue(value: string) {
   const field = lq.value.filter?.field

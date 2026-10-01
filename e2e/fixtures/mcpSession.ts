@@ -1,7 +1,7 @@
 import { test } from '@playwright/test'
 // @ts-expect-error untyped package module
 import { createToolSet } from '../../packages/guano/mcp/tools.mjs'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 // @ts-expect-error untyped server module
@@ -26,6 +26,9 @@ export interface McpSession {
   stored: () => any
   /** the exported <body>… of the first route */
   html: () => Promise<string>
+  /** every exported HTML file, keyed by its route path — for checks that span
+   * the routes a collection generates */
+  exportAll: () => Promise<Record<string, string>>
   home: () => Promise<{ id: string; version: string }>
   /** the `kind` of every publish warning, which is what these specs assert on */
   kinds: () => Promise<string[]>
@@ -64,6 +67,24 @@ export async function mcpSession(
         await exportSite(stored(), dir)
         const out = readFileSync(join(dir, 'index.html'), 'utf8')
         return out.slice(out.indexOf('<body'))
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
+    },
+    exportAll: async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'guano-mcp-'))
+      try {
+        await exportSite(stored(), dir)
+        const out: Record<string, string> = {}
+        const walk = (rel: string) => {
+          for (const name of readdirSync(join(dir, rel))) {
+            const next = rel ? `${rel}/${name}` : name
+            if (statSync(join(dir, next)).isDirectory()) walk(next)
+            else if (next.endsWith('.html')) out[next] = readFileSync(join(dir, next), 'utf8')
+          }
+        }
+        walk('')
+        return out
       } finally {
         rmSync(dir, { recursive: true, force: true })
       }
