@@ -1395,10 +1395,14 @@ site.
 
 The project has a shared interaction library (named class-swap animations):
 
-- `create_interaction` — name + `toClasses` (validated Tailwind), optional
-  `duration` / `easing`. Returns the id. `update_interaction {interactionId, name?,
-  toClasses?, duration?, easing?}` changes one in place — every element bound to it
-  picks the change up, so never create-a-second-and-rebind just to tweak classes.
+- `create_interactions {items: [{name, toClasses, duration?, easing?}]}` — the batch
+  form, and the one to use: a sliding sheet needs two effects and a tab strip four, and
+  creating them one at a time rewrites the whole project once each. Each item is
+  validated on its own, so one bad class fails that item and saves the rest.
+  `create_interaction` is the single form. `toClasses` is validated Tailwind.
+- `update_interaction {interactionId, name?, toClasses?, duration?, easing?}` changes one
+  in place — every element bound to it picks the change up, so never
+  create-a-second-and-rebind just to tweak classes.
 - **Bind in batch**: put `bindInteractions: [{interactionId, trigger}]` on the
   `edit_elements` edits — one call binds a whole page's animations along with their
   base-state classes (e.g. `opacity-0 translate-y-8 transition-all`; the interaction

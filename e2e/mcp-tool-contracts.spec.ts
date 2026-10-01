@@ -93,3 +93,111 @@ test.describe('component node rows', () => {
     expect(added.interactionsAdded.map((i: { name: string }) => i.name).join(' ')).toContain('Sheet')
   })
 })
+
+test.describe('design tokens', () => {
+  test('addTokens adds without resending the whole palette', async () => {
+    const s = await mcpSession()
+    await s.call('update_settings', {
+      tokens: [
+        { name: 'brand', value: '#0D594A' },
+        { name: 'cream', value: '#FFEDA6' },
+      ],
+    })
+    // the session resent all 27 tokens to add two, because `tokens` replaces
+    const r = await s.call('update_settings', { addTokens: [{ name: 'ink', value: '#111111' }] })
+    expect(r.saved).toBe(true)
+    expect(r.tokensChanged).toEqual({ added: ['ink'] })
+    expect(r.tokens.map((t: { name: string }) => t.name).sort()).toEqual(['brand', 'cream', 'ink'])
+  })
+
+  test('addTokens re-values an existing token and keeps its id', async () => {
+    const s = await mcpSession()
+    await s.call('update_settings', { tokens: [{ name: 'brand', value: '#000000' }] })
+    const before = s.stored().settings.tokens[0].id
+    await s.call('update_settings', { addTokens: [{ name: 'brand', value: '#0D594A' }] })
+    const after = s.stored().settings.tokens
+    expect(after).toHaveLength(1)
+    expect(after[0].value).toBe('#0D594A')
+    expect(after[0].id).toBe(before) // same id, so merges stay quiet
+  })
+
+  test('removing a token that still styles something is refused, and says where', async () => {
+    const s = await mcpSession()
+    await s.call('update_settings', { tokens: [{ name: 'brand', value: '#0D594A' }] })
+    const home = await s.home()
+    await s.call('set_page_code', {
+      pageId: home.id,
+      code: pageCode('\t:h1#title:'),
+      version: home.version,
+    })
+    const after = await s.home()
+    await s.call('edit_elements', {
+      pageId: after.id,
+      version: after.version,
+      edits: [{ ref: 'title', addClasses: ['bg-brand'] }],
+    })
+
+    const refused = await s.call('update_settings', { removeTokens: ['brand'] })
+    expect(refused.saved).toBe(false)
+    expect(refused.reason).toBe('tokens-in-use')
+    expect(refused.inUse[0].token).toBe('brand')
+    expect(refused.inUse[0].where).toContain('page')
+    expect(s.stored().settings.tokens).toHaveLength(1) // nothing written
+
+    const forced = await s.call('update_settings', { removeTokens: ['brand'], forcePurge: true })
+    expect(forced.saved).toBe(true)
+    expect(forced.tokens).toHaveLength(0)
+  })
+
+  test('an unused token is removed without ceremony', async () => {
+    const s = await mcpSession()
+    await s.call('update_settings', {
+      tokens: [
+        { name: 'brand', value: '#0D594A' },
+        { name: 'unused', value: '#FFFFFF' },
+      ],
+    })
+    const r = await s.call('update_settings', { removeTokens: ['unused'] })
+    expect(r.saved).toBe(true)
+    expect(r.tokensChanged).toEqual({ added: [], removed: ['unused'] })
+    expect(r.tokens.map((t: { name: string }) => t.name)).toEqual(['brand'])
+  })
+})
+
+test.describe('create_interactions', () => {
+  test('a batch is one write, and reports each item', async () => {
+    const s = await mcpSession()
+    // a sliding sheet needs two effects and a tab strip four; the session made
+    // eight one call at a time because only the animation side had a batch form
+    const r = await s.call('create_interactions', {
+      items: [
+        { name: 'Sheet · open', toClasses: 'visible opacity-100' },
+        { name: 'Sheet · slide in', toClasses: 'translate-x-0 translate-y-0' },
+        { name: 'Tab · active', toClasses: 'bg-white', duration: 'duration-200' },
+      ],
+    })
+    expect(r.saved).toBe(true)
+    expect(r.created).toHaveLength(3)
+    expect(r.failures).toBeUndefined()
+    expect(s.stored().interactions).toHaveLength(3)
+    expect(r.created[2].duration).toBe('duration-200')
+    expect(r.created[0].duration).toBe('duration-300') // the default still applies
+  })
+
+  test('one bad item fails on its own and the rest are saved', async () => {
+    const s = await mcpSession()
+    const r = await s.call('create_interactions', {
+      items: [
+        { name: 'Good', toClasses: 'flex' },
+        { name: 'Bad', toClasses: 'not-a-real-class' },
+        { name: '', toClasses: 'flex' },
+      ],
+    })
+    expect(r.saved).toBe(true)
+    expect(r.created.map((i: { name: string }) => i.name)).toEqual(['Good'])
+    expect(r.failures).toHaveLength(2)
+    expect(r.failures[0].errors[0]).toContain('not-a-real-class')
+    expect(r.failures[1].errors[0]).toContain('name')
+    expect(s.stored().interactions).toHaveLength(1)
+  })
+})

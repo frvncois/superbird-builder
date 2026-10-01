@@ -2132,6 +2132,41 @@ function addLibraryEntry(project, key, report) {
   return made.def
 }
 
+/**
+ * Which of `names` still style something, and where. A removed token leaves its
+ * classes (`bg-brand`) pointing at nothing, which renders as no colour at all
+ * rather than as an error — so removal asks first.
+ *
+ * Looks at page nodes, component masters (base classes AND variant overrides)
+ * and the two effect libraries' toClasses, which is everywhere a class can live.
+ */
+function tokenUsage(project, names) {
+  const found = new Map()
+  const note = (cls, where) => {
+    for (const token of String(cls ?? '').split(/\s+/).filter(Boolean)) {
+      // a token is used as `<prefix>-<name>`, optionally with a variant prefix
+      // and an opacity modifier: `md:hover:bg-brand/50`
+      const bare = token.slice(token.lastIndexOf(':') + 1).split('/')[0]
+      const at = bare.lastIndexOf('-')
+      if (at <= 0) continue
+      const name = bare.slice(at + 1)
+      if (!names.has(name)) continue
+      if (!found.has(name)) found.set(name, where)
+    }
+  }
+  for (const page of project.pages ?? []) {
+    walkNodes(page.elements ?? [], (n) => note(n.classes, `page "${page.name}"`))
+  }
+  for (const def of project.components ?? []) {
+    walkNodes([def.root], (n) => {
+      note(n.classes, `component "${def.name}"`)
+      for (const cls of Object.values(n.variantClasses ?? {})) note(cls, `component "${def.name}"`)
+    })
+  }
+  for (const i of project.interactions ?? []) note(i.toClasses, `interaction "${i.name}"`)
+  return found
+}
+
 /** an instance token carrying an `@link`. The `:Name` line renders no element
  * of its own, so the link would be dropped on the floor — say so, with the
  * two ways that work. Lines are 0-based over `code`. */
@@ -4627,12 +4662,34 @@ const tools = [
       properties: {
         tokens: {
           type: 'array',
+          description:
+            'REPLACES the whole token list — anything left out is removed. Prefer addTokens / ' +
+            'removeTokens unless you really mean to define the palette from scratch.',
           items: {
             type: 'object',
             properties: { name: { type: 'string' }, value: { type: 'string' } },
             required: ['name', 'value'],
             additionalProperties: false,
           },
+        },
+        addTokens: {
+          type: 'array',
+          description:
+            'add or re-value design tokens, leaving the rest alone (upsert by name, ids kept). ' +
+            'This is the form to use for "one more colour".',
+          items: {
+            type: 'object',
+            properties: { name: { type: 'string' }, value: { type: 'string' } },
+            required: ['name', 'value'],
+            additionalProperties: false,
+          },
+        },
+        removeTokens: {
+          type: 'array',
+          description:
+            'remove design tokens by name. Refused while a token still styles elements unless ' +
+            'forcePurge: true — those classes would render as no colour at all.',
+          items: { type: 'string' },
         },
         theme: {
           type: 'object',
@@ -4864,6 +4921,9 @@ const tools = [
     },
     handler: async (args) => {
       const tokenWarnings = []
+      /** set by addTokens/removeTokens, so the response can say what changed
+       * instead of echoing the whole token list back */
+      let tokensChanged
       const themeWarnings = []
       // extra fields for the response when a locale removal ran (purge counts,
       // dead @locale: switcher links)
@@ -4943,6 +5003,70 @@ const tools = [
                 }
               : {}),
           }
+        }
+      }
+
+      // addTokens / removeTokens: the additive form, like addLocales. `tokens`
+      // REPLACES the whole list, so adding two tokens meant resending all 27 and
+      // any one left out was silently dropped.
+      if (args.addTokens !== undefined || args.removeTokens !== undefined) {
+        const removing = new Set(args.removeTokens ?? [])
+        const inUse = removing.size ? tokenUsage(project, removing) : new Map()
+        if (inUse.size && args.forcePurge !== true) {
+          return {
+            saved: false,
+            reason: 'tokens-in-use',
+            inUse: [...inUse].map(([name, where]) => ({ token: name, where })),
+            message:
+              `${[...inUse.keys()].join(', ')} still style elements. Removing a token leaves ` +
+              'those classes pointing at nothing, which renders as no colour at all. Restyle ' +
+              'them first, or retry with forcePurge: true.',
+          }
+        }
+        const kept = (s.tokens ?? []).filter((t) => !removing.has(t.name))
+        const byName = new Map(kept.map((t) => [t.name, t]))
+        const malformed = (args.addTokens ?? [])
+          .map((t) => ({ name: t.name, error: tokenError({ name: t.name, value: t.value }) }))
+          .filter((t) => t.error)
+        if (malformed.length) {
+          return {
+            saved: false,
+            reason: 'invalid-tokens',
+            invalid: malformed.map((t) => t.name),
+            message: `token names are kebab-case ([a-z][a-z0-9-]*), values are #hex colours`,
+          }
+        }
+        const shadowing = (args.addTokens ?? [])
+          .filter((t) => isReservedToken(t.name))
+          .map((t) => t.name)
+        if (shadowing.length && args.allowShadow !== true) {
+          return {
+            saved: false,
+            reason: 'shadowing-tokens',
+            shadowing,
+            message:
+              `${shadowing.join(', ')} shadow Tailwind palette names. That is allowed — a token ` +
+              'defines `bg-<name>`, not `bg-<name>-500`, so the palette shades keep working — ' +
+              'but `bg-blue` will mean YOUR blue. Retry with allowShadow: true to keep these ' +
+              'names, or rename them (brand-blue …).',
+          }
+        }
+        if (shadowing.length) tokenWarnings.push(...shadowing)
+        // upsert by NAME, keeping the id so unrelated diffs stay quiet
+        for (const t of args.addTokens ?? []) {
+          const have = byName.get(t.name)
+          if (have) have.value = t.value
+          else {
+            const made = { id: randomUUID(), name: t.name, value: t.value }
+            byName.set(t.name, made)
+            kept.push(made)
+          }
+        }
+        s.tokens = kept
+        setStyleTokens(s.tokens.map((t) => t.name))
+        tokensChanged = {
+          added: (args.addTokens ?? []).map((t) => t.name),
+          ...(removing.size ? { removed: [...removing] } : {}),
         }
       }
 
@@ -5149,6 +5273,7 @@ const tools = [
               ],
             }
           : {}),
+        ...(tokensChanged ? { tokensChanged } : {}),
         tokens: (s.tokens ?? []).map((t) => ({ name: t.name, value: t.value })),
         seo: s.seo,
         fonts: s.fonts,
@@ -6019,7 +6144,8 @@ const tools = [
     description:
       'Add a reusable interaction to the project library. `toClasses` are the Tailwind classes ' +
       'applied to the target while active (validated; invalid ones are rejected without saving). ' +
-      'Returns the new interaction id to pass to bind_interaction. Requires a target.',
+      'Returns the new interaction id to pass to bind_interaction. For more than one, use ' +
+      'create_interactions (one write instead of N). Requires a target.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -6053,6 +6179,78 @@ const tools = [
       project.interactions.push(interaction)
       await saveTargetProject(project)
       return { saved: true, interaction: interactionView(interaction) }
+    },
+  },
+  {
+    name: 'create_interactions',
+    description:
+      'Add SEVERAL interactions to the project library in one call — the batch form of ' +
+      'create_interaction, and the one to prefer. A tab strip or a sliding sheet needs three or ' +
+      'four effects before a single element is bound; creating them one at a time rewrites the ' +
+      'whole project once each. Each item is validated on its own: the valid ones are saved and ' +
+      'the rest come back in `failures`. Requires a target.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        items: {
+          type: 'array',
+          description: 'each item has the same shape as create_interaction',
+          items: {
+            type: 'object',
+            properties: {
+              name: { type: 'string' },
+              toClasses: { type: 'string', description: 'space-separated Tailwind classes' },
+              duration: { type: 'string', description: "e.g. 'duration-300' (default)" },
+              easing: { type: 'string', description: "e.g. 'ease-out' (default)" },
+            },
+            required: ['name', 'toClasses'],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ['items'],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const { project } = await loadTargetProject()
+      const created = []
+      const failures = []
+      const pending = []
+      for (const [i, item] of (args.items ?? []).entries()) {
+        const name = String(item?.name ?? '').trim()
+        if (!name) {
+          failures.push({ index: i, errors: ['a name is required'] })
+          continue
+        }
+        const badClasses = String(item.toClasses ?? '')
+          .split(/\s+/)
+          .filter(Boolean)
+          .filter((c) => !isValidClass(c))
+        if (badClasses.length) {
+          failures.push({ index: i, name, errors: [`invalid classes: ${badClasses.join(', ')}`] })
+          continue
+        }
+        const interaction = {
+          id: randomUUID(),
+          name,
+          toClasses: String(item.toClasses ?? '').trim(),
+          duration: String(item.duration ?? '').trim() || 'duration-300',
+          easing: String(item.easing ?? '').trim() || 'ease-out',
+        }
+        pending.push(interaction)
+        created.push(interactionView(interaction))
+      }
+      // ONE write for the whole batch, like create_animations
+      if (pending.length) {
+        project.interactions = project.interactions ?? []
+        project.interactions.push(...pending)
+        await saveTargetProject(project)
+      }
+      return {
+        saved: pending.length > 0,
+        created,
+        ...(failures.length ? { failures } : {}),
+      }
     },
   },
   {
