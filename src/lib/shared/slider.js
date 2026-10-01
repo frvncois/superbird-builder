@@ -210,7 +210,15 @@ export function sliderTrackClasses(config, breakpoints = [], opts = {}) {
   }
   const { base, narrower } = overridesOf(resolved, breakpoints)
   out.push(`[--sl-pv:${base}]`)
-  for (const { bp, n } of narrower) out.push(`max-[${bp.width}px]:[--sl-pv:${n}]`)
+  // INCLUSIVE at the breakpoint's own width, like every other breakpoint
+  // comparison in the project (perViewForWidth below, site-runtime's computeBp,
+  // breakpointIdForWidth). Tailwind compiles `max-[768px]` to
+  // `not all and (min-width: 768px)`, i.e. width < 768 — so a viewport at
+  // exactly 768 kept the base value while the canvas frame of that breakpoint,
+  // which resolves the number in JS, showed the override. The sub-pixel margin
+  // makes the media query cover its own width without reaching the next one.
+  for (const { bp, n } of narrower)
+    out.push(`max-[${bp.width + 0.02}px]:[--sl-pv:${n}]`)
   return out.join(' ')
 }
 
@@ -223,15 +231,21 @@ export const SLIDER_ARROW_CLASSES =
   'absolute top-1/2 z-10 grid size-9 -translate-y-1/2 place-items-center rounded-full bg-black/40 text-white transition-opacity hover:bg-black/60 aria-disabled:pointer-events-none aria-disabled:opacity-30'
 export const SLIDER_PREV_CLASS = 'left-3'
 export const SLIDER_NEXT_CLASS = 'right-3'
-export const SLIDER_DOTS_CLASSES =
-  'absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 gap-1.5'
-// the two dot states REPLACE each other's background rather than stacking:
-// `bg-white/50 bg-white` are the same property at the same specificity, so
-// which one wins would come down to their order in the compiled stylesheet,
-// not the order in the attribute.
-const SLIDER_DOT_BASE = 'size-2 rounded-full transition-colors'
-export const SLIDER_DOT_CLASSES = `${SLIDER_DOT_BASE} bg-white/50`
-export const SLIDER_DOT_ACTIVE_CLASSES = `${SLIDER_DOT_BASE} bg-white`
+// Dots sit BELOW the track, in flow. Absolutely positioned over it they
+// covered the last rows of every slide, and the host had to be padded by hand
+// to get out from under them.
+export const SLIDER_DOTS_CLASSES = 'mt-3 flex justify-center gap-1.5'
+// The dots take the HOST's text colour (`bg-current`), so `text-primary` on the
+// :slider styles them. They were `bg-white`, which is invisible on any light UI
+// and assumed a dark image underneath — nothing in the editor said so, and a
+// project's own palette could not reach them.
+//
+// The two states REPLACE each other's opacity rather than stacking: they are the
+// same property at the same specificity, so which one won would come down to
+// their order in the compiled stylesheet, not the order in the attribute.
+const SLIDER_DOT_BASE = 'size-2 rounded-full bg-current transition-opacity'
+export const SLIDER_DOT_CLASSES = `${SLIDER_DOT_BASE} opacity-30`
+export const SLIDER_DOT_ACTIVE_CLASSES = `${SLIDER_DOT_BASE} opacity-100`
 
 export const SLIDER_PREV_SVG =
   '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>'

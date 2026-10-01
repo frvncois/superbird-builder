@@ -122,7 +122,12 @@ test.describe(':slider export', () => {
     // the per-breakpoint slides-per-view rides one custom property, so a single
     // basis:calc() on every slide covers every breakpoint
     expect(html).toContain('[--sl-pv:3]')
-    expect(html).toContain('max-[390px]:[--sl-pv:1]')
+    // the override's media query covers the breakpoint's OWN width: Tailwind
+    // reads `max-[390px]` as `width < 390`, which left a viewport at exactly
+    // 390 on the base value while the canvas frame for that breakpoint showed
+    // the override. The sub-pixel margin makes the compare inclusive, like
+    // every other breakpoint compare in the project.
+    expect(html).toContain('max-[390.02px]:[--sl-pv:1]')
     expect(html).toContain('[--sl-gap:16px]')
     // chrome is built in, and the dot rail is left for the runtime to fill
     expect(html).toContain('data-sl-prev')
@@ -258,6 +263,25 @@ test.describe(':slider export', () => {
 
       await page.setViewportSize({ width: 360, height: 800 })
       await expect(page.locator('#sl [data-sl-dots] button')).toHaveCount(SLIDE_COUNT)
+
+      // AT the breakpoint's own width the override applies — the canvas frame
+      // for Mobile is exactly 390 wide and resolves the number in JS, so the
+      // site has to agree with it
+      await page.setViewportSize({ width: 390, height: 800 })
+      await expect(page.locator('#sl [data-sl-dots] button')).toHaveCount(SLIDE_COUNT)
+      expect(
+        await page
+          .locator('#sl [data-sl-track]')
+          .evaluate((t) => getComputedStyle(t).getPropertyValue('--sl-pv').trim()),
+      ).toBe('1')
+
+      // and one pixel wider it does not
+      await page.setViewportSize({ width: 391, height: 800 })
+      expect(
+        await page
+          .locator('#sl [data-sl-track]')
+          .evaluate((t) => getComputedStyle(t).getPropertyValue('--sl-pv').trim()),
+      ).toBe('3')
     })
 
     test('dragging moves the track and swallows only the drag’s own click', async ({ page }) => {
@@ -279,21 +303,47 @@ test.describe(':slider export', () => {
     })
 
     test('the active dot is visibly distinct, not decided by stylesheet order', async ({ page }) => {
-      // bg-white/50 and bg-white are the same property at the same specificity,
-      // so the two dot states must REPLACE each other rather than stack
+      // opacity-30 and opacity-100 are the same property at the same
+      // specificity, so the two dot states must REPLACE each other rather than
+      // stack — which one won would otherwise come down to stylesheet order
       await exportSite(fixture({ perView: { base: 1 } }), SITE)
       await page.goto('/')
       await expect(page.locator('#sl [data-sl-dots] button')).toHaveCount(SLIDE_COUNT)
-      const colors = () =>
+      const opacities = () =>
         page.evaluate(() =>
           [...document.querySelectorAll('#sl [data-sl-dots] button')].map(
-            (d) => getComputedStyle(d).backgroundColor,
+            (d) => getComputedStyle(d).opacity,
           ),
         )
       await expect.poll(async () => {
-        const [active, ...rest] = await colors()
+        const [active, ...rest] = await opacities()
         return active !== rest[0] && rest.every((c) => c === rest[0])
       }).toBe(true)
+    })
+
+    test('the dots take the host’s text colour, not a hard-coded white', async ({ page }) => {
+      // they were bg-white, invisible on any light UI and unreachable from the
+      // project's palette; `bg-current` lets `text-*` on the :slider style them
+      await exportSite(fixture({ perView: { base: 1 } }), SITE)
+      await page.goto('/')
+      const [dot, host] = await Promise.all([
+        page
+          .locator('#sl [data-sl-dots] button')
+          .first()
+          .evaluate((d) => getComputedStyle(d).backgroundColor),
+        page.locator('#sl').evaluate((h) => getComputedStyle(h).color),
+      ])
+      expect(dot).toBe(host)
+    })
+
+    test('the dots sit below the track, never over the slides', async ({ page }) => {
+      await exportSite(fixture({ perView: { base: 1 } }), SITE)
+      await page.goto('/')
+      const [track, dots] = await Promise.all([
+        page.locator('#sl [data-sl-track]').boundingBox(),
+        page.locator('#sl [data-sl-dots]').boundingBox(),
+      ])
+      expect(dots!.y).toBeGreaterThanOrEqual(track!.y + track!.height)
     })
 
     test('autoplay advances on its own', async ({ page }) => {

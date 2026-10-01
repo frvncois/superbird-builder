@@ -1594,7 +1594,8 @@ not code:
 | `drag` | `true` | mouse drag; touch swipe works either way |
 
 `perView` is **desktop-first**, keyed like the class cascade: `"base"` is the widest
-breakpoint and applies everywhere; a breakpoint id overrides it from that width down, and
+breakpoint and applies everywhere; a breakpoint id overrides it from that width down **including that width
+itself** (a Mobile override at 390 applies at exactly 390 px), and
 a breakpoint that stores nothing inherits the next wider one. So "three posts on desktop,
 one on mobile" is `{perView: {base: 3, "<mobile-id>": 1}}` — get the ids from
 `get_settings` (`breakpoints`).
@@ -1606,6 +1607,13 @@ default; the editor prunes the same way, and a byte-identical node keeps merges 
 The chrome is rendered by the slider itself — do not add arrow or dot elements in the
 code. Style the host (`classes` on the `:slider` node) as you would any container; the
 track and slides size themselves from `perView`/`gap`.
+
+**The dots take the host's text colour**, so `text-primary` on the `:slider` colours
+them (the active dot is the same colour at full opacity, the rest at 30%). They sit in
+flow BELOW the track, so they never cover a slide and the host needs no padding for
+them. The **arrows** do overlay the slides, left and right, on a translucent dark
+circle — on a slide whose edges carry content, set `arrows: false` and page with the
+dots.
 
 Autoplay never runs for a visitor who asks for reduced motion, and never in the Build
 canvas — arrows, dots, dragging and autoplay all run in Preview and on the published site.
