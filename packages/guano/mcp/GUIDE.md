@@ -940,10 +940,13 @@ here is what they see there. Golden rule 7: reach for one before plain elements.
 
    The response returns the new elements' ids (`nodes`) — style them right away with
    `edit_elements {componentId}`. No page is involved, and none has to hold an instance.
-4. **From a page** — `create_component {pageId, id, name, version}` (batch:
+4. **From a page** — `create_component {pageId, ref, name, version}` (batch:
    `create_components`) turns an element you already built into a component: its
    subtree becomes the master, classes/content/bindings WITH it, and the original block
-   becomes the first instance. Bindings INSIDE the subtree are remapped and keep
+   becomes the first instance. `ref` or `id`, whichever you have — the practical way to
+   build a 60-node component is to write it on a page with refs, style it by ref, then
+   extract it, so a ref needs no extra read. The response carries the master's `nodes`,
+   the addresses `edit_elements {componentId}` takes from then on. Bindings INSIDE the subtree are remapped and keep
    working; a binding OUTSIDE the block that targets INTO it cannot survive (effects
    are scoped per instance) — the response `warnings` lists any such binding.
 

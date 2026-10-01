@@ -2167,6 +2167,18 @@ function tokenUsage(project, names) {
   return found
 }
 
+/** the id of the page node carrying `#ref`, or null. Refs are unique per page
+ * (validateDocument enforces it), so the first match is the only one. */
+function refNodeId(page, ref) {
+  const want = String(ref ?? '').replace(/^#/, '')
+  if (!want) return null
+  let found = null
+  walkNodes(page.elements ?? [], (n) => {
+    if (!found && n.ref === want) found = n.id
+  })
+  return found
+}
+
 /** an instance token carrying an `@link`. The `:Name` line renders no element
  * of its own, so the link would be dropped on the floor — say so, with the
  * two ways that work. Lines are 0-based over `code`. */
@@ -3939,6 +3951,13 @@ const tools = [
       properties: {
         pageId: { type: 'string' },
         id: { type: 'string', description: 'element id (from get_page) whose subtree becomes the component' },
+        ref: {
+          type: 'string',
+          description:
+            "INSTEAD of `id`: the element's '#ref' (without the \"#\"). The usual way to build a " +
+            'big component is to write it on a page with refs, style it by ref, then extract it — ' +
+            'and an id had to be fetched with a separate get_page just for this call.',
+        },
         name: { type: 'string', description: 'component name — normalized to CapitalCase' },
         category: {
           type: 'string',
@@ -3988,21 +4007,33 @@ const tools = [
           usage: `style it with edit_elements {componentId: "${def.id}", edits: [...]}, then write ':${name}:' in any page's code`,
         }
       }
-      if (!args.pageId || !args.id || !args.version) {
-        throw new Error('pass pageId + id + version (extract an element of a page) or code (write the component from scratch)')
+      if (!args.pageId || (!args.id && !args.ref) || !args.version) {
+        throw new Error('pass pageId + id (or ref) + version (extract an element of a page) or code (write the component from scratch)')
       }
       const page = findPage(project, args.pageId)
       const current = sha256(page.code)
       if (args.version !== current) {
         return { saved: false, reason: 'stale-version', message: STALE_MESSAGE, currentVersion: current }
       }
-      const made = makeComponentFrom(project, page, args.id, args.name, args.category)
+      const rootId = args.id ?? refNodeId(page, args.ref)
+      if (!rootId) {
+        return {
+          saved: false,
+          reason: 'no-such-ref',
+          message: `no element with ref "#${args.ref}" on this page (get_page elements:"refs" lists them)`,
+        }
+      }
+      const made = makeComponentFrom(project, page, rootId, args.name, args.category)
       if (!made.ok) return { saved: false, reason: made.reason, message: made.message }
       await saveTargetProject(project)
+      const def = project.components.find((c) => c.id === made.componentId)
       return {
         saved: true,
         componentId: made.componentId,
         name: made.name,
+        // the master's own addresses, so styling it needs no second call — the
+        // code path has always returned these and extraction did not
+        ...(def ? { nodes: masterNodeRows(project, def) } : {}),
         usage: `write ':${made.name}:' in any page's code to add an instance`,
         version: sha256(page.code),
         ...(made.warnings ? { warnings: made.warnings } : {}),
@@ -4031,13 +4062,17 @@ const tools = [
             properties: {
               pageId: { type: 'string' },
               id: { type: 'string', description: 'element id (from get_page) whose subtree becomes the component' },
+              ref: {
+                type: 'string',
+                description: "INSTEAD of `id`: the element's '#ref' (without the \"#\")",
+              },
               name: { type: 'string', description: 'component name — normalized to CapitalCase' },
               category: {
                 type: 'string',
                 description: 'optional grouping in the editor\'s Components drawer',
               },
             },
-            required: ['pageId', 'id', 'name'],
+            required: ['pageId', 'name'],
             additionalProperties: false,
           },
         },
@@ -4088,7 +4123,20 @@ const tools = [
       for (let i = 0; i < args.items.length; i++) {
         const item = args.items[i]
         const page = findPage(project, item.pageId)
-        const made = makeComponentFrom(project, page, item.id, item.name, item.category)
+        // refs are resolved per item, as the batch runs: an earlier extraction
+        // rewrites the page, and a ref survives that where a line number would not
+        const rootId = item.id ?? refNodeId(page, item.ref)
+        if (!rootId) {
+          failures.push({
+            index: i,
+            reason: item.ref ? 'no-such-ref' : 'missing-id',
+            message: item.ref
+              ? `no element with ref "#${item.ref}" on page ${item.pageId}`
+              : 'pass id or ref',
+          })
+          continue
+        }
+        const made = makeComponentFrom(project, page, rootId, item.name, item.category)
         if (!made.ok) failures.push({ index: i, reason: made.reason, message: made.message })
         else
           results.push({

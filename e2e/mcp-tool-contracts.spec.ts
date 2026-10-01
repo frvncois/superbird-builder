@@ -201,3 +201,69 @@ test.describe('create_interactions', () => {
     expect(s.stored().interactions).toHaveLength(1)
   })
 })
+
+test.describe('extracting a component', () => {
+  test('create_component takes a ref, and reports the master’s nodes', async () => {
+    const s = await mcpSession()
+    const home = await s.home()
+    await s.call('set_page_code', {
+      pageId: home.id,
+      code: pageCode('\t:div#card\n\t\t:h3:\n\t\t:paragraph:\n\tdiv:'),
+      version: home.version,
+    })
+    const after = await s.home()
+    // the usual way to build a big component is to write it on a page with refs
+    // and style it by ref — and then an id had to be fetched with a get_page
+    // whose only purpose was this call
+    const made = await s.call('create_component', {
+      pageId: after.id,
+      ref: 'card',
+      name: 'Card',
+      version: after.version,
+    })
+    expect(made.saved).toBe(true)
+    expect(made.name).toBe('Card')
+    // the addresses to style it with, which only the `code` path used to return
+    // the extracted element stays inside the master, under the :Card root
+    expect(made.nodes.map((n: { type: string }) => n.type)).toEqual(['Card', 'div', 'h3', 'paragraph'])
+    expect(made.nodes[0].root).toBe(true)
+    expect(s.stored().pages[0].code).toContain(':Card')
+  })
+
+  test('an unknown ref is refused by name, not by throwing', async () => {
+    const s = await mcpSession()
+    const home = await s.home()
+    const r = await s.call('create_component', {
+      pageId: home.id,
+      ref: 'nope',
+      name: 'Card',
+      version: home.version,
+    })
+    expect(r.saved).toBe(false)
+    expect(r.reason).toBe('no-such-ref')
+    expect(r.message).toContain('#nope')
+  })
+
+  test('create_components resolves each item’s ref as the batch rewrites the page', async () => {
+    const s = await mcpSession()
+    const home = await s.home()
+    await s.call('set_page_code', {
+      pageId: home.id,
+      code: pageCode('\t:header#top\n\t\t:h1:\n\theader:\n\t:footer#bottom\n\t\t:span:\n\tfooter:'),
+      version: home.version,
+    })
+    const after = await s.home()
+    const r = await s.call('create_components', {
+      items: [
+        { pageId: after.id, ref: 'top', name: 'SiteHeader' },
+        { pageId: after.id, ref: 'bottom', name: 'SiteFooter' },
+      ],
+      versions: [{ pageId: after.id, version: after.version }],
+    })
+    expect(r.saved).toBe(true)
+    expect(r.created).toBe(2)
+    const code = s.stored().pages[0].code
+    expect(code).toContain(':SiteHeader')
+    expect(code).toContain(':SiteFooter')
+  })
+})
