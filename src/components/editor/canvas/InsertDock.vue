@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch, type Component as VueComponent } from 'vue'
 import { Component, CornerDownLeft, Plus } from 'lucide-vue-next'
 import InputUI from '@/components/ui/InputUI.vue'
+import ButtonUI from '@/components/ui/ButtonUI.vue'
 import { useComponents } from '@/composables/useComponents'
 import { useCommandPalette } from '@/composables/useCommandPalette'
 import { useElement } from '@/composables/useElement'
@@ -23,6 +24,17 @@ const { startInsertDrag } = useInsertDrag()
 
 const query = ref('')
 const active = ref(0)
+
+// the filter chips: which part of the set is on show. `all` shows every
+// group; the others narrow both the grid and the search. Reset on open.
+type Tab = 'all' | 'basic' | 'components' | 'library'
+const TABS: { key: Tab; label: string }[] = [
+  { key: 'all', label: 'All' },
+  { key: 'basic', label: 'Basic' },
+  { key: 'components', label: 'Components' },
+  { key: 'library', label: 'Library' },
+]
+const tab = ref<Tab>('all')
 const input = ref<InstanceType<typeof InputUI>>()
 const listEl = ref<HTMLElement>()
 
@@ -32,6 +44,12 @@ function scrollActiveIntoView() {
   nextTick(() =>
     listEl.value?.querySelector('[data-active="true"]')?.scrollIntoView({ block: 'nearest' }),
   )
+}
+
+interface DockGroup {
+  title: string
+  tab: Exclude<Tab, 'all'>
+  items: DockItem[]
 }
 
 interface DockItem {
@@ -46,9 +64,10 @@ interface DockItem {
 
 // full item set: built-in elements, then components when present. Each item
 // is both a drag source (payload) and a click/Enter action (run).
-const allGroups = computed<{ title: string; items: DockItem[] }[]>(() => {
-  const base: { title: string; items: DockItem[] }[] = ELEMENT_GROUPS.map((g) => ({
+const allGroups = computed<DockGroup[]>(() => {
+  const base: DockGroup[] = ELEMENT_GROUPS.map((g) => ({
     title: g.title,
+    tab: 'basic' as const,
     items: g.items.map((item) => ({
       key: item.type,
       label: item.label,
@@ -70,6 +89,7 @@ const allGroups = computed<{ title: string; items: DockItem[] }[]>(() => {
   if (offered.length) {
     base.push({
       title: 'Components',
+      tab: 'components',
       items: offered.map((c) => ({
         key: `component:${c.id}`,
         label: c.name,
@@ -89,19 +109,24 @@ const allGroups = computed<{ title: string; items: DockItem[] }[]>(() => {
   const library = CATALOG.filter((e) => !added.has(e.key) && e.key !== card?.preview?.key).filter(
     (e) => fits(e.name),
   )
-  if (library.length) {
-    base.push({
-      title: 'Library',
-      items: library.map((e) => ({
-        key: `catalog:${e.key}`,
-        label: e.name,
-        keywords: [e.category, e.key],
-        icon: Component,
-        accent: true,
-        payload: { kind: 'catalog', key: e.key, name: e.name },
-        run: () => insertCatalog(e.key),
-      })),
-    })
+  // one group per catalog category, in the order the library was authored
+  const byCategory = new Map<string, DockItem[]>()
+  for (const e of library) {
+    const item: DockItem = {
+      key: `catalog:${e.key}`,
+      label: e.name,
+      keywords: [e.category, e.key],
+      icon: Component,
+      accent: true,
+      payload: { kind: 'catalog', key: e.key, name: e.name },
+      run: () => insertCatalog(e.key),
+    }
+    const group = byCategory.get(e.category)
+    if (group) group.push(item)
+    else byCategory.set(e.category, [item])
+  }
+  for (const [category, items] of byCategory) {
+    base.push({ title: category, tab: 'library', items })
   }
   return base
 })
@@ -112,6 +137,7 @@ const results = computed(() => {
   const groups: { title: string; items: { item: DockItem; index: number }[] }[] = []
   const flat: DockItem[] = []
   for (const group of allGroups.value) {
+    if (tab.value !== 'all' && group.tab !== tab.value) continue
     const matched = q
       ? group.items
           .map((item) => {
@@ -137,7 +163,18 @@ const results = computed(() => {
   return { groups, flat }
 })
 
-watch(query, () => (active.value = 0))
+watch([query, tab], () => (active.value = 0))
+
+// what an empty tab says: the set is empty, not the search
+const emptyHint = computed(() => {
+  if (results.value.flat.length) return ''
+  if (query.value.trim()) return 'No results'
+  if (tab.value === 'components') {
+    return 'Nothing yet — use a library entry, or select an element on a page and choose “Create component”.'
+  }
+  if (tab.value === 'library') return 'Everything from the library is already in your project.'
+  return 'No results'
+})
 watch(
   () => results.value.flat.length,
   (len) => {
@@ -165,6 +202,7 @@ function onDocClick(e: MouseEvent) {
 watch(open, (isOpen) => {
   if (isOpen) {
     query.value = ''
+    tab.value = 'all'
     active.value = 0
     nextTick(() => input.value?.focus())
     window.addEventListener('keydown', onWindowKeydown)
@@ -287,21 +325,38 @@ function onKeydown(e: KeyboardEvent) {
     <Transition name="dock">
       <div
         v-if="open"
-        class="flex w-80 origin-bottom-left flex-col overflow-hidden rounded-2xl border border-input bg-background/96 shadow-xl backdrop-blur"
+        class="flex w-[28rem] origin-bottom-left flex-col overflow-hidden rounded-2xl border border-input bg-background/96 shadow-xl backdrop-blur"
         @keydown="onKeydown"
       >
-        <div class="border-b border-input p-4">
+        <div class="flex flex-col gap-3 border-b border-input p-4">
           <div class="dock-search relative">
             <InputUI ref="input" size="lg" v-model="query" placeholder="Search elements & components…" />
             <CornerDownLeft
               class="pointer-events-none absolute top-1/2 right-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
             />
           </div>
+          <!-- filter chips, same strip as the media library's type chips.
+               mousedown is swallowed so the search keeps the keyboard -->
+          <div class="flex items-center gap-1">
+            <ButtonUI
+              v-for="t in TABS"
+              :key="t.key"
+              size="xs"
+              :variant="tab === t.key ? 'default' : 'ghost'"
+              class="text-muted-foreground"
+              :class="tab === t.key && '!text-primary-foreground'"
+              :data-dock-tab="t.key"
+              @mousedown.prevent
+              @click="tab = t.key"
+            >
+              {{ t.label }}
+            </ButtonUI>
+          </div>
         </div>
 
         <div
           ref="listEl"
-          class="dock-scroll flex max-h-64 flex-col gap-2 overflow-y-auto p-4"
+          class="dock-scroll flex max-h-96 flex-col gap-3 overflow-y-auto p-4"
           @wheel.stop
         >
           <div v-for="group in results.groups" :key="group.title" class="flex flex-col gap-2">
@@ -338,8 +393,8 @@ function onKeydown(e: KeyboardEvent) {
             </div>
           </div>
 
-          <p v-if="!results.flat.length" class="px-2 py-6 text-center text-xs text-muted-foreground">
-            No results
+          <p v-if="emptyHint" class="px-6 py-6 text-center text-xs text-muted-foreground">
+            {{ emptyHint }}
           </p>
         </div>
       </div>

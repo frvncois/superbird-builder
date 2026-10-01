@@ -186,7 +186,6 @@ function onKeydown(e: KeyboardEvent) {
         v-model="query"
         type="text"
         spellcheck="false"
-        placeholder="Add class"
         class="h-6 min-w-20 flex-1 bg-transparent font-mono text-xs outline-none placeholder:text-muted-foreground"
         @keydown="onKeydown"
       />

@@ -20,7 +20,8 @@ import { useInsertDrag } from './useInsertDrag'
  * window handler (bubble phase) closes the panel and moves focus.
  */
 export function useDrawerEscape(
-  panel: Ref<HTMLElement | undefined>,
+  // readonly so a drawer can hand in a computed over its DrawerShell's `el`
+  panel: Readonly<Ref<HTMLElement | undefined>>,
   opts: { canPeel: () => boolean; peel: () => void },
 ) {
   const { stack } = useModal()

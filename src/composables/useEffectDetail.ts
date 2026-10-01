@@ -37,6 +37,15 @@ export interface EffectDetail {
 
 const detail = ref<EffectDetail | null>(null)
 
+/** the Add chooser — the libraries and presets, reached from the list's Add
+ *  button. Same drill-in shape as the detail view, same closers below. */
+const chooser = ref(false)
+
+/** the binding row the list shows open — module state, because the list is
+ *  unmounted while the chooser or a detail view has the panel, and the row a
+ *  chooser action just added must be the open one when the list comes back */
+const openBindingId = ref<string | null>(null)
+
 const { project } = useProject()
 const { activePanelId } = usePanel()
 const { selectedElement } = useElement()
@@ -62,11 +71,17 @@ function startWatchers() {
         if (detail.value && !resolves(detail.value)) detail.value = null
       },
     )
-    watch(activePanelId, () => (detail.value = null))
+    watch(activePanelId, () => {
+      detail.value = null
+      chooser.value = false
+    })
     watch(
       () => selectedElement.value?.id,
       (id, was) => {
-        if (id && was && id !== was) detail.value = null
+        if (id && was && id !== was) {
+          detail.value = null
+          chooser.value = false
+        }
       },
     )
   })
@@ -80,6 +95,9 @@ export function useEffectDetail() {
     // and SettingsEditor's Escape defers to pickingFor — leaving Escape dead
     // for the rest of the session.
     pickingFor.value = null
+    // a brand-new effect is applied and done with: Done lands on the list,
+    // not back in the chooser it was created from
+    if (created) chooser.value = false
     detail.value = { kind, id, created }
   }
 
@@ -87,5 +105,14 @@ export function useEffectDetail() {
     detail.value = null
   }
 
-  return { detail, openDetail, closeDetail }
+  function openChooser() {
+    pickingFor.value = null
+    chooser.value = true
+  }
+
+  function closeChooser() {
+    chooser.value = false
+  }
+
+  return { detail, openDetail, closeDetail, chooser, openChooser, closeChooser, openBindingId }
 }

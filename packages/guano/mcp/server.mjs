@@ -67,6 +67,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })),
 }))
 
+// A tool result is read by a MODEL, and pretty-printing one is pure cost: the
+// indentation of a `get_page` on a 500-line page runs ~15 KB (~4k tokens) of
+// whitespace, per call, which dwarfs anything saved on the tool list. Small
+// results stay indented so a human watching the traffic can still read them.
+const PRETTY_MAX = 2_000
+function serializeResult(result) {
+  const compact = JSON.stringify(result)
+  return compact.length > PRETTY_MAX ? compact : JSON.stringify(result, null, 2)
+}
+
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const tool = toolMap.get(request.params.name)
   if (!tool) {
@@ -74,7 +84,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
   try {
     const result = await tool.handler(request.params.arguments ?? {})
-    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }
+    return { content: [{ type: 'text', text: serializeResult(result) }] }
   } catch (e) {
     return { isError: true, content: [{ type: 'text', text: e?.message ?? String(e) }] }
   }

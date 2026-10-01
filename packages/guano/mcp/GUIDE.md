@@ -834,7 +834,7 @@ nouns — so the worklist skips it. A localize:false field always RENDERS its ba
 translation writes to it are refused (`""` clears are allowed), and flipping a field to
 false with existing overrides warns with their count — they turn inert but stay in
 storage, so flipping back restores them),
-add entries with `upsert_entry` — or, for many, `upsert_entries {entries: [...]}` in one
+add entries with `upsert_entries {entries: [...]}` — one call, one or many, in one
 call (`values` maps field *names* to strings), and bind elements with `[field]` args.
 Entry `name`/`slug` are identity; only `values` bind. An element with a `[field]` binding
 shows the bound value in entry scope — its own `content` is ignored there.
@@ -856,6 +856,17 @@ alike. `fieldAttrs: {value: "phone"}` pre-fills an input from the entry it edits
 attribute works; the static `attributes` value is the fallback when there is no entry or
 the field is empty, so a bound attribute is still authorable. It is PER INSTANCE, and
 refused on a `:Name` wrapper, which renders no element.
+
+**The attribute allowlist.** `attributes`, `instanceAttributes` and `fieldAttrs` accept
+any `data-*` or `aria-*` name, plus: `target`, `rel`, `download`, `title`, `role`, `type`,
+`name`, `value`, `placeholder`, `alt`, `loading`, `tabindex`, `lang`, `dir`, `hidden`,
+`disabled`, `open`, `for`, `required`, `readonly`, `checked`, `selected`, `multiple`,
+`autofocus`, `autocomplete`, `min`, `max`, `step`, `rows`, `cols`, `maxlength`,
+`minlength`, `pattern`, `inputmode`, `accept` and `translate`. Anything the renderer
+already manages (`id`, `class`, `style`, `src`, `href`) and anything executable (`on*`)
+is refused, and the refusal names what it dropped. A boolean attribute (`download`,
+`hidden`, `required`, `disabled`, `checked`…) is expressed with `""` and serializes bare;
+a value of `false` means the attribute is absent.
 
 **Attribute text is per placement and per locale.** `attributes` are shared by every
 instance of a component, which is right for `role` and `type` and wrong for the text a
@@ -980,7 +991,7 @@ multi-line code blocks — leading indentation still collapses).
    `localize: false` never appear in the worklist at all.
    `set_translations` covers element/master/entry kinds in one call and returns `written`
    (items) + `fieldsWritten` (values — compare to the worklist total). For one-off
-   touch-ups, `edit_elements` (content/src) and `upsert_entry` (values) also take a
+   touch-ups, `edit_elements` (content/src) and `upsert_entries` (values) also take a
    `locale`. An empty string deletes an override; OMITTED keys keep theirs. The default
    locale is always the base content; classes and htmlId are never localized. Shared
    chrome is cheapest to translate ONCE on the master via `edit_elements {onMaster: true,
@@ -1529,7 +1540,7 @@ The project has a shared interaction library (named class-swap animations):
   form, and the one to use: a sliding sheet needs two effects and a tab strip four, and
   creating them one at a time rewrites the whole project once each. Each item is
   validated on its own, so one bad class fails that item and saves the rest.
-  `create_interaction` is the single form. `toClasses` is validated Tailwind.
+  `create_interactions {items: [...]}` takes one or many. `toClasses` is validated Tailwind.
 - `update_interaction {interactionId, name?, toClasses?, duration?, easing?}` changes one
   in place — every element bound to it picks the change up, so never
   create-a-second-and-rebind just to tweak classes.
@@ -1565,7 +1576,7 @@ the previous step, `stagger` across the target's children, `repeat`, and `yoyo`.
 - `list_animations` — the library, plus the authoritative `properties` and `easings`
   vocabularies and each timeline's computed `durationMs`. **Read this before authoring**
   rather than guessing names.
-- `create_animation {name, steps}` / `update_animation {animationId, name?, steps?}` /
+- `create_animations {items: [{name, steps}]}` / `update_animation {animationId, name?, steps?}` /
   `delete_animation {animationId}` (delete also unbinds everywhere).
 - **`create_animations {items: [...]}`** is the batch form — use it when porting a design.
   Each single create rewrites the whole project, and parallel calls race, so 39 separate
@@ -1622,10 +1633,10 @@ pass another element's id to make this element the trigger and that one the subj
 A fade-up on a heading, end to end:
 
 ```
-create_animation {name: "Fade up", steps: [
+create_animations {items: [{name: "Fade up", steps: [
   {tracks: [{prop: "opacity", from: 0, to: 1}, {prop: "y", from: 40, to: 0}],
    duration: 700, easing: "ease-out"}
-]}
+]}]}
 edit_elements {pageId, version, edits: [
   {id: "<heading id>", bindAnimations: [{animationId: "<id>", trigger: "appear"}]}
 ]}
@@ -1851,7 +1862,7 @@ privilege role, who cannot change structure, settings, or publish anything thems
 
 - comment and reply text (`list_comments`)
 - page copy (`get_page {includeContent: true}`)
-- CMS entry values and their locale overrides (`get_collection`, `upsert_entry` echoes)
+- CMS entry values and their locale overrides (`get_collection`, `upsert_entries` echoes)
 - translation base strings (`get_translation_worklist`)
 - media asset names
 

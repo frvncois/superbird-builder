@@ -356,6 +356,35 @@ element (`src/lib/shared/svg.js`).
 
 The `guano mcp` server (`packages/guano/mcp/`) shipped Phases 0–8. Known, deliberately-deferred limits:
 
+- **M0 — the singular create/upsert tools were removed (2026-10-01).**
+  `create_interaction`, `create_animation` and `upsert_entry` are gone; their
+  batch forms `create_interactions {items}`, `create_animations {items}` and
+  `upsert_entries {entries}` take one item or many and are the only forms now.
+  A client that cached the old tool list needs a restart — `get_status` reports
+  `mcpVersion`/`versionMismatch`, which is the tell. The same pass cut the
+  `tools/list` payload from 84 KB to 68 KB (~21k → ~17k tokens injected per
+  turn) by moving schema prose into `GUIDE.md`; `npm run check:mcp` is the gate
+  that keeps it there. Further reduction needs toolsets (below), not more
+  trimming: ~22 KB of the remainder is pure JSON structure.
+- **M0b — per-call response size is now the dominant agent cost.** Measured
+  2026-10-01 against a real 5-page / 20-component / 7-collection project, on its
+  largest page (528 lines), as the bytes a client receives:
+
+  | call | pretty | compact |
+  |---|---|---|
+  | `get_page` (default) | 61.9 KB (~15.5k tok) | 46.4 KB (~11.6k tok) |
+  | `get_page {elements:"refs"}` | 34.1 KB | 27.6 KB |
+  | `get_page {elements:"all"}` | 87.6 KB (~21.9k tok) | 70.1 KB |
+  | `list_components {includeNodes}` | 103.2 KB (~25.8k tok) | 70.4 KB |
+
+  One default `get_page` therefore costs about what the WHOLE tool list costs,
+  and a session does several. `mcp/server.mjs` now sends results over
+  `PRETTY_MAX` compact, which is 19–33% off every large response for a one-line
+  change. What remains is the shape itself: the default `elements` mode repeats
+  per-element rows that a `refs` read gives in half the bytes, and
+  `list_components {includeNodes}` echoes every master node of every component.
+  Worth its own pass — a cheaper default read shape, or capping the echoed
+  content — before any further trimming of `tools/list`.
 - **M1 — no in-server HTTP transport.** v1 is a stdio CLI (`guano mcp`) that
   talks to a running instance over the HTTP API. A streamable-HTTP `/mcp`
   endpoint on the node server is out of scope (would let remote agents connect

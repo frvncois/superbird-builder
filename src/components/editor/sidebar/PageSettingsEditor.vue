@@ -172,8 +172,6 @@ const hasHistory = computed(() => Boolean(item.value?.createdAt || item.value?.u
 
 <template>
   <div v-if="item" class="flex min-h-full flex-col">
-    <!-- h-11 matches the list view's search row (p-1.5 around an h-8 field), so
-         swapping between the two states moves nothing below it -->
     <div class="flex h-11 shrink-0 items-center gap-1 px-1.5">
       <ButtonUI
         variant="icon"
@@ -187,9 +185,6 @@ const hasHistory = computed(() => Boolean(item.value?.createdAt || item.value?.u
     </div>
 
     <div class="flex flex-1 flex-col gap-5 px-2.5 pt-1 pb-3">
-      <!-- entry CONTENT first: the field values are why this view is opened now,
-           name/slug/status are the supporting metadata. Field SCHEMA stays in
-           the Data panel — this edits values only. -->
       <DrawerSection v-if="entry && collection" title="Content">
         <p v-if="!isDefault" class="text-[10px] text-muted-foreground">
           Translating {{ activeLocale }} — empty fields fall back to {{ defaultLocale }}.

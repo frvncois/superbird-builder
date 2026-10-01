@@ -362,7 +362,7 @@ test('what a host cannot say about an instance is refused, not dropped', async (
 test('publish warns about what a design review would send back', async () => {
   const { call, home } = await session()
   await call('add_library_components', { keys: ['select', 'navbar'] })
-  await call('create_interaction', { name: 'Never bound', toClasses: 'hidden' })
+  await call('create_interactions', { items: [{ name: 'Never bound', toClasses: 'hidden' }] })
   await call('update_settings', { motion: { transitions: { enabled: true, preset: 'fade' } } })
   const h = await home()
   const w = await call('set_page_code', {

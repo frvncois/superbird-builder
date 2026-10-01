@@ -11,17 +11,19 @@ const expanded = ref<Record<string, boolean>>({})
 // beside the rail: it takes the shared 16rem track, stays
 // open while you navigate, and only the rail button closes it. Three zones: a
 // search field, the scrollable Pages + Collections tree, and the locale
-// switcher pinned at the bottom. A row reveals its actions on hover: an Edit
-// icon that swaps the drawer to that page's LAYERS, and a kebab
+// switcher pinned at the bottom. Clicking a page opens it on the canvas and,
+// on the Edit surface, swaps the drawer to that page's LAYERS; the row's Edit
+// icon does the same from Play. A row also reveals a kebab on hover
 // (settings/duplicate/delete). The list swaps in place for three detail
 // views — layers, page/item settings, collection settings.
 import { computed, onMounted, watch } from 'vue'
 import {
   Plus, Copy, Trash2, Settings, Languages, ChevronDown, ChevronRight, Check,
-  House, Search, SquarePen,
+  House, SquarePen,
 } from 'lucide-vue-next'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import MenuUI from '@/components/ui/MenuUI.vue'
+import DrawerShell from './DrawerShell.vue'
 import PageSettingsEditor, { type SettingsTarget } from './PageSettingsEditor.vue'
 import CollectionSettingsEditor from './CollectionSettingsEditor.vue'
 import LayersPane from '@/components/editor/layers/LayersPane.vue'
@@ -68,6 +70,17 @@ function closeDetail() {
   settingsTarget.value = null
   layersOpen.value = false
   collectionSettingsId.value = null
+}
+
+/** a page row: open the page, and on the Edit surface its layers with it —
+ * opening a page IS the act of going to work on it, so the tree comes along
+ * rather than waiting behind the row's Edit icon */
+function selectPage(pageId: string) {
+  if (canBuild.value && isBuild.value) {
+    editLayers(pageId)
+    return
+  }
+  openPage(pageId)
 }
 
 /** the Edit icon: put the page on the canvas and show its layers */
@@ -247,7 +260,8 @@ async function confirmDeleteLocale(loc: string) {
   if (ok) deleteLocale(loc)
 }
 
-const panel = ref<HTMLElement>()
+const shell = ref<InstanceType<typeof DrawerShell>>()
+const panel = computed(() => shell.value?.el)
 
 // Escape peels one layer at a time — filter, then a settings view — and never
 // closes the column itself; only the rail does. See useDrawerEscape for why a
@@ -268,14 +282,8 @@ useDrawerEscape(panel, {
 </script>
 
 <template>
-  <div ref="panel" class="flex h-full flex-col bg-background">
-    <!-- Navigating and editing are two layers of one surface, so they swap with
-         a transform-only push rather than a hard cut. Both panes are absolutely
-         positioned inside this box: nothing reflows mid-transition, and the two
-         states already share a header height so the swap moves no pixels. -->
-    <div class="relative min-h-0 flex-1 overflow-hidden">
-    <Transition name="drawer-push">
-    <div v-if="detailOpen" class="pane pane-settings overflow-y-auto">
+  <DrawerShell ref="shell" v-model:query="query" :detail="detailOpen" placeholder="Search pages, items…">
+    <template #detail>
       <LayersPane v-if="layersOpen" @back="closeDetail" />
       <CollectionSettingsEditor
         v-else-if="collectionSettingsId"
@@ -287,24 +295,10 @@ useDrawerEscape(panel, {
         :target="settingsTarget"
         @back="closeDetail"
       />
-    </div>
+    </template>
 
-    <div v-else class="pane pane-list flex flex-col">
-    <!-- search -->
-    <div class="relative shrink-0 p-1.5">
-      <Search class="pointer-events-none absolute top-1/2 left-4 size-3.5 -translate-y-1/2 text-muted-foreground" />
-      <input
-        v-model="query"
-        type="text"
-        spellcheck="false"
-        placeholder="Search pages, items…"
-        class="h-8 w-full rounded-lg bg-input pr-2 pl-8 text-xs outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-accent"
-      />
-    </div>
-
-    <!-- tree: pb leaves room for a row kebab opened near the bottom -->
-    <div class="flex-1 overflow-y-auto pb-10">
-      <!-- pages -->
+    <!-- pb leaves room for a row kebab opened near the bottom -->
+    <div class="flex-1 space-y-0.5 overflow-y-auto pb-10">
       <div v-if="visiblePages.length || !searching" class="flex items-center gap-1 px-2.5 pt-2 pb-1">
         <span class="flex-1 text-[9px] font-medium tracking-wide text-muted-foreground uppercase">
           Pages
@@ -319,13 +313,13 @@ useDrawerEscape(panel, {
       <div
         v-for="page in visiblePages" :key="page.id"
         :data-page-row="page.name"
-        class="group/row mx-1 flex h-7 items-center rounded-lg pr-0.5 pl-1.5"
+        class="group/row mx-1 flex h-7 items-center rounded-md pr-0.5 pl-1.5"
         :class="isActivePage(page.id) ? 'bg-accent/25' : 'hover:bg-accent/15'"
       >
         <button
           type="button"
-          class="flex h-full min-w-0 flex-1 items-center gap-1.5 text-left outline-none"
-          @click="openPage(page.id)"
+          class="flex h-full min-w-0 flex-1 items-center gap-1.5 text-left outline-none px-0.5"
+          @click="selectPage(page.id)"
         >
           <House v-if="page.id === homePage.id" class="size-3 shrink-0 text-muted-foreground" />
           <span
@@ -338,7 +332,6 @@ useDrawerEscape(panel, {
             class="size-1.5 shrink-0 rounded-full bg-pending"
           />
         </button>
-        <!-- structure is an Edit-surface job, so Play doesn't offer the way in -->
         <ButtonUI
           v-if="canBuild && isBuild"
           variant="icon" size="xs" :icon="SquarePen" tooltip="Edit layers"
@@ -367,7 +360,6 @@ useDrawerEscape(panel, {
         </MenuUI>
       </div>
 
-      <!-- collections -->
       <div v-if="visibleCollections.length || !searching" class="flex items-center gap-1 px-2.5 pt-4 pb-1">
         <span class="flex-1 text-[9px] font-medium tracking-wide text-muted-foreground uppercase">
           Collections
@@ -386,7 +378,7 @@ useDrawerEscape(panel, {
       <div v-for="{ collection, entries } in visibleCollections" :key="collection.id">
         <div
           :data-collection-row="collection.name"
-          class="group/row mx-1 flex h-7 items-center rounded-lg pr-0.5 pl-1 hover:bg-accent/15"
+          class="group/row mx-1 flex h-7 items-center rounded-md pr-0.5 pl-1 hover:bg-accent/15"
         >
           <button
             type="button"
@@ -400,7 +392,7 @@ useDrawerEscape(panel, {
             <span class="truncate text-xs font-medium">{{ collection.name }}</span>
             <span class="shrink-0 text-[10px] text-muted-foreground">{{ collection.entries.length }}</span>
           </button>
-          <!-- a data-only collection has no template page, so no layers to edit -->
+
           <ButtonUI
             v-if="canBuild && isBuild && collection.templatePageId"
             variant="icon" size="xs" :icon="SquarePen" tooltip="Edit template layers"
@@ -442,7 +434,7 @@ useDrawerEscape(panel, {
           </p>
           <div
             v-for="entry in entries" :key="entry.id"
-            class="group/row mr-1 flex h-7 items-center rounded-lg pr-0.5 pl-1.5"
+            class="group/row mr-1 flex h-7 items-center rounded-md pr-0.5 pl-1.5"
             :class="activeEntryId === entry.id ? 'bg-accent/25' : 'hover:bg-accent/15'"
           >
             <button
@@ -489,14 +481,12 @@ useDrawerEscape(panel, {
         No results for “{{ query.trim() }}”.
       </p>
     </div>
-    </div>
-    </Transition>
-    </div>
 
-    <!-- locale switcher: pinned, opens upward. Outside the swapping panes on
-         purpose — the item editor's text fields are locale-scoped and show
-         fallbacks, so hiding the switcher behind Back would strand a
-         translator. Keep it out of the Transition. -->
+    <!-- locale switcher: pinned, opens upward. In the footer, outside the
+         swapping panes, on purpose — the item editor's text fields are
+         locale-scoped and show fallbacks, so hiding the switcher behind Back
+         would strand a translator. -->
+    <template #footer>
     <div class="shrink-0 border-t border-input p-1">
       <MenuUI
         side="top"
@@ -553,37 +543,7 @@ useDrawerEscape(panel, {
         </template>
       </MenuUI>
     </div>
-  </div>
+    </template>
+  </DrawerShell>
 </template>
 
-<style scoped>
-/* the two swap layers stack rather than displace each other */
-.pane {
-  position: absolute;
-  inset: 0;
-}
-.drawer-push-enter-active,
-.drawer-push-leave-active {
-  transition:
-    transform 0.18s ease-out,
-    opacity 0.18s ease-out;
-}
-/* settings is the deeper layer: it arrives from and leaves to the right */
-.pane-settings.drawer-push-enter-from,
-.pane-settings.drawer-push-leave-to {
-  transform: translateX(0.75rem);
-  opacity: 0;
-}
-.pane-list.drawer-push-enter-from,
-.pane-list.drawer-push-leave-to {
-  transform: translateX(-0.75rem);
-  opacity: 0;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .drawer-push-enter-active,
-  .drawer-push-leave-active {
-    transition-duration: 0.01ms;
-  }
-}
-</style>

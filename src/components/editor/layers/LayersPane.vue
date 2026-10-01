@@ -7,8 +7,8 @@
 // everything else (classes, content, media, interactions, translations) lives
 // on the node and is edited in the panels — so this shows the same structure
 // without a text round-trip.
-import { computed, ref } from 'vue'
-import { ChevronLeft, TriangleAlert } from 'lucide-vue-next'
+import { computed, nextTick, ref, watch } from 'vue'
+import { ChevronLeft, Search, TriangleAlert, X } from 'lucide-vue-next'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import { useElement } from '@/composables/useElement'
 import { usePage } from '@/composables/usePage'
@@ -18,18 +18,63 @@ import { useStructure } from '@/composables/useStructure'
 import { validateDocument } from '@/lib/syntax'
 import LayerRow from './LayerRow.vue'
 import { useLayerSurface } from './useLayerSurface'
+import { layerLabel } from './layerLabel'
+import { provideLayerFilter } from './layerFilter'
+import type { ElementNode } from '@/types/editor'
 
 const emit = defineEmits<{ back: [] }>()
 
 const { activePage } = usePage()
 const { collections } = useCollections()
-const { components } = useComponents()
+const { components, masterFor } = useComponents()
 const { selectElement, elementAtLine } = useElement()
 const { backend } = useStructure()
 
 const roots = computed(() => backend.value.roots.value)
 const isPage = computed(() => backend.value.kind === 'page')
 const title = computed(() => activePage.value?.name ?? 'Layers')
+
+// --- search: find a row by the words it shows ---
+// The tree is the only index of a page now, and a deep one has no Cmd+F. The
+// field is off until the glass is pressed so the header stays a header.
+const searching = ref(false)
+const query = ref('')
+const queryInput = ref<HTMLInputElement>()
+
+async function openSearch() {
+  searching.value = true
+  await nextTick()
+  queryInput.value?.focus()
+}
+
+function closeSearch() {
+  searching.value = false
+  query.value = ''
+}
+
+// Leaving the page drops a stale filter — its ids belong to a tree that is
+// no longer on screen. (Keyed off the page, not `roots`: a structural edit
+// re-derives the tree, and the search must survive one.)
+watch(() => activePage.value?.id, closeSearch)
+
+/** matches plus every ancestor of one: a hit keeps the nesting around it */
+const visibleIds = computed<Set<string> | null>(() => {
+  const needle = query.value.trim().toLowerCase()
+  if (!searching.value || !needle) return null
+  const keep = new Set<string>()
+  const walk = (node: ElementNode, ancestors: string[]) => {
+    const path = [...ancestors, node.id]
+    const hit = layerLabel(node, masterFor).toLowerCase().includes(needle)
+      || node.type.toLowerCase().includes(needle)
+    if (hit) for (const id of path) keep.add(id)
+    for (const child of node.children) walk(child, path)
+  }
+  for (const root of roots.value) walk(root, [])
+  return keep
+})
+provideLayerFilter(visibleIds)
+
+const noMatches = computed(() => !!visibleIds.value && visibleIds.value.size === 0)
 
 const surface = ref<HTMLElement>()
 const { onKeydown } = useLayerSurface({
@@ -71,8 +116,6 @@ function goToIssue(line: number) {
     tabindex="0"
     @keydown="onKeydown"
   >
-    <!-- h-11 matches the list view's search row, so swapping between the two
-         states moves nothing below it -->
     <div class="flex h-11 shrink-0 items-center gap-1 px-1.5">
       <ButtonUI
         variant="icon"
@@ -82,12 +125,48 @@ function goToIssue(line: number) {
         class="w-7 text-muted-foreground"
         @click="emit('back')"
       />
-      <span class="min-w-0 flex-1 truncate text-xs font-medium">{{ title }}</span>
+      <template v-if="searching">
+        <div class="relative min-w-0 flex-1">
+          <Search class="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          <input
+            ref="queryInput"
+            v-model="query"
+            type="text"
+            spellcheck="false"
+            placeholder="Search layers…"
+            aria-label="Search layers"
+            class="h-7 w-full rounded-lg bg-input pr-2 pl-7 text-xs outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-accent"
+            @keydown.stop
+            @keydown.esc.prevent="closeSearch"
+          />
+        </div>
+        <ButtonUI
+          variant="icon"
+          size="sm"
+          :icon="X"
+          class="w-7 shrink-0 text-muted-foreground"
+          @click="closeSearch"
+        />
+      </template>
+      <template v-else>
+        <span class="min-w-0 flex-1 truncate text-xs font-medium">{{ title }}</span>
+        <ButtonUI
+          variant="icon"
+          size="sm"
+          :icon="Search"
+          tooltip="Search layers"
+          class="w-7 shrink-0 text-muted-foreground"
+          @click="openSearch"
+        />
+      </template>
     </div>
 
     <div class="min-h-0 flex-1 overflow-y-auto px-1 pb-8">
       <LayerRow v-for="node in roots" :key="node.id" :node="node" :depth="0" />
-      <p v-if="!roots.length" class="px-2 py-6 text-center text-xs text-muted-foreground">
+      <p v-if="noMatches" class="px-2 py-6 text-center text-xs text-muted-foreground">
+        No layer matches.
+      </p>
+      <p v-else-if="!roots.length" class="px-2 py-6 text-center text-xs text-muted-foreground">
         Nothing here yet.
       </p>
     </div>

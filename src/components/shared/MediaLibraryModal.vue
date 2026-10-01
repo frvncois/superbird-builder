@@ -397,7 +397,8 @@ const MENU_ITEM =
         <ButtonUI variant="icon" size="sm" :icon="X" class="w-7 text-muted-foreground" @click="emit('close')" />
       </div>
 
-      <!-- toolbar: type chips ——— filter · view · new folder · upload -->
+      <!-- toolbar: type chips ——— filter · view · new folder · upload. The right
+           cluster is one family: h-9, rounded-xl, text-xs, 3.5 icons -->
       <div class="flex shrink-0 items-center gap-2 border-b border-input px-4 py-2">
         <div class="flex min-w-0 flex-wrap items-center gap-1">
           <ButtonUI
@@ -471,14 +472,16 @@ const MENU_ITEM =
           </template>
         </MenuUI>
 
-        <div class="flex items-center rounded-lg bg-input p-0.5">
+        <!-- view switch: one joined outline group, so it reads at the same
+             height and radius as the Filter and New folder buttons beside it -->
+        <div class="flex h-9 shrink-0 items-center divide-x divide-accent overflow-hidden rounded-xl border border-accent">
           <ButtonUI
             variant="ghost"
             size="sm"
             :icon="LayoutGrid"
             tooltip="Grid"
-            class="w-7"
-            :class="view === 'grid' ? 'text-foreground' : 'text-muted-foreground'"
+            class="w-9 rounded-none"
+            :class="view === 'grid' ? 'bg-accent/30 text-foreground' : 'text-muted-foreground'"
             @click="view = 'grid'"
           />
           <ButtonUI
@@ -486,19 +489,14 @@ const MENU_ITEM =
             size="sm"
             :icon="List"
             tooltip="List"
-            class="w-7"
-            :class="view === 'list' ? 'text-foreground' : 'text-muted-foreground'"
+            class="w-9 rounded-none"
+            :class="view === 'list' ? 'bg-accent/30 text-foreground' : 'text-muted-foreground'"
             @click="view = 'list'"
           />
         </div>
-        <ButtonUI
-          variant="outline"
-          size="sm"
-          :icon="FolderPlus"
-          tooltip="New folder"
-          class="w-9 shrink-0"
-          @click="createFolderHere"
-        />
+        <ButtonUI variant="outline" size="sm" :icon="FolderPlus" class="shrink-0" @click="createFolderHere">
+          New folder
+        </ButtonUI>
         <ButtonUI size="sm" :icon="Upload" :disabled="!!uploadProgress" @click="uploadInput?.click()">
           {{ uploadProgress ? `Uploading ${uploadProgress}…` : 'Upload' }}
         </ButtonUI>

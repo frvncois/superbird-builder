@@ -149,9 +149,14 @@ const classes = computed(() => [
   // untranslated fallback content renders dimmed under a non-default locale
   untranslated.value && 'opacity-60',
   // while inline-editing, the accent editing ring (bound in the template)
-  // replaces the selection/highlight outlines instead of fighting them
-  selected.value && !editing.value && 'outline outline-2 -outline-offset-2 outline-sky-500',
-  highlighted.value && !editing.value && 'outline outline-2 -outline-offset-2 outline-emerald-500',
+  // replaces the selection/highlight outlines instead of fighting them.
+  // The chrome is `!important` AND names its style explicitly: a field's or
+  // button's own `outline-none` is compiled by @tailwindcss/browser into a
+  // stylesheet injected AFTER ours, and it also sets `--tw-outline-style:
+  // none` — the variable the bare `outline` utility reads — so `outline!`
+  // alone still computed to `none` on a selected input.
+  selected.value && !editing.value && 'outline-solid! outline-2! -outline-offset-2! outline-sky-500!',
+  highlighted.value && !editing.value && 'outline-solid! outline-2! -outline-offset-2! outline-emerald-500!',
   dropPosition.value &&
     (dropPosition.value === 'before'
       ? 'shadow-[0_-2px_0_0_#0ea5e9]'
@@ -159,7 +164,7 @@ const classes = computed(() => [
         ? 'shadow-[0_2px_0_0_#0ea5e9]'
         : // 'inside' (palette drop as last child): dashed to distinguish
           // from the solid selection outline
-          'outline outline-2 -outline-offset-2 outline-dashed outline-sky-500 bg-sky-500/5'),
+          'outline-dashed! outline-2! -outline-offset-2! outline-sky-500! bg-sky-500/5'),
 ])
 
 // --- inline text editing (double-click) ---
@@ -175,11 +180,25 @@ const { editing, editEl, startEditing, finishEditing, onEditKeydown } = useInlin
   onExit: () => requestReveal(), // Esc/Enter hands focus back to the Layers tree
 })
 
+// The Edit canvas is a selection surface, not the site: a link must not
+// navigate, a button not submit, a checkbox not toggle, a label not forward
+// its click, and a field must not take focus and start a caret — every one of
+// those stole the click that was meant to select the element. Form controls
+// also get their mousedown swallowed, which is what focus and a <select>'s
+// native dropdown ride on; the click still reaches us to select.
+const FOCUSING_TAGS = new Set(['input', 'select', 'textarea'])
+const tag = computed(() => def.value?.tag ?? 'div')
+
 const handlers = {
   dblclick: startEditing,
+  mousedown(e: MouseEvent) {
+    if (editing.value) return
+    if (FOCUSING_TAGS.has(tag.value)) e.preventDefault()
+  },
   click(e: Event) {
     e.stopPropagation()
     if (editing.value) return
+    e.preventDefault()
     // a pending "Pick target" claims the click instead of selecting;
     // inside an instance the shared master id is what gets targeted
     if (pickingFor.value) {
@@ -446,7 +465,7 @@ const handlers = {
     :alt="altAttr"
     :class="[
       classes,
-      editing && 'cursor-text outline outline-2 -outline-offset-2 outline-accent bg-accent/5',
+      editing && 'cursor-text outline-solid! outline-2! -outline-offset-2! outline-accent! bg-accent/5',
     ]"
     :style="[backgroundInfo?.style, motionStyle]"
     :draggable="!editing"

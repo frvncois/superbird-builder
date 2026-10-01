@@ -7,18 +7,16 @@ import StyleEditor from '@/components/editor/style/StyleEditor.vue'
 import InteractionsEditor from '@/components/editor/interactions/InteractionsEditor.vue'
 import InteractionDetail from '@/components/editor/interactions/InteractionDetail.vue'
 import AnimationDetail from '@/components/editor/interactions/AnimationDetail.vue'
-import SiteMotionPopover from '@/components/editor/interactions/SiteMotionPopover.vue'
+import EffectChooser from '@/components/editor/interactions/EffectChooser.vue'
 import BranchesEditor from '@/components/editor/drafts/BranchesEditor.vue'
 import DataEditor from '@/components/editor/content/DataEditor.vue'
 import { usePanel } from '@/composables/usePanel'
 import { useElement } from '@/composables/useElement'
-import { useAuth } from '@/composables/useAuth'
 import { useEffectDetail } from '@/composables/useEffectDetail'
 
 const { activePanelId } = usePanel()
 const { selectedElement, isMultiSelect } = useElement()
-const { canBuild } = useAuth()
-const { detail } = useEffectDetail()
+const { detail, chooser } = useEffectDetail()
 </script>
 
 <template>
@@ -49,11 +47,11 @@ const { detail } = useEffectDetail()
       />
       <AnimationDetail v-else :key="detail.id" :id="detail.id" :created="detail.created" />
     </template>
+    <!-- the Add chooser holds the libraries and presets: project-level, so it
+         renders with no selection too; only Apply needs one -->
+    <EffectChooser v-else-if="chooser" />
     <template v-else>
-      <!-- the libraries are project-level, so this renders with no selection
-           too; only the per-element cards and Apply need one -->
       <InteractionsEditor />
-      <SiteMotionPopover v-if="canBuild" />
     </template>
   </template>
 

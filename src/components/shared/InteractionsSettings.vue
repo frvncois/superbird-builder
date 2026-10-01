@@ -2,8 +2,7 @@
 // The site-wide half of motion: settings that belong to the project rather
 // than to one element. Everything here applies to the Preview surface and the
 // published site — never the Build canvas, which pans instead of scrolling.
-// Body of the Settings → Interactions tab; also summarised in the Interactions
-// side panel (SiteMotionPopover).
+// Body of the Settings → Interactions tab — the one place these are edited.
 import { computed } from 'vue'
 import { useSettings } from '@/composables/useSettings'
 import { useAnimation } from '@/composables/useAnimation'

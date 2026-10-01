@@ -108,9 +108,9 @@ editor is viewing.
 `set_target` · `list_pages`, `get_page`, `set_page_code`, `create_page`, `delete_page`,
 `set_page_seo` · `edit_elements` (batch: classes, text content, media src/background,
 html id) · `get_settings`, `update_settings` (design tokens, SEO defaults, fonts,
-custom head) · `list_interactions`, `create_interaction`,
+custom head) · `list_interactions`, `create_interactions`,
 `bind_interaction`, `unbind_interaction` · `list_collections`, `get_collection`,
-`create_collection`, `update_collection`, `delete_collection`, `upsert_entry`,
+`create_collection`, `update_collection`, `delete_collection`, `upsert_entries`,
 `delete_entry` · `list_media`, `upload_media` · `list_comments`,
 `reply_to_comment` · `publish`.
 

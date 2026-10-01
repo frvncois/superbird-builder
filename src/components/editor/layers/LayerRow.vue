@@ -10,7 +10,6 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { ChevronRight, Eye, EyeOff, Palette, Paperclip, Zap } from 'lucide-vue-next'
 import { elementIcon } from '@/lib/elementIcons'
-import { ELEMENTS } from '@/lib/elements'
 import { isComponentType } from '@/lib/components'
 import { useElement } from '@/composables/useElement'
 import { useComponents } from '@/composables/useComponents'
@@ -20,6 +19,8 @@ import { useInteraction } from '@/composables/useInteraction'
 import { useStructure } from '@/composables/useStructure'
 import { usePanel } from '@/composables/usePanel'
 import { useLayerState } from './layerState'
+import { layerLabel } from './layerLabel'
+import { useLayerFilter } from './layerFilter'
 import { useLayerSurfaceRow } from './useLayerSurface'
 import type { ElementNode } from '@/types/editor'
 
@@ -27,7 +28,7 @@ const props = defineProps<{ node: ElementNode; depth: number }>()
 const surface = useLayerSurfaceRow()
 
 const {
-  selectedElementIds, selectElement, highlightElement, highlightedElement, dropTarget,
+  selectElement, highlightElement, isSelected, isHighlighted, dropPositionFor,
 } = useElement()
 const { masterFor, isHidden, setHidden } = useComponents()
 const { canBuild } = useAuth()
@@ -37,10 +38,20 @@ const { backend } = useStructure()
 const { togglePanel } = usePanel()
 const { isCollapsed, toggle, editingRefId } = useLayerState()
 
-const selected = computed(() => selectedElementIds.value.includes(props.node.id))
-const highlighted = computed(() => highlightedElement.value?.id === props.node.id)
+// per-id marks: a hover or selection change reaches only the rows it concerns,
+// not a computed in every row of the tree
+const selected = computed(() => isSelected(props.node.id))
+const highlighted = computed(() => isHighlighted(props.node.id))
 const hasChildren = computed(() => props.node.children.length > 0)
-const open = computed(() => hasChildren.value && !isCollapsed(props.node.id))
+// a search prunes the tree to the hits and their ancestors, and shows every
+// surviving branch open — collapse state is how you read a tree, not how you
+// read a result
+const filter = useLayerFilter()
+const filtered = computed(() => filter?.value ?? null)
+const visible = computed(() => !filtered.value || filtered.value.has(props.node.id))
+const open = computed(
+  () => hasChildren.value && (!!filtered.value || !isCollapsed(props.node.id)),
+)
 const isInstance = computed(() => isComponentType(props.node.type))
 /** what a `[arg]` means on this element: a CMS binding everywhere but on a
  *  component wrapper, whose slot is not a field */
@@ -70,44 +81,9 @@ const kindClass = computed(() =>
 const hidden = computed(() => isHidden(props.node))
 const canHide = computed(() => canBuild.value && props.node.type !== 'body')
 
-/**
- * What to call this row. The type alone — which is all anything in the app
- * showed for a node until now — makes a page of `div` / `div` / `div`, so
- * prefer whatever the author actually wrote: its ref, its text, its binding.
- */
-/** the words of a seeded container (a button, a link) live in its child, so
- *  the row would otherwise read `button` — which says nothing on a page of them */
-/** a node's text: its own, else what its hosts say, else its master's */
-function textOf(node: ElementNode): string {
-  if (node.content) return node.content
-  const mapping = masterFor(node.id)
-  if (!mapping) return ''
-  return [...mapping.mirrors, mapping.master].find((source) => source.content)?.content ?? ''
-}
-
-function seedText(node: ElementNode): string {
-  if (!ELEMENTS[node.type]?.seed) return ''
-  for (const child of node.children) {
-    const own = textOf(child)
-    if (own) return own
-  }
-  return ''
-}
-
-const label = computed(() => {
-  const n = props.node
-  if (n.ref) return `#${n.ref}`
-  if (isInstance.value) return n.type
-  // inside an instance the node's own content is empty by design — the master
-  // holds it, and the master is what renders
-  const text = (textOf(n) || seedText(n) || '')
-    .replace(/<[^>]*>/g, ' ')
-    .trim()
-  if (text) return text.length > 28 ? `${text.slice(0, 28)}…` : text
-  if (n.arg) return `[${n.arg}]`
-  // the TYPE, not the tag: `heading` and `text` say more than `h2` and `div`
-  return n.type
-})
+// the label lives in `layerLabel.ts`: the search filtering this tree matches
+// on exactly what the row shows
+const label = computed(() => layerLabel(props.node, masterFor))
 
 /** shown after the label when the label isn't already the type */
 const secondary = computed(() => (label.value === props.node.type ? '' : props.node.type))
@@ -148,7 +124,7 @@ function onClick(e: MouseEvent) {
 
 /** where a drag currently wants to land relative to THIS row */
 const dropHere = computed(() =>
-  dropTarget.value?.id === props.node.id ? dropTarget.value.position : null,
+  dropPositionFor(props.node.id),
 )
 
 // --- inline ref rename: the only way a human can set a #ref now ---
@@ -191,7 +167,7 @@ function commitRef() {
 </script>
 
 <template>
-  <div :class="hidden && 'opacity-50'">
+  <div v-if="visible" :class="hidden && 'opacity-50'">
     <div
       :data-layer-row="node.id"
       :data-layer-hidden="hidden || undefined"

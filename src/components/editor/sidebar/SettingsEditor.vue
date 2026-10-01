@@ -51,7 +51,7 @@ const panels = computed<Panel[]>(() =>
 const { activePanelId, togglePanel, closePanel } = usePanel()
 const activePanel = computed(() => panels.value.find((p) => p.id === activePanelId.value))
 const { pickingFor } = useInteraction()
-const { detail } = useEffectDetail()
+const { detail, chooser } = useEffectDetail()
 const { selectedElement, isMultiSelect, requestReveal } = useElement()
 
 // Escape always returns to the Layers tree with the current selection in view:
@@ -148,6 +148,7 @@ function panelTitle(): string {
     const noun = detail.value.kind === 'interaction' ? 'interaction' : 'animation'
     return detail.value.created ? `New ${noun}` : `Edit ${noun}`
   }
+  if (chooser.value && activePanel.value?.id === 'interactions') return 'Add interaction'
   return activePanel.value?.label ?? ''
 }
 

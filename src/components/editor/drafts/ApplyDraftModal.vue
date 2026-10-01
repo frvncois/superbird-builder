@@ -2,7 +2,8 @@
 // Review-and-apply flow for a draft: change summary, side-by-side conflict
 // choices, then a success state offering to keep or delete the draft.
 import { computed, onMounted, ref } from 'vue'
-import { Check, CircleCheck, LoaderCircle } from 'lucide-vue-next'
+import { Check, CircleCheck } from 'lucide-vue-next'
+import LoadingUI from '@/components/ui/LoadingUI.vue'
 import ModalDialog from '@/components/modal/ModalDialog.vue'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import { useBranches } from '@/composables/useBranches'
@@ -90,12 +91,11 @@ async function deleteDraft() {
     @close="emit('close')"
   >
     <!-- loading -->
-    <div v-if="stage === 'loading' || stage === 'applying'" class="flex items-center gap-2 py-6">
-      <LoaderCircle class="size-4 animate-spin text-muted-foreground" />
-      <p class="text-xs text-muted-foreground">
-        {{ stage === 'applying' ? 'Merging the draft…' : 'Comparing with Main…' }}
-      </p>
-    </div>
+    <LoadingUI
+      v-if="stage === 'loading' || stage === 'applying'"
+      class="justify-start py-6"
+      :label="stage === 'applying' ? 'Merging the draft…' : 'Comparing with Main…'"
+    />
 
     <!-- review -->
     <template v-else-if="stage === 'review'">

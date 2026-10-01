@@ -24,6 +24,7 @@ import { useEditorShortcuts } from '@/composables/useEditorShortcuts'
 import { useEditorBoot } from '@/composables/useEditorBoot'
 import { useAuth } from '@/composables/useAuth'
 import { useViewMode } from '@/composables/useViewMode'
+import LoadingUI from '@/components/ui/LoadingUI.vue'
 
 // editor-zone globals: keymaps live here (NOT in App.vue) so the public
 // site never boots them. Structural shortcuts self-gate to Build mode.
@@ -43,8 +44,8 @@ const { isBuild, visibleColumn, showComponents } = useViewMode()
     <ButtonUI variant="outline" size="sm" @click="reloadPage">Retry</ButtonUI>
   </div>
 
-  <template v-else-if="ready">
-    <EditorLayout :column="visibleColumn" :framed="isBuild">
+  <template v-else>
+    <EditorLayout v-if="ready" :column="visibleColumn" :framed="isBuild">
       <template #rail>
         <AppRail />
       </template>
@@ -89,9 +90,33 @@ const { isBuild, visibleColumn, showComponents } = useViewMode()
         <SettingsEditor />
       </template>
     </EditorLayout>
-  </template>
 
-  <div v-else class="flex min-h-screen items-center justify-center bg-background">
-    <p class="text-xs text-muted-foreground">Loading…</p>
-  </div>
+    <!-- The boot screen sits OVER the editor rather than before it: the shell
+         mounts underneath the moment the store is hydrated, and the screen
+         fades off it — so the first thing seen is the editor settling into
+         place, not a hard cut from logo to chrome. -->
+    <Transition name="boot">
+      <LoadingUI v-if="!ready" page class="fixed inset-0 z-[60]" />
+    </Transition>
+  </template>
 </template>
+
+<style scoped>
+.boot-leave-active {
+  transition:
+    opacity 0.5s cubic-bezier(0.4, 0, 0.2, 1),
+    transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+  /* keep the pointer on the editor while the screen is still fading */
+  pointer-events: none;
+}
+.boot-leave-to {
+  opacity: 0;
+  transform: scale(1.04);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .boot-leave-active {
+    transition-duration: 0.01ms;
+  }
+}
+</style>

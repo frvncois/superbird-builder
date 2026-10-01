@@ -7,6 +7,7 @@ import ButtonUI from '@/components/ui/ButtonUI.vue'
 import MainLogo from '@/assets/MainLogo.vue'
 import { roleLabel } from '@/lib/roles'
 import type { Role } from '@/composables/useAuth'
+import LoadingUI from '@/components/ui/LoadingUI.vue'
 
 const route = useRoute()
 const token = String(route.params.token ?? '')
@@ -70,7 +71,7 @@ async function submit() {
   <div class="flex min-h-screen flex-col items-center justify-center gap-16 bg-background">
     <MainLogo class="size-12" />
 
-    <p v-if="loading" class="text-xs text-muted-foreground">Checking your invite…</p>
+    <LoadingUI v-if="loading" label="Checking your invite…" />
 
     <div v-else-if="invalid || !invite" class="flex flex-col items-center gap-2">
       <p class="text-sm font-medium">This invite link is invalid or has expired.</p>

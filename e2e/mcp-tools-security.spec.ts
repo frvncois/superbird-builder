@@ -119,10 +119,9 @@ test('entry values are sanitized at write, not just at render', async () => {
   const { store, api } = fixture()
   const call = await toolset(api)
 
-  await call('upsert_entry', {
+  await call('upsert_entries', {
     collectionId: 'c1',
-    entryId: 'e1',
-    values: { title: '<p onclick="evil()">hi</p><script>x()</script>' },
+    entries: [{ entryId: 'e1', values: { title: '<p onclick="evil()">hi</p><script>x()</script>' } }],
   })
   const stored = JSON.parse(store.get('guano-project:main')!)
   const title = stored.collections[0].entries[0].values.title
@@ -130,10 +129,9 @@ test('entry values are sanitized at write, not just at render', async () => {
   expect(title).not.toContain('onclick')
 
   // a media field given a script URL is refused loudly, not silently dropped
-  const refused = await call('upsert_entry', {
+  const refused = await call('upsert_entries', {
     collectionId: 'c1',
-    entryId: 'e1',
-    values: { photo: 'javascript:alert(1)' },
+    entries: [{ entryId: 'e1', values: { photo: 'javascript:alert(1)' } }],
   })
   expect(JSON.stringify(refused)).toContain('not an allowed media URL')
 })

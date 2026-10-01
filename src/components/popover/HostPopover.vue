@@ -22,9 +22,6 @@ defineEmits<{
       </p>
       <ButtonUI variant="icon" size="sm" :icon="X" class="w-7 text-muted-foreground" @click="$emit('close')" />
     </header>
-
-    <!-- overflow-x-hidden: overflow-y-auto alone computes overflow-x to auto,
-         so one too-wide row would give the whole popover a horizontal scrollbar -->
     <div class="custom-scrollbar flex max-h-[70vh] flex-col overflow-x-hidden overflow-y-auto">
       <slot />
     </div>

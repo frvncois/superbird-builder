@@ -18,8 +18,9 @@ const openComponents = ref<Record<string, boolean>>({})
 // element tree, editable in place. Inserting a component into a page happens
 // on the page, from the ⌘E dock.
 import { computed } from 'vue'
-import { ChevronRight, Component as ComponentIcon, Copy, Search, Settings, Trash2 } from 'lucide-vue-next'
+import { ChevronRight, Component as ComponentIcon, Copy, Settings, Trash2 } from 'lucide-vue-next'
 import MenuUI from '@/components/ui/MenuUI.vue'
+import DrawerShell from './DrawerShell.vue'
 import ComponentSettingsEditor from './ComponentSettingsEditor.vue'
 import LayerRow from '@/components/editor/layers/LayerRow.vue'
 import { useLayerSurface } from '@/components/editor/layers/useLayerSurface'
@@ -141,7 +142,8 @@ async function confirmDelete(def: ComponentDef) {
   if (ok) deleteComponent(def.id)
 }
 
-const panel = ref<HTMLElement>()
+const shell = ref<InstanceType<typeof DrawerShell>>()
+const panel = computed(() => shell.value?.el)
 
 // Escape peels one layer at a time — filter, then the settings view — and
 // never closes the column itself; only the rail does.
@@ -155,183 +157,132 @@ useDrawerEscape(panel, {
 </script>
 
 <template>
-  <div ref="panel" class="flex h-full flex-col bg-background">
-    <!-- list and settings are two layers of one surface, so they swap with a
-         transform-only push rather than a hard cut (same as PagesDrawer) -->
-    <div class="relative min-h-0 flex-1 overflow-hidden">
-      <Transition name="drawer-push">
-        <div v-if="settingsId" class="pane pane-settings overflow-y-auto">
-          <ComponentSettingsEditor :component-id="settingsId" @back="settingsId = null" />
+  <DrawerShell ref="shell" v-model:query="query" :detail="!!settingsId" placeholder="Search components…">
+    <template #detail>
+      <ComponentSettingsEditor :component-id="settingsId!" @back="settingsId = null" />
+    </template>
+
+    <!-- the tree is also a LAYER SURFACE: it takes focus for the tree's
+         keys and is a drop target for row drags and the ⌘E dock.
+         pb leaves room for a row kebab opened near the bottom -->
+    <div
+      ref="surface"
+      data-insert-surface
+      tabindex="0"
+      class="flex-1 space-y-0.5 overflow-y-auto pb-10 outline-none"
+      @keydown="onKeydown"
+    >
+      <template v-for="(section, i) in sections" :key="section.title">
+        <div class="flex items-center gap-1 px-2.5 pb-1" :class="i ? 'pt-4' : 'pt-2'">
+          <span class="flex-1 text-[9px] font-medium tracking-wide text-muted-foreground uppercase">
+            {{ section.title }}
+          </span>
         </div>
 
-        <div v-else class="pane pane-list flex flex-col">
-          <!-- search -->
-          <div class="relative shrink-0 p-1.5">
-            <Search class="pointer-events-none absolute top-1/2 left-4 size-3.5 -translate-y-1/2 text-muted-foreground" />
-            <input
-              v-model="query"
-              type="text"
-              spellcheck="false"
-              placeholder="Search components…"
-              class="h-8 w-full rounded-lg bg-input pr-2 pl-8 text-xs outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-accent"
-            />
+        <p
+          v-if="section.title === 'Project' && !hasOwn"
+          class="px-2.5 py-1 text-[10px] text-muted-foreground"
+        >
+          Nothing yet. Edit one from the library below, use one on a page, or select an
+          element on a page and choose “Create component”.
+        </p>
+
+        <div v-for="group in section.groups" :key="group.key">
+          <div class="group/row mx-1 flex h-7 items-center rounded-md pr-0.5 pl-1 hover:bg-accent/15">
+            <button
+              type="button"
+              class="flex h-full min-w-0 flex-1 items-center gap-1 text-left outline-none"
+              @click="toggleGroup(group.key)"
+            >
+              <ChevronRight
+                class="size-3 shrink-0 text-muted-foreground transition-transform"
+                :class="isExpanded(group.key) && 'rotate-90'"
+              />
+              <span class="truncate text-xs font-medium">{{ group.name }}</span>
+              <span class="shrink-0 text-[10px] text-muted-foreground">{{ group.cards.length }}</span>
+            </button>
           </div>
 
-          <!-- the tree is also a LAYER SURFACE: it takes focus for the tree's
-               keys and is a drop target for row drags and the ⌘E dock.
-               pb leaves room for a row kebab opened near the bottom -->
-          <div
-            ref="surface"
-            data-insert-surface
-            tabindex="0"
-            class="flex-1 overflow-y-auto pb-10 outline-none"
-            @keydown="onKeydown"
-          >
-            <template v-for="(section, i) in sections" :key="section.title">
-              <div class="flex items-center gap-1 px-2.5 pb-1" :class="i ? 'pt-4' : 'pt-2'">
-                <span class="flex-1 text-[9px] font-medium tracking-wide text-muted-foreground uppercase">
-                  {{ section.title }}
-                </span>
+          <!-- a guide line carries the nesting at this width -->
+          <div v-if="isExpanded(group.key)" class="mt-0.5 mb-1 ml-3.5 border-l border-input pl-1">
+            <template v-for="card in group.cards" :key="card.def.id">
+              <div
+                :data-component="card.preview ? undefined : card.def.name"
+                :data-catalog="card.preview?.key"
+                class="group/row mr-1 flex h-7 items-center rounded-md pr-0.5 pl-1"
+                :class="activeCard?.def.id === card.def.id ? 'bg-accent/25' : 'hover:bg-accent/15'"
+              >
+                <button
+                  type="button"
+                  data-row-toggle
+                  class="flex size-4 shrink-0 items-center justify-center text-muted-foreground outline-none hover:text-foreground"
+                  :aria-label="isOpen(card.def) ? 'Collapse' : 'Expand'"
+                  @click="toggleComponent(card.def)"
+                >
+                  <ChevronRight
+                    class="size-3 shrink-0 transition-transform"
+                    :class="isOpen(card.def) && 'rotate-90'"
+                  />
+                </button>
+                <button
+                  v-tooltip="card.preview ? { text: card.preview.description, side: 'right' } : ''"
+                  type="button"
+                  data-row-main
+                  class="flex h-full min-w-0 flex-1 items-center gap-1.5 text-left outline-none"
+                  @click="focusCard(card.key)"
+                >
+                  <ComponentIcon class="size-3 shrink-0 text-muted-foreground" />
+                  <span
+                    class="truncate text-xs"
+                    :class="activeCard?.def.id === card.def.id ? 'font-medium' : 'text-muted-foreground'"
+                  >{{ card.def.name }}</span>
+                </button>
+                <MenuUI
+                  v-if="!card.preview"
+                  width="w-40"
+                  class="opacity-0 group-hover/row:opacity-100 data-[open]:opacity-100"
+                  trigger-class="flex size-6 items-center justify-center rounded-lg text-muted-foreground outline-none hover:bg-accent/30 focus-visible:ring-2 focus-visible:ring-accent"
+                >
+                  <template #default="{ close }">
+                    <button type="button" class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs outline-none hover:bg-accent/30 focus-visible:bg-accent/30" @click="(settingsId = card.def.id, close())">
+                      <Settings class="size-3.5" /> Settings
+                    </button>
+                    <button type="button" class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs outline-none hover:bg-accent/30 focus-visible:bg-accent/30" @click="(duplicateComponent(card.def.id), close())">
+                      <Copy class="size-3.5" /> Duplicate
+                    </button>
+                    <div class="mx-1 my-1 h-px bg-input" />
+                    <button type="button" class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-danger outline-none hover:bg-accent/30 focus-visible:bg-accent/30" @click="(confirmDelete(card.def), close())">
+                      <Trash2 class="size-3.5" /> Delete
+                    </button>
+                  </template>
+                </MenuUI>
               </div>
 
-              <p
-                v-if="section.title === 'Project' && !hasOwn"
-                class="px-2.5 py-1 text-[10px] text-muted-foreground"
-              >
-                Nothing yet. Edit one from the library below, use one on a page, or select an
-                element on a page and choose “Create component”.
-              </p>
-
-              <div v-for="group in section.groups" :key="group.key">
-                <div class="group/row mx-1 flex h-7 items-center rounded-lg pr-0.5 pl-1 hover:bg-accent/15">
-                  <button
-                    type="button"
-                    class="flex h-full min-w-0 flex-1 items-center gap-1 text-left outline-none"
-                    @click="toggleGroup(group.key)"
-                  >
-                    <ChevronRight
-                      class="size-3 shrink-0 text-muted-foreground transition-transform"
-                      :class="isExpanded(group.key) && 'rotate-90'"
-                    />
-                    <span class="truncate text-xs font-medium">{{ group.name }}</span>
-                    <span class="shrink-0 text-[10px] text-muted-foreground">{{ group.cards.length }}</span>
-                  </button>
-                </div>
-
-                <!-- a guide line carries the nesting at this width -->
-                <div v-if="isExpanded(group.key)" class="mt-0.5 mb-1 ml-3.5 border-l border-input pl-1">
-                  <template v-for="card in group.cards" :key="card.def.id">
-                    <div
-                      :data-component="card.preview ? undefined : card.def.name"
-                      :data-catalog="card.preview?.key"
-                      class="group/row mr-1 flex h-7 items-center rounded-lg pr-0.5 pl-0.5"
-                      :class="activeCard?.def.id === card.def.id ? 'bg-accent/15' : 'hover:bg-accent/15'"
-                    >
-                      <button
-                        type="button"
-                        data-row-toggle
-                        class="flex size-4 shrink-0 items-center justify-center rounded text-muted-foreground outline-none hover:text-foreground"
-                        :aria-label="isOpen(card.def) ? 'Collapse' : 'Expand'"
-                        @click="toggleComponent(card.def)"
-                      >
-                        <ChevronRight
-                          class="size-3 transition-transform"
-                          :class="isOpen(card.def) && 'rotate-90'"
-                        />
-                      </button>
-                      <button
-                        v-tooltip="card.preview ? { text: card.preview.description, side: 'right' } : ''"
-                        type="button"
-                        data-row-main
-                        class="flex h-full min-w-0 flex-1 items-center gap-1.5 text-left outline-none"
-                        @click="focusCard(card.key)"
-                      >
-                        <ComponentIcon class="size-3 shrink-0 text-muted-foreground" />
-                        <span
-                          class="truncate text-xs"
-                          :class="activeCard?.def.id === card.def.id ? 'font-medium' : 'text-muted-foreground'"
-                        >{{ card.def.name }}</span>
-                      </button>
-                      <MenuUI
-                        v-if="!card.preview"
-                        width="w-40"
-                        class="opacity-0 group-hover/row:opacity-100 data-[open]:opacity-100"
-                        trigger-class="flex size-6 items-center justify-center rounded-lg text-muted-foreground outline-none hover:bg-accent/30 focus-visible:ring-2 focus-visible:ring-accent"
-                      >
-                        <template #default="{ close }">
-                          <button type="button" class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs outline-none hover:bg-accent/30 focus-visible:bg-accent/30" @click="(settingsId = card.def.id, close())">
-                            <Settings class="size-3.5" /> Settings
-                          </button>
-                          <button type="button" class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs outline-none hover:bg-accent/30 focus-visible:bg-accent/30" @click="(duplicateComponent(card.def.id), close())">
-                            <Copy class="size-3.5" /> Duplicate
-                          </button>
-                          <div class="mx-1 my-1 h-px bg-input" />
-                          <button type="button" class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-danger outline-none hover:bg-accent/30 focus-visible:bg-accent/30" @click="(confirmDelete(card.def), close())">
-                            <Trash2 class="size-3.5" /> Delete
-                          </button>
-                        </template>
-                      </MenuUI>
-                    </div>
-
-                    <!-- the component's element tree. Its own row above stands
-                         for the root wrapper, so the tree starts at its children -->
-                    <div v-if="isOpen(card.def)" class="mr-1 mb-1">
-                      <LayerRow
-                        v-for="child in card.def.root.children"
-                        :key="child.id"
-                        :node="child"
-                        :depth="1"
-                      />
-                      <p
-                        v-if="!card.def.root.children.length"
-                        class="py-1 pl-6 text-[10px] text-muted-foreground"
-                      >
-                        Empty. Insert an element with ⌘E.
-                      </p>
-                    </div>
-                  </template>
-                </div>
+              <!-- the component's element tree. Its own row above stands
+                   for the root wrapper, so the tree starts at its children -->
+              <div v-if="isOpen(card.def)" class="mr-1 mb-1">
+                <LayerRow
+                  v-for="child in card.def.root.children"
+                  :key="child.id"
+                  :node="child"
+                  :depth="1"
+                />
+                <p
+                  v-if="!card.def.root.children.length"
+                  class="py-1 pl-6 text-[10px] text-muted-foreground"
+                >
+                  Empty. Insert an element with ⌘E.
+                </p>
               </div>
             </template>
-
-            <p v-if="noResults" class="px-2 py-6 text-center text-xs text-muted-foreground">
-              No results for “{{ query.trim() }}”.
-            </p>
           </div>
         </div>
-      </Transition>
+      </template>
+
+      <p v-if="noResults" class="px-2 py-6 text-center text-xs text-muted-foreground">
+        No results for “{{ query.trim() }}”.
+      </p>
     </div>
-  </div>
+  </DrawerShell>
 </template>
 
-<style scoped>
-/* the two swap layers stack rather than displace each other */
-.pane {
-  position: absolute;
-  inset: 0;
-}
-.drawer-push-enter-active,
-.drawer-push-leave-active {
-  transition:
-    transform 0.18s ease-out,
-    opacity 0.18s ease-out;
-}
-/* settings is the deeper layer: it arrives from and leaves to the right */
-.pane-settings.drawer-push-enter-from,
-.pane-settings.drawer-push-leave-to {
-  transform: translateX(0.75rem);
-  opacity: 0;
-}
-.pane-list.drawer-push-enter-from,
-.pane-list.drawer-push-leave-to {
-  transform: translateX(-0.75rem);
-  opacity: 0;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .drawer-push-enter-active,
-  .drawer-push-leave-active {
-    transition-duration: 0.01ms;
-  }
-}
-</style>
