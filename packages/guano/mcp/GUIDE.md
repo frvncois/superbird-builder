@@ -1788,6 +1788,16 @@ canvas — arrows, dots, dragging and autoplay all run in Preview and on the pub
 Animations write inline styles, so never bind an animation that tweens `transform` or
 `width` to a slider's slides; the track is a real scroller and the two will fight.
 
+## Looking at your work
+
+`preview` renders the current target to a **separate site on its own port** and returns the
+url. Open it and look. It touches nothing live, needs no publish permission, and includes
+DRAFT pages — which a publish drops and which are exactly what you need while building.
+
+**Use it after every page.** Publishing is the only other way to render anything, and it
+puts bytes on the live origin: a half-built draft goes live every time you want to check a
+layout. Preview as you go, publish once at the end.
+
 ## Drafts, publishing, comments
 
 - Drafts are full project copies. `set_target {createDraft: "name"}` snapshots Main into

@@ -89,6 +89,12 @@ if (!process.env.GUANO_DATA_DIR && process.env.SB_DATA_DIR) {
 }
 const SNAPSHOT = join(DATA_DIR, 'published.json')
 const SITE = join(DATA_DIR, 'site')
+// The PREVIEW export: the same exporter, a different directory, served on its
+// own port. An agent (and a human) can look at what they built WITHOUT putting
+// it on the live origin — which was the only way to see anything, so a review
+// session published six times just to look, each one replacing the live site
+// with a half-built draft.
+const PREVIEW = join(DATA_DIR, 'preview')
 const MEDIA_DIR = join(DATA_DIR, 'media')
 // server-managed publish config — the GitHub token lives here, NEVER in the
 // /api/store project blob (which any authed user can read)
@@ -271,6 +277,9 @@ const storeWriteAllowed = slidingLimiter(600, 60_000)
 // A publish is a full Tailwind compile + static export; a dozen a minute is
 // already far past what a human does deliberately.
 const publishAllowed = slidingLimiter(12, 60_000)
+// previews are cheap and nothing ships, so they get their own, looser budget —
+// spending the publish budget on looking is what this exists to avoid
+const previewAllowed = slidingLimiter(30, 60_000)
 
 const tooManyRequests = (res, retryAfterSeconds, what) =>
   send(
@@ -931,6 +940,62 @@ async function protectedWriteDenial(req, user, key, existingStr, bodyStr) {
 }
 
 
+/**
+ * POST /api/preview — export the posted snapshot to the PREVIEW directory and
+ * return where to look at it. Nothing reaches the live origin.
+ *
+ * Deliberately NOT gated on the agent publish policy: the whole point is that an
+ * agent can see its own work without shipping it. A contributor's snapshot goes
+ * through the same content merge publishing uses, so a preview can never be a
+ * way to render structure a contributor is not allowed to write.
+ */
+async function handlePreview(req, res) {
+  const user = requestUser(req)
+  if (!user) return fail(res, 401, 'unauthorized')
+  const limit = previewAllowed(user.id)
+  if (!limit.ok) return tooManyRequests(res, limit.retryAfterSeconds, 'previews')
+
+  let raw = await readBody(req)
+  if (raw === null) return fail(res, 400, 'snapshot too large')
+  let parsed
+  try {
+    parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed.pages) || !parsed.pages.length) throw new Error('no pages')
+  } catch {
+    return fail(res, 400, 'invalid project snapshot')
+  }
+  if (user.role === 'contributor') {
+    const stored = await readFileOrNull(storeFile(MAIN_PROJECT_KEY))
+    const r = mergeContributorProject(stored, stored, raw)
+    if (r.error) return fail(res, 403, r.error)
+    parsed = JSON.parse(r.merged)
+  }
+  try {
+    // A preview exports EVERY page, published or not: it is the surface for
+    // looking at work in progress, and a draft page you cannot see is the thing
+    // you most need to. The live export still drops unpublished pages.
+    const stats = await exportSite({ ...parsed, pages: parsed.pages.map(previewPublished) }, PREVIEW)
+    return send(
+      res,
+      200,
+      JSON.stringify({ ok: true, ...stats, url: previewOrigin(req) }),
+    )
+  } catch (err) {
+    console.error(err)
+    return fail(res, 500, `preview export failed: ${err.message}`)
+  }
+}
+
+/** a page as the preview renders it — drafts included, so work in progress is
+ * visible. `status` is restored nowhere else: this is a copy. */
+const previewPublished = (page) => (page.status === 'published' ? page : { ...page, status: 'published' })
+
+/** where the preview server answers: same host, PREVIEW_PORT */
+function previewOrigin(req) {
+  const host = String(req.headers.host ?? `localhost:${port}`).split(':')[0]
+  return `http://${host}:${previewPort}/`
+}
+
 async function handlePost(req, res, params) {
   // the session is the credential; PUBLISH_TOKEN stays as a CI escape hatch.
   const bearerOk = !!TOKEN && timingSafeEqualStr(req.headers.authorization ?? '', `Bearer ${TOKEN}`)
@@ -1357,19 +1422,47 @@ async function handleStatic(req, res) {
 
   // the published static site — owns everything outside /admin and /api,
   // including /assets/* (style.css, script.js, media)
-  const exact = join(SITE, path)
+  return await serveSiteDir(req, res, SITE)
+}
+
+/**
+ * Serve one exported site directory: an exact file, else the path's
+ * index.html, else the export's 404 page. Shared by the live site and the
+ * preview server, which differ only in which directory they point at (and the
+ * preview's noindex header).
+ */
+async function serveSiteDir(req, res, root) {
+  const path = normalize(decodeURIComponent(new URL(req.url, 'http://x').pathname))
+  const NOSNIFF = { 'x-content-type-options': 'nosniff' }
+  const preview = root === PREVIEW
+  const headersFor = (target) => ({
+    ...NOSNIFF,
+    // unfinished work must never be indexed
+    ...(preview ? { 'x-robots-tag': 'noindex, nofollow' } : {}),
+    // SVG is a document format: even a sanitized file must not run script on
+    // this origin when navigated to directly (mirrors /media/:id)
+    ...(extname(target) === '.svg'
+      ? { 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'" }
+      : {}),
+  })
+  const exact = join(root, path)
   const target =
-    exact.startsWith(SITE) && extname(exact) !== '' && existsSync(exact)
+    exact.startsWith(root) && extname(exact) !== '' && existsSync(exact)
       ? exact
-      : join(SITE, path, 'index.html')
+      : join(root, path, 'index.html')
   try {
     const data = await readFile(target)
     send(res, 200, data, MIME[extname(target)] ?? 'application/octet-stream', headersFor(target))
   } catch {
     try {
-      send(res, 404, await readFile(join(SITE, '404.html')), MIME['.html'], NOSNIFF)
+      send(res, 404, await readFile(join(root, '404.html')), MIME['.html'], headersFor('x.html'))
     } catch {
-      send(res, 404, 'Nothing published yet.', 'text/plain')
+      send(
+        res,
+        404,
+        preview ? 'Nothing previewed yet — POST /api/preview first.' : 'Nothing published yet.',
+        'text/plain',
+      )
     }
   }
 }
@@ -1383,6 +1476,9 @@ const server = createServer(async (req, res) => {
     // Origin header and pass — the CI bearer publish keeps working.
     if (path.startsWith('/api/') && req.method !== 'GET' && !originAllowed(req)) {
       return fail(res, 403, 'cross-origin request rejected')
+    }
+    if (path === '/api/preview' && req.method === 'POST') {
+      return await handlePreview(req, res)
     }
     if (path === '/api/published' && req.method === 'POST') {
       return await handlePost(req, res, url.searchParams)
@@ -1432,6 +1528,26 @@ const server = createServer(async (req, res) => {
 // When PORT wasn't explicitly chosen, a busy default port walks to the next
 // free one (another guano/dev instance is usually what's squatting on it).
 // An explicit PORT is a contract: fail with one clear line, no stack trace.
+// The preview site answers on its own port, not a sub-path: the export uses
+// root-absolute URLs (/assets/…), so serving it under /preview/ would mean
+// threading a base path through every emitted URL.
+const PREVIEW_PORT = Number(process.env.GUANO_PREVIEW_PORT) || 0
+let previewPort = 0
+
+const previewServer = createServer(async (req, res) => {
+  try {
+    const path = normalize(decodeURIComponent(new URL(req.url, 'http://x').pathname))
+    // never the editor, and never indexed — this is unfinished work
+    if (path === '/admin' || path.startsWith('/admin/') || path.startsWith('/api/')) {
+      return fail(res, 404, 'the preview server serves the exported site only')
+    }
+    await serveSiteDir(req, res, PREVIEW)
+  } catch (err) {
+    console.error(err)
+    fail(res, 500, 'internal error')
+  }
+})
+
 const PORT_EXPLICIT = Boolean(process.env.PORT)
 const PORT_TRIES = PORT_EXPLICIT ? 1 : 10
 let port = PORT
@@ -1465,12 +1581,22 @@ server.listen(port, async () => {
   }
   await migrateStoreDir()
   if (port !== PORT) console.log(`port ${PORT} was busy — using ${port}`)
+  // the preview site, on its own port. A failure here is never fatal: it is a
+  // convenience, and the editor and the live site must come up regardless.
+  previewServer.once('error', (err) => {
+    console.warn(`preview server unavailable (${err.message}) — /api/preview will still export`)
+    previewPort = 0
+  })
+  previewServer.listen(PREVIEW_PORT || port + 1, () => {
+    previewPort = previewServer.address().port
+  })
   const base = `http://localhost:${port}`
   console.log(`
   guano is running${TOKEN ? ' (publish token required)' : ''}
 
   ➜ editor:  ${base}/admin
   ➜ site:    ${base}/
+  ➜ preview: http://localhost:${PREVIEW_PORT || port + 1}/
   ➜ data:    ${DATA_DIR}
 ${needsSetup() ? `\n  first run — open ${base}/admin to create your admin account\n` : ''}`)
 })

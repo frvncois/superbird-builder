@@ -68,6 +68,16 @@ export async function publish(projectSnapshot) {
   return res.json()
 }
 
+/**
+ * Export the snapshot to the PREVIEW site and return where to look at it.
+ * Nothing reaches the live origin, and the agent publish policy does not gate
+ * it — seeing your own work should never require shipping it.
+ */
+export async function preview(projectSnapshot) {
+  const res = await req('POST', '/api/preview', projectSnapshot)
+  return res.json()
+}
+
 /** the media library index: { assets, folders } */
 export async function mediaIndex() {
   const res = await req('GET', '/api/media')

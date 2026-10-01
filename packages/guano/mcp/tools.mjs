@@ -81,7 +81,8 @@ const GUIDE_HASH = GUIDE
 // uses it: with a dialog available the target choice is genuinely the human's,
 // instead of an agent-asserted chosenByUser boolean.
 export function createToolSet({ api, runtime, elicit, hasElicitation = () => null }) {
-  const { whoami, storeGetRaw, storeGetJson, storePutRaw, publish, mediaIndex, mediaUpload } = api
+  const { whoami, storeGetRaw, storeGetJson, storePutRaw, publish, preview, mediaIndex, mediaUpload } =
+    api
   const {
     validateDocument,
     parseSyntax,
@@ -8140,9 +8141,46 @@ const tools = [
     },
   },
   {
+    name: 'preview',
+    description:
+      'Render the CURRENT TARGET to the PREVIEW site and return its url — then OPEN it and ' +
+      'look. This is how you see your own work: publishing is the only other way to render ' +
+      'anything, and it puts bytes on the live origin, so a half-built draft goes live every ' +
+      'time you want to check a layout. A preview touches nothing live, needs no publish ' +
+      'permission, and includes DRAFT pages (the live export drops them), which is exactly what ' +
+      'you want while building. Re-run it after any change; the last render wins. Call it after ' +
+      'each page instead of publishing, and publish once at the end. Requires a target.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    handler: async () => {
+      if (!preview) {
+        throw new Error('this instance does not support previews — update the server')
+      }
+      const { project } = await loadTargetProject()
+      const stats = await preview(project)
+      const defaultLocale = project.defaultLocale || 'en'
+      const origin = String(stats.url ?? '').replace(/\/+$/, '')
+      const localeUrls = { [defaultLocale]: `${origin}/` }
+      for (const code of (project.locales ?? []).filter((l) => l !== defaultLocale)) {
+        localeUrls[code] = `${origin}/${code}/`
+      }
+      return {
+        previewed: true,
+        target,
+        url: `${origin}/`,
+        localeUrls,
+        routes: stats.routes,
+        bytes: stats.bytes,
+        note:
+          'Nothing live changed. Open the url to look; draft pages are included here and are ' +
+          'NOT in a publish.',
+      }
+    },
+  },
+  {
     name: 'publish',
     description:
-      'Publish the CURRENT TARGET as the live static site (server export). Editor+ only ' +
+      'Publish the CURRENT TARGET as the live static site (server export). To LOOK at your ' +
+      'work use `preview` instead — this one puts bytes on the live origin. Editor+ only ' +
       '(enforced server-side). Returns export stats and the `url` where the site is now live ' +
       '(served at the origin root; the editor lives at /admin), plus `localeUrls` (one per ' +
       'registered locale) and `warnings` — READ THEM AND ACT: design checks a review would send back ' +
