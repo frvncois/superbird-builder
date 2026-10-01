@@ -267,3 +267,85 @@ test.describe('extracting a component', () => {
     expect(code).toContain(':SiteFooter')
   })
 })
+
+test.describe('reference fields', () => {
+  /** two collections, the second referring to the first */
+  async function graph() {
+    const s = await mcpSession()
+    const author = (await s.call('create_collection', { name: 'author', detailRoutes: false }))
+      .collection
+    const post = (await s.call('create_collection', { name: 'post', detailRoutes: false })).collection
+    await s.call('update_collection', {
+      collectionId: post.id,
+      addFields: [{ name: 'writer', type: 'reference', refCollectionId: author.id }],
+    })
+    await s.call('upsert_entries', {
+      collectionId: author.id,
+      entries: [{ name: 'Ada Lovelace' }],
+    })
+    return { s, author, post }
+  }
+
+  test('a reference takes a slug, so seeding needs no uuid transcription', async () => {
+    const { s, author: authorCol, post } = await graph()
+    const author = s.stored().collections.find((c: { name: string }) => c.name === 'author')
+      .entries[0]
+    // entry ids only come back in a response, so the session transcribed 35
+    // uuids by hand between calls
+    const r = await s.call('upsert_entries', {
+      collectionId: post.id,
+      entries: [{ name: 'First post', values: { writer: author.slug } }],
+    })
+    expect(r.saved).toBe(true)
+    const written = s.stored().collections.find((c: { name: string }) => c.name === 'post')
+      .entries[0]
+    expect(written.values.writer).toBe(author.id) // stored as the id, as always
+  })
+
+  test('an id still works, and a value matching nothing is refused', async () => {
+    const { s, author: authorCol, post } = await graph()
+    const author = s.stored().collections.find((c: { name: string }) => c.name === 'author')
+      .entries[0]
+    const byId = await s.call('upsert_entries', {
+      collectionId: post.id,
+      entries: [{ name: 'By id', values: { writer: author.id } }],
+    })
+    expect(byId.saved).toBe(true)
+
+    // stored as-is before this: the field read back fine and rendered nothing
+    const bad = await s.call('upsert_entries', {
+      collectionId: post.id,
+      entries: [{ name: 'Bad', values: { writer: 'nobody' } }],
+    })
+    expect(bad.saved).toBe(false)
+    expect(JSON.stringify(bad)).toContain('nobody')
+    expect(JSON.stringify(bad)).toContain('slug')
+    // and the half-made entry is rolled back
+    const posts = s.stored().collections.find((c: { name: string }) => c.name === 'post').entries
+    expect(posts.map((e: { name: string }) => e.name)).toEqual(['By id'])
+  })
+
+  test('a multi-reference resolves each value, by slug or id', async () => {
+    const { s, author: authorCol, post } = await graph()
+    await s.call('upsert_entries', {
+      collectionId: authorCol.id,
+      entries: [{ name: 'Grace Hopper' }],
+    })
+    const authors = s.stored().collections.find((c: { name: string }) => c.name === 'author')
+      .entries
+    await s.call('update_collection', {
+      collectionId: post.id,
+      addFields: [
+        { name: 'contributors', type: 'multi-reference', refCollectionId: authorCol.id },
+      ],
+    })
+    const r = await s.call('upsert_entries', {
+      collectionId: post.id,
+      entries: [{ name: 'Joint', values: { contributors: [authors[0].slug, authors[1].id] } }],
+    })
+    expect(r.saved).toBe(true)
+    const written = s.stored().collections.find((c: { name: string }) => c.name === 'post')
+      .entries[0]
+    expect(written.values.contributors).toEqual([authors[0].id, authors[1].id])
+  })
+})

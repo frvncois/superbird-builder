@@ -789,6 +789,12 @@ add entries with `upsert_entry` — or, for many, `upsert_entries {entries: [...
 call (`values` maps field *names* to strings), and bind elements with `[field]` args.
 Entry `name`/`slug` are identity; only `values` bind. An element with a `[field]` binding
 shows the bound value in entry scope — its own `content` is ignored there.
+
+**A `reference` / `multi-reference` value takes a SLUG or an entry id**, whichever you
+have: slugs are derived from the name, so seeding a graph (posts → authors, messages →
+conversations) needs no id transcription between calls. A value matching neither is
+refused and names what it could not find — stored as-is, as it used to be, the field read
+back fine and rendered nothing.
 `delete_collection` removes the collection and its template page; its response lists
 `referencingPages` still holding `:collection-list[name]` / `:collection-item[name]`
 blocks — clean those up right away (they hard-fail the next `set_page_code`).

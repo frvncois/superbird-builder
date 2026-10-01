@@ -2353,6 +2353,48 @@ const unsafeSrcError = (field, value) => ({
  * typed { ok:false, reason, message } — a failed create rolls back its stub so
  * a batch save never persists a half-made entry.
  */
+/**
+ * Resolve a reference field's values to entry IDS, accepting a slug for each.
+ *
+ * Entry ids only come back in an upsert RESPONSE, so seeding a graph
+ * (conversations → messages → back again) meant transcribing uuids by hand
+ * between calls. A slug is something the caller already knows, and an id that
+ * matches nothing used to be stored as-is: the field read back fine and
+ * rendered nothing, which is the silent-failure shape worth refusing.
+ */
+function resolveReferences(project, field, values) {
+  const target = (project.collections ?? []).find((c) => c.id === field.refCollectionId)
+  if (!target) {
+    return {
+      ok: false,
+      reason: 'unknown-reference-collection',
+      field: field.name,
+      message: `field "${field.name}" points at collection ${field.refCollectionId}, which does not exist`,
+    }
+  }
+  const ids = []
+  const unknown = []
+  for (const value of values) {
+    const hit =
+      (target.entries ?? []).find((e) => e.id === value) ??
+      (target.entries ?? []).find((e) => e.slug === value)
+    if (hit) ids.push(hit.id)
+    else unknown.push(value)
+  }
+  if (unknown.length) {
+    return {
+      ok: false,
+      reason: 'unknown-reference',
+      field: field.name,
+      message:
+        `field "${field.name}": ${unknown.map((u) => `"${u}"`).join(', ')} ` +
+        `match no entry of "${target.name}" by id or slug. ` +
+        `get_collection {collectionId: "${target.id}"} lists them; a slug works wherever an id does.`,
+    }
+  }
+  return { ids }
+}
+
 function upsertEntryInto(project, c, spec, slugify) {
   const fieldByName = new Map((c.fields ?? []).map((f) => [f.name, f]))
   const values = spec.values ?? {}
@@ -2420,7 +2462,23 @@ function upsertEntryInto(project, c, spec, slugify) {
             return unsafeSrcError(f, bad)
           }
         }
+        if (f.type === 'multi-reference') {
+          const resolved = resolveReferences(project, f, list)
+          if (!resolved.ids) {
+            rollback()
+            return resolved
+          }
+          cleaned[k] = resolved.ids
+          continue
+        }
         cleaned[k] = list
+      } else if (f.type === 'reference') {
+        const resolved = resolveReferences(project, f, String(v) ? [String(v)] : [])
+        if (!resolved.ids) {
+          rollback()
+          return resolved
+        }
+        cleaned[k] = resolved.ids[0] ?? ''
       } else if (f.type === 'image') {
         const s = String(v)
         if (s !== '' && !SAFE_SRC.test(s)) {
