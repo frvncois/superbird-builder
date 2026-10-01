@@ -1272,6 +1272,7 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
         ['htmlId', edit.htmlId !== undefined && edit.htmlId !== ''],
         ['bindInteractions', edit.bindInteractions?.length],
         ['bindAnimations', edit.bindAnimations?.length],
+        ['fieldAttrs', edit.fieldAttrs !== undefined],
       ]
         .filter(([, given]) => given)
         .map(([name]) => name)
@@ -1883,6 +1884,31 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
         if (Object.keys(clean).length) attrTarget.attributes = clean
         else delete attrTarget.attributes
         applied.push(`attributes${onShared}`)
+        changed = true
+      }
+    }
+
+    if (edit.fieldAttrs !== undefined) {
+      if (localized) {
+        errors.push('fieldAttrs are not localizable — the FIELD value is what carries locales')
+      } else {
+        const incoming =
+          edit.fieldAttrs && typeof edit.fieldAttrs === 'object' ? edit.fieldAttrs : {}
+        const clean = {}
+        const notAllowed = []
+        for (const [rawName, field] of Object.entries(incoming)) {
+          const name = String(rawName).toLowerCase().trim()
+          if (!isAllowedAttribute(name)) notAllowed.push(rawName)
+          else clean[name] = String(field)
+        }
+        if (notAllowed.length) {
+          errors.push(`fieldAttrs ignored (attribute name not allowed): ${notAllowed.join(', ')}`)
+        }
+        // per-INSTANCE, like listQuery and content — two placements of one
+        // component can bind the same attribute to different fields
+        if (Object.keys(clean).length) node.fieldAttrs = clean
+        else delete node.fieldAttrs
+        applied.push('fieldAttrs')
         changed = true
       }
     }
@@ -5780,6 +5806,20 @@ const tools = [
                   'pattern, inputmode, accept). Replaces the whole set; {} or null clears. ' +
                   'id/class/style/src/href and on* handlers are refused. Inside a component ' +
                   'instance the set lands on the MASTER (attributes render shared, like classes).',
+                additionalProperties: { type: 'string' },
+              },
+              fieldAttrs: {
+                type: ['object', 'null'],
+                description:
+                  'bind ATTRIBUTE VALUES to collection fields: {"<attribute>": "<field name>"}, ' +
+                  'resolved against the surrounding entry scope. This is how presentation ' +
+                  'follows data — bind `data-status` to a status field and style it with ' +
+                  '`data-[status=waiting]:bg-pending` classes, so ONE pill renders a different ' +
+                  'colour per entry instead of needing two components; bind `value` or ' +
+                  '`placeholder` to pre-fill an input from the entry it edits. The static ' +
+                  '`attributes` value is the fallback when there is no entry or the field is ' +
+                  'empty. Replaces the whole set; {} or null clears. Per INSTANCE, not shared ' +
+                  'with the component master.',
                 additionalProperties: { type: 'string' },
               },
               arg: {

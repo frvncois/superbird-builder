@@ -201,6 +201,20 @@ export interface ElementNode {
      * the "related posts / more from" pattern */
     excludeCurrent?: boolean
   }
+  /**
+   * Attribute values bound to collection fields: attribute name → field name,
+   * resolved against the surrounding entry scope (shared/fields.resolveFieldAttrs).
+   *
+   * This is how presentation follows DATA. A `[field]` arg binds an element's
+   * TEXT; this binds an attribute, which is the only way to reach a `data-*`
+   * hook a `data-[status=waiting]:` class can style, or to pre-fill an input's
+   * `value` / `placeholder` from the entry being edited. Without it a status
+   * pill could not change colour per entry and every edit form rendered empty.
+   *
+   * Falls back to the static `attributes` value when there is no entry or the
+   * field is empty, so a bound attribute is still authorable out of scope.
+   */
+  fieldAttrs?: Record<string, string>
   /** slider only: carousel configuration (node-only state, like listQuery).
    * Absent = every default; see shared/slider.js */
   slider?: SliderConfig

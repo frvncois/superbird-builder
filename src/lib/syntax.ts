@@ -619,6 +619,7 @@ export const NODE_STATE_KEYS = [
   'locales',
   'listQuery',
   'entryId',
+  'fieldAttrs',
   'slider',
 ] as const
 

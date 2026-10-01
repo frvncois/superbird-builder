@@ -1,4 +1,4 @@
-import { computed, ref, shallowRef } from 'vue'
+import { computed, effectScope, reactive, ref, shallowRef, toRaw, watch } from 'vue'
 import { usePage } from './usePage'
 import { REF_SLOT, applyNodeMarkers, reconcile } from '@/lib/syntax'
 import { isKnownElement } from '@/lib/elements'
@@ -22,6 +22,12 @@ interface NodeProps {
   interactions?: InteractionBinding[]
   animations?: AnimationBinding[]
   attributes?: Record<string, string>
+  /** attribute values bound to collection fields */
+  fieldAttrs?: Record<string, string>
+  /** a list's filter/sort/limit and a picked entry — node-only state like the
+   * rest, and copying a filtered list used to silently lose the filter */
+  listQuery?: ElementNode['listQuery']
+  entryId?: string
   slider?: ElementNode['slider']
 }
 
@@ -47,6 +53,9 @@ function captureProps(n: ElementNode): NodeProps {
     interactions: n.interactions ? deepClone(n.interactions) : undefined,
     animations: n.animations ? deepClone(n.animations) : undefined,
     attributes: n.attributes ? deepClone(n.attributes) : undefined,
+    fieldAttrs: n.fieldAttrs ? { ...n.fieldAttrs } : undefined,
+    listQuery: n.listQuery ? deepClone(n.listQuery) : undefined,
+    entryId: n.entryId,
     slider: n.slider ? deepClone(n.slider) : undefined,
   }
 }
@@ -64,17 +73,35 @@ export function setSelectionScope(roots: (() => ElementNode[]) | null) {
   selectionScope.value = roots
   selectedElementId.value = null
   selectionAnchorId.value = null
-  highlightedElementId.value = null
+  syncSet(highlightedIds, [])
 }
 
 // the fixed end of a multi-selection; the focus (selectedElementId) moves with
 // Cmd+Shift+↑/↓. Together they define a contiguous run of siblings.
 const selectionAnchorId = ref<string | null>(null)
 
-// a transient "preview" highlight, independent of selection — e.g. hovering an
-// interaction's Target button outlines the target on the canvas + Layers tree
-// without changing the real selection (which would swap the settings panel)
-const highlightedElementId = ref<string | null>(null)
+// --- per-id marks: what a canvas element asks about ITSELF ---
+//
+// Every rendered element (× breakpoint frames) and every Layers row asks "am I
+// selected / highlighted / the drop target?". Asked against one shared ref,
+// each is a dependency of that ref, so hovering a Layers row — which writes
+// the highlight twice per row crossed — re-evaluated a computed in every
+// element on the page: ~15 ms a change on a 5,000-element page before any
+// real render work, felt as the canvas lagging behind the pointer. A reactive
+// Set/Map tracks `has`/`get` PER KEY, so a change reaches only the element
+// leaving the state and the one entering it. Write them only through
+// `syncSet` / the watchers below — `clear()` notifies every key again.
+const highlightedIds = reactive(new Set<string>())
+const selectedIds = reactive(new Set<string>())
+/** the body when nothing is picked — the canvas outlines it, the tree does not */
+const defaultSelectedIds = reactive(new Set<string>())
+const dropTargets = reactive(new Map<string, DropPosition>())
+
+function syncSet(set: Set<string>, next: Iterable<string>) {
+  const want = new Set(next)
+  for (const id of [...toRaw(set)]) if (!want.has(id)) set.delete(id)
+  for (const id of want) if (!set.has(id)) set.add(id)
+}
 
 // bumped to ask the Layers tree to bring the current selection into view
 // (e.g. after inserting from the ⌘E dock)
@@ -88,7 +115,33 @@ export type DropPosition = 'before' | 'after' | 'inside'
 const draggingId = ref<string | null>(null)
 const dropTarget = ref<{ id: string; position: DropPosition } | null>(null)
 
+watch(dropTarget, (target) => {
+  for (const id of [...toRaw(dropTargets).keys()]) if (id !== target?.id) dropTargets.delete(id)
+  if (target) dropTargets.set(target.id, target.position)
+})
+
+// the selection marks derive from per-caller computeds, so they are kept in
+// step by ONE watcher in a detached scope — created inside a component's
+// setup it would die with that component (the `useThemeTokens` lesson)
+let selectionMarksStarted = false
+function startSelectionMarks() {
+  if (selectionMarksStarted) return
+  selectionMarksStarted = true
+  effectScope(true).run(() => {
+    const { selectedElementIds, bodyElement } = useElement()
+    watch(
+      [selectedElementIds, () => bodyElement.value?.id ?? null],
+      ([ids, bodyId]) => {
+        syncSet(selectedIds, ids)
+        syncSet(defaultSelectedIds, ids.length === 0 && bodyId ? [bodyId] : [])
+      },
+      { immediate: true },
+    )
+  })
+}
+
 export function useElement() {
+  startSelectionMarks()
   const { activePage } = usePage()
 
   const elements = computed(() =>
@@ -355,6 +408,9 @@ export function useElement() {
           }))
         }
         if (p.attributes) n.attributes = deepClone(p.attributes)
+        if (p.fieldAttrs) n.fieldAttrs = { ...p.fieldAttrs }
+        if (p.listQuery) n.listQuery = deepClone(p.listQuery)
+        if (p.entryId) n.entryId = p.entryId
         if (p.slider) n.slider = deepClone(p.slider)
       })
       selectionAnchorId.value = firstRootId ?? lastRootId
@@ -429,12 +485,27 @@ export function useElement() {
     selectionAnchorId.value = id // a plain select collapses any multi-selection
   }
 
-  const highlightedElement = computed(() =>
-    highlightedElementId.value ? findNode(elements.value, highlightedElementId.value) : null,
-  )
-
+  // a transient "preview" highlight, independent of selection — e.g. hovering an
+  // interaction's Target button or a Layers row outlines the element on the
+  // canvas without changing the real selection (which would swap the panel)
   function highlightElement(id: string | null) {
-    highlightedElementId.value = id
+    syncSet(highlightedIds, id ? [id] : [])
+  }
+
+  /** is this element the transient highlight? Tracks only this id. */
+  function isHighlighted(id: string): boolean {
+    return highlightedIds.has(id)
+  }
+
+  /** is this element in the selection? `withDefault` counts the body that
+   *  stands in when nothing is picked (the canvas does, the tree doesn't). */
+  function isSelected(id: string, withDefault = false): boolean {
+    return selectedIds.has(id) || (withDefault && defaultSelectedIds.has(id))
+  }
+
+  /** where a drag would land relative to this element, if it is the target */
+  function dropPositionFor(id: string): DropPosition | null {
+    return dropTargets.get(id) ?? null
   }
 
   /** ask the Layers tree to scroll the selection's row into view */
@@ -741,8 +812,10 @@ export function useElement() {
     reorderElement,
     moveSelectionGroup,
     wrapSelectionInDiv,
-    highlightedElement,
     highlightElement,
+    isHighlighted,
+    isSelected,
+    dropPositionFor,
     revealTick,
     requestReveal,
   }

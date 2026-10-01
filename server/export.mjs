@@ -14,7 +14,14 @@ import { ELEMENTS_DATA as ELEMENTS } from '../src/lib/shared/elements.js'
 import { themeBlock, rootFontSizeCss, applyTitleTemplate } from '../src/lib/shared/tokens.js'
 import { PROSE_CSS, CUSTOM_VARIANTS } from '../src/lib/shared/prose.js'
 import { fontFaceBlock } from '../src/lib/shared/fonts.js'
-import { resolveBinding, resolveListScope, refDisplay, applyListQuery, mediaUrls } from '../src/lib/shared/fields.js'
+import {
+  resolveBinding,
+  resolveListScope,
+  refDisplay,
+  applyListQuery,
+  mediaUrls,
+  resolveFieldAttrs,
+} from '../src/lib/shared/fields.js'
 import {
   sanitizeAttributes,
   serializeAttribute,
@@ -711,7 +718,20 @@ function attrsFor(node, ctx, bg, { wrapLink = true, extraClass = '' } = {}) {
   // <a> and is skipped here.
   const managed = new Set(['id', 'class', 'style', 'src', 'alt', 'href'])
   const wrapsInAnchor = wrapLink && def?.tag !== 'a' && !!resolveHref(node, ctx)
-  const own = wrapsInAnchor ? splitLinkAttributes(custom).element : custom
+  // attribute values bound to collection fields, resolved in the entry scope
+  // being rendered (mirrors useRenderNode's customAttrs). Per-instance with a
+  // component default, like listQuery.
+  const boundAttrs = resolveInstanceValue(node, mapping, 'fieldAttrs')
+  const withBound =
+    boundAttrs && ctx.scope?.entry
+      ? resolveFieldAttrs(
+          boundAttrs,
+          ctx.scope.collection,
+          (field) => entryValue(ctx.scope.entry, field, ctx.locale, ctx.defaultLocale) ?? '',
+          custom,
+        )
+      : custom
+  const own = wrapsInAnchor ? splitLinkAttributes(withBound).element : withBound
   // attributes the element TYPE implies (:checkbox → type="checkbox"), unless
   // the author set that attribute themselves
   const implied = def?.attrs ?? {}

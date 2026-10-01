@@ -6,6 +6,7 @@ import { useInteraction, type ScopeOf } from './useInteraction'
 import { useComponents } from './useComponents'
 import { useAnimation, animBindingActiveAt, scopedAnimBindings } from './useAnimation'
 import { bindingScope, entryScopePart } from '@/lib/shared/entryScope.js'
+import { resolveFieldAttrs } from '@/lib/shared/fields.js'
 import { useMotion } from './useMotion'
 import { appearRootMargin, composeMotionStyle, effectiveAppearMode } from '@/lib/motion'
 import { useProject } from './useProject'
@@ -229,7 +230,18 @@ export function useRenderNode(
     // route, since a shared component's master cannot know which page its
     // instance is on. Mirrors ariaCurrentFor in server/export.mjs.
     if (isCurrentLink.value && !attrs['aria-current']) attrs['aria-current'] = 'page'
-    return attrs
+    // attribute values bound to collection fields, resolved in the entry scope
+    // being rendered. Per-instance with a component default, like listQuery.
+    const bound = resolveInstanceValue(node.value, mapping.value, 'fieldAttrs') as
+      | Record<string, string>
+      | undefined
+    if (!bound || !scope?.entry) return attrs
+    return resolveFieldAttrs(
+      bound,
+      scope.collection,
+      (field) => entryValue(scope.entry!, field as never).value ?? '',
+      attrs,
+    )
   })
 
   // --- background media (image → CSS bg, video → layer); master-aware like style ---

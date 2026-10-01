@@ -221,3 +221,36 @@ export function refDisplay(collections, field, entry) {
     .filter(Boolean)
     .join(', ')
 }
+
+/**
+ * Attribute values bound to collection fields (`node.fieldAttrs`), resolved in
+ * the entry scope being rendered. Shared by both Vue renderers, the exporter and
+ * the MCP validators, so the canvas, Preview and the published page agree.
+ *
+ * This is the only way presentation can follow DATA: a `data-status` attribute
+ * drives a `data-[status=waiting]:` class, so one status pill renders a
+ * different colour per entry instead of needing two components; and `value` /
+ * `placeholder` on an input pre-fill an edit form from the entry it edits.
+ *
+ * Falls back to whatever the static `attributes` already held when there is no
+ * entry, or the field is missing, or its value is empty — so a bound attribute
+ * is still authorable (and visible) outside entry scope.
+ *
+ * @param {Record<string,string>|undefined} fieldAttrs attribute name → field name
+ * @param {{fields?: {name: string}[]}|null|undefined} collection the entry's collection
+ * @param {(field: {name: string}) => string} readField reads one field's value
+ *   for the entry being rendered (locale-aware in every caller)
+ * @param {Record<string,string>} base the already-sanitized static attributes
+ * @returns {Record<string,string>} a new object; `base` is never mutated
+ */
+export function resolveFieldAttrs(fieldAttrs, collection, readField, base = {}) {
+  const out = { ...base }
+  for (const [rawName, fieldName] of Object.entries(fieldAttrs ?? {})) {
+    const name = String(rawName).toLowerCase().trim()
+    const field = (collection?.fields ?? []).find((f) => f.name === fieldName)
+    if (!field) continue
+    const value = readField(field)
+    if (value !== undefined && value !== null && String(value) !== '') out[name] = String(value)
+  }
+  return out
+}

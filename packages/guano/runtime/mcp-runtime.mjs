@@ -1081,6 +1081,7 @@ var NODE_STATE_KEYS = [
 	"locales",
 	"listQuery",
 	"entryId",
+	"fieldAttrs",
 	"slider"
 ];
 /** true when a node carries state that would be lost (or wrongly inherited) */

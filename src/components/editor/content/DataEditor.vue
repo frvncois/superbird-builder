@@ -230,7 +230,7 @@ const canAttrs = computed(() => !!selectedElement.value && !isBody.value)
 
 // editable buffer: rows may hold half-typed/invalid names; only the valid,
 // allowlisted subset is written back to the node (sanitizeAttributes)
-const attrRows = ref<{ name: string; value: string }[]>([])
+const attrRows = ref<{ name: string; value: string; field: string }[]>([])
 let syncingAttrs = false
 
 watch(
@@ -238,7 +238,15 @@ watch(
   () => {
     syncingAttrs = true
     const attrs = selectedElement.value?.attributes ?? {}
-    attrRows.value = Object.entries(attrs).map(([name, value]) => ({ name, value: String(value) }))
+    const bound = selectedElement.value?.fieldAttrs ?? {}
+    // a row exists for every attribute AND for every bound one, so an attribute
+    // that only has a field binding is still editable
+    const names = [...new Set([...Object.keys(attrs), ...Object.keys(bound)])]
+    attrRows.value = names.map((name) => ({
+      name,
+      value: String(attrs[name] ?? ''),
+      field: bound[name] ?? '',
+    }))
     nextTick(() => (syncingAttrs = false))
   },
   { immediate: true },
@@ -251,12 +259,28 @@ watch(
     const clean = sanitizeAttributes(Object.fromEntries(rows.map((r) => [r.name, r.value])))
     if (Object.keys(clean).length) selectedElement.value.attributes = clean
     else delete selectedElement.value.attributes
+    // the field bindings, keyed the same way. Only allowlisted names, so the
+    // two sets can never disagree about which attributes exist.
+    const bound: Record<string, string> = {}
+    for (const row of rows) {
+      const name = row.name.toLowerCase().trim()
+      if (row.field && isAllowedAttribute(name)) bound[name] = row.field
+    }
+    if (Object.keys(bound).length) selectedElement.value.fieldAttrs = bound
+    else delete selectedElement.value.fieldAttrs
   },
   { deep: true },
 )
 
+/** fields an attribute's value can be bound to — the entry context's own.
+ * Empty off a template page, where there is no entry to read. */
+const attrFieldOptions = computed(() => [
+  { label: 'Fixed value', value: '' },
+  ...(activeCollection.value?.fields ?? []).map((f) => ({ label: f.name, value: f.name })),
+])
+
 function addAttr() {
-  attrRows.value.push({ name: '', value: '' })
+  attrRows.value.push({ name: '', value: '', field: '' })
 }
 function removeAttr(i: number) {
   attrRows.value.splice(i, 1)
@@ -1043,7 +1067,11 @@ const src = computed({
       <div v-for="(row, i) in attrRows" :key="i" class="flex flex-col gap-1">
         <div class="flex items-center gap-1">
           <InputUI v-model="row.name" placeholder="name" class="font-mono" />
-          <InputUI v-model="row.value" placeholder="value" class="font-mono" />
+          <InputUI
+            v-model="row.value"
+            :placeholder="row.field ? 'fallback' : 'value'"
+            class="font-mono"
+          />
           <ButtonUI
             variant="icon"
             size="sm"
@@ -1053,6 +1081,16 @@ const src = computed({
             @click="removeAttr(i)"
           />
         </div>
+        <SelectUI
+          v-if="activeCollection"
+          v-model="row.field"
+          :options="attrFieldOptions"
+          class="text-[11px]"
+        />
+        <p v-if="row.field" class="text-[10px] text-muted-foreground">
+          Takes <span class="font-mono">{{ row.field }}</span> from each entry. The value beside
+          the name is the fallback when the field is empty.
+        </p>
         <p v-if="attrInvalid(row.name)" class="text-[10px] text-danger">
           “{{ row.name }}” isn’t allowed — use data-*, aria-*, or names like target, rel, title.
         </p>
