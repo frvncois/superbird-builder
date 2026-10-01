@@ -6,6 +6,11 @@ same document, so everything here describes the real system — you never need t
 guess, or reverse-engineer anything. If a capability is not in this handbook or the tool
 list, it does not exist yet: **report it as a limitation instead of working around it.**
 
+**Read this handbook a section at a time.** `get_guide` with no argument returns these
+golden rules plus the section list; fetch the sections the job needs
+(`get_guide {section: "the-dsl"}`) before your first write. `section: "all"` returns all
+~100 KB, which some clients will not return in one result.
+
 ## The golden rules
 
 1. **Page structure lives in code.** Each page is a small indentation-based DSL document.

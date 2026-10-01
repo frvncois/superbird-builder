@@ -13,7 +13,7 @@ import { readFile, realpath, stat } from 'node:fs/promises'
 import { basename, extname, isAbsolute, resolve as resolvePath, sep } from 'node:path'
 
 // the AI-first handbook (DSL grammar, element registry, style rules, workflow) —
-// served verbatim by get_guide and as the MCP server's initialize instructions.
+// served by get_guide, a section at a time.
 // Ships next to this file in the npm package (mcp/ is in package.json files).
 export const GUIDE = (() => {
   try {
@@ -21,6 +21,35 @@ export const GUIDE = (() => {
   } catch {
     return null
   }
+})()
+
+/**
+ * What the MCP server sends as its `initialize` instructions: the intro, the
+ * golden rules and the workflow recipe, then a pointer to the rest.
+ *
+ * NOT the whole handbook, which is ~100 KB and was sent in full. A client that
+ * injects instructions pays that on every turn of every session, and the DSL and
+ * animation sections only matter once an agent reaches that work — which
+ * get_guide serves on demand.
+ */
+export const GUIDE_INSTRUCTIONS = (() => {
+  if (!GUIDE) return null
+  const parts = GUIDE.split(/^## /m)
+  const want = ['The golden rules', 'Workflow recipe']
+  const kept = parts
+    .slice(1)
+    .filter((p) => want.some((w) => p.startsWith(w)))
+    .map((p) => `## ${p.trimEnd()}`)
+  return [
+    parts[0].trimEnd(),
+    ...kept,
+    '## The rest of the handbook',
+    'Everything else — the DSL grammar, the element registry, styling, content and data,' +
+      ' components, variants, nesting, icons, class interactions, project settings,' +
+      ' interactions, animations, sliders, publishing — is in the handbook, a section at a' +
+      ' time. Call `get_guide` with no argument for the section list, then fetch what the job' +
+      ' needs. Do it BEFORE your first write.',
+  ].join('\n\n')
 })()
 
 /** this MCP package's version — compared against the running server's so a
@@ -2762,17 +2791,20 @@ const tools = [
       'The Guano handbook: the page DSL grammar, the full element registry, how styling/' +
       'content/interactions attach to elements, the class-validation rules, and the intended ' +
       'workflow. READ THIS BEFORE YOUR FIRST WRITE — it answers every "how do I express X" ' +
-      'question; nothing needs to be discovered by trial and error. The full handbook is ' +
-      '~55 KB; pass `section: "toc"` for the section list, then fetch just the sections you ' +
-      'need (`section: "animations"`) to keep it out of your context.',
+      'question; nothing needs to be discovered by trial and error. Call it with NO argument ' +
+      'first: that returns the golden rules plus the section list (a few KB), and you then ' +
+      `fetch the sections the job needs (\`section: "animations"\`). The whole handbook is ` +
+      `${Math.round(GUIDE.length / 1024)} KB — more than some clients will return in one ` +
+      'result — and is available as `section: "all"` when you want all of it.',
     inputSchema: {
       type: 'object',
       properties: {
         section: {
           type: 'string',
           description:
-            'one "## " section by slug ("the-dsl", "styling", "animations", …), or "toc" for ' +
-            'the section list; omit for the whole handbook',
+            'one "## " section by slug ("the-dsl", "styling", "animations", …), "toc" for the ' +
+            'section list alone, or "all" for the whole handbook. Omitting it returns the ' +
+            'golden rules plus the section list, which is where to start.',
         },
       },
       additionalProperties: false,
@@ -2782,7 +2814,6 @@ const tools = [
       // the header makes a stale MCP process visible: if the handbook you read
       // lacks a documented feature, compare this line with get_status
       const header = `<!-- guano handbook · mcp v${MCP_VERSION} · ${GUIDE_HASH} -->`
-      if (!args.section) return { guide: `${header}\n${GUIDE}` }
       const slugOf = (t) => t.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
       const parts = GUIDE.split(/^## /m)
       const sections = parts.slice(1).map((p) => {
@@ -2790,12 +2821,26 @@ const tools = [
         const title = p.slice(0, nl === -1 ? p.length : nl).trim()
         return { slug: slugOf(title), title, body: `## ${p.trimEnd()}\n` }
       })
-      const q = slugOf(String(args.section))
+      // The whole handbook is past what some clients will return in one result
+      // (the Cocoapp session's first call came back "exceeds maximum allowed
+      // tokens" and cost four calls to recover before any work started), so a
+      // bare call hands back the rules and the map instead of all of it.
+      const q = args.section ? slugOf(String(args.section)) : 'toc'
+      if (q === 'all') return { guide: `${header}\n${GUIDE}` }
       if (q === 'toc') {
+        const rules = sections.find((x) => x.slug === 'the-golden-rules')
         return {
           header,
           intro: parts[0].trim(),
+          ...(args.section ? {} : { goldenRules: rules?.body }),
           sections: sections.map((s) => ({ section: s.slug, title: s.title, bytes: s.body.length })),
+          ...(args.section
+            ? {}
+            : {
+                next:
+                  'Fetch the sections this job needs, e.g. get_guide {section: "the-dsl"}. ' +
+                  'get_guide {section: "all"} returns the whole handbook.',
+              }),
         }
       }
       const hit =
@@ -3283,7 +3328,10 @@ const tools = [
         ...(page.seo ? { seo: page.seo } : {}),
         totalLines: lines.length,
         version: sha256(page.code),
-        ...(check.length ? { diagnostics: check } : {}),
+        // ALWAYS present, empty array and all: omitted when clean, a validated
+        // page and a page nobody checked read identically, and "no diagnostics
+        // key" is the same shape as "this tool doesn't report them"
+        diagnostics: check,
         ...codeFields,
         ...pageInfo,
         elements,

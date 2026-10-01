@@ -16,7 +16,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 
 import * as api from './api.mjs'
-import { createToolSet, GUIDE, MCP_VERSION } from './tools.mjs'
+import { createToolSet, GUIDE_INSTRUCTIONS, MCP_VERSION } from './tools.mjs'
 
 // the bundled editor runtime (built by `npm run build:mcp-runtime`)
 const RUNTIME_URL = new URL('../runtime/mcp-runtime.mjs', import.meta.url)
@@ -53,12 +53,14 @@ const { tools, toolMap } = createToolSet({
 
 // ---------- wire up the MCP server ----------
 
-// the handbook rides in the initialize response — MCP clients inject
-// `instructions` into the model's context, so agents know the DSL, the element
-// registry, and the workflow BEFORE their first tool call (no discovery cost)
+// The golden rules and the workflow recipe ride in the initialize response —
+// MCP clients inject `instructions` into the model's context, so an agent knows
+// how to work here BEFORE its first tool call. Deliberately NOT the whole
+// handbook (~100 KB): a client that injects instructions pays for them on every
+// turn, and get_guide serves the rest a section at a time, on demand.
 const server = new Server(
   { name: 'guano', version: MCP_VERSION },
-  { capabilities: { tools: {} }, ...(GUIDE ? { instructions: GUIDE } : {}) },
+  { capabilities: { tools: {} }, ...(GUIDE_INSTRUCTIONS ? { instructions: GUIDE_INSTRUCTIONS } : {}) },
 )
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
