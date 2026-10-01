@@ -5181,6 +5181,42 @@ function sanitizeAttributes(record) {
 	return out;
 }
 //#endregion
+//#region src/lib/shared/entryScope.js
+/**
+* Which nodes a route renders under an ENTRY SCOPE, and which scope.
+*
+* A node is in an entry scope when it is repeated or embedded per entry: inside
+* a `:collection-list`, inside a bound `:slider`, or in the template body a
+* `:collection-item` embeds. Everything else renders ONCE per route.
+*
+* This is what decides whether a binding's state key carries the entry part.
+* The entry part is carried only when a binding's OWNER and its TARGET share a
+* scope — both inside one repeat (a per-row effect, independent per row) or
+* both outside every repeat (one shared effect). A row button that opens one
+* sheet outside the list therefore keys its effect exactly the way the sheet
+* keys it. Keyed off the trigger alone, the button wrote `X@e<row>` while the
+* sheet listened on `X`, so the click silently did nothing — which made the
+* "ONE overlay per kind, outside the list" recipe unbuildable.
+*
+* @param {Array<{tree: any[], root: string|null}>} trees
+* @returns {Map<string, string>} node id → scope root id (absent = no scope)
+*/
+function buildScopeRoots(trees) {
+	const index = /* @__PURE__ */ new Map();
+	const walk = (nodes, root) => {
+		for (const n of nodes ?? []) {
+			if (root) index.set(n.id, root);
+			walk(n.children, isEntryScopeRoot(n) ? n.id : root);
+		}
+	};
+	for (const { tree, root } of trees) walk(tree, root ?? null);
+	return index;
+}
+/** does this node render its children once per entry? */
+function isEntryScopeRoot(node) {
+	return node.type === "collection-list" || node.type === "slider" && !!node.arg;
+}
+//#endregion
 //#region src/lib/shared/locales.js
 /** delete a locale's SEO overrides everywhere, pruning emptied containers so a
 *  touch-then-clear leaves the blob byte-identical (keeps merge signatures
@@ -8205,4 +8241,4 @@ function materializeCatalogEntry(entry, project, component = (key) => project.co
 	});
 }
 //#endregion
-export { APPEAR_MODES, BUILTIN_LIST_SOURCES, CATALOG, CATALOG_TOKENS, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MOTION_PROPS, NODE_STATE_KEYS, REF_SLOT, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, SCROLL_LERP_MAX, SCROLL_LERP_MIN, SLIDER_DEFAULTS, STYLE_SECTIONS, TOKEN_NAME_RE, TRANSITION_DEFAULTS, TRANSITION_PRESET_IDS, VARIANT_NAME_RE, addVariantAxis, addVariantOption, adoptStructure, alignInstanceLines, alignMirrors, applyClass, buildDocument, buildInstanceMap, canNest, catalogDependencies, catalogEntry, cloneForMaster, compileAnimation, componentReaches, componentUsage, countLocaleSeo, createNode, createPage, createProject, dataMarkerOf, deepClone, defaultBreakpoints, defaultSettings, deleteComponent, dependencyOrder, detachInstance, duplicateComponent, effectiveClasses, elementBlockLines, enforceDocument, expandComponentInstances, extractBodyArg, extractBodyDecor, extractBodyLines, findNode, findParent, fontError, fontFormatForUrl, hasAncestorOfType, hasNodeState, hasOpenArgBracket, hoistBlockRef, inheritedInstanceValue, interactionGroupKey, interactionMarkerOf, interactionStateKey, isAllowedAttribute, isBodyOpenLine, isClosedBlock, isComponentType, isEmittableToken, isInstanceWrapper, isKnownElement, isLeafElement, isNodeHidden, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isValidClass, isValidToken, lexLine, lucideNameOf, lucideSvg, matchClass, materializeCatalogEntry, mergeClassLayers, nestedComponentNames, normalizeComponentName, normalizeSyntax, parseSetup, parseSyntax, pickedKeys, purgeLocaleSeo, pushMasterStructure, reconcile, refOf, removeVariantAxis, removeVariantOption, renameComponent, renameVariantAxis, renameVariantOption, replaceSetup, resolveInstanceValue, resolvePicks, resolveSliderConfig, rewriteInstanceBlock, sameLayerProperty, sameProperty, sanitizeAttributes, sanitizeInlineSvg, sanitizeRich, serializeNode, setComponentCategory, setComponentMeta, setInstancePick, setNodeHidden, setSetupLocale, setStyleTokens, setVariantAxes, setVariantClasses, setVariantDefault, slugify, stripExtractedInstanceState, stripNodeState, styleMarkerOf, tokenError, typeOptionsFor, validateAnimation, validateBinding, validateDocument, validateMotionSettings, validateSliderConfig, variantKey, walkNodes, withDataMarker, withInteractionMarker, withStyleMarker, withoutRef };
+export { APPEAR_MODES, BUILTIN_LIST_SOURCES, CATALOG, CATALOG_TOKENS, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MOTION_PROPS, NODE_STATE_KEYS, REF_SLOT, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, SCROLL_LERP_MAX, SCROLL_LERP_MIN, SLIDER_DEFAULTS, STYLE_SECTIONS, TOKEN_NAME_RE, TRANSITION_DEFAULTS, TRANSITION_PRESET_IDS, VARIANT_NAME_RE, addVariantAxis, addVariantOption, adoptStructure, alignInstanceLines, alignMirrors, applyClass, buildDocument, buildInstanceMap, buildScopeRoots, canNest, catalogDependencies, catalogEntry, cloneForMaster, compileAnimation, componentReaches, componentUsage, countLocaleSeo, createNode, createPage, createProject, dataMarkerOf, deepClone, defaultBreakpoints, defaultSettings, deleteComponent, dependencyOrder, detachInstance, duplicateComponent, effectiveClasses, elementBlockLines, enforceDocument, expandComponentInstances, extractBodyArg, extractBodyDecor, extractBodyLines, findNode, findParent, fontError, fontFormatForUrl, hasAncestorOfType, hasNodeState, hasOpenArgBracket, hoistBlockRef, inheritedInstanceValue, interactionGroupKey, interactionMarkerOf, interactionStateKey, isAllowedAttribute, isBodyOpenLine, isClosedBlock, isComponentType, isEmittableToken, isEntryScopeRoot, isInstanceWrapper, isKnownElement, isLeafElement, isNodeHidden, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isValidClass, isValidToken, lexLine, lucideNameOf, lucideSvg, matchClass, materializeCatalogEntry, mergeClassLayers, nestedComponentNames, normalizeComponentName, normalizeSyntax, parseSetup, parseSyntax, pickedKeys, purgeLocaleSeo, pushMasterStructure, reconcile, refOf, removeVariantAxis, removeVariantOption, renameComponent, renameVariantAxis, renameVariantOption, replaceSetup, resolveInstanceValue, resolvePicks, resolveSliderConfig, rewriteInstanceBlock, sameLayerProperty, sameProperty, sanitizeAttributes, sanitizeInlineSvg, sanitizeRich, serializeNode, setComponentCategory, setComponentMeta, setInstancePick, setNodeHidden, setSetupLocale, setStyleTokens, setVariantAxes, setVariantClasses, setVariantDefault, slugify, stripExtractedInstanceState, stripNodeState, styleMarkerOf, tokenError, typeOptionsFor, validateAnimation, validateBinding, validateDocument, validateMotionSettings, validateSliderConfig, variantKey, walkNodes, withDataMarker, withInteractionMarker, withStyleMarker, withoutRef };

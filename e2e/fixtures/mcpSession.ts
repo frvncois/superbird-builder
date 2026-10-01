@@ -27,10 +27,16 @@ export interface McpSession {
   /** the exported <body>… of the first route */
   html: () => Promise<string>
   home: () => Promise<{ id: string; version: string }>
+  /** the `kind` of every publish warning, which is what these specs assert on */
+  kinds: () => Promise<string[]>
   runtime: any
 }
 
-export async function mcpSession(projectName = 'T'): Promise<McpSession> {
+export async function mcpSession(
+  projectName = 'T',
+  /** what the server would report back from the export — `route-size` reads it */
+  publishStats: { routes: number; bytes: number } = { routes: 1, bytes: 1 },
+): Promise<McpSession> {
   const runtime = await runtimePromise
   test.skip(!runtime, 'runtime/mcp-runtime.mjs missing — run `npm run build:mcp-runtime`')
   const store = new Map([['guano-project:main', JSON.stringify(runtime.createProject(projectName))]])
@@ -40,7 +46,7 @@ export async function mcpSession(projectName = 'T'): Promise<McpSession> {
     storeGetRaw: async (k: string) => store.get(k) ?? null,
     storeGetJson: async (k: string) => (store.has(k) ? JSON.parse(store.get(k)!) : null),
     storePutRaw: async (k: string, v: string) => void store.set(k, v),
-    publish: async () => ({ routes: 1, bytes: 1 }),
+    publish: async () => publishStats,
     mediaIndex: async () => ({ assets: [], folders: [] }),
     mediaUpload: async () => ({ id: 'm1' }),
   }
@@ -63,5 +69,9 @@ export async function mcpSession(projectName = 'T'): Promise<McpSession> {
       }
     },
     home: async () => (await set.toolMap.get('list_pages')!.handler({})).pages[0],
+    kinds: async () =>
+      ((await set.toolMap.get('publish')!.handler({})).warnings ?? []).map(
+        (w: { kind: string }) => w.kind,
+      ),
   }
 }

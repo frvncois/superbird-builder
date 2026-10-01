@@ -167,6 +167,10 @@ export {
 // sanitizes attributes with the SAME allowlist the editor and exporter use
 export { sanitizeAttributes, isAllowedAttribute } from './shared/attributes.js'
 
+// which nodes a route renders under an entry scope — the publish check for a
+// binding whose target it can never reach (see shared/entryScope.js)
+export { buildScopeRoots, isEntryScopeRoot } from './shared/entryScope.js'
+
 // --- per-locale SEO purge (src/lib/shared/locales.js) — page/project SEO
 // overrides live outside the node `locales` buckets, so removing a locale has
 // to clear them too, identically in the editor and here

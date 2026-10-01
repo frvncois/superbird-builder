@@ -675,6 +675,16 @@ taste; they are the defects a review finds first.
 - Nothing left over: no unused interactions or animations, no probe pages, no
   test components. `publish` reports these — clear them before handing over.
 
+**What `publish` checks for you** — act on each, they are the review you would otherwise
+get back: a browser-styled `:select`, a form control with no classes, a body transition
+under an app shell, an unstaggered `load` animation on a large container, an overlay
+repeated per list row, a **binding whose target this route cannot reach** (not on the
+page, or trigger and target in two different repeats), an **interactive element inside a
+linked container** (`<a>…<button>` is invalid markup), a **heavy row template** repeated
+over many entries, **attribute text on a multilingual site** (placeholder, aria-label,
+alt and title are not localizable — keep translatable copy in element content), **export
+weight** per route, and effects nothing is bound to.
+
 **Before you say it is done**: publish, open every route, and look. Compare two
 pages side by side for width, spacing and type. Open every sheet and menu. Resize
 to tablet and phone. Then read `publish`'s `warnings` and act on each.

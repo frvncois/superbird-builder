@@ -99,6 +99,7 @@ export function createToolSet({ api, runtime, elicit, hasElicitation = () => nul
     applyClass,
     isValidClass,
     isComponentType,
+    buildScopeRoots,
     styleMarkerOf,
     withStyleMarker,
     interactionMarkerOf,
@@ -2824,6 +2825,142 @@ function designWarnings(project) {
         'Keep ONE overlay outside the list and open it from every row (the rows bind the same ' +
         'target); what differs per row is content, which a prototype can fake with one shared sheet.',
     })
+  }
+
+  // 3c. a binding whose target it can never reach. The state key's entry part
+  // follows the TARGET (shared/entryScope.js), so a trigger and its target agree
+  // whenever one of them is outside every repeat — but two SIBLING repeats
+  // cannot, and a target that is not on the route at all never fires.
+  const unreachable = []
+  for (const page of published) {
+    const scopeRoots = buildScopeRoots([
+      { tree: page.elements ?? [], root: null },
+      ...components.map((c) => ({ tree: [c.root], root: null })),
+    ])
+    const ids = new Set()
+    walkNodes(page.elements ?? [], (n) => ids.add(n.id))
+    for (const c of components) walkNodes([c.root], (n) => ids.add(n.id))
+    walkNodes(page.elements ?? [], (owner) => {
+      for (const b of [...(owner.interactions ?? []), ...(owner.animations ?? [])]) {
+        if (!b.targetId) continue
+        if (!ids.has(b.targetId)) {
+          unreachable.push(`${owner.id} → ${b.targetId} (no such element) on page "${page.name}"`)
+          continue
+        }
+        const a = scopeRoots.get(owner.id) ?? null
+        const t = scopeRoots.get(b.targetId) ?? null
+        if (a !== null && t !== null && a !== t) {
+          unreachable.push(
+            `${owner.id} → ${b.targetId} (different repeats) on page "${page.name}"`,
+          )
+        }
+      }
+    })
+  }
+  if (unreachable.length) {
+    warnings.push({
+      kind: 'binding-target-unreachable',
+      where: unreachable.slice(0, 6),
+      message:
+        `${unreachable.length} binding(s) point at an element this route cannot resolve: either ` +
+        'the target is not on the page, or trigger and target sit in two DIFFERENT repeats, ' +
+        'where neither can know which row of the other to drive. Target an element in the same ' +
+        'row for a per-row effect, or one outside every list for a shared one.',
+    })
+  }
+
+  // 3d. an interactive element inside a link. <a><button> is invalid, and the
+  // click lands on whichever the browser decides — the session shipped two.
+  const INTERACTIVE = ['button', 'link', 'input', 'textarea', 'select']
+  const nested = []
+  const holdsInteractive = (nodes, seen = new Set()) => {
+    for (const n of nodes ?? []) {
+      if (INTERACTIVE.includes(n.type)) return `:${n.type}`
+      if (isComponentType(n.type)) {
+        const def = masterByName.get(n.type)
+        if (def && !seen.has(n.type)) {
+          const inside = holdsInteractive(def.root.children ?? [], new Set([...seen, n.type]))
+          if (inside) return `${inside} inside :${n.type}`
+        }
+        continue
+      }
+      const deeper = holdsInteractive(n.children ?? [], seen)
+      if (deeper) return deeper
+    }
+    return null
+  }
+  eachRendered((n, where) => {
+    // a linked element that is ITSELF a link is the ordinary case
+    if (!n.link || n.type === 'link') return
+    const inside = holdsInteractive(n.children ?? [])
+    if (inside) nested.push(`${inside} inside a linked :${n.type} in ${where}`)
+  })
+  if (nested.length) {
+    warnings.push({
+      kind: 'interactive-inside-link',
+      where: nested.slice(0, 6),
+      message:
+        `${nested.length} interactive element(s) sit inside a linked container, which exports as ` +
+        '<a>…<button>…</a> — invalid markup, and the click goes to whichever the browser picks. ' +
+        'Either drop the link and bind the inner control, or make the whole card a link and use ' +
+        'a styled :span instead of a :button inside it.',
+    })
+  }
+
+  // 3e. a repeat whose row template is heavy. Twelve rows of a 40-node drawer is
+  // 480 nodes of markup per locale, which is what made one route 300 KB.
+  const HEAVY_ROW = 40
+  const MANY_ENTRIES = 8
+  const heavy = []
+  for (const page of published) {
+    walkNodes(page.elements ?? [], (n) => {
+      if (!(n.type === 'collection-list' || n.type === 'slider') || !n.arg) return
+      const count = (project.collections ?? []).find((c) => c.name === n.arg)?.entries?.length ?? 0
+      if (count <= MANY_ENTRIES) return
+      const size = (nodes) =>
+        (nodes ?? []).reduce((k, c) => k + 1 + size(c.children), 0)
+      const rowNodes = size(n.children)
+      if (rowNodes >= HEAVY_ROW) {
+        heavy.push(
+          `:${n.type}[${n.arg}] on page "${page.name}" — ${rowNodes} nodes × ${count} entries`,
+        )
+      }
+    })
+  }
+  if (heavy.length) {
+    warnings.push({
+      kind: 'heavy-repeat',
+      where: heavy.slice(0, 6),
+      message:
+        `${heavy.length} list(s) repeat a large row template over many entries, so the route ships ` +
+        'that subtree once per entry (and again per locale). Move what every row shares — a ' +
+        'drawer, a confirm dialog, a detail panel — outside the list and open the one copy from ' +
+        'each row.',
+    })
+  }
+
+  // 3f. attribute strings a multilingual site leaves in one language. Attributes
+  // are not localizable yet, so this is a limit to state rather than a fix.
+  const locales = project.locales ?? []
+  if (locales.length > 1) {
+    const LOCALIZABLE_ATTRS = ['placeholder', 'aria-label', 'alt', 'title']
+    const untranslated = []
+    eachRendered((n, where) => {
+      const named = LOCALIZABLE_ATTRS.filter((a) => String(n.attributes?.[a] ?? '').trim())
+      if (named.length) untranslated.push(`${named.join(', ')} on :${n.type} in ${where}`)
+    })
+    if (untranslated.length) {
+      warnings.push({
+        kind: 'untranslated-attributes',
+        where: untranslated.slice(0, 6),
+        message:
+          `this site has ${locales.length} locales, and ${untranslated.length} element(s) carry ` +
+          'attribute text (placeholder, aria-label, alt, title) that is NOT localizable — those ' +
+          'strings render in the default language on every locale route. Keep user-visible copy ' +
+          'in element content where it can be translated, and treat this as a known limit when ' +
+          'a placeholder or a screen-reader label has to differ per language.',
+      })
+    }
   }
 
   // 4. effects nothing uses
@@ -7809,7 +7946,10 @@ const tools = [
       '(served at the origin root; the editor lives at /admin), plus `localeUrls` (one per ' +
       'registered locale) and `warnings` — READ THEM AND ACT: design checks a review would send back ' +
       '(browser-styled selects, unstyled controls, a whole-body page transition under an app shell, ' +
-      'entrance animations that shift the layout, unused effects) and issues that publish silently (a collection whose ' +
+      'entrance animations that shift the layout, bindings whose target the route cannot reach, a ' +
+      'button inside a link, a heavy row template repeated per entry, attribute text a ' +
+      'multilingual site cannot translate, export weight, unused effects) and issues that publish ' +
+      'silently (a collection whose ' +
       'template page is draft — its entry routes are NOT exported, so every :collection-list ' +
       'card / @item link to it 404s live). Note: this publishes the target you chose — ' +
       'publishing a draft bypasses the merge-into-Main flow. Requires a target.',
@@ -7818,6 +7958,21 @@ const tools = [
       const { project } = await loadTargetProject()
       const warnings = collectPublishWarnings(project)
       const stats = await publish(project)
+      // Weight, which only the export knows. A backstop above `heavy-repeat`,
+      // which catches the usual cause (a drawer inlined once per list row):
+      // 150 KB of HTML for ONE route is already a lot of inlined structure.
+      const perRoute = stats?.routes ? Math.round(stats.bytes / stats.routes) : 0
+      if (perRoute > 150_000) {
+        warnings.push({
+          kind: 'route-size',
+          message:
+            `the export averages ${Math.round(perRoute / 1024)} KB of HTML per route ` +
+            `(${Math.round((stats.bytes ?? 0) / 1024)} KB over ${stats.routes} routes). Something ` +
+            'large is inlined on every page — usually an overlay repeated per list row, or a ' +
+            'sheet holding a full contact/template list that every route carries. Move shared ' +
+            'overlays out of list templates and keep long option lists to one copy.',
+        })
+      }
       // the export is served at the origin root; non-default locales at /<code>/
       const origin = (api.base ?? '').replace(/\/+$/, '')
       const defaultLocale = project.defaultLocale || 'en'
