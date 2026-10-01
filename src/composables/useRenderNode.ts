@@ -159,6 +159,16 @@ export function useRenderNode(
           : (scope?.entry ?? activeEntry.value)?.id,
     }),
   )
+  /** a list's row TEMPLATE: its children minus the empty-state block, which is
+   * never repeated */
+  const listTemplateChildren = computed(() =>
+    node.value.children.filter((c) => c.type !== 'list-empty'),
+  )
+  /** the empty-state block(s), rendered only when the list has no entries */
+  const listEmptyChildren = computed(() =>
+    node.value.children.filter((c) => c.type === 'list-empty'),
+  )
+
   // --- slider (carousel) ---
 
   const isSlider = computed(() => node.value.type === 'slider')
@@ -741,6 +751,8 @@ export function useRenderNode(
     motionStyle,
     listCollection,
     listEntries,
+    listTemplateChildren,
+    listEmptyChildren,
     isSlider,
     sliderBound,
     sliderConfig,

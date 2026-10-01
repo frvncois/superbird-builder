@@ -69,6 +69,13 @@ export const ELEMENTS_DATA = {
   td: { tag: 'td', suggest: 'text' },
   /** repeats its children once per entry of the collection in its arg */
   'collection-list': { tag: 'div', suggest: 'div' },
+  /**
+   * A list's EMPTY STATE: a direct child of a `:collection-list` (or a bound
+   * `:slider`) that renders only when the list has no entries, and is never
+   * repeated. Without it a filtered list that matched nothing rendered as a
+   * blank gap, and the only workaround was to not filter.
+   */
+  'list-empty': { tag: 'div', suggest: 'text' },
   /** renders one picked entry through its collection's template */
   'collection-item': { tag: 'div', defaultContent: '' },
   /** carousel. With an arg it repeats its children per entry like a

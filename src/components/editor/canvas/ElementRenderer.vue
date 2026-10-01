@@ -28,7 +28,7 @@ import type { ElementNode } from '@/types/editor'
 
 const props = defineProps<{ node: ElementNode }>()
 
-const { selectedElement, selectedElementIds, selectElement, draggingId, dropTarget, highlightedElement, requestReveal } = useElement()
+const { selectElement, draggingId, dropTarget, isSelected, isHighlighted, dropPositionFor, requestReveal } = useElement()
 const { backend } = useStructure()
 const { pickingFor, pickTarget } = useInteraction()
 const { openMenu } = useContextMenu()
@@ -41,6 +41,8 @@ const {
   mapping,
   listCollection,
   listEntries,
+  listTemplateChildren,
+  listEmptyChildren,
   itemCollection,
   itemEntry,
   itemTemplateChildren,
@@ -124,18 +126,15 @@ const inActiveFrame = computed(() => {
   return frameBreakpointId === (activeBreakpointId.value ?? baseBreakpoint.value?.id ?? null)
 })
 
-const selected = computed(
-  () =>
-    inActiveFrame.value &&
-    (selectedElementIds.value.length
-      ? selectedElementIds.value.includes(props.node.id)
-      : selectedElement.value?.id === props.node.id),
-)
+// `isSelected` / `isHighlighted` / `dropPositionFor` track THIS id only — a
+// selection or hover change must not re-evaluate every element on the canvas
+const selected = computed(() => inActiveFrame.value && isSelected(props.node.id, true))
 // a transient preview highlight (e.g. an interaction's Target hover), shown in a
 // distinct colour and only when this node isn't already the live selection
 const highlighted = computed(
-  () => inActiveFrame.value && highlightedElement.value?.id === props.node.id && !selected.value,
+  () => inActiveFrame.value && isHighlighted(props.node.id) && !selected.value,
 )
+const dropPosition = computed(() => dropPositionFor(props.node.id))
 
 const classes = computed(() => [
   // core: body flex-1, master/own classes, interaction classes, bg host —
@@ -153,10 +152,10 @@ const classes = computed(() => [
   // replaces the selection/highlight outlines instead of fighting them
   selected.value && !editing.value && 'outline outline-2 -outline-offset-2 outline-sky-500',
   highlighted.value && !editing.value && 'outline outline-2 -outline-offset-2 outline-emerald-500',
-  dropTarget.value?.id === props.node.id &&
-    (dropTarget.value.position === 'before'
+  dropPosition.value &&
+    (dropPosition.value === 'before'
       ? 'shadow-[0_-2px_0_0_#0ea5e9]'
-      : dropTarget.value.position === 'after'
+      : dropPosition.value === 'after'
         ? 'shadow-[0_2px_0_0_#0ea5e9]'
         : // 'inside' (palette drop as last child): dashed to distinguish
           // from the solid selection outline
@@ -265,16 +264,28 @@ const handlers = {
           :count="listEntries.length"
         >
           <ElementRenderer
-            v-for="child in node.children"
+            v-for="child in listTemplateChildren"
             :key="`${child.id}:${entry.id}`"
             :node="child"
           />
         </EntryScope>
       </template>
-      <!-- no entries yet: show the item template once with placeholders -->
-      <EntryScope v-else :collection="listCollection" :entry="null">
-        <ElementRenderer v-for="child in node.children" :key="child.id" :node="child" />
-      </EntryScope>
+      <!-- No entries yet. Build is an EDITING surface, so it shows the row
+           template once with placeholders — otherwise a list for an empty
+           collection could never be styled — AND the empty-state block, which is
+           the only thing the site renders here. With entries the empty block is
+           not drawn, matching the site; select it in the Layers tree to style it,
+           exactly like a hidden part. -->
+      <template v-else>
+        <EntryScope :collection="listCollection" :entry="null">
+          <ElementRenderer
+            v-for="child in listTemplateChildren"
+            :key="child.id"
+            :node="child"
+          />
+        </EntryScope>
+        <ElementRenderer v-for="child in listEmptyChildren" :key="child.id" :node="child" />
+      </template>
     </template>
     <div v-else class="border border-dashed border-input p-2 text-xs text-muted-foreground">
       Unknown collection ({{ node.arg || '?' }})

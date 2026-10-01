@@ -787,17 +787,23 @@ function renderNode(node, ctx) {
     // the filter that moved to its master
     const listQuery = resolveInstanceValue(node, ctx.mm.get(node.id), 'listQuery')
     const listEntries = list ? applyListQuery(list.entries, listQuery, { currentEntryId }) : []
-    const inner = list
-      ? listEntries
-          .map((entry, index) => {
-            const inner2 = {
-              ...ctx,
-              scope: { collection: list.collection, entry, index, count: listEntries.length },
-            }
-            return node.children.map((child) => renderNode(child, inner2)).join('')
-          })
-          .join('')
-      : ''
+    // the row TEMPLATE is the children minus any empty-state block, which is
+    // never repeated and renders only when there is nothing to repeat
+    const template = node.children.filter((c) => c.type !== 'list-empty')
+    const emptyState = node.children.filter((c) => c.type === 'list-empty')
+    const inner = !list
+      ? ''
+      : listEntries.length
+        ? listEntries
+            .map((entry, index) => {
+              const inner2 = {
+                ...ctx,
+                scope: { collection: list.collection, entry, index, count: listEntries.length },
+              }
+              return template.map((child) => renderNode(child, inner2)).join('')
+            })
+            .join('')
+        : emptyState.map((child) => renderNode(child, ctx)).join('')
     return linkWrap(`<${tag}${attrsFor(node, ctx)}>${inner}</${tag}>`, node, ctx)
   }
 
@@ -827,15 +833,23 @@ function renderNode(node, ctx) {
         resolveInstanceValue(node, ctx.mm.get(node.id), 'listQuery'),
         { currentEntryId },
       )
+      const template = node.children.filter((c) => c.type !== 'list-empty')
       slides = entries
         .map((entry, index) => {
           const inner = {
             ...ctx,
             scope: { collection: list.collection, entry, index, count: entries.length },
           }
-          return slide(node.children.map((child) => renderNode(child, inner)).join(''))
+          return slide(template.map((child) => renderNode(child, inner)).join(''))
         })
         .join('')
+      // a bound slider with nothing to show renders its empty state as one slide
+      if (!entries.length) {
+        const emptyState = node.children.filter((c) => c.type === 'list-empty')
+        slides = emptyState.length
+          ? slide(emptyState.map((child) => renderNode(child, ctx)).join(''))
+          : ''
+      }
     } else if (!node.arg) {
       slides = node.children.map((child) => slide(renderNode(child, ctx))).join('')
     }

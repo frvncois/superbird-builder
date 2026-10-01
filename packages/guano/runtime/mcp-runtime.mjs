@@ -197,6 +197,16 @@ var ELEMENTS = {
 		tag: "div",
 		suggest: "div"
 	},
+	/**
+	* A list's EMPTY STATE: a direct child of a `:collection-list` (or a bound
+	* `:slider`) that renders only when the list has no entries, and is never
+	* repeated. Without it a filtered list that matched nothing rendered as a
+	* blank gap, and the only workaround was to not filter.
+	*/
+	"list-empty": {
+		tag: "div",
+		suggest: "text"
+	},
 	/** renders one picked entry through its collection's template */
 	"collection-item": {
 		tag: "div",
@@ -1261,6 +1271,13 @@ function validateDocument(code, componentNames = [], collectionNames = [], listF
 					arg
 				});
 				continue;
+			}
+			if (name === "list-empty") {
+				const parent = stack[stack.length - 1];
+				if (!(parent && (parent.type === "collection-list" || parent.type === "slider" && !!parent.arg))) diags.push({
+					line: i,
+					message: "':list-empty' is a list's empty state — it only renders as a DIRECT child of a ':collection-list' or a ':slider[name]'. Elsewhere it never renders at all."
+				});
 			}
 			if (linkFromToken(part?.link) === "@item") {
 				const scope = [...stack].reverse().find((s) => s.arg && collectionNames.includes(s.arg));

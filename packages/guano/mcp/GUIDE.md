@@ -409,6 +409,22 @@ wrapped in `<a class="contents">`, so an entire card becomes one clickable regio
   of the `posts` collection. The arg may instead name a **field** of the surrounding
   entry: a `multi-reference` field (repeats over the entries it points to) or a
   `multi-image` field (repeats once per image — see Galleries).
+- `:list-empty` … `list-empty:` — a list's **empty state**. Written as a direct child of
+  a `:collection-list` or a bound `:slider[name]`, it renders ONLY when there is nothing
+  to repeat, and is never repeated itself. The rest of the children are the row template,
+  and they do not render when the list is empty. This is how you satisfy "an empty state
+  for every list" — a filtered list that matches nothing used to leave a blank gap, with
+  no way to say "no closed conversations". Elsewhere in the code it never renders at all,
+  which `set_page_code` reports as a diagnostic.
+
+  ```
+  :collection-list[convo]
+  	:div              (the row, repeated)
+  	:list-empty
+  		:text:        "Nothing here yet"
+  	list-empty:
+  collection-list:
+  ```
 - `:collection-item[posts]:` — renders ONE picked entry through the collection's
   template page. Pick the entry with `edit_elements` `{entryId: "<entry id from
   get_collection>"}` — **without an entryId it renders empty**. Beware: it embeds

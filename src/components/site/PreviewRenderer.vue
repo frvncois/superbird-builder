@@ -40,7 +40,7 @@ const pageTransition = usePageTransition()
 
 const {
   def,
-  listCollection, listEntries, itemCollection, itemEntry, itemTemplateChildren, selfNested,
+  listCollection, listEntries, listTemplateChildren, listEmptyChildren, itemCollection, itemEntry, itemTemplateChildren, selfNested,
   customAttrs, backgroundInfo,
   displayContent, richContent, srcAttr, altAttr, iconInfo, hidden, linkRaw, baseClasses,
   hoverHandlers, fireClickInteractions, fireChangeInteractions, el,
@@ -174,12 +174,19 @@ const handlers = {
         :count="listEntries.length"
       >
         <PreviewRenderer
-          v-for="child in node.children"
+          v-for="child in listTemplateChildren"
           :key="`${child.id}:${entry.id}`"
           :node="child"
         />
       </EntryScope>
     </template>
+    <!-- nothing to repeat: the empty-state block, if the author wrote one -->
+    <PreviewRenderer
+      v-else-if="listCollection"
+      v-for="child in listEmptyChildren"
+      :key="child.id"
+      :node="child"
+    />
   </component>
 
   <!-- carousel — the same DOM the published site gets, driven by the same

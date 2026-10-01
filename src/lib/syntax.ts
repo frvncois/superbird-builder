@@ -921,6 +921,25 @@ export function validateDocument(
         continue
       }
 
+      // `:list-empty` renders only when a list has nothing to repeat, so it is
+      // meaningful ONLY as a direct child of a `:collection-list` or a bound
+      // `:slider`. Anywhere else it renders never — a silent no-op worth a
+      // diagnostic.
+      if (name === 'list-empty') {
+        const parent = stack[stack.length - 1]
+        const inList =
+          parent &&
+          (parent.type === 'collection-list' || (parent.type === 'slider' && !!parent.arg))
+        if (!inList) {
+          diags.push({
+            line: i,
+            message:
+              "':list-empty' is a list's empty state — it only renders as a DIRECT child of a " +
+              "':collection-list' or a ':slider[name]'. Elsewhere it never renders at all.",
+          })
+        }
+      }
+
       // `@item` links to the entry's own page — which a data-only collection
       // does not have. Caught here rather than silently rendering unlinked.
       if (linkFromToken(part?.link) === '@item') {
