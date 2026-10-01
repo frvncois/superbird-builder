@@ -883,7 +883,7 @@ async function ownsDraft(user, key) {
 
 const AGENT_MAIN_DENIED =
   'agent writes to Main are disabled — work in a draft and let a human apply it, ' +
-  'or enable agent Main writes in Settings'
+  'or enable "Write to Main" in Settings → MCP → Agent permissions'
 
 /**
  * Guard one project-blob write: the reason to refuse, or null to allow.
@@ -1284,6 +1284,28 @@ async function handleProjectImport(req, res) {
   return send(res, 200, JSON.stringify({ ok: true }))
 }
 
+/** POST /api/project-delete — admin-only wipe of the project: every store key
+ * (pages, drafts, merge bases, publish baseline), all media, the exported site
+ * and the publish snapshot. Users/sessions/invites/publish.json survive so the
+ * admin stays signed in. No backup is taken — the UI confirms first. Main is
+ * re-seeded empty afterwards so the instance stays drivable headlessly and an
+ * open editor hydrates the fresh project via the store broadcast. */
+async function handleProjectDelete(req, res) {
+  const user = sessionUser(req)
+  if (!user) return fail(res, 401, 'unauthorized')
+  if (user.role !== 'admin') return fail(res, 403, 'forbidden')
+
+  for (const dir of [STORE_DIR, MEDIA_DIR, SITE]) {
+    await rm(dir, { recursive: true, force: true })
+    await mkdir(dir, { recursive: true })
+  }
+  await rm(SNAPSHOT, { force: true })
+  storeSize.at = 0
+  resetMediaIndexCache()
+  await ensureProjectSeeded('Untitled project')
+  return send(res, 200, JSON.stringify({ ok: true }))
+}
+
 /** one-time rename of pre-rename store keys (superbird-* → guano-*) on the
  * live store dir. Idempotent: an existing new-name file is never clobbered.
  * Runs at boot and after a project-package import (legacy backups). */
@@ -1396,6 +1418,9 @@ const server = createServer(async (req, res) => {
     }
     if (path === '/api/project-import' && req.method === 'POST') {
       return await handleProjectImport(req, res)
+    }
+    if (path === '/api/project-delete' && req.method === 'POST') {
+      return await handleProjectDelete(req, res)
     }
     if (path.startsWith('/api/auth/')) return await handleAuth(req, res, path)
     if (path.startsWith('/api/invite/')) return await handleInvite(req, res, path)

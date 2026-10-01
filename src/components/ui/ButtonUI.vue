@@ -2,7 +2,7 @@
 import { computed, type Component } from 'vue'
 import type { Side } from '@/lib/floating'
 
-type Variant = 'default' | 'outline' | 'ghost' | 'icon' | 'mono'
+type Variant = 'default' | 'danger' | 'outline' | 'ghost' | 'icon' | 'mono'
 type Size = 'default' | 'lg' | 'sm' | 'xs'
 
 const props = withDefaults(
@@ -28,6 +28,7 @@ const base =
 
 const variants: Record<Variant, string> = {
   default: 'bg-primary text-primary-foreground hover:bg-primary',
+  danger: 'bg-danger text-white hover:bg-danger/90',
   outline: 'border border-accent bg-transparent hover:bg-accent/30 hover:text-accent-foreground',
   ghost: 'bg-transparent hover:bg-accent/30 hover:text-accent-foreground',
   icon: 'bg-transparent hover:text-accent-foreground',

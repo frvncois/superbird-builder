@@ -15,12 +15,7 @@ const emit = defineEmits<{ close: [result?: boolean] }>()
     <p class="text-xs text-muted-foreground">{{ message }}</p>
     <template #actions>
       <ButtonUI variant="outline" size="sm" @click="emit('close')">Cancel</ButtonUI>
-      <ButtonUI
-        variant="default"
-        size="sm"
-        class="bg-danger text-white hover:bg-danger"
-        @click="emit('close', true)"
-      >
+      <ButtonUI variant="danger" size="sm" @click="emit('close', true)">
         {{ confirmLabel }}
       </ButtonUI>
     </template>

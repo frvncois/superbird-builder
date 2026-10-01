@@ -18,6 +18,7 @@ import UploadUI from '@/components/ui/UploadUI.vue'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import BadgeUI from '@/components/ui/BadgeUI.vue'
 import ColorPickerUI from '@/components/ui/ColorPickerUI.vue'
+import ToggleUI from '@/components/ui/ToggleUI.vue'
 import { useProject } from '@/composables/useProject'
 import { useSettings } from '@/composables/useSettings'
 import { useLocale } from '@/composables/useLocale'
@@ -467,6 +468,46 @@ async function saveGhToken() {
   }
 }
 
+// --- agent policy: what a `guano_` token may do (server/agent-policy.mjs) ---
+// Admin + session only on the server, so the switches only render for admins.
+type AgentPolicy = { allowMainWrites: boolean; allowPublish: boolean; allowCustomCode: boolean }
+const agentPolicy = ref<AgentPolicy | null>(null)
+const agentPolicyError = ref<string | null>(null)
+const AGENT_POLICY_ROWS: { key: keyof AgentPolicy; label: string; hint: string }[] = [
+  { key: 'allowMainWrites', label: 'Write to Main', hint: 'Edit the live project directly instead of a draft.' },
+  { key: 'allowPublish', label: 'Publish', hint: 'Export the target as the live site.' },
+  { key: 'allowCustomCode', label: 'Custom code', hint: 'Change head/body code — raw script on every page.' },
+]
+
+onMounted(async () => {
+  if (!isAdmin.value) return
+  try {
+    const res = await fetch('/api/agent-policy')
+    if (res.ok) agentPolicy.value = await res.json()
+  } catch {
+    /* best-effort — the group stays hidden */
+  }
+})
+
+async function setAgentPolicy(key: keyof AgentPolicy, value: boolean) {
+  if (!agentPolicy.value) return
+  const prev = agentPolicy.value
+  agentPolicy.value = { ...prev, [key]: value }
+  agentPolicyError.value = null
+  try {
+    const res = await fetch('/api/agent-policy', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ [key]: value }),
+    })
+    if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? 'Save failed')
+    agentPolicy.value = await res.json()
+  } catch (e) {
+    agentPolicy.value = prev
+    agentPolicyError.value = e instanceof Error ? e.message : 'Save failed'
+  }
+}
+
 // --- integration secrets (Stripe / mailing / SMTP password) ---
 // Same contract as the GitHub token: the server stores them and only ever
 // reports whether one is set, so nothing secret reaches the project blob.
@@ -613,6 +654,28 @@ async function onImportFile(e: Event) {
     importing.value = false
   }
 }
+
+const deleting = ref(false)
+const deleteError = ref<string | null>(null)
+async function deleteProject() {
+  const ok = await confirm({
+    title: 'Clear all project data?',
+    message:
+      'Deletes ALL pages, components, collections, drafts, settings, media and the published site, for every user. No backup is made — download a package first if you may need it. This cannot be undone.',
+    confirmLabel: 'Clear project data',
+  })
+  if (!ok) return
+  deleting.value = true
+  deleteError.value = null
+  try {
+    const res = await fetch('/api/project-delete', { method: 'POST' })
+    if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? 'Delete failed')
+    location.reload()
+  } catch (e) {
+    deleteError.value = e instanceof Error ? e.message : 'Delete failed'
+    deleting.value = false
+  }
+}
 </script>
 
 <template>
@@ -725,6 +788,24 @@ async function onImportFile(e: Event) {
                 <InputUI v-model="newLocale" placeholder="e.g. fr" @keydown.enter="onAddLocale" />
                 <ButtonUI variant="outline" size="sm" :icon="Plus" @click="onAddLocale">Add</ButtonUI>
               </div>
+            </SettingsGroup>
+
+            <SettingsGroup
+              v-if="isAdmin"
+              title="Clear project data"
+              description="Wipes ALL pages, components, collections, drafts, settings, media and the published site, then starts a blank project. Users and logins are kept."
+              danger
+            >
+              <ButtonUI
+                variant="outline"
+                size="sm"
+                class="w-full !text-danger"
+                :disabled="deleting"
+                @click="deleteProject"
+              >
+                {{ deleting ? 'Clearing…' : 'Clear project data' }}
+              </ButtonUI>
+              <p v-if="deleteError" class="text-[10px] text-danger">{{ deleteError }}</p>
             </SettingsGroup>
           </TabPanelUI>
 
@@ -1287,6 +1368,23 @@ async function onImportFile(e: Event) {
                 </li>
               </ul>
               <p v-else class="text-[10px] text-muted-foreground">No tokens yet.</p>
+            </SettingsGroup>
+
+            <SettingsGroup
+              v-if="isAdmin && agentPolicy"
+              title="Agent permissions"
+              description="What an MCP agent (token-authenticated) may do. Off by default: agents work in drafts a human applies."
+            >
+              <RowUI v-for="row in AGENT_POLICY_ROWS" :key="row.key" :label="row.label">
+                <div class="flex items-center justify-end gap-2">
+                  <span class="text-[10px] text-muted-foreground">{{ row.hint }}</span>
+                  <ToggleUI
+                    :model-value="agentPolicy[row.key]"
+                    @update:model-value="(v) => setAgentPolicy(row.key, v)"
+                  />
+                </div>
+              </RowUI>
+              <p v-if="agentPolicyError" class="text-[10px] text-danger">{{ agentPolicyError }}</p>
             </SettingsGroup>
           </TabPanelUI>
 
