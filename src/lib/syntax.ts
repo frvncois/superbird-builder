@@ -580,8 +580,23 @@ export interface ReconcileStats {
   created: number
   /** adopted nodes that landed under a DIFFERENT parent than they had, and so
    * had their carried state dropped (see `guardReparent`). Only nodes that were
-   * actually carrying something are listed — stripping a blank node is a no-op. */
-  reparented?: { id: string; type: string }[]
+   * actually carrying something are listed — stripping a blank node is a no-op.
+   *
+   * `dropped` is what the node was carrying, so a caller can put it back in one
+   * edit rather than reconstructing it from memory. Wrapping a styled element in
+   * a new div is the ordinary case, and re-applying its classes by hand (and
+   * re-finding its binding ids) was the whole cost of it. */
+  reparented?: {
+    id: string
+    type: string
+    dropped?: {
+      classes?: string
+      content?: string
+      src?: string
+      interactionIds?: string[]
+      animationIds?: string[]
+    }
+  }[]
 }
 
 /** the node-only state a node carries that is NOT derivable from the code.
@@ -735,7 +750,21 @@ export function reconcile(
     // that used to corrupt silently.
     if (opts.guardReparent && parentOf.get(node.id) !== (parent?.id ?? null)) {
       if (hasNodeState(node)) {
-        stats?.reparented?.push({ id: node.id, type: node.type })
+        stats?.reparented?.push({
+          id: node.id,
+          type: node.type,
+          dropped: {
+            ...(node.classes ? { classes: node.classes } : {}),
+            ...(node.content ? { content: node.content } : {}),
+            ...(node.src ? { src: node.src } : {}),
+            ...(node.interactions?.length
+              ? { interactionIds: node.interactions.map((b) => b.interactionId) }
+              : {}),
+            ...(node.animations?.length
+              ? { animationIds: node.animations.map((b) => b.animationId) }
+              : {}),
+          },
+        })
         stripNodeState(node)
       }
     }

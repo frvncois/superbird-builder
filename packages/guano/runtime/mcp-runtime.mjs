@@ -1161,7 +1161,14 @@ function reconcile(oldCode, newCode, previous, map, stats, opts = {}) {
 			if (hasNodeState(node)) {
 				stats?.reparented?.push({
 					id: node.id,
-					type: node.type
+					type: node.type,
+					dropped: {
+						...node.classes ? { classes: node.classes } : {},
+						...node.content ? { content: node.content } : {},
+						...node.src ? { src: node.src } : {},
+						...node.interactions?.length ? { interactionIds: node.interactions.map((b) => b.interactionId) } : {},
+						...node.animations?.length ? { animationIds: node.animations.map((b) => b.animationId) } : {}
+					}
 				});
 				stripNodeState(node);
 			}

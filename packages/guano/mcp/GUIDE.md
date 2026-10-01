@@ -441,6 +441,12 @@ On success the response reports the identity outcome:
   wearing the old page's styling. Either strip them (`removeClasses`) or, better,
   re-send with **`fresh: true`** — structure is re-derived as usual but every node
   starts clean (no classes, content, src, bindings or locale overrides carried over).
+- `reparented` lists elements that kept their identity but moved under a DIFFERENT
+  parent — wrapping a styled element in a new `:div` is the everyday case. Their state is
+  dropped rather than re-seated, because carrying it across would silently style the new
+  structure with the old one's presentation. **Each entry carries `dropped`** — the
+  classes, content, src and interaction/animation ids it was holding — so put it back
+  with ONE `edit_elements` call from the response, rather than reconstructing it.
 - A warning note also appears when a **previously-styled** element was ORPHANED (its
   classes/content/bindings lost because your submitted code no longer lines up with the
   stored structure for it) — it lists the lost ids. If that happens unintentionally,

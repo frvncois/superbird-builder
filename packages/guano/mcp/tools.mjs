@@ -3758,9 +3758,11 @@ const tools = [
           `${stats.reparented.length} element(s) kept their identity but moved under a ` +
             'DIFFERENT parent, so the classes/content/bindings they were carrying were ' +
             `DROPPED rather than applied to unrelated content: ${shown}` +
-            `${stats.reparented.length > 12 ? ', …' : ''}. Re-apply whatever they should ` +
-            'have via edit_elements. (Carrying it across would have silently styled the ' +
-            'new structure with the old one\'s presentation.)',
+            `${stats.reparented.length > 12 ? ', …' : ''}. Each one's \`dropped\` field holds ` +
+            'what it was carrying — classes, content, src and the interaction/animation ids — ' +
+            'so put it back with ONE edit_elements call rather than reconstructing it. ' +
+            '(Carrying it across automatically would have silently styled the new structure ' +
+            'with the old one\'s presentation.)',
         )
       }
       if (inherited.length) {

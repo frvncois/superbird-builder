@@ -446,3 +446,68 @@ test.describe('breakpoints', () => {
     expect(kept.breakpoints.find((b: { id: string }) => b.id === mobile.id).name).toBe('Phone')
   })
 })
+
+test.describe('set_page_code reparenting', () => {
+  test('a wrapped element reports WHAT it was carrying, so it can be put back', async () => {
+    const s = await mcpSession()
+    const home = await s.home()
+    await s.call('set_page_code', {
+      pageId: home.id,
+      code: pageCode('\t:h1#title:'),
+      version: home.version,
+    })
+    let after = await s.home()
+    const { created } = await s.call('create_interactions', {
+      items: [{ name: 'Show', toClasses: 'flex' }],
+    })
+    await s.call('edit_elements', {
+      pageId: after.id,
+      version: after.version,
+      edits: [
+        {
+          ref: 'title',
+          addClasses: ['text-3xl', 'font-bold'],
+          content: 'Dashboard',
+          bindInteractions: [{ interactionId: created[0].id, trigger: 'hover' }],
+        },
+      ],
+    })
+
+    // wrap it in a new div: the node keeps its identity but changes parent, so
+    // its state is dropped rather than re-seated onto unrelated content
+    after = await s.home()
+    const r = await s.call('set_page_code', {
+      pageId: after.id,
+      code: pageCode('\t:div#wrap\n\t\t:h1#title:\n\tdiv:'),
+      version: after.version,
+    })
+    expect(r.saved).toBe(true)
+    expect(r.reparented).toHaveLength(1)
+    // the whole cost of this used to be reconstructing the state from memory,
+    // including binding ids the agent happened to still have in context
+    const dropped = r.reparented[0].dropped
+    expect(dropped.classes).toContain('text-3xl')
+    expect(dropped.content).toBe('Dashboard')
+    expect(dropped.interactionIds).toEqual([created[0].id])
+    expect(r.note ?? JSON.stringify(r.notes)).toContain('dropped')
+
+    // and putting it back is one call, from what the response just said
+    const back = await s.home()
+    const redo = await s.call('edit_elements', {
+      pageId: back.id,
+      version: back.version,
+      edits: [
+        {
+          ref: 'title',
+          addClasses: dropped.classes.split(' '),
+          content: dropped.content,
+          bindInteractions: dropped.interactionIds.map((id: string) => ({
+            interactionId: id,
+            trigger: 'hover',
+          })),
+        },
+      ],
+    })
+    expect(redo.failed).toBe(0)
+  })
+})
