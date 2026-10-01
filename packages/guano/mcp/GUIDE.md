@@ -1473,6 +1473,11 @@ step's tracks move the children; tracks in other steps still move the element it
 narrows the cascade to matching descendants (`{stagger: 250, staggerSelector: "img"}`)
 when the things to cascade are nested inside the direct children.
 
+Because a staggered step leaves the container itself untouched, a staggered entrance on a
+big grid is fine with `trigger: "load"` and is NOT what `load-animation-moves-layout`
+flags. That warning is about an unstaggered move or scale on a large container, which
+shifts the whole region on every page load.
+
 **Parallax** is a `scrub` binding over a step that moves `y` from positive to negative;
 give it `easing: "linear"` so progress tracks scroll evenly.
 
