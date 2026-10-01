@@ -29,7 +29,13 @@ const MENU_ITEM =
 const NAVBAR_LINK = 'text-sm text-muted-foreground transition-colors hover:text-foreground'
 const MOBILE_LINK =
   'rounded-md px-2 py-1.5 text-sm text-foreground transition-colors hover:bg-accent hover:text-accent-foreground'
-const OVERLAY = 'absolute inset-0 bg-[rgba(0,0,0,0.5)]'
+// `bg-black/50`, not `bg-[rgba(0,0,0,0.5)]`: the library's own standard is to
+// style from classes a human can also type and the Style panel can re-read.
+const OVERLAY = 'absolute inset-0 bg-black/50'
+// A layer that FADES rather than appearing: `hidden` → `block` cannot
+// transition (the first frame after a display change does not animate), so
+// anything that moves on open starts laid out and merely invisible.
+const FADE_LAYER = 'invisible fixed inset-0 z-50 opacity-0 transition-opacity'
 const DIALOG_PANEL = `relative z-50 flex w-full max-w-md flex-col gap-4 rounded-xl p-6 shadow-lg border border-border bg-card text-card-foreground`
 
 /** one accordion row: a full-width trigger over a panel that starts hidden */
@@ -280,37 +286,49 @@ export const INTERACTIVE: CatalogEntry[] = [
     description: 'A panel that comes in from an edge of the screen.',
     tokens: ['border', 'background', 'foreground', 'muted-foreground'],
     variants: [{ name: 'side', options: ['right', 'left', 'top', 'bottom'], default: 'right' }],
-    interactions: [{ key: 'open', name: 'Sheet · open', toClasses: 'block' }],
+    // TWO effects, because a sheet both appears and slides: the layer turns
+    // visible (which can fade, unlike display) and the panel translates to 0
+    // from whichever edge its `side` option parks it off. Every trigger binds
+    // both. `translate-x-0 translate-y-0` cancels the off-position on either
+    // axis, so one effect covers all four sides.
+    interactions: [
+      { key: 'open', name: 'Sheet · open', toClasses: 'visible opacity-100' },
+      { key: 'slide', name: 'Sheet · slide in', toClasses: 'translate-x-0 translate-y-0' },
+    ],
     root: {
       type: 'div',
       classes: 'flex flex-col items-start gap-4',
       children: [
         trigger(button('Open sheet', { variant: 'outline' }), [
           { interaction: 'open', trigger: 'click', target: 'layer', action: 'on' },
+          { interaction: 'slide', trigger: 'click', target: 'panel', action: 'on' },
         ]),
         {
           type: 'div',
           key: 'layer',
-          classes: 'hidden fixed inset-0 z-50',
+          classes: FADE_LAYER,
           children: [
             {
               type: 'div',
               classes: OVERLAY,
               interactions: [
                 { interaction: 'open', trigger: 'click', target: 'layer', action: 'off', closeOn: ['escape'] },
+                { interaction: 'slide', trigger: 'click', target: 'panel', action: 'off' },
               ],
             },
             {
               type: 'div',
               key: 'panel',
               classes:
-                'absolute inset-y-0 right-0 flex h-full w-80 flex-col gap-4 border-l border-border bg-background p-6 shadow-lg',
-              // the side it comes from: only the edge it hugs and the border
-              // facing the page change
+                'absolute inset-y-0 right-0 flex h-full w-80 translate-x-full flex-col gap-4 border-l border-border bg-background p-6 shadow-lg transition-transform',
+              // the side it comes from: the edge it hugs, the border facing the
+              // page, and the off-position it slides in FROM
               variantClasses: {
-                'side:left': 'right-auto left-0 border-l-0 border-r',
-                'side:top': 'inset-x-0 inset-y-auto top-0 h-auto w-full border-l-0 border-b',
-                'side:bottom': 'inset-x-0 inset-y-auto bottom-0 h-auto w-full border-l-0 border-t',
+                'side:left': 'right-auto left-0 -translate-x-full border-l-0 border-r',
+                'side:top':
+                  'inset-x-0 inset-y-auto top-0 h-auto w-full -translate-y-full border-l-0 border-b',
+                'side:bottom':
+                  'inset-x-0 inset-y-auto bottom-0 h-auto w-full translate-y-full border-l-0 border-t',
               },
               attributes: { role: 'dialog', 'aria-modal': 'true' },
               children: [
@@ -321,7 +339,12 @@ export const INTERACTIVE: CatalogEntry[] = [
                   content: 'What this panel is for, in a line.',
                   classes: 'text-sm text-muted-foreground',
                 },
-                closes(button('Close', { variant: 'outline' })),
+                // closes BOTH effects: the layer fades out and the panel
+                // slides back to its edge
+                trigger(button('Close', { variant: 'outline' }), [
+                  { interaction: 'open', trigger: 'click', target: 'layer', action: 'off' },
+                  { interaction: 'slide', trigger: 'click', target: 'panel', action: 'off' },
+                ]),
               ],
             },
           ],

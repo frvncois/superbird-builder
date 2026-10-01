@@ -604,11 +604,23 @@ const VISIBILITY_CLASSES = new Set(['visible', 'invisible', 'collapse'])
  * an arbitrary-value class (`p-[13px]`), a numeric flex (`flex-2`), in our
  * vocabulary, or a design token.
  */
+/** colour families an opacity modifier is meaningful on. `/50` on anything else
+ * is either a fraction (`w-1/2`, handled by SPACING_FRACTION_RE) or nonsense, so
+ * the stem is only re-checked for these. */
+const OPACITY_MODIFIER_RE =
+  /^((?:bg|text|border|ring|outline|divide|shadow|from|via|to|decoration|caret|accent|placeholder|fill|stroke)-.+)\/(?:\d{1,3}|\[[^\]]+\])$/
+
 export function isValidClass(cls: string): boolean {
   const { variants: segments, base } = splitClassVariants(cls)
   if (!base) return false
   if (segments.some((v) => !isKnownVariant(v))) return false
   if (/-\[.+\]$/.test(base)) return true // arbitrary value
+  // `bg-black/50`, `text-white/70`, `border-border/50` — Tailwind's opacity
+  // modifier, everyday syntax that was rejected outright. The slider's own
+  // chrome uses it, so the renderers emitted classes an author could not type,
+  // and a translucent overlay had to be written `bg-[rgba(0,0,0,0.5)]`.
+  const opacity = OPACITY_MODIFIER_RE.exec(base)
+  if (opacity) return isValidClass(opacity[1]!)
   if (FLEX_NUMERIC_RE.test(base)) return true // flex-2, flex-0.5, …
   if (SPACING_NUMERIC_RE.test(base)) return true // h-11, p-7, -mt-13, gap-9 … (v4 dynamic scale)
   if (SPACING_FRACTION_RE.test(base)) return true // basis-1/2, w-2/3, -translate-x-1/3

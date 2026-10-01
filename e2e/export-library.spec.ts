@@ -148,4 +148,26 @@ test.describe('the bundled library', () => {
     await page.getByRole('button', { name: 'Delete', exact: true }).click()
     await expect(question).toBeHidden()
   })
+
+  test('the sheet slides in rather than appearing', async ({ page }) => {
+    // `hidden` → `block` cannot transition, so a sheet that moves has to start
+    // laid out and merely invisible. Two effects: the layer fades, the panel
+    // translates from the edge its `side` option parks it off.
+    await page.goto('/')
+    const panel = page
+      .getByText('What this panel is for, in a line.')
+      .locator('xpath=ancestor::*[@role="dialog"]')
+    // v4 translate utilities drive the `translate` property, not `transform`
+    const shift = () => panel.evaluate((p) => getComputedStyle(p).translate)
+    // an interaction supplies its own `transition-all duration easing`, which
+    // replaces the element's authored transition-* — so the author never has to
+    // add one for the swap to animate
+    const duration = await panel.evaluate((p) => getComputedStyle(p).transitionDuration)
+    expect(duration).not.toBe('0s')
+
+    const off = await shift()
+    expect(off).not.toBe('none') // parked off its right edge
+    await page.getByRole('button', { name: 'Open sheet' }).click()
+    await expect.poll(shift).toBe('0px') // slid home
+  })
 })

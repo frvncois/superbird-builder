@@ -1256,6 +1256,33 @@ to the effect, not to that one trigger. A pointerdown counts as "outside" only w
 it lands outside **both** the trigger and the target, so clicking inside the open
 panel never dismisses it.
 
+**Sheet that slides** — `hidden` → `block` cannot transition: the first frame after a
+display change does not animate, so anything that MOVES on open has to start laid out
+and merely invisible. That needs TWO effects, and every trigger binds both:
+
+```
+create_interactions {items: [
+  {name: "Sheet · open",     toClasses: "visible opacity-100"},
+  {name: "Sheet · slide in", toClasses: "translate-x-0 translate-y-0"}
+]}
+
+:button (Open)    bind BOTH: {targetId: <layer>, action: "on"}, {targetId: <panel>, action: "on"}
+:div    (layer)   classes: invisible fixed inset-0 z-50 opacity-0
+  :div  (overlay) classes: absolute inset-0 bg-black/50
+                  bind BOTH off, closeOn: ["escape"]
+  :div  (panel)   classes: absolute inset-y-0 right-0 h-full w-80 translate-x-full
+```
+
+`translate-x-0 translate-y-0` cancels the off-position on either axis, so ONE effect
+slides a panel in from any edge — park it with `translate-x-full`, `-translate-x-full`,
+`-translate-y-full` or `translate-y-full` and the same effect brings it home. The
+library's `Sheet` is built exactly this way; copy it with `add_library_components`
+rather than rebuilding it.
+
+**You never add `transition-*` classes for this.** An interaction carries its own
+`transition-all <duration> <easing>`, which replaces whatever transition the element
+had while the effect is on. Set `duration` and `easing` on the interaction instead.
+
 **Accordion** — `group` makes it exclusive. Inside a `:collection-list` the group is
 shared across the repeats (one item open at a time) but stays independent per
 component instance:

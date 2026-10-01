@@ -3728,11 +3728,17 @@ var VISIBILITY_CLASSES = /* @__PURE__ */ new Set([
 * an arbitrary-value class (`p-[13px]`), a numeric flex (`flex-2`), in our
 * vocabulary, or a design token.
 */
+/** colour families an opacity modifier is meaningful on. `/50` on anything else
+* is either a fraction (`w-1/2`, handled by SPACING_FRACTION_RE) or nonsense, so
+* the stem is only re-checked for these. */
+var OPACITY_MODIFIER_RE = /^((?:bg|text|border|ring|outline|divide|shadow|from|via|to|decoration|caret|accent|placeholder|fill|stroke)-.+)\/(?:\d{1,3}|\[[^\]]+\])$/;
 function isValidClass(cls) {
 	const { variants: segments, base } = splitClassVariants(cls);
 	if (!base) return false;
 	if (segments.some((v) => !isKnownVariant(v))) return false;
 	if (/-\[.+\]$/.test(base)) return true;
+	const opacity = OPACITY_MODIFIER_RE.exec(base);
+	if (opacity) return isValidClass(opacity[1]);
 	if (FLEX_NUMERIC_RE.test(base)) return true;
 	if (SPACING_NUMERIC_RE.test(base)) return true;
 	if (SPACING_FRACTION_RE.test(base)) return true;
@@ -6499,11 +6505,7 @@ var FORMS = [
 			type: "input",
 			key: "input",
 			classes: `h-9 ${FIELD} ${PLACEHOLDER}`,
-			attributes: {
-				type: "text",
-				placeholder: "Enter your email",
-				name: "email"
-			}
+			attributes: { type: "text" }
 		}
 	},
 	{
@@ -7279,7 +7281,8 @@ var CONTENT = [
 var MENU_ITEM = "rounded-md px-2 py-1.5 text-sm text-card-foreground transition-colors hover:bg-accent hover:text-accent-foreground";
 var NAVBAR_LINK = "text-sm text-muted-foreground transition-colors hover:text-foreground";
 var MOBILE_LINK = "rounded-md px-2 py-1.5 text-sm text-foreground transition-colors hover:bg-accent hover:text-accent-foreground";
-var OVERLAY = "absolute inset-0 bg-[rgba(0,0,0,0.5)]";
+var OVERLAY = "absolute inset-0 bg-black/50";
+var FADE_LAYER = "invisible fixed inset-0 z-50 opacity-0 transition-opacity";
 var DIALOG_PANEL = `relative z-50 flex w-full max-w-md flex-col gap-4 rounded-xl p-6 shadow-lg border border-border bg-card text-card-foreground`;
 /** one accordion row: a full-width trigger over a panel that starts hidden */
 var accordionItem = (key, question, answer) => ({
@@ -7633,7 +7636,11 @@ var INTERACTIVE = [
 		interactions: [{
 			key: "open",
 			name: "Sheet · open",
-			toClasses: "block"
+			toClasses: "visible opacity-100"
+		}, {
+			key: "slide",
+			name: "Sheet · slide in",
+			toClasses: "translate-x-0 translate-y-0"
 		}],
 		root: {
 			type: "div",
@@ -7643,10 +7650,15 @@ var INTERACTIVE = [
 				trigger: "click",
 				target: "layer",
 				action: "on"
+			}, {
+				interaction: "slide",
+				trigger: "click",
+				target: "panel",
+				action: "on"
 			}]), {
 				type: "div",
 				key: "layer",
-				classes: "hidden fixed inset-0 z-50",
+				classes: FADE_LAYER,
 				children: [{
 					type: "div",
 					classes: OVERLAY,
@@ -7656,15 +7668,20 @@ var INTERACTIVE = [
 						target: "layer",
 						action: "off",
 						closeOn: ["escape"]
+					}, {
+						interaction: "slide",
+						trigger: "click",
+						target: "panel",
+						action: "off"
 					}]
 				}, {
 					type: "div",
 					key: "panel",
-					classes: "absolute inset-y-0 right-0 flex h-full w-80 flex-col gap-4 border-l border-border bg-background p-6 shadow-lg",
+					classes: "absolute inset-y-0 right-0 flex h-full w-80 translate-x-full flex-col gap-4 border-l border-border bg-background p-6 shadow-lg transition-transform",
 					variantClasses: {
-						"side:left": "right-auto left-0 border-l-0 border-r",
-						"side:top": "inset-x-0 inset-y-auto top-0 h-auto w-full border-l-0 border-b",
-						"side:bottom": "inset-x-0 inset-y-auto bottom-0 h-auto w-full border-l-0 border-t"
+						"side:left": "right-auto left-0 -translate-x-full border-l-0 border-r",
+						"side:top": "inset-x-0 inset-y-auto top-0 h-auto w-full -translate-y-full border-l-0 border-b",
+						"side:bottom": "inset-x-0 inset-y-auto bottom-0 h-auto w-full translate-y-full border-l-0 border-t"
 					},
 					attributes: {
 						role: "dialog",
@@ -7683,7 +7700,17 @@ var INTERACTIVE = [
 							content: "What this panel is for, in a line.",
 							classes: "text-sm text-muted-foreground"
 						},
-						closes(button("Close", { variant: "outline" }))
+						trigger(button("Close", { variant: "outline" }), [{
+							interaction: "open",
+							trigger: "click",
+							target: "layer",
+							action: "off"
+						}, {
+							interaction: "slide",
+							trigger: "click",
+							target: "panel",
+							action: "off"
+						}])
 					]
 				}]
 			}]

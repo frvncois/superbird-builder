@@ -51,7 +51,11 @@ export const FORMS: CatalogEntry[] = [
       type: 'input',
       key: 'input',
       classes: `h-9 ${FIELD} ${PLACEHOLDER}`,
-      attributes: { type: 'text', placeholder: 'Enter your email', name: 'email' },
+      // a bare primitive ships no copy: the placeholder read "Enter your email"
+      // and the name was "email", so every field copied from it said so until
+      // someone noticed. The composite form entries below keep their example
+      // text, where it reads as an example.
+      attributes: { type: 'text' },
     },
   },
   {
