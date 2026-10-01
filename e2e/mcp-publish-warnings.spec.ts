@@ -152,7 +152,7 @@ test.describe('what a review sends back', () => {
     expect(await s.kinds()).toContain('heavy-repeat')
   })
 
-  test('attribute text on a multilingual site is flagged as untranslatable', async () => {
+  test('attribute text with no translation is flagged, and a translation clears it', async () => {
     const s = await mcpSession()
     const home = await s.home()
     await s.call('set_page_code', {
@@ -171,6 +171,16 @@ test.describe('what a review sends back', () => {
 
     await s.call('update_settings', { addLocales: ['fr'] })
     expect(await s.kinds()).toContain('untranslated-attributes')
+
+    // it names work left, not a limit: translating it clears the warning
+    const now = await s.home()
+    await s.call('edit_elements', {
+      pageId: now.id,
+      version: now.version,
+      locale: 'fr',
+      edits: [{ ref: 'search', attributes: { placeholder: 'Rechercher des contacts' } }],
+    })
+    expect(await s.kinds()).not.toContain('untranslated-attributes')
   })
 
   test('a trigger and a target in two different repeats is flagged', async () => {

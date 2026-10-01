@@ -165,7 +165,12 @@ export {
 
 // --- custom attribute allowlist (src/lib/shared/attributes.js) — the MCP
 // sanitizes attributes with the SAME allowlist the editor and exporter use
-export { sanitizeAttributes, isAllowedAttribute } from './shared/attributes.js'
+export {
+  sanitizeAttributes,
+  isAllowedAttribute,
+  isLocalizableAttribute,
+  mergeAttributeLayers,
+} from './shared/attributes.js'
 
 // which nodes a route renders under an entry scope — the publish check for a
 // binding whose target it can never reach (see shared/entryScope.js)

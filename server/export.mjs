@@ -23,6 +23,7 @@ import {
   resolveFieldAttrs,
 } from '../src/lib/shared/fields.js'
 import {
+  mergeAttributeLayers,
   sanitizeAttributes,
   serializeAttribute,
   splitLinkAttributes,
@@ -150,6 +151,16 @@ const nodeContent = (node, locale, def) =>
   (locale !== def && node.locales?.[locale]?.content) || node.content
 
 const nodeSrc = (node, locale, def) => (locale !== def && node.locales?.[locale]?.src) || node.src
+
+/** the ATTRIBUTES a node renders on this route: the master's (shared, like
+ * classes), this placement's own overrides, then the locale's text overrides.
+ * Mirrors useRenderNode's customAttrs through the same shared helper. */
+const nodeAttributes = (node, mapping, locale, def) =>
+  mergeAttributeLayers(
+    (mapping ? mapping.master : node).attributes,
+    node.instanceAttributes,
+    locale !== def ? node.locales?.[locale]?.attributes : undefined,
+  )
 
 // reference fields store ids (possibly arrays) — those never read as text
 const baseEntryText = (entry, name) =>
@@ -487,7 +498,9 @@ function linkWrap(html, node, ctx) {
   // non-interactive div is not announced as the link's name. attrsFor holds
   // these back for exactly this reason.
   const mapping = ctx.mm.get(node.id)
-  const custom = withSafeRel(sanitizeAttributes((mapping ? mapping.master : node).attributes))
+  const custom = withSafeRel(
+    sanitizeAttributes(nodeAttributes(node, mapping, ctx.locale, ctx.defaultLocale)),
+  )
   const { link } = splitLinkAttributes(custom)
   const extra = Object.entries(link)
     .map(([name, value]) => ' ' + serializeAttribute(name, value, escapeHtml))
@@ -539,7 +552,9 @@ function attrsFor(node, ctx, bg, { wrapLink = true, extraClass = '' } = {}) {
   if (mediaTag && src && SAFE_SRC.test(src)) attrs.push(`src="${escapeHtml(src)}"`)
   // custom attributes are master-aware like classes; sanitized once, used for
   // both the alt precedence below and the pass-through loop at the end
-  const custom = withSafeRel(sanitizeAttributes((mapping ? mapping.master : node).attributes))
+  const custom = withSafeRel(
+    sanitizeAttributes(nodeAttributes(node, mapping, ctx.locale, ctx.defaultLocale)),
+  )
   // images always carry alt: the author's attributes.alt, else the library
   // asset's default, else '' (decorative)
   if (def?.tag === 'img') {

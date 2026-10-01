@@ -106,6 +106,41 @@ export function useLocale() {
       : { value: node.content, translated: false }
   }
 
+  /**
+   * The active locale's ATTRIBUTE overrides for a node, or undefined on the
+   * default locale. Unlike content there is no fallback marker: an absent or
+   * empty override simply leaves the base attribute in place
+   * (mergeAttributeLayers ignores it).
+   */
+  function localeAttributes(node: ElementNode): Record<string, string> | undefined {
+    if (isDefault.value) return undefined
+    return node.locales?.[activeLocale.value]?.attributes
+  }
+
+  /** write one attribute's translation; '' deletes the override */
+  function setNodeAttribute(node: ElementNode, name: string, value: string) {
+    if (isDefault.value) {
+      const attrs = { ...(node.attributes ?? {}) }
+      if (value) attrs[name] = value
+      else delete attrs[name]
+      if (Object.keys(attrs).length) node.attributes = attrs
+      else delete node.attributes
+      return
+    }
+    const pack = { ...(node.locales?.[activeLocale.value] ?? {}) }
+    const attrs = { ...(pack.attributes ?? {}) }
+    if (value) attrs[name] = value
+    else delete attrs[name]
+    if (Object.keys(attrs).length) pack.attributes = attrs
+    else delete pack.attributes
+    // prune an empty pack so touch-then-clear leaves the node byte-identical
+    const locales = { ...(node.locales ?? {}) }
+    if (Object.keys(pack).length) locales[activeLocale.value] = pack
+    else delete locales[activeLocale.value]
+    if (Object.keys(locales).length) node.locales = locales
+    else delete node.locales
+  }
+
   function nodeSrc(node: ElementNode): LocalizedValue {
     if (isDefault.value) return { value: node.src, translated: true }
     const override = node.locales?.[activeLocale.value]?.src
@@ -210,6 +245,8 @@ export function useLocale() {
     setDefaultLocale,
     nodeContent,
     nodeSrc,
+    localeAttributes,
+    setNodeAttribute,
     entryValue,
     editNodeContent,
     setNodeContent,

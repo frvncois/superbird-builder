@@ -173,7 +173,17 @@ export interface ElementNode {
    * node-only visual state like classes/src */
   background?: string
   /** per-locale overrides for editable content; base content/src is the default locale */
-  locales?: Record<string, { content?: string; src?: string }>
+  locales?: Record<
+    string,
+    {
+      content?: string
+      src?: string
+      /** per-locale ATTRIBUTE text — only the attributes a visitor reads
+       * (placeholder, aria-label, alt, title), which otherwise render in the
+       * default language on every locale route */
+      attributes?: Record<string, string>
+    }
+  >
   /** navigation target for link elements — internal '/path' or absolute URL */
   link?: string
   /** token argument from the code — field binding or collection name */
@@ -222,6 +232,18 @@ export interface ElementNode {
    * field is empty, so a bound attribute is still authorable out of scope.
    */
   fieldAttrs?: Record<string, string>
+  /**
+   * Attribute overrides for THIS placement of a component, merged over the
+   * master's `attributes` at render.
+   *
+   * `attributes` are shared like classes, which is right for `role` or `type` on
+   * a one-purpose control and wrong for the text a visitor reads: two Input
+   * instances need "Search contacts" and "Search", two icon buttons need
+   * different aria-labels. Without this a component could not be reused for
+   * either, so the Cocoapp prototype copied Input's class string onto plain
+   * `:input:` elements and lost the component entirely.
+   */
+  instanceAttributes?: Record<string, string>
   /** slider only: carousel configuration (node-only state, like listQuery).
    * Absent = every default; see shared/slider.js */
   slider?: SliderConfig

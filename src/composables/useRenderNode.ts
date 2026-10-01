@@ -19,7 +19,11 @@ import { backgroundRender, backgroundKindFromUrl } from '@/lib/shared/background
 import { conflictingBaseClasses } from '@/lib/shared/interactionClasses.js'
 import { resolveSliderConfig, sliderTrackClasses, sliderWireData } from '@/lib/shared/slider.js'
 import { useMedia, kindOfMime } from './useMedia'
-import { sanitizeAttributes, withSafeRel } from '@/lib/shared/attributes.js'
+import {
+  mergeAttributeLayers,
+  sanitizeAttributes,
+  withSafeRel,
+} from '@/lib/shared/attributes.js'
 import { DEFAULT_SCROLL_AT } from '@/lib/shared/interactionKeys.js'
 import { useLocale } from './useLocale'
 import { SAFE_SRC } from '@/lib/shared/urls.js'
@@ -105,7 +109,8 @@ export function useRenderNode(
     () => project.value.breakpoints.find((b) => b.id === frameBreakpointId)?.width ?? null,
   )
   const { collections, collectionByName, activeCollection, activeEntry, entryPath } = useCollections()
-  const { nodeContent, nodeSrc, entryValue, setNodeContent, setEntryValue } = useLocale()
+  const { nodeContent, nodeSrc, localeAttributes, entryValue, setNodeContent, setEntryValue } =
+    useLocale()
   const { assetForSrc } = useMedia()
 
   const def = computed(() => ELEMENTS[node.value.type])
@@ -229,8 +234,18 @@ export function useRenderNode(
   // withSafeRel mirrors the exporter: target="_blank" always carries a rel, so
   // the Data panel shows the same attribute set the published page will have
   const customAttrs = computed(() => {
+    // three layers: the component master's (shared, like classes), then THIS
+    // placement's overrides, then the active locale's text. Only the last two are
+    // the node's own, which is why they survive being inside an instance.
+    const shared = (mapping.value ? mapping.value.master : node.value).attributes ?? {}
     const own = withSafeRel(
-      sanitizeAttributes((mapping.value ? mapping.value.master : node.value).attributes ?? {}),
+      sanitizeAttributes(
+        mergeAttributeLayers(
+          shared,
+          node.value.instanceAttributes,
+          localeAttributes(node.value),
+        ),
+      ),
     )
     // attributes the element TYPE implies (:checkbox → type="checkbox"); the
     // author's own value always wins

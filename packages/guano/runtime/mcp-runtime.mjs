@@ -1092,6 +1092,7 @@ var NODE_STATE_KEYS = [
 	"listQuery",
 	"entryId",
 	"fieldAttrs",
+	"instanceAttributes",
 	"slider"
 ];
 /** true when a node carries state that would be lost (or wrongly inherited) */
@@ -5198,6 +5199,36 @@ function sanitizeAttributes(record) {
 	}
 	return out;
 }
+/**
+* Attributes whose value is TEXT A VISITOR READS, and so can be translated.
+* `type`, `role` and `name` are structural and never localized; these four are
+* copy, and on a multilingual site they used to render in the default language
+* on every locale route with no way to change it.
+*/
+var LOCALIZABLE_ATTRS = [
+	"placeholder",
+	"aria-label",
+	"alt",
+	"title"
+];
+/** true when `name` carries text worth translating */
+function isLocalizableAttribute(name) {
+	return LOCALIZABLE_ATTRS.includes(String(name).toLowerCase().trim());
+}
+/**
+* The attributes an element renders: the component master's, with this
+* placement's own overrides on top, then the active locale's text overrides.
+*
+* Shared by both Vue renderers and the exporter so the canvas, Preview and the
+* published page agree. `localeAttrs` is already narrowed to the locale being
+* rendered (absent on the default locale).
+*/
+function mergeAttributeLayers(shared, instance, localeAttrs) {
+	const out = { ...shared ?? {} };
+	for (const [name, value] of Object.entries(instance ?? {})) out[name] = value;
+	for (const [name, value] of Object.entries(localeAttrs ?? {})) if (isLocalizableAttribute(name) && String(value) !== "") out[name] = value;
+	return out;
+}
 //#endregion
 //#region src/lib/shared/entryScope.js
 /**
@@ -8259,4 +8290,4 @@ function materializeCatalogEntry(entry, project, component = (key) => project.co
 	});
 }
 //#endregion
-export { APPEAR_MODES, BUILTIN_LIST_SOURCES, CATALOG, CATALOG_TOKENS, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MOTION_PROPS, NODE_STATE_KEYS, REF_SLOT, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, SCROLL_LERP_MAX, SCROLL_LERP_MIN, SLIDER_DEFAULTS, STYLE_SECTIONS, TOKEN_NAME_RE, TRANSITION_DEFAULTS, TRANSITION_PRESET_IDS, VARIANT_NAME_RE, addVariantAxis, addVariantOption, adoptStructure, alignInstanceLines, alignMirrors, applyClass, buildDocument, buildInstanceMap, buildScopeRoots, canNest, catalogDependencies, catalogEntry, cloneForMaster, compileAnimation, componentReaches, componentUsage, countLocaleSeo, createNode, createPage, createProject, dataMarkerOf, deepClone, defaultBreakpoints, defaultSettings, deleteComponent, dependencyOrder, detachInstance, duplicateComponent, effectiveClasses, elementBlockLines, enforceDocument, expandComponentInstances, extractBodyArg, extractBodyDecor, extractBodyLines, findNode, findParent, fontError, fontFormatForUrl, hasAncestorOfType, hasNodeState, hasOpenArgBracket, hoistBlockRef, inheritedInstanceValue, interactionGroupKey, interactionMarkerOf, interactionStateKey, isAllowedAttribute, isBodyOpenLine, isClosedBlock, isComponentType, isEmittableToken, isEntryScopeRoot, isInstanceWrapper, isKnownElement, isLeafElement, isNodeHidden, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isValidClass, isValidToken, lexLine, lucideNameOf, lucideSvg, matchClass, materializeCatalogEntry, mergeClassLayers, nestedComponentNames, normalizeComponentName, normalizeSyntax, parseSetup, parseSyntax, pickedKeys, purgeLocaleSeo, pushMasterStructure, reconcile, refOf, removeVariantAxis, removeVariantOption, renameComponent, renameVariantAxis, renameVariantOption, replaceSetup, resolveInstanceValue, resolvePicks, resolveSliderConfig, rewriteInstanceBlock, sameLayerProperty, sameProperty, sanitizeAttributes, sanitizeInlineSvg, sanitizeRich, serializeNode, setComponentCategory, setComponentMeta, setInstancePick, setNodeHidden, setSetupLocale, setStyleTokens, setVariantAxes, setVariantClasses, setVariantDefault, slugify, stripExtractedInstanceState, stripNodeState, styleMarkerOf, tokenError, typeOptionsFor, validateAnimation, validateBinding, validateDocument, validateMotionSettings, validateSliderConfig, variantKey, walkNodes, withDataMarker, withInteractionMarker, withStyleMarker, withoutRef };
+export { APPEAR_MODES, BUILTIN_LIST_SOURCES, CATALOG, CATALOG_TOKENS, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MOTION_PROPS, NODE_STATE_KEYS, REF_SLOT, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, SCROLL_LERP_MAX, SCROLL_LERP_MIN, SLIDER_DEFAULTS, STYLE_SECTIONS, TOKEN_NAME_RE, TRANSITION_DEFAULTS, TRANSITION_PRESET_IDS, VARIANT_NAME_RE, addVariantAxis, addVariantOption, adoptStructure, alignInstanceLines, alignMirrors, applyClass, buildDocument, buildInstanceMap, buildScopeRoots, canNest, catalogDependencies, catalogEntry, cloneForMaster, compileAnimation, componentReaches, componentUsage, countLocaleSeo, createNode, createPage, createProject, dataMarkerOf, deepClone, defaultBreakpoints, defaultSettings, deleteComponent, dependencyOrder, detachInstance, duplicateComponent, effectiveClasses, elementBlockLines, enforceDocument, expandComponentInstances, extractBodyArg, extractBodyDecor, extractBodyLines, findNode, findParent, fontError, fontFormatForUrl, hasAncestorOfType, hasNodeState, hasOpenArgBracket, hoistBlockRef, inheritedInstanceValue, interactionGroupKey, interactionMarkerOf, interactionStateKey, isAllowedAttribute, isBodyOpenLine, isClosedBlock, isComponentType, isEmittableToken, isEntryScopeRoot, isInstanceWrapper, isKnownElement, isLeafElement, isLocalizableAttribute, isNodeHidden, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isValidClass, isValidToken, lexLine, lucideNameOf, lucideSvg, matchClass, materializeCatalogEntry, mergeAttributeLayers, mergeClassLayers, nestedComponentNames, normalizeComponentName, normalizeSyntax, parseSetup, parseSyntax, pickedKeys, purgeLocaleSeo, pushMasterStructure, reconcile, refOf, removeVariantAxis, removeVariantOption, renameComponent, renameVariantAxis, renameVariantOption, replaceSetup, resolveInstanceValue, resolvePicks, resolveSliderConfig, rewriteInstanceBlock, sameLayerProperty, sameProperty, sanitizeAttributes, sanitizeInlineSvg, sanitizeRich, serializeNode, setComponentCategory, setComponentMeta, setInstancePick, setNodeHidden, setSetupLocale, setStyleTokens, setVariantAxes, setVariantClasses, setVariantDefault, slugify, stripExtractedInstanceState, stripNodeState, styleMarkerOf, tokenError, typeOptionsFor, validateAnimation, validateBinding, validateDocument, validateMotionSettings, validateSliderConfig, variantKey, walkNodes, withDataMarker, withInteractionMarker, withStyleMarker, withoutRef };

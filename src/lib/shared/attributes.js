@@ -139,3 +139,34 @@ export function sanitizeAttributes(record) {
 export function serializeAttribute(name, value, escape) {
   return value === '' && isBooleanAttribute(name) ? name : `${name}="${escape(value)}"`
 }
+
+/**
+ * Attributes whose value is TEXT A VISITOR READS, and so can be translated.
+ * `type`, `role` and `name` are structural and never localized; these four are
+ * copy, and on a multilingual site they used to render in the default language
+ * on every locale route with no way to change it.
+ */
+export const LOCALIZABLE_ATTRS = ['placeholder', 'aria-label', 'alt', 'title']
+
+/** true when `name` carries text worth translating */
+export function isLocalizableAttribute(name) {
+  return LOCALIZABLE_ATTRS.includes(String(name).toLowerCase().trim())
+}
+
+/**
+ * The attributes an element renders: the component master's, with this
+ * placement's own overrides on top, then the active locale's text overrides.
+ *
+ * Shared by both Vue renderers and the exporter so the canvas, Preview and the
+ * published page agree. `localeAttrs` is already narrowed to the locale being
+ * rendered (absent on the default locale).
+ */
+export function mergeAttributeLayers(shared, instance, localeAttrs) {
+  const out = { ...(shared ?? {}) }
+  for (const [name, value] of Object.entries(instance ?? {})) out[name] = value
+  for (const [name, value] of Object.entries(localeAttrs ?? {})) {
+    // a locale override only applies to copy, and only when it says something
+    if (isLocalizableAttribute(name) && String(value) !== '') out[name] = value
+  }
+  return out
+}

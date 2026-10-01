@@ -620,6 +620,7 @@ export const NODE_STATE_KEYS = [
   'listQuery',
   'entryId',
   'fieldAttrs',
+  'instanceAttributes',
   'slider',
 ] as const
 

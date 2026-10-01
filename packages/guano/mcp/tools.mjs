@@ -116,6 +116,8 @@ export function createToolSet({ api, runtime, elicit, hasElicitation = () => nul
     SAFE_SRC,
     sanitizeAttributes,
     isAllowedAttribute,
+    isLocalizableAttribute,
+    mergeAttributeLayers,
     setStyleTokens,
     isEmittableToken,
     isReservedToken,
@@ -1859,7 +1861,36 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
     if (edit.attributes !== undefined) {
       const attrTarget = sharedNode
       if (localized) {
-        errors.push('attributes are not localizable — omit locale for attribute edits')
+        // the TEXT attributes a visitor reads are translatable; the rest are
+        // structural (type, role, name) and render the same in every language
+        const incoming =
+          edit.attributes && typeof edit.attributes === 'object' ? edit.attributes : {}
+        const clean = sanitizeAttributes(incoming)
+        const notText = Object.keys(clean).filter((n) => !isLocalizableAttribute(n))
+        if (notText.length) {
+          errors.push(
+            `only text attributes are localizable (placeholder, aria-label, alt, title) — ` +
+              `refused: ${notText.join(', ')}`,
+          )
+        } else {
+          const pack = { ...(node.locales?.[locale] ?? {}) }
+          const attrs = { ...(pack.attributes ?? {}) }
+          for (const [name, value] of Object.entries(clean)) {
+            if (value) attrs[name] = value
+            else delete attrs[name]
+          }
+          if (Object.keys(attrs).length) pack.attributes = attrs
+          else delete pack.attributes
+          // prune an empty pack, so touch-then-clear leaves the node
+          // byte-identical and merge signatures stay quiet
+          const locales = { ...(node.locales ?? {}) }
+          if (Object.keys(pack).length) locales[locale] = pack
+          else delete locales[locale]
+          if (Object.keys(locales).length) node.locales = locales
+          else delete node.locales
+          applied.push(`attributes (${locale})`)
+          changed = true
+        }
       } else if (!attrTarget) {
         errors.push('attributes refused: this instance node has no master counterpart (structure diverged)')
       } else {
@@ -1884,6 +1915,30 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
         if (Object.keys(clean).length) attrTarget.attributes = clean
         else delete attrTarget.attributes
         applied.push(`attributes${onShared}`)
+        changed = true
+      }
+    }
+
+    if (edit.instanceAttributes !== undefined) {
+      if (localized) {
+        errors.push(
+          'instanceAttributes are not localizable — pass `locale` with `attributes` to ' +
+            'translate placeholder/aria-label/alt/title instead',
+        )
+      } else {
+        const incoming =
+          edit.instanceAttributes && typeof edit.instanceAttributes === 'object'
+            ? edit.instanceAttributes
+            : {}
+        const clean = sanitizeAttributes(incoming)
+        const refused = Object.keys(incoming).filter((n) => !(n.toLowerCase() in clean))
+        if (refused.length) {
+          errors.push(`instanceAttributes ignored (name not allowed): ${refused.join(', ')}`)
+        }
+        // THIS placement only — never the master, which is the whole point
+        if (Object.keys(clean).length) node.instanceAttributes = clean
+        else delete node.instanceAttributes
+        applied.push('instanceAttributes')
         changed = true
       }
     }
@@ -2965,26 +3020,38 @@ function designWarnings(project) {
     })
   }
 
-  // 3f. attribute strings a multilingual site leaves in one language. Attributes
-  // are not localizable yet, so this is a limit to state rather than a fix.
+  // 3f. attribute text a multilingual site has not translated. It IS translatable
+  // now (node.locales[code].attributes), so this names work left, not a limit.
   const locales = project.locales ?? []
-  if (locales.length > 1) {
-    const LOCALIZABLE_ATTRS = ['placeholder', 'aria-label', 'alt', 'title']
+  const nonDefault = locales.filter((l) => l !== (project.defaultLocale || 'en'))
+  if (nonDefault.length) {
     const untranslated = []
-    eachRendered((n, where) => {
-      const named = LOCALIZABLE_ATTRS.filter((a) => String(n.attributes?.[a] ?? '').trim())
-      if (named.length) untranslated.push(`${named.join(', ')} on :${n.type} in ${where}`)
-    })
+    for (const page of published) {
+      const mm = buildInstanceMap(project, page)
+      walkNodes(page.elements ?? [], (n) => {
+        const attrs = mergeAttributeLayers(
+          (mm.get(n.id)?.master ?? n).attributes,
+          n.instanceAttributes,
+          undefined,
+        )
+        for (const [name, value] of Object.entries(attrs)) {
+          if (!isLocalizableAttribute(name) || !String(value).trim()) continue
+          const missing = nonDefault.filter((l) => !n.locales?.[l]?.attributes?.[name])
+          if (missing.length) {
+            untranslated.push(`${name} on :${n.type} in page "${page.name}" (${missing.join(', ')})`)
+          }
+        }
+      })
+    }
     if (untranslated.length) {
       warnings.push({
         kind: 'untranslated-attributes',
         where: untranslated.slice(0, 6),
         message:
-          `this site has ${locales.length} locales, and ${untranslated.length} element(s) carry ` +
-          'attribute text (placeholder, aria-label, alt, title) that is NOT localizable — those ' +
-          'strings render in the default language on every locale route. Keep user-visible copy ' +
-          'in element content where it can be translated, and treat this as a known limit when ' +
-          'a placeholder or a screen-reader label has to differ per language.',
+          `${untranslated.length} attribute string(s) a visitor reads (placeholder, aria-label, ` +
+          'alt, title) have no translation, so they render in the default language on the other ' +
+          'locale routes. get_translation_worklist lists them as `kind: "attribute"` — the ' +
+          'counters do too, so "missingTranslatable: 0" now means it.',
       })
     }
   }
@@ -5808,6 +5875,16 @@ const tools = [
                   'instance the set lands on the MASTER (attributes render shared, like classes).',
                 additionalProperties: { type: 'string' },
               },
+              instanceAttributes: {
+                type: ['object', 'null'],
+                description:
+                  'attribute overrides for THIS placement, merged over the component master\'s ' +
+                  '`attributes`. `attributes` are shared like classes, which is right for `role` ' +
+                  'or `type` and wrong for the text a visitor reads — two Input instances need ' +
+                  '"Search contacts" and "Search". Use this rather than copying a component\'s ' +
+                  'classes onto a plain element. Same allowlist; {} or null clears.',
+                additionalProperties: { type: 'string' },
+              },
               fieldAttrs: {
                 type: ['object', 'null'],
                 description:
@@ -6218,7 +6295,7 @@ const tools = [
         locale: { type: 'string', description: 'a registered non-default locale, e.g. "fr"' },
         missingOnly: { type: 'boolean', description: 'return only items without an override yet' },
         countsOnly: { type: 'boolean', description: 'return the counters only, no items — size the job first' },
-        kind: { type: 'string', enum: ['element', 'master', 'entry'], description: 'restrict to one kind' },
+        kind: { type: 'string', enum: ['element', 'master', 'entry', 'attribute'], description: 'restrict to one kind' },
         pageId: { type: 'string', description: 'element items on this page only' },
         pageIds: {
           type: 'array',
@@ -6285,6 +6362,34 @@ const tools = [
               })
             } else if (skip && isLeafElement(n.type) && n.content && n.arg === undefined) {
               translateNo++
+            }
+            // the attribute TEXT a visitor reads — a placeholder, an icon
+            // button's aria-label, an image's alt. These used to render in the
+            // default language on every locale route with no way to change it,
+            // and the worklist reaching `missingTranslatable: 0` while they sat
+            // in English is exactly the false "job done" worth fixing.
+            if (!skip) {
+              const attrs = mergeAttributeLayers(
+                (mapped ?? n).attributes,
+                n.instanceAttributes,
+                undefined,
+              )
+              for (const [name, value] of Object.entries(attrs)) {
+                if (!isLocalizableAttribute(name) || !String(value).trim()) continue
+                all.push({
+                  kind: 'attribute',
+                  pageId: page.id,
+                  page: page.name,
+                  id: n.id,
+                  line: n.line,
+                  type: n.type,
+                  attribute: name,
+                  base: fence(value),
+                  override: fence(n.locales?.[locale]?.attributes?.[name]),
+                  ...(draftPage ? { draftPage: true } : {}),
+                  ...(flagStructural(value) ? { looksStructural: true } : {}),
+                })
+              }
             }
             visit(n.children ?? [], skip)
           }
@@ -6415,11 +6520,17 @@ const tools = [
           items: {
             type: 'object',
             properties: {
-              kind: { type: 'string', enum: ['element', 'master', 'entry'] },
+              kind: { type: 'string', enum: ['element', 'master', 'entry', 'attribute'] },
               pageId: { type: 'string' },
               componentId: { type: 'string' },
               collectionId: { type: 'string' },
-              id: { type: 'string', description: 'element/master node id (element and master kinds)' },
+              id: { type: 'string', description: 'element/master node id (element, master and attribute kinds)' },
+              attribute: {
+                type: 'string',
+                description:
+                  'kind "attribute" only: which attribute to translate (placeholder, aria-label, ' +
+                  'alt, title)',
+              },
               entryId: { type: 'string' },
               content: { type: 'string' },
               values: { type: 'object', additionalProperties: { type: 'string' } },
@@ -6494,6 +6605,45 @@ const tools = [
           }
           const value = isRich(item.content) ? sanitizeRich(item.content) : item.content
           setLocaleOverride(node, locale, 'content', value)
+          written++
+          fieldsWritten++
+        } else if (item.kind === 'attribute') {
+          if (item.content === undefined) {
+            fail(item, 'attribute items need `content`')
+            continue
+          }
+          if (!isLocalizableAttribute(item.attribute)) {
+            fail(
+              item,
+              `only text attributes are localizable (placeholder, aria-label, alt, title) — ` +
+                `not "${item.attribute}"`,
+            )
+            continue
+          }
+          const page = (project.pages ?? []).find((p) => p.id === item.pageId)
+          if (!page) {
+            fail(item, `no page with id "${item.pageId}"`)
+            continue
+          }
+          const node = findNode(page.elements ?? [], item.id)
+          if (!node) {
+            fail(item, `no element with id "${item.id}"`)
+            continue
+          }
+          const name = String(item.attribute).toLowerCase().trim()
+          const pack = { ...(node.locales?.[locale] ?? {}) }
+          const attrs = { ...(pack.attributes ?? {}) }
+          if (item.content) attrs[name] = item.content
+          else delete attrs[name]
+          if (Object.keys(attrs).length) pack.attributes = attrs
+          else delete pack.attributes
+          // prune an empty pack, so clearing an override leaves the node
+          // byte-identical (the rule every locale write here follows)
+          const locales = { ...(node.locales ?? {}) }
+          if (Object.keys(pack).length) locales[locale] = pack
+          else delete locales[locale]
+          if (Object.keys(locales).length) node.locales = locales
+          else delete node.locales
           written++
           fieldsWritten++
         } else if (item.kind === 'entry') {
