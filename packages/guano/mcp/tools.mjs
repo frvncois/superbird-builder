@@ -2552,8 +2552,16 @@ function designWarnings(project) {
   // 3. entrance animations that move layout containers
   const moving = []
   const lib = new Map((project.animations ?? []).map((a) => [a.id, a]))
+  // A STAGGERED step moves the container's CHILDREN, not the container (see
+  // splitByStagger in shared/motion.js), so it is exactly the "small items,
+  // staggered" shape this warning recommends — flagging it contradicted the
+  // guide's own advice to bind a stagger to the list element.
   const transformsLayout = (a) =>
-    (a?.steps ?? []).some((st) => (st.tracks ?? []).some((t) => ['x', 'y', 'scale', 'width', 'height'].includes(t.prop)))
+    (a?.steps ?? []).some(
+      (st) =>
+        !(st.stagger > 0) &&
+        (st.tracks ?? []).some((t) => ['x', 'y', 'scale', 'width', 'height'].includes(t.prop)),
+    )
   const countDesc = (n) => (n.children ?? []).reduce((k, c) => k + 1 + countDesc(c), 0)
   eachRendered((n, where) => {
     for (const b of n.animations ?? []) {
@@ -2570,8 +2578,8 @@ function designWarnings(project) {
       message:
         `${moving.length} large container(s) enter with a \`load\` animation that moves or scales them — ` +
         'the whole region shifts on every page load, and the transform it leaves behind traps any fixed ' +
-        'sheet or modal inside. Fade containers (opacity only); reserve movement for small items, ' +
-        'staggered, with `appear`.',
+        'sheet or modal inside. Fade containers (opacity only), or set `stagger` on the step so the ' +
+        'CHILDREN move and the container stays put — a staggered step is not flagged.',
     })
   }
 
