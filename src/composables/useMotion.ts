@@ -59,6 +59,10 @@ function maxStagger(split: StaggerSplit): number {
 
 /** a play's full run length INCLUDING the stagger tail seen so far — clamping
  * at compiled.duration froze cascades mid-flight with late children part-faded */
+/** the scope(s) a reader accepts: one string, or the set of scopes a node's
+ * bindings key under (see inScope) */
+export type MotionScope = string | ReadonlySet<string | undefined>
+
 function playEnd(play: PlayState): number {
   if (!play.split.hasStagger) return play.compiled.duration
   return play.compiled.duration + maxStagger(play.split) * (play.maxChild ?? 0)
@@ -263,15 +267,20 @@ export function useMotion() {
 
   /** does this play belong to the rendering asking for it? a scoped play is
    * one component instance's / one list repeat's alone */
-  function inScope(key: string, scope?: string): boolean {
+  /** A node reads the plays landing on it under ANY of the scopes its bindings
+   * key under — one per binding, because the entry part follows the target
+   * (shared/entryScope.js), so a trigger inside a list and a trigger outside it
+   * can drive the same element under different keys. */
+  function inScope(key: string, scope?: MotionScope): boolean {
     const at = key.indexOf('@')
-    return (at === -1 ? undefined : key.slice(at + 1)) === scope
+    const own = at === -1 ? undefined : key.slice(at + 1)
+    return scope instanceof Set ? scope.has(own) : own === scope
   }
 
   /** the element-moving values of every active play targeting this node,
    * later plays winning per PROPERTY — so a marquee's x and an entrance's y
    * compose into one transform instead of overwriting each other */
-  function valuesForNode(nodeId: string, scope?: string): MotionValues | undefined {
+  function valuesForNode(nodeId: string, scope?: MotionScope): MotionValues | undefined {
     void tick.value // re-evaluate every frame while something is running
     // farthest-from-range first so the scrub nearest (or inside) its active
     // range wins shared properties — the published runtime orders its frame
@@ -295,7 +304,7 @@ export function useMotion() {
   function staggerValuesFor(
     parentId: string,
     childIndex: number,
-    scope?: string,
+    scope?: MotionScope,
   ): MotionValues | undefined {
     void tick.value
     let merged: MotionValues | undefined
@@ -312,7 +321,7 @@ export function useMotion() {
   }
 
   /** the merged style for a node (element part only; see staggerValuesFor) */
-  function styleForNode(nodeId: string, scope?: string): MotionStyle | undefined {
+  function styleForNode(nodeId: string, scope?: MotionScope): MotionStyle | undefined {
     const values = valuesForNode(nodeId, scope)
     return values ? composeMotionStyle(values) : undefined
   }

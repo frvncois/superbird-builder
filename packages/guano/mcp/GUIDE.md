@@ -643,7 +643,13 @@ taste; they are the defects a review finds first.
   of their region.
 - ONE overlay per kind, outside the list: a sheet, dialog or menu panel written inside
   a `:collection-list` row ships once per entry (twelve contacts, twelve sheets) and
-  the editor renders every copy. Rows open the one shared overlay instead.
+  the editor renders every copy. Rows open the one shared overlay instead — bind the
+  row's trigger to it with `targetRef`/`targetId` and it fires the single copy.
+  (A row trigger that opens an overlay outside its list shares ONE on/off state with
+  every other row, which is what "one shared overlay" means: opening it from row 7
+  opens the same panel row 2 opens. An effect that must be independent per row — an
+  inline expander, a per-row confirm — targets an element inside the row, and each
+  row then gets its own state automatically.)
 - Empty and loading states for every list. Placeholder copy reads like the product,
   not like "Lorem ipsum" or "Card title".
 - Nothing left over: no unused interactions or animations, no probe pages, no

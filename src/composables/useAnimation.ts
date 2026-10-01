@@ -3,7 +3,7 @@ import { usePage } from './usePage'
 import { useProject } from './useProject'
 import { useInteraction } from './useInteraction'
 import { walkNodes } from '@/lib/tree'
-import { masterAnimationsTargeting } from './useMasterBindings'
+import { masterAnimationsTargeting, type OwnedBinding } from './useMasterBindings'
 import { validateAnimation } from '@/lib/motion'
 import { MOTION_PRESETS, type MotionPresetId } from '@/lib/motionPresets'
 import type { Animation, AnimationBinding, ElementNode } from '@/types/editor'
@@ -38,11 +38,13 @@ const allBindings = computed(() => {
 
 /** node id → bindings whose animation moves that node */
 const animTargetIndex = computed(() => {
-  const index = new Map<string, AnimationBinding[]>()
+  const index = new Map<string, OwnedBinding<AnimationBinding>[]>()
   for (const { owner, binding } of allBindings.value) {
     const key = binding.targetId ?? owner.id
     const list = index.get(key) ?? []
-    list.push(binding)
+    // the owner travels with the binding: it decides the entry part of the
+    // binding's scope (src/lib/shared/entryScope.js)
+    list.push({ binding, ownerId: owner.id })
     index.set(key, list)
   }
   return index
@@ -59,7 +61,10 @@ export function animBindingActiveAt(
 }
 
 /** bindings inside a component master whose animation moves `masterId` */
-export function scopedAnimBindings(masterId: string, componentRoot: ElementNode): AnimationBinding[] {
+export function scopedAnimBindings(
+  masterId: string,
+  componentRoot: ElementNode,
+): OwnedBinding<AnimationBinding>[] {
   // the shared per-master index — a walk here ran once per rendered element
   return [...masterAnimationsTargeting(masterId, componentRoot)]
 }

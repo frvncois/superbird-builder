@@ -8,6 +8,7 @@ import {
   interactionStateKey,
   nextInteractionState,
 } from '@/lib/shared/interactionKeys.js'
+import { buildScopeRoots } from '@/lib/shared/entryScope.js'
 import type { AnimationBinding, ElementNode, Interaction, InteractionBinding } from '@/types/editor'
 
 /**
@@ -59,17 +60,30 @@ const all = computed(() => {
   return list
 })
 
-/** node id → bindings whose effect applies to that node */
+/** node id → bindings whose effect applies to that node, each paired with the
+ * node it is declared on (the owner decides the binding's entry scope) */
 const targetIndex = computed(() => {
-  const index = new Map<string, InteractionBinding[]>()
+  const index = new Map<string, { binding: InteractionBinding; ownerId: string }[]>()
   for (const { owner, binding } of all.value) {
     const key = binding.targetId ?? owner.id
     const list = index.get(key) ?? []
-    list.push(binding)
+    list.push({ binding, ownerId: owner.id })
     index.set(key, list)
   }
   return index
 })
+
+/**
+ * node id → the entry scope it renders under, for the active page and every
+ * component master (shared/entryScope.js). Mirrors the exporter's index: it is
+ * what keeps a row trigger and a shared overlay on ONE state key.
+ */
+const scopeRoots = computed(() =>
+  buildScopeRoots([
+    { tree: activePage.value.elements, root: null },
+    ...(project.value.components ?? []).map((c) => ({ tree: [c.root], root: null })),
+  ]),
+)
 
 /**
  * Per-EFFECT options, folded together from every binding that drives the same
@@ -100,6 +114,14 @@ const effectOptions = computed(() => {
   for (const component of project.value.components ?? []) walkNodes([component.root], collect)
   return index
 })
+
+/**
+ * Resolves the scope of a binding declared on `ownerId`, for the node being
+ * rendered. Per BINDING, not per node: a row trigger and the one shared overlay
+ * it opens only land on the same state key when the entry part follows the
+ * TARGET (src/lib/shared/entryScope.js).
+ */
+export type ScopeOf = (ownerId: string) => string | undefined
 
 /** whether a binding applies at the breakpoint being rendered. `undefined`
  * breakpoints = all; a null render breakpoint (unknown) never gates. */
@@ -174,18 +196,22 @@ export function useInteraction() {
    * close button, an overlay) drive one effect on one target, so its classes are
    * contributed once. Without the dedupe the to-classes appeared N times.
    */
-  function classesFor(nodeId: string, breakpointId: string | null = null, scope?: string): string {
+  function classesFor(
+    nodeId: string,
+    breakpointId: string | null = null,
+    scopeOf: ScopeOf = () => undefined,
+  ): string {
     const targeting = targetIndex.value.get(nodeId)
     if (!targeting?.length) return ''
     const seen = new Set<string>()
     const parts: string[] = []
-    for (const binding of targeting) {
+    for (const { binding, ownerId } of targeting) {
       if (!bindingActiveAt(binding, breakpointId)) continue
       if (seen.has(binding.interactionId)) continue
       seen.add(binding.interactionId)
       const animation = animationIndex.value.get(binding.interactionId)
       if (!animation) continue
-      const key = interactionStateKey(binding.interactionId, nodeId, scope)
+      const key = interactionStateKey(binding.interactionId, nodeId, scopeOf(ownerId))
       const base = `transition-all ${animation.duration} ${animation.easing}`
       parts.push(fired.value.has(key) ? `${base} ${animation.toClasses}` : base)
     }
@@ -200,19 +226,19 @@ export function useInteraction() {
   function scopedClassesFor(
     masterId: string,
     componentRoot: ElementNode,
-    scope: string,
+    scopeOf: ScopeOf,
     breakpointId: string | null = null,
   ): string {
     const seen = new Set<string>()
     const parts: string[] = []
     // the per-master index, not a walk: this runs once per rendered element
-    for (const binding of masterInteractionsTargeting(masterId, componentRoot)) {
+    for (const { binding, ownerId } of masterInteractionsTargeting(masterId, componentRoot)) {
       if (!bindingActiveAt(binding, breakpointId)) continue
       if (seen.has(binding.interactionId)) continue
       seen.add(binding.interactionId)
       const animation = animationIndex.value.get(binding.interactionId)
       if (!animation) continue
-      const key = interactionStateKey(binding.interactionId, masterId, scope)
+      const key = interactionStateKey(binding.interactionId, masterId, scopeOf(ownerId))
       const base = `transition-all ${animation.duration} ${animation.easing}`
       parts.push(fired.value.has(key) ? `${base} ${animation.toClasses}` : base)
     }
@@ -221,11 +247,15 @@ export function useInteraction() {
 
   /** the state keys whose effect lands on this node — registered for
    * outside-click hit-testing so a click inside an open menu isn't "outside" */
-  function targetStateKeys(nodeId: string, scope?: string): string[] {
+  function targetStateKeys(nodeId: string, scopeOf: ScopeOf): string[] {
     const targeting = targetIndex.value.get(nodeId)
     if (!targeting?.length) return []
     return [
-      ...new Set(targeting.map((b) => interactionStateKey(b.interactionId, nodeId, scope))),
+      ...new Set(
+        targeting.map(({ binding, ownerId }) =>
+          interactionStateKey(binding.interactionId, nodeId, scopeOf(ownerId)),
+        ),
+      ),
     ]
   }
 
@@ -233,11 +263,11 @@ export function useInteraction() {
   function scopedTargetStateKeys(
     masterId: string,
     componentRoot: ElementNode,
-    scope: string,
+    scopeOf: ScopeOf,
   ): string[] {
     const keys = new Set<string>()
-    for (const binding of masterInteractionsTargeting(masterId, componentRoot)) {
-      keys.add(interactionStateKey(binding.interactionId, masterId, scope))
+    for (const { binding, ownerId } of masterInteractionsTargeting(masterId, componentRoot)) {
+      keys.add(interactionStateKey(binding.interactionId, masterId, scopeOf(ownerId)))
     }
     return [...keys]
   }
@@ -430,6 +460,7 @@ export function useInteraction() {
     scopedClassesFor,
     targetStateKeys,
     scopedTargetStateKeys,
+    scopeRoots,
     bindingStateKey,
     isBindingOn,
     applyBinding,

@@ -2,9 +2,10 @@ import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ELEMENTS } from '@/lib/elements'
 import { usePage } from './usePage'
 import { useCollections } from './useCollections'
-import { useInteraction } from './useInteraction'
+import { useInteraction, type ScopeOf } from './useInteraction'
 import { useComponents } from './useComponents'
 import { useAnimation, animBindingActiveAt, scopedAnimBindings } from './useAnimation'
+import { bindingScope, entryScopePart } from '@/lib/shared/entryScope.js'
 import { useMotion } from './useMotion'
 import { appearRootMargin, composeMotionStyle, effectiveAppearMode } from '@/lib/motion'
 import { useProject } from './useProject'
@@ -80,6 +81,7 @@ export function useRenderNode(
     scopedClassesFor,
     targetStateKeys,
     scopedTargetStateKeys,
+    scopeRoots,
     registerInteractionEl,
     unregisterInteractionEl,
   } = useInteraction()
@@ -421,10 +423,10 @@ export function useRenderNode(
       ? scopedClassesFor(
           mapping.value.master.id,
           mapping.value.root,
-          motionScope.value ?? mapping.value.instanceId,
+          scopeOfTarget,
           renderBreakpointId.value,
         )
-      : classesFor(node.value.id, renderBreakpointId.value, motionScope.value)
+      : classesFor(node.value.id, renderBreakpointId.value, scopeOfTarget)
     // parity with the published runtime (int-fxrm): own classes styling the
     // same property as an active interaction's classes are REMOVED, not
     // outweighed — the cascade would pick an arbitrary winner (hidden+flex)
@@ -460,15 +462,34 @@ export function useRenderNode(
   const { animationFor, animTargetIndex } = useAnimation()
   const motion = useMotion()
 
-  /** The scope that isolates one rendering of this node from its siblings:
-   * the component instance AND the collection-list repeat. Without the entry
-   * part, hovering one card fires every repeat and an "appear once" animation
-   * plays for the whole list at once. Mirrors the export's key scope. */
-  const motionScope = computed(() =>
-    [mapping.value?.instanceId, scope?.entry ? `e${scope.entry.id}` : null]
-      .filter(Boolean)
-      .join('~') || undefined,
-  )
+  /** bindings live on the master inside a component instance, so a binding's
+   * "self target" is the master's id, not this instance node's */
+  const selfOwnerId = computed(() => (mapping.value ? mapping.value.master.id : node.value.id))
+
+  /**
+   * The scope that isolates one rendering of a binding from its siblings: the
+   * component instance, plus the entry when the binding's OWNER and its TARGET
+   * share one entry scope (src/lib/shared/entryScope.js). Without the entry part
+   * a hover on one card fires every repeat; with it keyed off the trigger alone,
+   * a row button that opens the one shared overlay outside the list wrote
+   * `X@e<row>` while the overlay listened on `X`, so the click did nothing.
+   * Mirrors the export's key scope exactly.
+   */
+  const scopeFor = (ownerId: string, targetId: string) =>
+    bindingScope(
+      mapping.value?.instanceId ?? null,
+      entryScopePart(scopeRoots.value, ownerId, targetId, scope?.entry?.id),
+    )
+
+  /** resolver for the bindings whose effect lands ON this node */
+  const scopeOfTarget: ScopeOf = (ownerId) => scopeFor(ownerId, selfOwnerId.value)
+
+  /** the scope of a binding this node declares */
+  const scopeOfOwn = (binding: { targetId?: string | null }) =>
+    scopeFor(selfOwnerId.value, binding.targetId ?? selfOwnerId.value)
+
+  /** this node's own scope — what a self-targeting binding keys under */
+  const selfScope = computed(() => scopeFor(selfOwnerId.value, selfOwnerId.value))
 
   /** animation bindings this node TRIGGERS (master-aware, like ofTrigger) */
   const animTriggers = computed(
@@ -482,9 +503,19 @@ export function useRenderNode(
       : (animTargetIndex.value.get(node.value.id) ?? []),
   )
 
+  /** every scope the animations landing on this node key under — one per
+   * binding, since the entry part follows the target */
+  const animTargetScopes = computed(() => {
+    const scopes = new Set<string | undefined>()
+    for (const { ownerId } of animTargets.value) scopes.add(scopeFor(ownerId, selfOwnerId.value))
+    return scopes
+  })
+
   /** the node's own animated values (element-moving tracks only) */
   const ownMotionValues = computed(() =>
-    animTargets.value.length ? motion.valuesForNode(node.value.id, motionScope.value) : undefined,
+    animTargets.value.length
+      ? motion.valuesForNode(node.value.id, animTargetScopes.value)
+      : undefined,
   )
 
   /** values this node inherits as the Nth child of a STAGGERED parent —
@@ -501,7 +532,7 @@ export function useRenderNode(
     if (!motion.staggeredTargets.value.has(parentTargetId)) return undefined
     const index = parent.children.indexOf(node.value)
     if (index === -1) return undefined
-    return motion.staggerValuesFor(parentTargetId, index, motionScope.value)
+    return motion.staggerValuesFor(parentTargetId, index, selfScope.value)
   })
 
   /** inline style for the frame currently being rendered */
@@ -535,14 +566,14 @@ export function useRenderNode(
     const animation = animationFor(binding.animationId)
     if (!animation) return
     motion.play(binding, animation, animTargetId(binding), {
-      scope: motionScope.value,
+      scope: scopeOfOwn(binding),
       reverse,
     })
   }
   function toggleAnim(binding: (typeof animTriggers.value)[number]) {
     const animation = animationFor(binding.animationId)
     if (!animation) return
-    motion.toggle(binding, animation, animTargetId(binding), motionScope.value)
+    motion.toggle(binding, animation, animTargetId(binding), scopeOfOwn(binding))
   }
 
   // --- interactions ---
@@ -552,11 +583,8 @@ export function useRenderNode(
       (i) => i.trigger === trigger,
     )
 
-  /** bindings live on the master inside a component instance, so the state key's
-   * "self target" is the master's id, not this instance node's */
-  const interactionOwnerId = computed(() =>
-    mapping.value ? mapping.value.master.id : node.value.id,
-  )
+  /** the state key's "self target" — see selfOwnerId */
+  const interactionOwnerId = selfOwnerId
 
   /** the component-instance part of the scope only. Exclusive groups key on this
    * and NOT on the collection-list repeat, so one accordion open at a time holds
@@ -566,7 +594,7 @@ export function useRenderNode(
   /** apply a binding in this node's scope. `on` forces a direction; omitting it
    * honours the binding's action (toggle / on / off). */
   function applyIn(binding: InteractionBinding, on?: boolean) {
-    applyBinding(binding, interactionOwnerId.value, motionScope.value, instanceScope.value, on)
+    applyBinding(binding, interactionOwnerId.value, scopeOfOwn(binding), instanceScope.value, on)
   }
 
   // ready-made hover handlers — renderers spread these into their own
@@ -579,7 +607,7 @@ export function useRenderNode(
     mouseleave() {
       for (const binding of ofTrigger('hover')) applyIn(binding, false)
       // hover-out rewinds rather than cutting, so the element eases back
-      for (const binding of animOf('hover')) motion.reverse(binding, motionScope.value)
+      for (const binding of animOf('hover')) motion.reverse(binding, scopeOfOwn(binding))
     },
   }
   function fireClickInteractions() {
@@ -611,14 +639,10 @@ export function useRenderNode(
   const involvedStateKeys = computed(() => {
     const triggered = (
       (mapping.value ? mapping.value.master.interactions : node.value.interactions) ?? []
-    ).map((b) => bindingStateKey(b, interactionOwnerId.value, motionScope.value))
+    ).map((b) => bindingStateKey(b, interactionOwnerId.value, scopeOfOwn(b)))
     const targeted = mapping.value
-      ? scopedTargetStateKeys(
-          mapping.value.master.id,
-          mapping.value.root,
-          motionScope.value ?? mapping.value.instanceId,
-        )
-      : targetStateKeys(node.value.id, motionScope.value)
+      ? scopedTargetStateKeys(mapping.value.master.id, mapping.value.root, scopeOfTarget)
+      : targetStateKeys(node.value.id, scopeOfTarget)
     return [...new Set([...triggered, ...targeted])]
   })
 
@@ -658,7 +682,7 @@ export function useRenderNode(
           appeared.add(binding.id)
           playAnim(binding)
         } else if (mode === 'reverse') {
-          motion.reverse(binding, motionScope.value)
+          motion.reverse(binding, scopeOfOwn(binding))
         }
       }
     }, at ? { rootMargin: appearRootMargin(at) } : undefined)

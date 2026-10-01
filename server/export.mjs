@@ -26,6 +26,7 @@ import { backgroundRender, backgroundKindFromUrl } from '../src/lib/shared/backg
 import { DEFAULT_ICON_SVG, parseInlineSvg, sanitizeInlineSvg } from '../src/lib/shared/svg.js'
 import { buildInstanceMap, isNodeHidden, resolveInstanceValue } from '../src/lib/shared/instances.js'
 import { conflictingBaseClasses } from '../src/lib/shared/interactionClasses.js'
+import { buildScopeRoots, entryScopePart, bindingScope } from '../src/lib/shared/entryScope.js'
 import {
   DEFAULT_SCROLL_AT,
   interactionGroupKey,
@@ -220,26 +221,49 @@ const buildMasterMap = (elements, components) => buildInstanceMap(elements, comp
  * Returns Map<targetNodeId, Interaction[]>.
  */
 function buildPlainTargets(page, project) {
-  const trees = [page.elements]
+  const index = new Map()
+  for (const { tree } of routeTrees(page, project)) {
+    walkNodes(tree, (owner) => {
+      for (const i of owner.interactions ?? []) {
+        const key = i.targetId ?? owner.id
+        if (!index.has(key)) index.set(key, [])
+        // the OWNER travels with the binding: the state key's entry scope is
+        // decided by where the owner sits relative to the target (see attrsFor)
+        index.get(key).push({ i, ownerId: owner.id })
+      }
+    })
+  }
+  return index
+}
+
+/**
+ * Every tree a route renders: the page, plus the template body of each
+ * `collection-item` embed. `root` labels where a tree came from, which is what
+ * buildScopeRoots keys the template's nodes under.
+ */
+function routeTrees(page, project) {
+  const trees = [{ tree: page.elements, root: null }]
   walkNodes(page.elements, (n) => {
     if (n.type === 'collection-item' && n.arg) {
       const col = project.collections.find((c) => c.name === n.arg)
       const tpl = col && project.pages.find((p) => p.id === col.templatePageId)
       const body = tpl?.elements.find((b) => b.type === 'body')
-      if (body) trees.push(body.children)
+      if (body) trees.push({ tree: body.children, root: `tpl:${tpl.id}` })
     }
   })
-  const index = new Map()
-  for (const tree of trees) {
-    walkNodes(tree, (owner) => {
-      for (const i of owner.interactions ?? []) {
-        const key = i.targetId ?? owner.id
-        if (!index.has(key)) index.set(key, [])
-        index.get(key).push(i)
-      }
-    })
-  }
-  return index
+  return trees
+}
+
+/**
+ * The route's entry-scope index (shared/entryScope.js): the page's trees plus
+ * every component master, since a master can hold a `:collection-list` of its
+ * own and its nodes are keyed by the same ids.
+ */
+function routeScopeRoots(page, project) {
+  return buildScopeRoots([
+    ...routeTrees(page, project),
+    ...(project.components ?? []).map((c) => ({ tree: [c.root], root: null })),
+  ])
 }
 
 /**
@@ -249,22 +273,13 @@ function buildPlainTargets(page, project) {
  * Returns Map<targetNodeId, AnimationBinding[]>.
  */
 function buildPlainAnimTargets(page, project) {
-  const trees = [page.elements]
-  walkNodes(page.elements, (n) => {
-    if (n.type === 'collection-item' && n.arg) {
-      const col = project.collections.find((c) => c.name === n.arg)
-      const tpl = col && project.pages.find((p) => p.id === col.templatePageId)
-      const body = tpl?.elements.find((b) => b.type === 'body')
-      if (body) trees.push(body.children)
-    }
-  })
   const index = new Map()
-  for (const tree of trees) {
+  for (const { tree } of routeTrees(page, project)) {
     walkNodes(tree, (owner) => {
       for (const b of owner.animations ?? []) {
         const key = b.targetId ?? owner.id
         if (!index.has(key)) index.set(key, [])
-        index.get(key).push(b)
+        index.get(key).push({ b, ownerId: owner.id })
       }
     })
   }
@@ -276,7 +291,7 @@ function scopedAnimTargets(root, masterId) {
   const list = []
   walkNodes([root], (owner) => {
     for (const b of owner.animations ?? []) {
-      if ((b.targetId ?? owner.id) === masterId) list.push(b)
+      if ((b.targetId ?? owner.id) === masterId) list.push({ b, ownerId: owner.id })
     }
   })
   return list
@@ -287,7 +302,7 @@ function scopedTargets(root, masterId) {
   const list = []
   walkNodes([root], (owner) => {
     for (const i of owner.interactions ?? []) {
-      if ((i.targetId ?? owner.id) === masterId) list.push(i)
+      if ((i.targetId ?? owner.id) === masterId) list.push({ i, ownerId: owner.id })
     }
   })
   return list
@@ -357,10 +372,10 @@ function classFor(node, ctx) {
   // transition setup is emitted once (mirrors useInteraction.classesFor)
   const seen = new Set()
   const setup = []
-  for (const b of bindings) {
-    if (seen.has(b.interactionId)) continue
-    seen.add(b.interactionId)
-    const a = ctx.anim.get(b.interactionId)
+  for (const { i } of bindings) {
+    if (seen.has(i.interactionId)) continue
+    seen.add(i.interactionId)
+    const a = ctx.anim.get(i.interactionId)
     if (a) setup.push(`transition-all ${a.duration} ${a.easing}`)
   }
   // the interaction's transition setup replaces the element's own transition
@@ -544,13 +559,22 @@ function attrsFor(node, ctx, bg, { wrapLink = true, extraClass = '' } = {}) {
   // collection-list repeat. Without the entry part, every repeated card shares
   // one key — hovering one lights them all, and "appear once" fires once for
   // the whole list instead of once per card.
-  const keyScope = [
-    mapping ? mapping.instanceId : null,
-    ctx.scope?.entry ? `e${ctx.scope.entry.id}` : null,
-  ]
-    .filter(Boolean)
-    .join('~')
-  const scopedKey = (id) => (keyScope ? `${id}@${keyScope}` : id)
+  // The ENTRY part of a binding's scope follows the TARGET, not the trigger: it
+  // is carried only when the owner and the target sit in the same entry scope
+  // (both inside one repeat, or both outside every repeat). A row button that
+  // opens ONE shared sheet outside the list therefore keys the effect exactly
+  // the way the sheet — rendered once, with no entry of its own — keys it.
+  // Keyed off the trigger (as this used to be), the button wrote `X@e<row>`
+  // while the sheet listened on `X`, so every such click did nothing.
+  const scopeFor = (ownerId, targetId) =>
+    bindingScope(
+      mapping ? mapping.instanceId : null,
+      entryScopePart(ctx.scopeRoots, ownerId, targetId, ctx.scope?.entry?.id),
+    )
+  const scopedKey = (id, ownerId, targetId) => {
+    const scope = scopeFor(ownerId, targetId)
+    return scope ? `${id}@${scope}` : id
+  }
   // exclusive groups key on the component instance ONLY, never the repeat: "one
   // accordion open at a time" has to hold across a collection-list's items
   const instanceScope = mapping ? mapping.instanceId : undefined
@@ -558,14 +582,17 @@ function attrsFor(node, ctx, bg, { wrapLink = true, extraClass = '' } = {}) {
   // inside a component instance, "itself" means the MASTER node
   const selfId = mapping ? mapping.master.id : node.id
   /** the key the EFFECT's on/off state lives under — one per (interaction,
-   * target), so every trigger pointing at it shares one boolean */
-  const stateKeyFor = (i, ownerId) =>
-    interactionStateKey(i.interactionId, i.targetId ?? ownerId, keyScope || undefined)
+   * target), so every trigger pointing at it shares one boolean. `ownerId` is
+   * the node the binding is DECLARED on, which the entry scope reads. */
+  const stateKeyFor = (i, ownerId) => {
+    const targetId = i.targetId ?? ownerId
+    return interactionStateKey(i.interactionId, targetId, scopeFor(ownerId, targetId))
+  }
 
   const triggers = (mapping ? mapping.master.interactions : node.interactions) ?? []
   if (triggers.length) {
     const list = triggers.map((i) => {
-      const key = scopedKey(i.id)
+      const key = scopedKey(i.id, selfId, i.targetId ?? selfId)
       const state = stateKeyFor(i, selfId)
       ctx.fx[state] = ctx.anim.get(i.interactionId)?.toClasses ?? ''
       const meta = { t: i.trigger, k: key, s: state }
@@ -587,10 +614,10 @@ function attrsFor(node, ctx, bg, { wrapLink = true, extraClass = '' } = {}) {
     // self bindings (no targetId) resolve to the MASTER node inside a component
     // instance — the trigger side keys the effect under selfId, so the target
     // side must too, or the runtime looks up an empty entry under the instance id
-    const targetKeys = [...new Set(targets.map((i) => stateKeyFor(i, selfId)))]
+    const targetKeys = [...new Set(targets.map(({ i, ownerId }) => stateKeyFor(i, ownerId)))]
     const baseTokens = classes.split(/\s+/).filter(Boolean)
-    for (const i of targets) {
-      const key = stateKeyFor(i, selfId)
+    for (const { i, ownerId } of targets) {
+      const key = stateKeyFor(i, ownerId)
       const to = ctx.anim.get(i.interactionId)?.toClasses ?? ''
       ctx.fx[key] ??= ''
       // Breakpoint gating moved from the binding key to the STATE key, because
@@ -622,7 +649,7 @@ function attrsFor(node, ctx, bg, { wrapLink = true, extraClass = '' } = {}) {
     for (const b of animTriggers) {
       const animation = ctx.animLib.get(b.animationId)
       if (!animation) continue // library entry deleted — skip rather than emit a dangling key
-      const key = scopedKey(b.id)
+      const key = scopedKey(b.id, selfId, b.targetId ?? selfId)
       ctx.animUsed[b.animationId] = animation
       if (b.breakpoints) ctx.animBp[key] = b.breakpoints
       const meta = { k: key, t: b.trigger, a: b.animationId }
@@ -649,10 +676,10 @@ function attrsFor(node, ctx, bg, { wrapLink = true, extraClass = '' } = {}) {
   const firstFrame = {}
   if (animTargets.length) {
     const keys = []
-    for (const b of animTargets) {
+    for (const { b, ownerId } of animTargets) {
       const animation = ctx.animLib.get(b.animationId)
       if (!animation) continue
-      const key = scopedKey(b.id)
+      const key = scopedKey(b.id, ownerId, b.targetId ?? ownerId)
       ctx.animUsed[b.animationId] = animation
       if (b.breakpoints) ctx.animBp[key] = b.breakpoints
       keys.push(key)
@@ -1038,6 +1065,9 @@ function renderPage(route, project, media) {
     mm: buildMasterMap(page.elements, project.components),
     plainTargets: buildPlainTargets(page, project),
     plainAnimTargets: buildPlainAnimTargets(page, project),
+    // node id → its enclosing entry scope, which decides whether a binding's
+    // state key carries the entry part (see attrsFor)
+    scopeRoots: routeScopeRoots(page, project),
     // animation id → the saved timeline, for emitting only what's used
     animLib: new Map((project.animations ?? []).map((a) => [a.id, a])),
     // animation id → timeline, populated as bindings are emitted
