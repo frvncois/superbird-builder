@@ -698,8 +698,7 @@ repeated per list row, a **binding whose target this route cannot reach** (not o
 page, or trigger and target in two different repeats), an **interactive element inside a
 linked container** (`<a>…<button>` is invalid markup), a **heavy row template** repeated
 over many entries, **attribute text on a multilingual site** (placeholder, aria-label,
-alt and title are not localizable — keep translatable copy in element content), **export
-weight** per route, and effects nothing is bound to.
+alt and title, which ARE translatable), **export weight** per route, and effects nothing is bound to.
 
 **Before you say it is done**: publish, open every route, and look. Compare two
 pages side by side for width, spacing and type. Open every sheet and menu. Resize
@@ -829,6 +828,26 @@ value, `peer-empty:` and `group-empty:` let a sibling or an ancestor react, and
 `has-[span:empty]:hidden` on a wrapper drops a whole row — a label and its value together
 — when the value is missing. These are the only way to vary presentation by DATA today,
 so reach for them before faking two variants of a row.
+
+**Bind an ATTRIBUTE to a field with `fieldAttrs`** when presentation has to follow data:
+`edit_elements {ref: "pill", fieldAttrs: {"data-status": "status"}}` emits
+`data-status="waiting"` per entry, and `data-[status=waiting]:bg-pending` styles it. That
+is how ONE pill renders a different colour per status, instead of two components that look
+alike. `fieldAttrs: {value: "phone"}` pre-fills an input from the entry it edits, and
+`{"aria-label": "title"}` gives a row's icon button a useful name. Any allowlisted
+attribute works; the static `attributes` value is the fallback when there is no entry or
+the field is empty, so a bound attribute is still authorable. It is PER INSTANCE, and
+refused on a `:Name` wrapper, which renders no element.
+
+**Attribute text is per placement and per locale.** `attributes` are shared by every
+instance of a component, which is right for `role` and `type` and wrong for the text a
+visitor reads. `instanceAttributes` overrides them for ONE placement — two `:Input:`
+instances saying "Search contacts" and "Your email" — so reuse the component instead of
+copying its classes onto a plain `:input:`. And
+`edit_elements {locale: "fr", attributes: {placeholder: "Rechercher"}}` translates one:
+`placeholder`, `aria-label`, `alt` and `title` only, since the rest are structural.
+`get_translation_worklist` lists them as `kind: "attribute"` and `set_translations` writes
+them, so `missingTranslatable: 0` really does mean nothing is left in the wrong language.
 
 **A `:collection-list` renders a real wrapper element**, which is what takes the node's
 classes (`flex`, `grid`, `gap-*`) — the repeated children go inside it. A bound
