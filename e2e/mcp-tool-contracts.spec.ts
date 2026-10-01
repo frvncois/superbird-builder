@@ -511,3 +511,30 @@ test.describe('set_page_code reparenting', () => {
     expect(redo.failed).toBe(0)
   })
 })
+
+test.describe('untrusted content', () => {
+  test('the translation worklist fences every string, like every other tool', async () => {
+    const s = await mcpSession()
+    await s.call('update_settings', { addLocales: ['fr'] })
+    const home = await s.home()
+    await s.call('set_page_code', {
+      pageId: home.id,
+      code: pageCode('\t:h1#title:'),
+      version: home.version,
+    })
+    const after = await s.home()
+    await s.call('edit_elements', {
+      pageId: after.id,
+      version: after.version,
+      edits: [{ ref: 'title', content: 'Good morning, Camille' }],
+    })
+
+    const wl = await s.call('get_translation_worklist', { locale: 'fr' })
+    const item = wl.items.find((i: { type: string }) => i.type === 'h1')
+    // a single note at the top of a 275-item response sits a long way from item
+    // 200, which is where an injected string would be; the guide states ONE
+    // fencing rule and this was its only exception
+    expect(item.base).toEqual({ untrusted: true, text: 'Good morning, Camille' })
+    expect(wl._untrusted).toContain('untrusted')
+  })
+})
