@@ -21,6 +21,15 @@ const DISPLAY = new Set([
   'inline-grid', 'table', 'contents', 'flow-root', 'hidden',
 ])
 
+// Visibility is its own property, NOT part of the display group: grouping them
+// would make `invisible` evict `flex` and silently change the layout it was
+// meant to keep. It needs a group of its own all the same — `visible` did not
+// evict a base `invisible`, so an overlay built the animatable way (base
+// `invisible opacity-0`, fired `visible opacity-100`) came down to which rule
+// Tailwind happened to emit last. That is the recipe for any overlay that
+// fades or slides, since `hidden` → `block` cannot transition.
+const VISIBILITY = new Set(['visible', 'invisible', 'collapse'])
+
 // Color-bearing families: any bg-/text-/border- value that is not one of the
 // known non-color utilities is a color (palette shade, project token, or
 // arbitrary), and every color in a family styles the SAME property — so
@@ -67,6 +76,7 @@ function headOf(base) {
   const color = colorHead(base)
   if (color) return color
   if (DISPLAY.has(base)) return 'display'
+  if (VISIBILITY.has(base)) return 'visibility'
   // the transition setup is one property each: `transition-transform` and the
   // appended `transition-all` style the same transition-property, and every
   // ease-* keyword is one timing-function — without grouping these, an
