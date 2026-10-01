@@ -806,6 +806,20 @@ call (`values` maps field *names* to strings), and bind elements with `[field]` 
 Entry `name`/`slug` are identity; only `values` bind. An element with a `[field]` binding
 shows the bound value in entry scope — its own `content` is ignored there.
 
+**An empty bound field renders an EMPTY ELEMENT, never a placeholder.** The tag is always
+emitted; only its text is blank. That is what makes data-driven presentation possible
+without a conditional: `empty:hidden` hides the element itself when its field has no
+value, `peer-empty:` and `group-empty:` let a sibling or an ancestor react, and
+`has-[span:empty]:hidden` on a wrapper drops a whole row — a label and its value together
+— when the value is missing. These are the only way to vary presentation by DATA today,
+so reach for them before faking two variants of a row.
+
+**A `:collection-list` renders a real wrapper element**, which is what takes the node's
+classes (`flex`, `grid`, `gap-*`) — the repeated children go inside it. A bound
+`:slider[name]` does the same and wraps each entry in its own slide. A bare `:Name:`
+component instance is the one thing that renders NO element of its own when it carries no
+classes, background or interactions.
+
 **A `reference` / `multi-reference` value takes a SLUG or an entry id**, whichever you
 have: slugs are derived from the name, so seeding a graph (posts → authors, messages →
 conversations) needs no id transcription between calls. A value matching neither is
@@ -1043,8 +1057,38 @@ component in a new box. For what you were after:
   div:
   ```
 - to make one placement a **link** → same wrapper, with the link on it: `:div@/messages`
-  › `:NavItem:` › `div:` (a linked `:div` renders as the `<a>`). `:NavItem:@/messages`
-  is refused: the instance line renders no element, so the link had nowhere to go.
+  › `:NavItem:` › `div:`. A linked `:div` exports as `<a class="contents"><div …>…</div></a>`
+  — the anchor wraps it and `contents` keeps the div's own box in the layout, so the
+  wrapper costs nothing visually. `:NavItem:@/messages` is refused: the instance line
+  renders no element, so the link had nowhere to go. **Never put a `:button`, `:input`,
+  `:select` or another `:link` inside a linked container** — that exports as
+  `<a>…<button>…</a>`, which is invalid, and the click goes to whichever the browser
+  picks. `publish` warns (`interactive-inside-link`). A `:slider` is never wrapped, for
+  the same reason: its arrows are buttons.
+
+### A component has no slots
+
+Every instance of a component has the **same structure**. There is no way to pass
+page-specific children into one. What varies per instance is `content`, `src`, `svg`,
+`background`, `hidden`, `variants`, `listQuery`, `slider` and `entryId` — text, media,
+which parts show, which look it wears, which entries a list inside it pulls. Not
+structure.
+
+So for a shell that must hold different things on different pages — a sheet, a dialog, a
+card body — pick one of these:
+
+- **A component per filled-in shell**: `NewMessageSheet`, `TemplatesSheet`. Each is its
+  own component, built once and reused where that exact panel appears. This is the usual
+  answer, and several sheet components is the right shape, not a workaround.
+- **Build it on the page** when it appears once. A one-off dialog does not need to be a
+  component at all.
+- **Hidden parts** when the variation is "this placement shows three of these five rows":
+  one component, `hidden: true` on the parts a given instance leaves out.
+
+The practical way to build a big one: write it on a page with `#ref`s, style it by ref
+(refs read like selectors and survive lines moving), then
+`create_component {pageId, ref, name, version}`. The response hands back the master's
+`nodes`, which is what `edit_elements {componentId}` takes from then on.
 
 ### The other verbs
 
