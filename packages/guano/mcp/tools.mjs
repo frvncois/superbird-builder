@@ -717,7 +717,7 @@ function elementSummary(project, page, opts = {}) {
   // a 300-node page otherwise returns 300 rows a caller that generated the code
   // already knows.
   if (opts.mode === 'none') return undefined
-  const mode = opts.mode === 'all' ? 'all' : opts.mode === 'refs' ? 'refs' : 'own'
+  const mode = ['all', 'refs', 'ref-parts'].includes(opts.mode) ? opts.mode : 'own'
   const instMap = buildInstanceMap(project, page)
   const out = []
   const countDescendants = (nodes) => {
@@ -828,6 +828,14 @@ function elementSummary(project, page, opts = {}) {
   // full of components needs no second read to learn where the copy goes.
   const partsOf = (wrapper) => {
     const parts = []
+    // the symbolic address for each part, by the same rule instanceParts uses —
+    // the element type, plus [n] for the nth of that type
+    const nameSeen = new Map()
+    const nameFor = (type) => {
+      const i = nameSeen.get(type) ?? 0
+      nameSeen.set(type, i + 1)
+      return i === 0 ? type : `${type}[${i}]`
+    }
     // `hiddenBy`: the nearest hidden element at or above the part — a part in
     // a hidden footer is as invisible as a hidden part, and that footer is
     // what has to be shown
@@ -845,6 +853,8 @@ function elementSummary(project, page, opts = {}) {
             else if (inherited) text = { masterContent: fence(inherited) }
           }
           parts.push({
+            // what edit_elements {ref, part} takes — no id, no line arithmetic
+            part: nameFor(n.type),
             id: n.id,
             type: n.type,
             ...(holds ? { component: n.type } : {}),
@@ -867,6 +877,26 @@ function elementSummary(project, page, opts = {}) {
       }
       // "refs" collapses instances like "own" does — the element tools refuse
       // writes to instance children anyway, so listing them is pure volume
+      if (mode === 'ref-parts') {
+        // ONLY the ref'd instances and their parts. `own` carries the same
+        // information but repeats every instance's parts on every page — a
+        // sidebar's forty of them per read — which is why the Cocoapp session
+        // fell back to counting lines instead.
+        if (!inComponent && isComponentType(n.type) && n.ref) {
+          out.push({
+            line: n.line,
+            id: n.id,
+            type: n.type,
+            ref: n.ref,
+            component: n.type,
+            ...(n.variants ? { variants: n.variants } : {}),
+            parts: partsOf(n),
+          })
+          continue
+        }
+        visit(n.children ?? [], inComponent || isComponentType(n.type))
+        continue
+      }
       if ((mode === 'own' || mode === 'refs') && !inComponent && isComponentType(n.type)) {
         out.push({
           line: n.line,
@@ -925,6 +955,39 @@ function nodeAtLine(page, line) {
 }
 
 /**
+ * The parts of a component instance, in document order, each with the SYMBOLIC
+ * name `edit_elements {ref, part}` addresses it by.
+ *
+ * A part is a leaf an agent fills (a text, an icon, an image) or an instance the
+ * component holds. The name is the element type, plus `[n]` for the nth of that
+ * type — `span`, `span[1]`, `icon`, `Badge`. That is all the disambiguation
+ * needed and it reads like what it is.
+ *
+ * Instance parts cannot carry a `#ref` (a ref inside a component block would be
+ * duplicated site-wide), so before this the only addresses were an id from a
+ * large read, or a computed line number. The Cocoapp session addressed ~110
+ * edits by line arithmetic over memorized block layouts, which any structural
+ * change to a component silently invalidates.
+ */
+function instanceParts(wrapper) {
+  const flat = []
+  const walk = (nodes) => {
+    for (const n of nodes ?? []) {
+      const holds = isComponentType(n.type)
+      if (holds || (isLeafElement(n.type) && ELEMENTS[n.type])) flat.push(n)
+      walk(n.children)
+    }
+  }
+  walk(wrapper.children)
+  const seen = new Map()
+  return flat.map((node) => {
+    const i = seen.get(node.type) ?? 0
+    seen.set(node.type, i + 1)
+    return { part: i === 0 ? node.type : `${node.type}[${i}]`, node }
+  })
+}
+
+/**
  * Resolve an edit's element by stable `id` (preferred — survives structural
  * edits) or 0-based `line`. Same component-instance tracking as nodeAtLine.
  */
@@ -962,6 +1025,26 @@ function resolveEditNode(page, edit, project = null, scopeDef = null) {
       return false
     }
     mark(page.elements ?? [], false)
+    // `part` addresses a part INSIDE the ref'd instance — the only way to reach
+    // one symbolically, since a part can never carry a ref of its own
+    if (edit.part) {
+      if (!isComponentType(node.type)) {
+        throw new Error(
+          `\`part\` addresses a part of a component instance, and "#${edit.ref}" is a :${node.type}. ` +
+            'Drop `part`, or point `ref` at the instance.',
+        )
+      }
+      const parts = instanceParts(node)
+      const hit = parts.find((x) => x.part === edit.part)
+      if (!hit) {
+        throw new Error(
+          `":${node.type}#${edit.ref}" has no part "${edit.part}". Its parts are: ` +
+            `${parts.map((x) => x.part).join(', ') || '(none)'} ` +
+            '(get_page elements:"ref-parts" lists them).',
+        )
+      }
+      return { node: hit.node, inComponent: true }
+    }
     return { node, inComponent }
   }
   if (edit.id) {
@@ -3671,7 +3754,7 @@ const tools = [
         pageId: { type: 'string' },
         elements: {
           type: 'string',
-          enum: ['own', 'all', 'refs', 'none'],
+          enum: ['own', 'all', 'refs', 'ref-parts', 'none'],
           description:
             '"own" (default) collapses each component instance to one row {type, component, ' +
             'childCount} and reduces master styling to a boolean styledOnMaster — far ' +
@@ -3680,6 +3763,11 @@ const tools = [
             'component; "refs" trims every row to the ADDRESSES — {line, id, type, ref?} — ' +
             "where `ref` is the element's '#ref' from the code (':div#hero:' → \"hero\"), " +
             'the address edit_elements `ref:` and bind `targetRef` take; ' +
+            '"ref-parts" returns ONLY the component instances carrying a #ref, each with its ' +
+            '`parts` — the texts, icons, images and held instances inside it, each with the ' +
+            'symbolic `part` name edit_elements {ref, part} takes. That is the small, targeted ' +
+            'read for filling a page of components: "own" carries the same thing but repeats ' +
+            "every instance's parts (a sidebar's forty) on every page; " +
             '"none" omits the summary entirely (same modes set_page_code accepts)',
         },
         summaryOnly: { type: 'boolean', description: 'omit the code fields entirely' },
@@ -5822,6 +5910,16 @@ const tools = [
                   '"hero"). Address by this when you wrote the refs yourself — it reads like a ' +
                   'selector and survives lines moving. Takes precedence over id/line. Use `setRef` ' +
                   'to CHANGE a ref.',
+              },
+              part: {
+                type: 'string',
+                description:
+                  'WITH `ref` on a component instance: which part inside it to edit — the ' +
+                  'element type plus [n] for the nth of that type ("span", "span[1]", "icon", ' +
+                  '"Badge"). Instance parts cannot carry a ref of their own, so this is the only ' +
+                  'symbolic way to reach one; `get_page {elements: "ref-parts"}` lists them. ' +
+                  'Give every instance you will fill a #ref and address its parts this way ' +
+                  'instead of counting lines.',
               },
               setRef: {
                 type: 'string',

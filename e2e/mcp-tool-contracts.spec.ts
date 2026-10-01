@@ -538,3 +538,90 @@ test.describe('untrusted content', () => {
     expect(wl._untrusted).toContain('untrusted')
   })
 })
+
+test.describe('addressing a component instance’s parts', () => {
+  /** a page with two Button instances, each ref'd */
+  async function buttons() {
+    const s = await mcpSession()
+    await s.call('add_library_components', { keys: ['button'] })
+    const home = await s.home()
+    await s.call('set_page_code', {
+      pageId: home.id,
+      code: pageCode('\t:Button#save:\n\t:Button#cancel:'),
+      version: home.version,
+    })
+    return s
+  }
+
+  test('ref-parts lists only the ref’d instances, with symbolic part names', async () => {
+    const s = await buttons()
+    const home = await s.home()
+    const small = await s.call('get_page', {
+      pageId: home.id,
+      elements: 'ref-parts',
+      summaryOnly: true,
+    })
+    expect(small.elements).toHaveLength(2)
+    expect(small.elements.map((e: { ref: string }) => e.ref)).toEqual(['save', 'cancel'])
+    const names = small.elements[0].parts.map((p: { part: string }) => p.part)
+    expect(names).toContain('span')
+    // the same type twice gets [n]
+    expect(new Set(names).size).toBe(names.length)
+
+    // and it is much smaller than the read that carried the same information
+    const own = await s.call('get_page', { pageId: home.id, elements: 'own', summaryOnly: true })
+    expect(JSON.stringify(small).length).toBeLessThan(JSON.stringify(own).length)
+  })
+
+  test('an edit addresses a part by name, and each instance keeps its own', async () => {
+    const s = await buttons()
+    const after = await s.home()
+    const r = await s.call('edit_elements', {
+      pageId: after.id,
+      version: after.version,
+      edits: [
+        { ref: 'save', part: 'span', content: 'Save changes' },
+        { ref: 'cancel', part: 'span', content: 'Cancel' },
+      ],
+    })
+    expect(r.failed).toBe(0)
+    const html = await s.html()
+    expect(html).toContain('Save changes')
+    expect(html).toContain('Cancel')
+  })
+
+  test('a part that does not exist is refused, and the message lists the real ones', async () => {
+    const s = await buttons()
+    const after = await s.home()
+    const r = await s.call('edit_elements', {
+      pageId: after.id,
+      version: after.version,
+      edits: [{ ref: 'save', part: 'h1', content: 'nope' }],
+      verbose: true,
+    })
+    expect(r.failed).toBe(1)
+    const message = r.failures[0].errors[0]
+    expect(message).toContain('has no part "h1"')
+    // and it lists the real ones, so the next call is right
+    expect(message).toContain('icon, span, icon[1]')
+  })
+
+  test('part on a plain element says so rather than guessing', async () => {
+    const s = await mcpSession()
+    const home = await s.home()
+    await s.call('set_page_code', {
+      pageId: home.id,
+      code: pageCode('\t:h1#title:'),
+      version: home.version,
+    })
+    const after = await s.home()
+    const r = await s.call('edit_elements', {
+      pageId: after.id,
+      version: after.version,
+      edits: [{ ref: 'title', part: 'span', content: 'x' }],
+      verbose: true,
+    })
+    expect(r.failed).toBe(1)
+    expect(JSON.stringify(r)).toContain('component instance')
+  })
+})

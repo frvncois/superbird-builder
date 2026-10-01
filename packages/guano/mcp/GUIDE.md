@@ -349,7 +349,25 @@ Two rules:
 - **Not inside a component block.** A component's structure is cloned into every
   instance on every page, so a ref in there would be duplicated site-wide. Put the ref
   on the instance's own `:Name` line instead; `create_component` does this for you,
-  hoisting the extracted block's root ref onto the wrapper and dropping the rest.
+  hoisting the extracted block's root ref onto the wrapper and dropping the rest. The parts
+  INSIDE that instance are then addressed by `part` — see below.
+
+**Filling a component instance: `{ref, part}`.** Give every instance you will fill a
+`#ref`, then address what is inside it by part name — the element type plus `[n]` for the
+nth of that type:
+
+```
+:Button#save:          → edit_elements {ref: "save", part: "span", content: "Save changes"}
+:StatCard#unread:      → {ref: "unread", part: "span[1]", content: "128"}
+                         {ref: "unread", part: "icon", icon: "mail"}
+```
+
+`get_page {elements: "ref-parts"}` lists exactly these — only the ref'd instances, each
+with its parts — which is the small, targeted read for a page of components. (`own` carries
+the same information but repeats every instance's parts on every page, a sidebar's forty of
+them per read.) Never count lines to reach a part: a part has no ref of its own, and line
+arithmetic over a component's block layout breaks silently the moment that component gains
+an element.
 
 Once an element has a ref you can use it everywhere an id works:
 
