@@ -3215,6 +3215,34 @@ function buildVocabulary() {
 		"bottom",
 		"left"
 	]) out.add(`${prefix}-auto`);
+	for (const prefix of [
+		"top",
+		"right",
+		"bottom",
+		"left",
+		"inset",
+		"inset-x",
+		"inset-y"
+	]) for (const value of [
+		"full",
+		"1/2",
+		"1/3",
+		"2/3",
+		"1/4",
+		"3/4"
+	]) {
+		out.add(`${prefix}-${value}`);
+		out.add(`-${prefix}-${value}`);
+	}
+	for (const n of [
+		"1",
+		"2",
+		"3",
+		"4",
+		"5",
+		"6",
+		"none"
+	]) out.add(`line-clamp-${n}`);
 	for (const s of [
 		"all",
 		"x",
@@ -3474,6 +3502,7 @@ function buildVocabulary() {
 var VOCABULARY = buildVocabulary();
 var TOKEN_CLASSES = [];
 function setStyleTokens(names) {
+	propForBaseCache.clear();
 	TOKEN_CLASSES = names.flatMap((n) => [
 		`bg-${n}`,
 		`text-${n}`,
@@ -3733,9 +3762,46 @@ var SIZE_FAMILIES = [
 function sizeFamily(base) {
 	for (const family of SIZE_FAMILIES) if (base.startsWith(`${family}-`) && base.length > family.length + 1) return `size:${family}`;
 }
-/** the catalog property a bare class belongs to, if any */
+/** Offsets are one group per side, like SIZE_FAMILIES — the catalog lists only
+* the numeric stops, so `top-full` used to stack onto `top-0` and the winner was
+* whichever Tailwind emitted last. The value shape is checked rather than the
+* prefix alone, or v4's `inset-ring-*` / `inset-shadow-*` would be read as
+* offsets. Longest prefix first, so `inset-x-0` is not an `inset`. */
+var OFFSET_FAMILIES = [
+	"inset-x",
+	"inset-y",
+	"inset",
+	"top",
+	"right",
+	"bottom",
+	"left"
+];
+var OFFSET_VALUE_RE = /^(?:\d+(?:\.\d+)?|\d+\/\d+|full|auto|px|\[[^\]]+\])$/;
+function offsetFamily(base) {
+	const bare = base.startsWith("-") ? base.slice(1) : base;
+	for (const family of OFFSET_FAMILIES) {
+		if (!bare.startsWith(`${family}-`)) continue;
+		const value = bare.slice(family.length + 1);
+		return OFFSET_VALUE_RE.test(value) ? `offset:${family}` : void 0;
+	}
+}
+/** the catalog property a bare class belongs to, if any.
+*
+* Memoized: this scans the whole catalog, and `mergeClassLayers` asks it for
+* every class of every element carrying variant overrides — on a canvas
+* rendering a few thousand Buttons across three frames that was the second
+* largest cost of opening a page. The answer depends only on the class and
+* the token vocabulary, so `setStyleTokens` is what clears it. */
+var propForBaseCache = /* @__PURE__ */ new Map();
 function propForBase(base) {
-	for (const section of STYLE_SECTIONS) for (const prop of section.properties) if (matchClass(prop, [base]) === base) return prop;
+	if (propForBaseCache.has(base)) return propForBaseCache.get(base);
+	let found;
+	outer: for (const section of STYLE_SECTIONS) for (const prop of section.properties) if (matchClass(prop, [base]) === base) {
+		found = prop;
+		break outer;
+	}
+	propForBaseCache.set(base, found);
+	return found;
 }
 /**
 * A stable identity for the CSS property a bare class controls, used to detect
@@ -3754,6 +3820,9 @@ function propKey(base) {
 	if (VISIBILITY_CLASSES.has(base)) return "visibility";
 	const size = sizeFamily(base);
 	if (size) return size;
+	const offset = offsetFamily(base);
+	if (offset) return offset;
+	if (base === "truncate" || base.startsWith("line-clamp-")) return "line-clamp";
 	if (BG_POSITION_RE.test(base) || base.startsWith("bg-position-")) return "background-position";
 	if (base.startsWith("bg-") && !NON_COLOR_BG_RE.test(base)) return "background-color";
 	if (FONT_FAMILY_RE$1.test(base) || FONT_ARBITRARY_FAMILY_RE.test(base)) return "font-family";
@@ -5925,7 +5994,7 @@ function resolveSliderConfig(config, breakpoints = []) {
 		perView
 	};
 }
-var SLIDER_DOT_BASE = "size-2 rounded-full transition-colors";
+var SLIDER_DOT_BASE = "size-2 rounded-full bg-current transition-opacity";
 `${SLIDER_DOT_BASE}`;
 `${SLIDER_DOT_BASE}`;
 //#endregion

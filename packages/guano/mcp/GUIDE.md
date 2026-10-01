@@ -493,6 +493,15 @@ The validator accepts:
   `max-w-full`, `basis-auto`, `min-w-fit`, `max-h-screen`, `max-w-prose`, `h-px`.
   Each of those families is one conflict group, so `w-1/2` replaces `w-full`, while
   `max-w-*` stays independent of `w-*`.
+- **Offset keywords and fractions** on `top` `right` `bottom` `left` `inset` `inset-x`
+  `inset-y`: `top-full`, `-bottom-full`, `left-1/2`, `inset-x-1/4`, `top-auto`
+  (negatives too). Each side is one conflict group, so `top-full` replaces `top-0`.
+  `top-full` is how a dropdown panel parks under its trigger — it used to come back
+  "not a known class" and had to be written `top-[100%]`.
+- **Line clamping**: `line-clamp-1` … `line-clamp-6`, `line-clamp-none`. One group with
+  `truncate` (the single-line form), so adding one evicts the other. Use it for list
+  previews — `truncate` was the only clamp available, which is why a two-line preview
+  came out on one line.
 - **The t-shirt scale** on the same families, all the way up: `max-w-3xs` … `max-w-7xl`,
   `min-w-xs`, `basis-2xl`.
 - **Dynamic numeric families** take any number, like spacing does: `scale-140`, `z-2`,

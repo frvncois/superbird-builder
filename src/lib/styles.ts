@@ -205,6 +205,20 @@ function buildVocabulary(): string[] {
   // `auto` is valid CSS only where margins and offsets collapse to it
   for (const prefix of ['m', 'mx', 'my', 'mt', 'mb', 'ml', 'mr']) out.add(`${prefix}-auto`)
   for (const prefix of ['inset', 'inset-x', 'inset-y', 'top', 'right', 'bottom', 'left']) out.add(`${prefix}-auto`)
+  // offset KEYWORDS and fractions (`top-full`, `-left-1/2`, `inset-x-1/2` …).
+  // The spacing scale above covers the numeric stops, and the size controls
+  // offer `full`/fractions for w/h — but an offset only had numbers, so
+  // `top-full`, which is how a dropdown is parked under its trigger, came back
+  // "not a known class" and had to be written `top-[100%]`.
+  for (const prefix of ['top', 'right', 'bottom', 'left', 'inset', 'inset-x', 'inset-y']) {
+    for (const value of ['full', '1/2', '1/3', '2/3', '1/4', '3/4']) {
+      out.add(`${prefix}-${value}`)
+      out.add(`-${prefix}-${value}`)
+    }
+  }
+  // multi-line truncation. `truncate` (one line) was the only clamp available,
+  // so every list preview that wanted two lines got one.
+  for (const n of ['1', '2', '3', '4', '5', '6', 'none']) out.add(`line-clamp-${n}`)
   // border-width classes (bare `border`, `border-2`, `border-x`, `border-t`, …)
   // now that they're driven by SpacingBoxControl, not a slider property
   for (const s of ['all', 'x', 'y', 't', 'r', 'b', 'l'] as Slot[]) {
@@ -624,6 +638,24 @@ function sizeFamily(base: string): string | undefined {
   return undefined
 }
 
+/** Offsets are one group per side, like SIZE_FAMILIES — the catalog lists only
+ * the numeric stops, so `top-full` used to stack onto `top-0` and the winner was
+ * whichever Tailwind emitted last. The value shape is checked rather than the
+ * prefix alone, or v4's `inset-ring-*` / `inset-shadow-*` would be read as
+ * offsets. Longest prefix first, so `inset-x-0` is not an `inset`. */
+const OFFSET_FAMILIES = ['inset-x', 'inset-y', 'inset', 'top', 'right', 'bottom', 'left']
+const OFFSET_VALUE_RE = /^(?:\d+(?:\.\d+)?|\d+\/\d+|full|auto|px|\[[^\]]+\])$/
+function offsetFamily(base: string): string | undefined {
+  const bare = base.startsWith('-') ? base.slice(1) : base
+  for (const family of OFFSET_FAMILIES) {
+    if (!bare.startsWith(`${family}-`)) continue
+    const value = bare.slice(family.length + 1)
+    // not a continue: `inset-ring-2` is an inset-* class that is NOT an offset
+    return OFFSET_VALUE_RE.test(value) ? `offset:${family}` : undefined
+  }
+  return undefined
+}
+
 /** the catalog property a bare class belongs to, if any.
  *
  * Memoized: this scans the whole catalog, and `mergeClassLayers` asks it for
@@ -667,6 +699,11 @@ function propKey(base: string): StyleProperty | string | undefined {
   if (VISIBILITY_CLASSES.has(base)) return 'visibility'
   const size = sizeFamily(base)
   if (size) return size
+  const offset = offsetFamily(base)
+  if (offset) return offset
+  // one line-clamp at a time, and `truncate` is the one-line form of the same
+  // thing — they cannot both apply, so adding one evicts the other
+  if (base === 'truncate' || base.startsWith('line-clamp-')) return 'line-clamp'
   if (BG_POSITION_RE.test(base) || base.startsWith('bg-position-')) return 'background-position'
   if (base.startsWith('bg-') && !NON_COLOR_BG_RE.test(base)) return 'background-color'
   if (FONT_FAMILY_RE.test(base) || FONT_ARBITRARY_FAMILY_RE.test(base)) return 'font-family'
