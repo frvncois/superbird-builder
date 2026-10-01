@@ -1879,7 +1879,11 @@ Known missing capabilities, so state them as limits instead of improvising: no t
 for smtp/publishing config (the site `domain` IS settable —
 `update_settings {domain}` — and makes canonical URLs + og:image absolute), per-page `<script>` injection,
 media folder management or asset rename/delete (list + upload only), renaming a
-collection, or creating new comment threads (you can only reply). **Forms** render real
+collection, or creating new comment threads (you can only reply). Forms are not wired to a
+backend (below). Everything else in this handbook exists: breakpoints, design tokens, a
+list's empty state, a filter against the current entry, attribute values bound to fields,
+per-placement and per-locale attribute text, and a preview that renders without
+publishing — reach for the named tool rather than working around it. **Forms** render real
 controls (`:input:` `:textarea:` `:checkbox:` `:radio:` `:select:`/`:option:`
 `:fieldset:`/`:legend:`) but are still visual-only — nothing is wired to a backend, so
 say so rather than implying a form will deliver anything. Beware: a `:button` inside a
