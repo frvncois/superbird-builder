@@ -1184,7 +1184,9 @@ Set it with `edit_elements`:
 
 - **`icon`** — the name of a bundled icon. The set is Lucide (~1700 icons); **search it
   with `list_icons {query: "arrow right"}`** rather than guessing a name — a wrong name
-  is refused.
+  is refused. If you would rather guess and check, `list_icons {names: [...]}` validates
+  a whole list in one call and suggests a real name for each miss (v4 reordered many
+  compound names: `arrow-right-circle` is `circle-arrow-right`).
 - **`svg`** — custom markup, for a mark the set lacks (a logo glyph). It is rebuilt by a
   strict sanitizer: only shapes survive (`path circle ellipse rect line polyline polygon
   g defs clipPath mask linearGradient radialGradient stop title desc`), every paint is

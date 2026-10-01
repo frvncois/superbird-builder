@@ -349,3 +349,29 @@ test.describe('reference fields', () => {
     expect(written.values.contributors).toEqual([authors[0].id, authors[1].id])
   })
 })
+
+test.describe('list_icons', () => {
+  test('a list of names is validated in one call, with a suggestion per miss', async () => {
+    const s = await mcpSession()
+    // the session guessed every icon name and searched once for one of them;
+    // a guess that is wrong is only found by check:catalog or by looking
+    const r = await s.call('list_icons', {
+      names: ['mail', 'users', 'not-an-icon', 'arrow-right-circle'],
+    })
+    expect(r.known).toEqual(['mail', 'users'])
+    expect(r.unknown.map((u: { name: string }) => u.name)).toEqual([
+      'not-an-icon',
+      'arrow-right-circle',
+    ])
+    // v4 renamed this one; the suggestion is one step from the fix
+    expect(r.unknown[1].didYouMean).toContain('circle-arrow-right')
+  })
+
+  test('searching still works, and asking for neither is an error', async () => {
+    const s = await mcpSession()
+    const hits = await s.call('list_icons', { query: 'chevron' })
+    expect(hits.icons.length).toBeGreaterThan(3)
+    expect(hits.icons.every((n: string) => n.includes('chevron'))).toBe(true)
+    await expect(s.call('list_icons', {})).rejects.toThrow(/query|names/)
+  })
+})

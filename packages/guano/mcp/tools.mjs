@@ -2916,20 +2916,53 @@ const tools = [
       'Find a bundled icon by name for an `:icon:` element. Pass `query` (one or more words — ' +
       '"arrow right", "user", "cart") and get the matching names back, best first; set one ' +
       'with edit_elements `icon`. The set is Lucide (~1700 icons), so always search rather ' +
-      'than guess a name. Read-only; needs no target.',
+      'than guess a name. Pass `names` INSTEAD to check a whole list of guesses in one call — ' +
+      'the answer splits them into `known` and `unknown`, with a suggestion for each miss. ' +
+      'Read-only; needs no target.',
     inputSchema: {
       type: 'object',
       properties: {
         query: { type: 'string', description: 'words the icon name should contain' },
+        names: {
+          type: 'array',
+          description:
+            'icon names to validate in ONE call, instead of searching. Returns {known, unknown}.',
+          items: { type: 'string' },
+        },
         limit: { type: 'integer', minimum: 1, maximum: 200, description: 'default 40' },
       },
-      required: ['query'],
       additionalProperties: false,
     },
     handler: async (args) => {
       const table = await loadIcons()
+      // validating a list of guesses: one call instead of one search per name
+      if (args.names?.length) {
+        const known = []
+        const unknown = []
+        for (const raw of args.names) {
+          const name = String(raw ?? '').trim()
+          if (!name) continue
+          if (table[name]) known.push(name)
+          else {
+            // the nearest names, ranked by how MANY of the guess's words they
+            // carry — Lucide v4 reordered a lot of compound names
+            // (arrow-right-circle → circle-arrow-right), and those are exactly
+            // the misses worth a suggestion
+            const words = name.toLowerCase().split(/[\s-]+/).filter(Boolean)
+            const score = (n) => words.filter((w) => n.includes(w)).length
+            const near = Object.keys(table)
+              .map((n) => ({ n, hits: score(n) }))
+              .filter((c) => c.hits > 0)
+              .sort((a, b) => b.hits - a.hits || a.n.length - b.n.length || a.n.localeCompare(b.n))
+              .slice(0, 3)
+              .map((c) => c.n)
+            unknown.push({ name, ...(near.length ? { didYouMean: near } : {}) })
+          }
+        }
+        return { known, ...(unknown.length ? { unknown } : {}) }
+      }
       const words = String(args.query ?? '').toLowerCase().split(/[\s-]+/).filter(Boolean)
-      if (!words.length) throw new Error('pass a `query` — the set is too large to list whole')
+      if (!words.length) throw new Error('pass a `query` (words to search) or `names` (to validate)')
       const limit = Math.min(Math.max(Number(args.limit) || 40, 1), 200)
       const hits = Object.keys(table).filter((name) => words.every((w) => name.includes(w)))
       // a name that STARTS with the query is the better match, then the shorter
