@@ -255,7 +255,8 @@ test('rename, duplicate, detach and delete keep every page in step', async () =>
   const out = await html()
   expect(out.match(/>Card title</g)).toHaveLength(2)
   written = await call('get_page', { pageId: h.id })
-  expect(written.diagnostics).toBeUndefined()
+  // always present, so "clean" and "nobody checked" are different answers
+  expect(written.diagnostics).toEqual([])
 })
 
 test('a list keeps its filter inside a component, and an instance can narrow it', async () => {
