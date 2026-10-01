@@ -375,3 +375,74 @@ test.describe('list_icons', () => {
     await expect(s.call('list_icons', {})).rejects.toThrow(/query|names/)
   })
 })
+
+test.describe('breakpoints', () => {
+  test('they can be set, and come back widest first', async () => {
+    const s = await mcpSession()
+    // nothing could edit these from MCP: an agent could scope a binding to a
+    // breakpoint but never add the breakpoint it wanted
+    const r = await s.call('update_settings', {
+      breakpoints: [
+        { name: 'Mobile', width: 390 },
+        { name: 'Desktop', width: 1440 },
+        { name: 'Tablet', width: 768 },
+      ],
+    })
+    expect(r.saved).toBe(true)
+    expect(r.breakpoints.map((b: { name: string }) => b.name)).toEqual([
+      'Desktop',
+      'Tablet',
+      'Mobile',
+    ])
+    // the widest is the base for the cascade, perView and binding scopes
+    expect(r.breakpoints[0].width).toBe(1440)
+    expect(s.stored().breakpoints[0].height).toBe(900) // defaulted
+  })
+
+  test('two breakpoints cannot share a width', async () => {
+    const s = await mcpSession()
+    const r = await s.call('update_settings', {
+      breakpoints: [
+        { name: 'A', width: 768 },
+        { name: 'B', width: 768 },
+      ],
+    })
+    expect(r.saved).toBe(false)
+    expect(r.reason).toBe('duplicate-breakpoint-width')
+  })
+
+  test('keeping an id keeps the breakpoint, and dropping one a slider names is refused', async () => {
+    const s = await mcpSession()
+    const base = s.stored().breakpoints
+    const mobile = base[base.length - 1]
+    const home = await s.home()
+    await s.call('set_page_code', {
+      pageId: home.id,
+      code: pageCode('\t:slider#deck\n\t\t:div\n\t\t\t:span:\n\t\tdiv:\n\tslider:'),
+      version: home.version,
+    })
+    const after = await s.home()
+    await s.call('edit_elements', {
+      pageId: after.id,
+      version: after.version,
+      edits: [{ ref: 'deck', slider: { perView: { base: 3, [mobile.id]: 1 } } }],
+    })
+
+    const refused = await s.call('update_settings', {
+      breakpoints: [{ name: 'Desktop', width: 1440 }],
+    })
+    expect(refused.saved).toBe(false)
+    expect(refused.reason).toBe('breakpoints-in-use')
+    expect(refused.inUse[0].where).toContain('slider')
+
+    // keeping its id keeps it, with a new width
+    const kept = await s.call('update_settings', {
+      breakpoints: [
+        { name: 'Desktop', width: 1440 },
+        { id: mobile.id, name: 'Phone', width: 420 },
+      ],
+    })
+    expect(kept.saved).toBe(true)
+    expect(kept.breakpoints.find((b: { id: string }) => b.id === mobile.id).name).toBe('Phone')
+  })
+})

@@ -2167,6 +2167,31 @@ function tokenUsage(project, names) {
   return found
 }
 
+/**
+ * Where a breakpoint id is still named: a binding's `breakpoints` scope or a
+ * slider's per-breakpoint `perView`. Dropping a breakpoint those name leaves the
+ * scope pointing at nothing, so it silently never applies.
+ */
+function breakpointUsage(project, id) {
+  let where = null
+  const look = (n, label) => {
+    if (where) return
+    for (const b of [...(n.interactions ?? []), ...(n.animations ?? [])]) {
+      if (b.breakpoints?.includes(id)) where = `a binding in ${label}`
+    }
+    if (!where && n.slider?.perView && Object.hasOwn(n.slider.perView, id)) {
+      where = `a slider in ${label}`
+    }
+  }
+  for (const page of project.pages ?? []) {
+    walkNodes(page.elements ?? [], (n) => look(n, `page "${page.name}"`))
+  }
+  for (const def of project.components ?? []) {
+    walkNodes([def.root], (n) => look(n, `component "${def.name}"`))
+  }
+  return where
+}
+
 /** the id of the page node carrying `#ref`, or null. Refs are unique per page
  * (validateDocument enforces it), so the first match is the only one. */
 function refNodeId(page, ref) {
@@ -4811,6 +4836,27 @@ const tools = [
             additionalProperties: false,
           },
         },
+        breakpoints: {
+          type: 'array',
+          minItems: 1,
+          description:
+            'REPLACE the project breakpoints. Each item is {name, width, height?}, plus `id` to ' +
+            'keep an existing one (omit id to mint a new one). The WIDEST is the base — class ' +
+            'cascade, slider perView and binding `breakpoints` are all desktop-first from it. ' +
+            'Widths must be distinct. Removing one that a binding or a slider still names is ' +
+            'refused unless forcePurge: true, since nothing would render it.',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              name: { type: 'string' },
+              width: { type: 'integer', minimum: 200, maximum: 4000 },
+              height: { type: 'integer', minimum: 200, maximum: 4000 },
+            },
+            required: ['name', 'width'],
+            additionalProperties: false,
+          },
+        },
         addTokens: {
           type: 'array',
           description:
@@ -5143,6 +5189,51 @@ const tools = [
               : {}),
           }
         }
+      }
+
+      if (args.breakpoints !== undefined) {
+        const incoming = args.breakpoints
+        const widths = incoming.map((b) => Number(b.width))
+        if (new Set(widths).size !== widths.length) {
+          return {
+            saved: false,
+            reason: 'duplicate-breakpoint-width',
+            message:
+              'two breakpoints cannot share a width — the cascade resolves a viewport to ONE ' +
+              'breakpoint, so a tie has no answer',
+          }
+        }
+        const keeping = new Set(incoming.filter((b) => b.id).map((b) => b.id))
+        const dropped = (project.breakpoints ?? []).filter((b) => !keeping.has(b.id))
+        const stillNamed = dropped.filter((b) => breakpointUsage(project, b.id))
+        if (stillNamed.length && args.forcePurge !== true) {
+          return {
+            saved: false,
+            reason: 'breakpoints-in-use',
+            inUse: stillNamed.map((b) => ({
+              id: b.id,
+              name: b.name,
+              where: breakpointUsage(project, b.id),
+            })),
+            message:
+              `${stillNamed.map((b) => b.name).join(', ')} are still named by a binding or a ` +
+              'slider. Dropping one leaves that scope pointing at nothing, so it never applies. ' +
+              'Rescope those first, or retry with forcePurge: true.',
+          }
+        }
+        const byId = new Map((project.breakpoints ?? []).map((b) => [b.id, b]))
+        project.breakpoints = incoming.map((b) => {
+          const have = b.id ? byId.get(b.id) : undefined
+          return {
+            id: have?.id ?? b.id ?? randomUUID(),
+            name: String(b.name),
+            width: Number(b.width),
+            height: Number(b.height ?? have?.height ?? 900),
+          }
+        })
+        // widest first is how every consumer reads them (basePerView, the
+        // canvas frames, breakpointIdForWidth)
+        project.breakpoints.sort((a, b) => b.width - a.width)
       }
 
       // addTokens / removeTokens: the additive form, like addLocales. `tokens`

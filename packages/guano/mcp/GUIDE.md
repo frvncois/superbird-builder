@@ -1661,6 +1661,12 @@ a breakpoint that stores nothing inherits the next wider one. So "three posts on
 one on mobile" is `{perView: {base: 3, "<mobile-id>": 1}}` — get the ids from
 `get_settings` (`breakpoints`).
 
+**Breakpoints** are `update_settings {breakpoints: [{name, width, height?}]}`, which
+REPLACES the set — pass `id` on an item to keep an existing one (its bindings and
+`perView` keys keep working), omit it to mint a new one. The widest is the base, two
+cannot share a width, and dropping one that a binding or a slider still names is refused
+unless `forcePurge: true`, since that scope would then never apply.
+
 Every field is optional and an absent one means its default, so `slider: {}` or
 `slider: null` clears back to a working default carousel. Only store what differs from the
 default; the editor prunes the same way, and a byte-identical node keeps merges clean.
@@ -1741,8 +1747,7 @@ happens, **report it; do not look for another route to the same edit.**
 ## Current tool gaps (report, don't hack)
 
 Known missing capabilities, so state them as limits instead of improvising: no tool yet
-to CREATE or edit **breakpoints** (`get_settings` lists the existing ones, and bindings
-can be scoped to their ids), smtp/publishing config (the site `domain` IS settable —
+for smtp/publishing config (the site `domain` IS settable —
 `update_settings {domain}` — and makes canonical URLs + og:image absolute), per-page `<script>` injection,
 media folder management or asset rename/delete (list + upload only), renaming a
 collection, or creating new comment threads (you can only reply). **Forms** render real
