@@ -383,11 +383,11 @@ export function useRenderNode(
   // --- inline text editing ---
   //
   // Which elements can be text-edited, and what an edit reads from and writes
-  // to. Only the Build canvas (`ElementRenderer`) uses these — Play renders the
-  // site read-only — but they live here with the content resolution they depend
-  // on (bound field, entry scope, locale fallback) rather than beside the
-  // gesture, since that is the part the field-type rules have to stay in step
-  // with.
+  // to. Both renderers use these — the Build canvas (`ElementRenderer`) and, for
+  // a contributor, the Play render (`PreviewRenderer`) — and they live here with
+  // the content resolution they depend on (bound field, entry scope, locale
+  // fallback) rather than beside the gesture, since that is the part the
+  // field-type rules have to stay in step with.
 
   /** text-content elements only; a bound element needs an entry to write to —
    * and a reference bind isn't text, it's picked in the Data panel */

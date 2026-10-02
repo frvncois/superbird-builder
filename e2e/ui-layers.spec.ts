@@ -423,9 +423,10 @@ test('the Edit / Play toggle swaps the surface, and Play edits nothing', async (
   await row.hover()
   await expect(row.getByRole('button', { name: 'Edit layers' })).toHaveCount(0)
 
-  // Play is READ-ONLY: the render has no content editing left on it. The
-  // gestures that used to open one — double-click for text, right-click for
-  // the "Edit content" menu — now do nothing at all.
+  // For a builder Play is READ-ONLY: they edit on the Edit canvas, so the
+  // gestures a contributor edits content with in Play — double-click for text,
+  // right-click for the "Edit content" menu — do nothing at all here
+  // (ui-preview-editing covers the contributor side).
   const hero = page.locator('[data-site-scope] h1').first()
   await expect(hero).toBeVisible({ timeout: 30_000 })
   await hero.dispatchEvent('dblclick')

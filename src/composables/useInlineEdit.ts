@@ -2,12 +2,13 @@ import { nextTick, ref, type Ref } from 'vue'
 import { sanitizeRich } from '@/lib/shared/richtext.js'
 
 /**
- * Inline plaintext editing on a canvas element: double-click to edit, Enter to
- * commit, Esc to discard. The Build canvas (`ElementRenderer`) is the only
- * caller — Play renders the site read-only and has no editing gesture of its
- * own. While editing, a dedicated span is mounted that Vue renders EMPTY — its
- * text is managed only by us — so Vue's fragment anchors for the interpolation
- * and child renderers survive.
+ * Inline plaintext editing on a rendered element: double-click to edit, Enter
+ * to commit. Shared by the Build canvas (`ElementRenderer`, Esc discards) and,
+ * for contributors, the Play render (`PreviewRenderer`, Esc saves — a
+ * contributor has no other surface to redo the typing on). While editing, a
+ * dedicated span is mounted that Vue renders EMPTY — its text is managed only
+ * by us — so Vue's fragment anchors for the interpolation and child renderers
+ * survive.
  */
 export function useInlineEdit(opts: {
   /** whether this element can be text-edited right now */
@@ -21,6 +22,8 @@ export function useInlineEdit(opts: {
   rich?: Ref<boolean>
   /** called after a keyboard exit (Enter/Esc), e.g. to return focus to the editor */
   onExit?: () => void
+  /** what Esc does — 'cancel' discards, 'save' commits (default 'cancel') */
+  escBehavior?: 'cancel' | 'save'
 }) {
   const editing = ref(false)
   const editEl = ref<HTMLElement>()
@@ -72,7 +75,9 @@ export function useInlineEdit(opts: {
       opts.onExit?.()
     } else if (e.key === 'Escape') {
       e.preventDefault()
-      finishEditing(true) // Esc discards, like Escape everywhere else in the editor
+      // Esc discards, like Escape everywhere else in the editor — unless the
+      // caller asked for it to save
+      finishEditing(opts.escBehavior !== 'save')
       opts.onExit?.()
     }
   }

@@ -1,11 +1,16 @@
 <script setup lang="ts">
 // The full-site live preview used inside the editor shell's Preview mode:
 // the site rendered as one navigable full-width column (no breakpoint frames).
-// It is READ-ONLY — the site as a visitor gets it, with links, interactions and
-// motion running for real. The one thing you do TO it is review: hold C and
-// click to drop a comment. Content is edited on the Edit surface.
+// For an admin or editor it is READ-ONLY — the site as a visitor gets it, with
+// links, interactions and motion running for real; content is edited on the
+// Edit surface. A contributor (pinned here) also edits content in place: see
+// usePreviewEditing, whose "Edit content" menu is rendered below. Anyone can
+// review: hold C and click to drop a comment.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import PreviewRenderer from '@/components/site/PreviewRenderer.vue'
+import ButtonUI from '@/components/ui/ButtonUI.vue'
+import { ImageUp, PenLine } from 'lucide-vue-next'
+import { usePreviewEditing } from '@/composables/usePreviewEditing'
 import CommentLayer from '@/components/site/CommentLayer.vue'
 import EntryScope from '@/components/shared/EntryScope.vue'
 import { usePage } from '@/composables/usePage'
@@ -33,6 +38,41 @@ const { addComment, activeComment, focusTick } = useComments()
 // to the element under the cursor
 const { commentMode } = useCommentMode()
 const mainEl = ref<HTMLElement>()
+
+// the contributor's "Edit content" menu (opened by a renderer's contextmenu)
+const { contentEditing, menu, closeMenu, requestEdit } = usePreviewEditing()
+// Escape closes it — capture-phase and stopped, so it peels this one layer
+// rather than reaching the editor's own Escape handlers
+function onMenuKeydown(e: KeyboardEvent) {
+  if (e.key !== 'Escape' || !menu.value) return
+  e.preventDefault()
+  e.stopPropagation()
+  closeMenu()
+}
+watch(
+  () => !!menu.value,
+  (open) => {
+    if (open) window.addEventListener('keydown', onMenuKeydown, true)
+    else window.removeEventListener('keydown', onMenuKeydown, true)
+  },
+)
+// opened at the pointer, then pulled back inside the viewport once its size is
+// known — a right-click near the bottom or right edge would otherwise put it
+// off-screen
+const menuEl = ref<HTMLElement>()
+const menuPos = ref({ x: 0, y: 0 })
+watch(menu, async (m) => {
+  if (!m) return
+  menuPos.value = { x: m.x, y: m.y }
+  await nextTick()
+  const rect = menuEl.value?.getBoundingClientRect()
+  if (!rect) return
+  const margin = 8
+  menuPos.value = {
+    x: Math.max(margin, Math.min(m.x, window.innerWidth - rect.width - margin)),
+    y: Math.max(margin, Math.min(m.y, window.innerHeight - rect.height - margin)),
+  }
+})
 // `main` is overflow-hidden (fixed-child containment); this inner wrapper is
 // what actually scrolls, so scrub progress measures against it
 const scrollEl = ref<HTMLElement>()
@@ -157,6 +197,8 @@ onMounted(() => {
   void nextTick(updateScrub)
 })
 onBeforeUnmount(() => {
+  closeMenu()
+  window.removeEventListener('keydown', onMenuKeydown, true)
   scrollEl.value?.removeEventListener('scroll', onScroll)
   scrollEl.value?.removeEventListener('wheel', onWheel)
   if (scrubFrame !== null) cancelAnimationFrame(scrubFrame)
@@ -233,5 +275,38 @@ const fontStyle = computed(() => ({
 
     <!-- floating comment pins over the preview -->
     <CommentLayer :root="mainEl ?? null" />
+
+    <!-- a contributor's "Edit content" context menu — teleported, since the
+         pane's containment would make `fixed` mean the pane, not the viewport,
+         and the menu sits at the pointer's viewport coordinates -->
+    <Teleport v-if="menu && contentEditing" to="body">
+      <div class="fixed inset-0 z-[90]" @click="closeMenu" @contextmenu.prevent="closeMenu" />
+      <div
+        ref="menuEl"
+        class="fixed z-[91] flex min-w-40 flex-col rounded-xl border border-input bg-background p-1 shadow-lg"
+        :style="{ left: `${menuPos.x}px`, top: `${menuPos.y}px` }"
+      >
+        <ButtonUI
+          v-if="menu.content"
+          variant="ghost"
+          size="sm"
+          :icon="PenLine"
+          class="w-full justify-start"
+          @click="requestEdit(menu.nodeId, 'content')"
+        >
+          Edit content
+        </ButtonUI>
+        <ButtonUI
+          v-if="menu.background"
+          variant="ghost"
+          size="sm"
+          :icon="ImageUp"
+          class="w-full justify-start"
+          @click="requestEdit(menu.nodeId, 'background')"
+        >
+          Replace background
+        </ButtonUI>
+      </div>
+    </Teleport>
   </div>
 </template>
