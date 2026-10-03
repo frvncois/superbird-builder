@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import {
   Archive, Check, ChevronRight, Code2, Copy, KeyRound, Languages, Palette, Pencil, Plug,
   Plus, Rocket, ScanSearch, Search, Settings, Settings2, Trash2, Type, UserRound, Users, X,
+  Inbox, Download, Mail, Webhook,
 } from 'lucide-vue-next'
 import ModalHost from '@/components/modal/ModalHost.vue'
 import TabsUI from '@/components/tabs/TabsUI.vue'
@@ -32,6 +33,8 @@ import { useAuth } from '@/composables/useAuth'
 import { useModal } from '@/composables/useModal'
 import { useApiTokens } from '@/composables/useApiTokens'
 import { useIntegrations } from '@/composables/useIntegrations'
+import { useFormSubmissions } from '@/composables/useFormSubmissions'
+import FormSubmissionsModal from '@/components/editor/forms/FormSubmissionsModal.vue'
 import RenameModal from '@/components/modal/RenameModal.vue'
 import {
   envRef,
@@ -105,13 +108,12 @@ const NAV = computed(() => {
     ]
     if (isAdmin.value) site.push({ id: 'code', label: 'Code', icon: Code2 })
     groups.push({ label: 'Site', items: site })
-    groups.push({
-      label: 'Connect',
-      items: [
-        { id: 'integrations', label: 'Integrations', icon: Plug },
-        { id: 'mcp', label: 'MCP', icon: KeyRound },
-      ],
-    })
+    const connect = [{ id: 'integrations', label: 'Integrations', icon: Plug }]
+    // Forms is admin-only because everything on it is: who gets the
+    // notification, which integration sends it, how long leads are kept
+    if (isAdmin.value) connect.push({ id: 'forms', label: 'Forms', icon: Inbox })
+    connect.push({ id: 'mcp', label: 'MCP', icon: KeyRound })
+    groups.push({ label: 'Connect', items: connect })
   }
   if (isAdmin.value)
     groups.push({
@@ -673,6 +675,7 @@ const {
   remove: removeIntegration,
   setKey: setIntegrationKey,
   removeKey: removeIntegrationKey,
+  test: testIntegration,
 } = useIntegrations()
 
 onMounted(() => {
@@ -827,6 +830,90 @@ const savedPlaceholder = (isSet: boolean, hint: string) =>
   isSet ? 'Saved — enter to replace' : hint
 
 const ghConfigured = computed(() => !!settings.value.publishing.github.repo && ghTokenSet.value)
+
+// --- forms: recipients, who sends, how long leads are kept ---
+//
+// All of it server-side and admin-only. A recipient list in the project blob
+// would let a draft, a merge or an injected agent redirect other people's
+// leads; a retention window there would let them keep them forever.
+
+const {
+  config: formsConfig,
+  forms: formList,
+  loadConfig: loadFormsConfig,
+  saveConfig: saveFormsConfig,
+  loadForms: loadFormList,
+} = useFormSubmissions()
+
+const formsError = ref<string | null>(null)
+const recipientDraft = ref('')
+
+onMounted(async () => {
+  if (!isAdmin.value) return
+  try {
+    await loadFormsConfig()
+    await loadFormList()
+  } catch (e) {
+    formsError.value = e instanceof Error ? e.message : 'Could not load form settings'
+  }
+})
+
+/** every integration is offered: the server checks the pick carries the keys
+ *  the capability needs and refuses by name, which is a better error than a
+ *  filtered list that silently omits the one the admin was looking for */
+const integrationOptions = computed(() => [
+  { label: 'None', value: '' },
+  ...integrations.value.map((ig) => ({ label: ig.name, value: ig.id })),
+])
+
+async function patchForms(patch: Record<string, unknown>) {
+  formsError.value = null
+  try {
+    await saveFormsConfig(patch)
+  } catch (e) {
+    formsError.value = e instanceof Error ? e.message : 'Could not save'
+    // re-read so the UI shows what is actually stored, not the refused pick
+    await loadFormsConfig().catch(() => {})
+  }
+}
+
+async function addRecipient() {
+  const email = recipientDraft.value.trim()
+  if (!email) return
+  await patchForms({ notifyTo: [...formsConfig.value.notifyTo, email] })
+  if (!formsError.value) recipientDraft.value = ''
+}
+
+const removeRecipient = (email: string) =>
+  patchForms({ notifyTo: formsConfig.value.notifyTo.filter((e) => e !== email) })
+
+const testingCapability = ref<string | null>(null)
+const testResult = ref<{ capability: string; ok: boolean; error?: string } | null>(null)
+
+async function testPick(capability: 'smtp' | 'webhook') {
+  const id = capability === 'smtp' ? formsConfig.value.mailer : formsConfig.value.webhook
+  if (!id) return
+  testingCapability.value = capability
+  testResult.value = null
+  try {
+    const r = await testIntegration(id, capability)
+    testResult.value = { capability, ...r }
+  } catch (e) {
+    testResult.value = {
+      capability,
+      ok: false,
+      error: e instanceof Error ? e.message : 'Test failed',
+    }
+  } finally {
+    testingCapability.value = null
+  }
+}
+
+const totalSubmissions = computed(() => formList.value.reduce((n, f) => n + f.count, 0))
+
+function openSubmissions(formId?: string) {
+  openModal(FormSubmissionsModal, formId ? { formId } : {})
+}
 
 // --- snapshots: server-kept project packages (the export, listed) ---
 
@@ -1742,6 +1829,173 @@ async function onImportFile(e: Event) {
                     : 'No integrations yet — an admin sets these up.'
                 }}
               </EmptyListUI>
+            </SettingsGroup>
+          </TabPanelUI>
+
+          <TabPanelUI v-if="isAdmin" class="gap-9" id="forms">
+            <SettingsGroup
+              title="Submissions"
+              description="What visitors sent through the forms on your site."
+            >
+              <template #action>
+                <ButtonUI size="xs" :icon="Inbox" @click="openSubmissions()">Open</ButtonUI>
+              </template>
+              <div v-if="formList.length" class="flex flex-col rounded-xl border border-input">
+                <button
+                  v-for="form in formList"
+                  :key="form.formId"
+                  type="button"
+                  class="flex items-center gap-2 border-b border-input px-3 py-2 text-left outline-none last:border-b-0 hover:bg-accent/20"
+                  @click="openSubmissions(form.formId)"
+                >
+                  <span
+                    class="size-1.5 shrink-0 rounded-full"
+                    :class="form.storageFull ? 'bg-danger' : form.count ? 'bg-success' : 'bg-pending'"
+                  />
+                  <div class="min-w-0 flex-1">
+                    <p class="truncate text-xs font-medium">{{ form.name }}</p>
+                    <p class="truncate text-[10px] text-muted-foreground">
+                      {{ form.count }} {{ form.count === 1 ? 'submission' : 'submissions' }}
+                      <template v-if="form.latestAt"> · {{ timeAgo(form.latestAt) }}</template>
+                      <template v-if="!form.onSite"> · no longer on the site</template>
+                    </p>
+                  </div>
+                </button>
+              </div>
+              <EmptyListUI v-else>
+                No forms yet — add a form to a page and turn on Accept submissions.
+              </EmptyListUI>
+            </SettingsGroup>
+
+            <SettingsGroup
+              title="Email notification"
+              description="Who hears about a new submission, and what sends it."
+            >
+              <RowUI label="Send with">
+                <SelectUI
+                  :options="integrationOptions"
+                  :model-value="formsConfig.mailer"
+                  @update:model-value="(v) => patchForms({ mailer: v ?? '' })"
+                />
+              </RowUI>
+              <p class="text-[9px] text-muted-foreground">
+                An integration with HOST, PORT, USER, PASSWORD and FROM. Every transactional mail
+                provider speaks SMTP, so any of them works.
+              </p>
+              <RowUI v-if="formsConfig.mailer" label="Test">
+                <ButtonUI
+                  variant="outline"
+                  size="xs"
+                  :icon="Mail"
+                  :disabled="testingCapability === 'smtp'"
+                  @click="testPick('smtp')"
+                >
+                  {{ testingCapability === 'smtp' ? 'Connecting…' : 'Send test' }}
+                </ButtonUI>
+                <span
+                  v-if="testResult?.capability === 'smtp'"
+                  class="text-[10px]"
+                  :class="testResult.ok ? 'text-success' : 'text-danger'"
+                >
+                  {{ testResult.ok ? 'Connected and signed in' : testResult.error }}
+                </span>
+              </RowUI>
+
+              <RowUI label="Recipients">
+                <div class="flex w-full gap-1.5">
+                  <InputUI
+                    v-model="recipientDraft"
+                    placeholder="leads@example.com"
+                    @keydown.enter="addRecipient"
+                  />
+                  <ButtonUI
+                    variant="outline"
+                    size="xs"
+                    class="!h-7 px-2.5"
+                    :disabled="!recipientDraft.trim() || formsConfig.notifyTo.length >= 5"
+                    @click="addRecipient"
+                  >
+                    Add
+                  </ButtonUI>
+                </div>
+              </RowUI>
+              <div v-if="formsConfig.notifyTo.length" class="flex flex-col rounded-xl border border-input">
+                <div
+                  v-for="email in formsConfig.notifyTo"
+                  :key="email"
+                  class="flex items-center gap-2 border-b border-input px-3 py-2 last:border-b-0"
+                >
+                  <span class="min-w-0 flex-1 truncate font-mono text-[10px]">{{ email }}</span>
+                  <ButtonUI
+                    variant="icon"
+                    size="sm"
+                    :icon="X"
+                    class="w-6 shrink-0 text-muted-foreground"
+                    @click="removeRecipient(email)"
+                  />
+                </div>
+              </div>
+              <p v-else class="text-[9px] text-muted-foreground">
+                Up to five. A form with notification on and no recipient here sends nothing.
+              </p>
+            </SettingsGroup>
+
+            <SettingsGroup
+              title="Forward to a webhook"
+              description="Send every submission on to another service."
+            >
+              <RowUI label="Send with">
+                <SelectUI
+                  :options="integrationOptions"
+                  :model-value="formsConfig.webhook"
+                  @update:model-value="(v) => patchForms({ webhook: v ?? '' })"
+                />
+              </RowUI>
+              <p class="text-[9px] text-muted-foreground">
+                An integration with FORWARD_URL (https), and optionally FORWARD_AUTH, sent as the
+                Authorization header. This is how a submission reaches Zapier, Airtable, a CRM or a
+                newsletter provider — no per-service setup needed.
+              </p>
+              <RowUI v-if="formsConfig.webhook" label="Test">
+                <ButtonUI
+                  variant="outline"
+                  size="xs"
+                  :icon="Webhook"
+                  :disabled="testingCapability === 'webhook'"
+                  @click="testPick('webhook')"
+                >
+                  {{ testingCapability === 'webhook' ? 'Posting…' : 'Send test' }}
+                </ButtonUI>
+                <span
+                  v-if="testResult?.capability === 'webhook'"
+                  class="text-[10px]"
+                  :class="testResult.ok ? 'text-success' : 'text-danger'"
+                >
+                  {{ testResult.ok ? 'The webhook answered' : testResult.error }}
+                </span>
+              </RowUI>
+            </SettingsGroup>
+
+            <SettingsGroup title="Retention" description="How long submissions are kept.">
+              <RowUI label="Keep for">
+                <InputUI
+                  type="number"
+                  :model-value="String(formsConfig.retentionDays)"
+                  placeholder="365"
+                  @update:model-value="(v) => patchForms({ retentionDays: Number(v) || 0 })"
+                />
+                <span class="text-[10px] text-muted-foreground">days</span>
+              </RowUI>
+              <p class="text-[9px] text-muted-foreground">
+                Older submissions are deleted automatically, at startup and once a day. 0 keeps
+                them forever. These are other people's names and messages, so keeping them no
+                longer than you need is the point.
+              </p>
+              <p class="text-[9px] text-muted-foreground">
+                {{ totalSubmissions }} stored right now. Submissions are not part of a project
+                backup — download the CSV if you need a copy.
+              </p>
+              <p v-if="formsError" class="text-[10px] text-danger">{{ formsError }}</p>
             </SettingsGroup>
           </TabPanelUI>
 

@@ -81,8 +81,19 @@ const GUIDE_HASH = GUIDE
 // uses it: with a dialog available the target choice is genuinely the human's,
 // instead of an agent-asserted chosenByUser boolean.
 export function createToolSet({ api, runtime, elicit, hasElicitation = () => null }) {
-  const { whoami, storeGetRaw, storeGetJson, storePutRaw, publish, preview, mediaIndex, mediaUpload } =
-    api
+  const {
+    whoami,
+    storeGetRaw,
+    storeGetJson,
+    storePutRaw,
+    publish,
+    preview,
+    mediaIndex,
+    mediaUpload,
+    formsList,
+    formSubmissions,
+    integrationsList,
+  } = api
   const {
     // the agent format: the read, the strict reader, the identity-carrying
     // write, and the tree validator behind all three (src/lib/html/)
@@ -146,6 +157,9 @@ export function createToolSet({ api, runtime, elicit, hasElicitation = () => nul
     isSymmetricTrigger,
     SLIDER_DEFAULTS,
     validateSliderConfig,
+    formConfigError,
+    formEnabled,
+    collectFormFields,
     sanitizeInlineSvg,
     lucideSvg,
     lucideNameOf,
@@ -1805,6 +1819,29 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
       }
     }
 
+    // --- form (form only: does it accept submissions, and what then) ---
+    if (edit.form !== undefined) {
+      if (node.type !== 'form') {
+        errors.push(`form refused: '${node.type}' is not a form`)
+      } else {
+        const config = edit.form
+        const empty = config === null || (typeof config === 'object' && !Object.keys(config).length)
+        if (empty) {
+          delete node.form
+          applied.push('form')
+          changed = true
+        } else {
+          const bad = formConfigError(config)
+          if (bad) errors.push(`form refused: ${bad}`)
+          else {
+            node.form = config
+            applied.push('form')
+            changed = true
+          }
+        }
+      }
+    }
+
     // --- interaction bindings (batched; masters own them inside instances) ---
     if (edit.bindInteractions?.length || edit.unbindInteractionIds?.length) {
       const bindTargetNode = sharedNode
@@ -1892,6 +1929,9 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
             animationId: bind.animationId,
             trigger: bind.trigger,
             targetId: resolved.targetId,
+            // omitted when it is the default, so an untouched binding stays
+            // byte-identical for the merge signature
+            ...(bind.action && bind.action !== 'toggle' ? { action: bind.action } : {}),
             ...(bind.appearMode ? { appearMode: bind.appearMode } : {}),
             ...(bind.appearAt ? { appearAt: bind.appearAt } : {}),
             ...(bind.scrub ? { scrub: bind.scrub } : {}),
@@ -3206,6 +3246,81 @@ function designWarnings(project) {
       message:
         'effects nothing is bound to — leftovers a human will find in the Interactions panel. ' +
         'Delete them (delete_interaction / delete_animation) or bind them.',
+    })
+  }
+  // 5. forms — the ways an enabled form silently collects nothing
+  const formIssues = []
+  const seenForm = new Set()
+  eachRendered((n, where) => {
+    if (n.type !== 'form') return
+    if (seenForm.has(`${where}:${n.id}`)) return
+    seenForm.add(`${where}:${n.id}`)
+    const config = n.form
+
+    if (config?.externalAction && !config.enabled) {
+      formIssues.push(
+        `the form in ${where} posts to ${config.externalAction} — submissions leave this ` +
+          'instance and nothing is stored here',
+      )
+      return
+    }
+    // a PLAIN form is a legitimate thing to build (a search box that links, a
+    // form wired by custom code), so an absent config is never a warning
+    if (!formEnabled(config)) return
+
+    const { fields, unnamed, duplicates } = collectFormFields(n, (child) => child.attributes)
+    if (!fields.length) {
+      formIssues.push(
+        `the form in ${where} accepts submissions but has no NAMED field — only a control with ` +
+          'a `name` attribute is submitted, so every submission would arrive empty',
+      )
+    }
+    if (unnamed.length) {
+      formIssues.push(
+        `${unnamed.length} control(s) in the form in ${where} have no usable name and will not ` +
+          'be submitted (a name starting with "_" is reserved)',
+      )
+    }
+    if (duplicates.length) {
+      formIssues.push(
+        `two controls in the form in ${where} share the name ${duplicates.join(', ')} — only ` +
+          'the first is stored',
+      )
+    }
+    let hasSubmit = false
+    walkNodes(n.children ?? [], (c) => {
+      if (c.type === 'button' || (c.type === 'input' && c.attributes?.type === 'submit')) {
+        hasSubmit = true
+      }
+    })
+    if (!hasSubmit) {
+      formIssues.push(`the form in ${where} has no submit button, so a visitor cannot send it`)
+    }
+    const states = (n.children ?? []).map((c) => c.type)
+    if (!states.includes('form-success') && !config.redirect) {
+      formIssues.push(
+        `the form in ${where} shows nothing after a submission — add a <form-success> block or ` +
+          'set a redirect, or the visitor cannot tell it worked',
+      )
+    }
+    const publishing = project.settings?.publishing
+    if (publishing?.method && publishing.method !== 'server' && !publishing.apiOrigin) {
+      formIssues.push(
+        `the form in ${where} accepts submissions, but this site publishes as ` +
+          `${publishing.method} with no studio URL set — the submissions would have nowhere to ` +
+          'post. An admin sets it in Settings → Publish',
+      )
+    }
+  })
+  if (formIssues.length) {
+    warnings.push({
+      kind: 'form-setup',
+      issues: formIssues.slice(0, 8),
+      message:
+        'forms that would collect nothing, or less than they look like they collect: ' +
+        formIssues.slice(0, 3).join('; ') +
+        (formIssues.length > 3 ? ` (+${formIssues.length - 3} more)` : '') +
+        '. See get_guide {section: "forms"}.',
     })
   }
   return warnings
@@ -5991,6 +6106,20 @@ const tools = [
                 },
                 additionalProperties: false,
               },
+              form: {
+                type: ['object', 'null'],
+                description:
+                  'form only. Without `enabled` a form posts nowhere; recipients are admin-set ' +
+                  'server-side. See get_guide {section: "forms"}.',
+                properties: {
+                  enabled: { type: 'boolean' },
+                  name: { type: 'string' },
+                  notify: { type: 'boolean' },
+                  forward: { type: 'boolean' },
+                  redirect: { type: 'string', description: 'a path on this site' },
+                },
+                additionalProperties: false,
+              },
               bindInteractions: {
                 type: 'array',
                 description: 'library interactions to bind — batch these here, not one bind_interaction call each',
@@ -6030,6 +6159,13 @@ const tools = [
                     targetRef: {
                       type: 'string',
                       description: "the target's '#ref' without the '#' — an alternative to targetId",
+                    },
+                    action: {
+                      type: 'string',
+                      enum: ['toggle', 'on', 'off'],
+                      description:
+                        'click only: toggle (default), or always-play/always-rewind. A click play ' +
+                        'is shared per (animation, target), so several buttons drive one timeline.',
                     },
                     appearMode: {
                       type: 'string',
@@ -7948,6 +8084,39 @@ const tools = [
           'Nothing live changed. Open the url to look; draft pages are included here and are ' +
           'NOT in a publish.',
       }
+    },
+  },
+  {
+    name: 'list_form_submissions',
+    description:
+      "What visitors sent through the site's forms; omit `formId` for counts. Read-only, and " +
+      'off unless an admin allowed it. See get_guide {section: "forms"}.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        formId: { type: 'string' },
+        limit: { type: 'number', description: 'default 50, max 200' },
+        before: { type: 'string', description: 'a submission id — the next page' },
+      },
+      additionalProperties: false,
+    },
+    handler: async ({ formId, limit, before }) => {
+      if (!formsList) throw new Error('this instance does not expose form submissions — update the server')
+      if (!formId) return await formsList()
+      // every value arrives fenced by the server; the note travels with it, so
+      // an agent reading a message field knows it is data and not an instruction
+      return await formSubmissions(formId, { limit, before })
+    },
+  },
+  {
+    name: 'list_integrations',
+    description:
+      'The integrations and their KEY NAMES, never a value. A plain key goes in custom code as ' +
+      '{{ENV.<NAME>_<KEY>}}; a secret one there fails the publish.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    handler: async () => {
+      if (!integrationsList) throw new Error('this instance does not expose integrations — update the server')
+      return await integrationsList()
     },
   },
   {

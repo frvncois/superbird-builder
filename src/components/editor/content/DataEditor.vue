@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
-import { ChevronDown, ChevronUp, Plus, X } from 'lucide-vue-next'
+import { ChevronDown, ChevronUp, Inbox, Plus, X } from 'lucide-vue-next'
 import { usePanel, focusWhenPanelVisible } from '@/composables/usePanel'
 import GroupPopover from '@/components/popover/GroupPopover.vue'
 import RowUI from '@/components/ui/RowUI.vue'
@@ -27,6 +27,8 @@ import { collectFormFields, formConfigError } from '@/lib/shared/forms.js'
 import { useProject } from '@/composables/useProject'
 import { useSettings } from '@/composables/useSettings'
 import { useAuth } from '@/composables/useAuth'
+import { useModal } from '@/composables/useModal'
+import FormSubmissionsModal from '@/components/editor/forms/FormSubmissionsModal.vue'
 import { useComponents } from '@/composables/useComponents'
 import type { CollectionEntry, CollectionField, ElementNode } from '@/types/editor'
 
@@ -393,6 +395,14 @@ function addFormState(type: 'form-success' | 'form-error') {
 
 const hasFormState = (type: string) =>
   (selectedElement.value?.children ?? []).some((c) => c.type === type)
+
+/** the submissions for THIS form, from the panel that configured it — the
+ *  shortest path from "is this working?" to the answer */
+const { openModal: openFormModal } = useModal()
+const viewSubmissions = () => {
+  const el = selectedElement.value
+  if (el) openFormModal(FormSubmissionsModal, { formId: el.id })
+}
 
 /** an enabled form on a zip/github publish with no studio URL posts nowhere —
  *  worth saying here rather than only in the publish warnings, which arrive
@@ -1071,6 +1081,12 @@ const src = computed({
           />
         </RowUI>
         <p v-if="formRedirectError" class="text-[10px] text-danger">{{ formRedirectError }}</p>
+
+        <RowUI v-if="canBuild" label="Submissions">
+          <ButtonUI variant="outline" size="sm" :icon="Inbox" @click="viewSubmissions">
+            View submissions
+          </ButtonUI>
+        </RowUI>
 
         <RowUI label="States">
           <ButtonUI

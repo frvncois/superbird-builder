@@ -29,7 +29,13 @@ export default defineConfig({
     // wipe the throwaway data dir, then serve the built SPA + API on an
     // isolated port/data dir
     command: `node -e "require('fs').rmSync(process.env.GUANO_DATA_DIR,{recursive:true,force:true})" && node ${SERVER}`,
-    env: { GUANO_DATA_DIR: DATA_DIR, PORT: String(PORT) },
+    // TRUST_PROXY so a spec can present its own client address through
+    // X-Forwarded-For. The public form endpoint's per-IP limit (5/minute) is a
+    // real guard worth testing, and without this every request in the suite
+    // shares one socket address — so the limiter, not the endpoint, is what a
+    // forms spec would end up measuring. Harmless for every other spec: with
+    // no XFF header, clientIp falls back to the socket address exactly as before.
+    env: { GUANO_DATA_DIR: DATA_DIR, PORT: String(PORT), TRUST_PROXY: '1' },
     port: PORT,
     reuseExistingServer: false,
     timeout: 60_000,

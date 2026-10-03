@@ -26,6 +26,13 @@ export interface McpSession {
   stored: () => any
   /** the exported <body>… of the first route */
   html: () => Promise<string>
+  /** the exported stylesheet — for a rule the renderer emits itself */
+  css: () => Promise<string>
+  /** export an ARBITRARY project with a given integrations list, and return
+   * the first route's HTML. The forms/ENV checks need both: a project whose
+   * custom code the tools do not write, and the integrations the substitution
+   * resolves against (which live outside the project by design). */
+  exportWith: (project: unknown, integrations: unknown[]) => Promise<string>
   /** every exported HTML file, keyed by its route path — for checks that span
    * the routes a collection generates */
   exportAll: () => Promise<Record<string, string>>
@@ -67,6 +74,24 @@ export async function mcpSession(
         await exportSite(stored(), dir)
         const out = readFileSync(join(dir, 'index.html'), 'utf8')
         return out.slice(out.indexOf('<body'))
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
+    },
+    css: async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'guano-mcp-'))
+      try {
+        await exportSite(stored(), dir)
+        return readFileSync(join(dir, 'assets/style.css'), 'utf8')
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
+    },
+    exportWith: async (project: unknown, integrations: unknown[]) => {
+      const dir = mkdtempSync(join(tmpdir(), 'guano-mcp-'))
+      try {
+        await exportSite(project, dir, { integrations })
+        return readFileSync(join(dir, 'index.html'), 'utf8')
       } finally {
         rmSync(dir, { recursive: true, force: true })
       }

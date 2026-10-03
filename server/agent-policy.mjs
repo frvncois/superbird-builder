@@ -25,6 +25,17 @@ const DEFAULTS = {
   allowPublish: false,
   /** may a token change custom head/body code — raw <script> on every page? */
   allowCustomCode: false,
+  /**
+   * May a token READ form submissions?
+   *
+   * These are site visitors' names, email addresses and messages — other
+   * people's personal data, held on the operator's server. An injected agent
+   * with read access could exfiltrate the whole list through any write it can
+   * make (a page's content, a comment, a draft nobody reviews closely). Off by
+   * default; a human turns it on when they actually want an agent triaging
+   * leads. No switch ever allows DELETING one.
+   */
+  allowFormSubmissions: false,
 }
 
 /** the policy, defaults filled in. Never throws — a missing/corrupt file is

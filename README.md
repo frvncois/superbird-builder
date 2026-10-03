@@ -70,6 +70,14 @@ studio being down, and auth/data stay per-instance on your box. The export is
 fully portable (root-absolute URLs, plain HTML + one CSS file + a ~1.5 KB
 runtime).
 
+One setting matters here: if the site uses **forms**, set **Settings → Publish →
+Studio URL** to this instance's public address (`https://studio.youragency.com`).
+The static pages are files on someone else's host, so a submission posts back to
+the studio, which validates and stores it. The studio only accepts a submission
+from the site's own domain (Settings → General → Domain), and never with
+cookies. Leave it empty in topology 1 — there the site and the studio are the
+same host.
+
 ### Either way
 
 The editor needs a **persistent Node process with a writable disk** — a VPS,
@@ -91,6 +99,9 @@ Rules that hold in every topology:
 - **One instance = one project = one site.** An agency with five clients runs
   five instances (five data dirs behind one reverse proxy, or five containers).
   That's deliberate — auth, content, and backups are isolated per client.
+- **Server-backed features need the studio reachable.** Form submissions, the
+  mail they send and any webhook forward all run on the Guano process. A site
+  with no forms needs nothing beyond the static files.
 - **Behind a reverse proxy (nginx, Caddy, a PaaS router), set `TRUST_PROXY=1`**
   so login rate limiting sees real client IPs from `X-Forwarded-For` instead of
   lumping everyone under the proxy's address. Never set it without a proxy in

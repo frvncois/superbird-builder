@@ -223,6 +223,9 @@ export { defaultSettings } from './settings'
 // --- slider (carousel) config — validated against the SAME rules the editor's
 // Data panel writes through, so an agent can't author a config the UI refuses
 export { SLIDER_DEFAULTS, validateSliderConfig, resolveSliderConfig } from './shared/slider.js'
+// forms: the config validator (edit_elements {form}) and the field reader the
+// publish warnings use — the same functions the Data panel and the exporter run
+export { collectFormFields, formConfigError, formEnabled, formName } from './shared/forms.js'
 
 // --- interaction key identity + vocabulary (src/lib/shared/interactionKeys.js).
 // The MCP validates bindings against the SAME trigger/action lists the editor,

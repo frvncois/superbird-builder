@@ -8,7 +8,7 @@
  * two projects adding the same entry must not end up sharing them.
  */
 
-import type { SliderConfig, VariantAxis } from '@/types/editor'
+import type { FormConfig, SliderConfig, VariantAxis } from '@/types/editor'
 
 export interface CatalogBinding {
   /** the `key` of one of the entry's own interactions */
@@ -55,6 +55,8 @@ export interface CatalogNode {
   variantClasses?: Record<string, string>
   /** slider only */
   slider?: SliderConfig
+  /** form only: whether this form takes submissions, and what happens then */
+  form?: FormConfig
 
   // --- an instance of ANOTHER entry ---
   /** the `key` of the entry this node is an instance of. Such a node has no

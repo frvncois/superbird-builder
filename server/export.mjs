@@ -42,6 +42,7 @@ import {
   interactionStateKey,
 } from '../src/lib/shared/interactionKeys.js'
 import {
+  animationStateKey,
   compileAnimation,
   splitByStagger,
   initialStyle,
@@ -66,6 +67,16 @@ import {
   SLIDER_DOTS_CLASSES,
 } from '../src/lib/shared/slider.js'
 import { SAFE_HREF, SAFE_SRC } from '../src/lib/shared/urls.js'
+import {
+  collectFormFields,
+  formEnabled,
+  formName,
+  isInternalRoute,
+  FORM_STATE_TYPES,
+  HONEYPOT_CLASS,
+  HONEYPOT_CSS,
+} from '../src/lib/shared/forms.js'
+import { envLookup, substituteEnvRefs } from '../src/lib/shared/integrations.js'
 import { slugify, entrySlug, entryRoutePath, collectionRouteBase, hasDetailRoutes } from '../src/lib/shared/slug.js'
 import { walkNodes } from './util.mjs'
 import { extractMedia } from './export-media.mjs'
@@ -360,7 +371,7 @@ function collectCandidates(project) {
   return candidates
 }
 
-async function buildCss(candidates, settings) {
+async function buildCss(candidates, settings, { forms = false } = {}) {
   // the root font-size goes on <html> in the export — that is what actually
   // rescales every rem, and it is the faithful reproduction of a design built
   // on a non-16px root
@@ -371,6 +382,11 @@ async function buildCss(candidates, settings) {
     baseBodyCss(settings) +
     rootFontSizeCss(settings) +
     PROSE_CSS +
+    // The honeypot's own rule, only for a site that has a form to protect.
+    // Off-screen rather than display:none, which some bots detect and skip —
+    // tripping it is exactly the signal we want. A renderer-invented class, so
+    // it gets a real rule rather than a candidate.
+    (forms ? HONEYPOT_CSS : '') +
     themeBlock(settings)
   const compiler = await compile(input, { base: ROOT, onDependency() {} })
   const css = compiler.build([...candidates])
@@ -676,6 +692,17 @@ function attrsFor(node, ctx, bg, { wrapLink = true, extraClass = '' } = {}) {
       ctx.animUsed[b.animationId] = animation
       if (b.breakpoints) ctx.animBp[key] = b.breakpoints
       const meta = { k: key, t: b.trigger, a: b.animationId }
+      // A CLICK play is shared per (animation, target), so an open button, a
+      // close button and an overlay drive ONE timeline — the same model the
+      // class engine's state key gives `data-int`. `k` stays the per-binding
+      // key (it is what `data-atgt` and the breakpoint gate are keyed by);
+      // `s` is only the play key, and only a click emits one (see
+      // animationStateKey for why hover is excluded).
+      if (b.trigger === 'click') {
+        const animTargetId = b.targetId ?? selfId
+        meta.s = animationStateKey(b.animationId, animTargetId, scopeFor(selfId, animTargetId))
+        if (b.action && b.action !== 'toggle') meta.ac = b.action
+      }
       // the site default resolves HERE, not in the browser: the runtime reads an
       // absent `m` as "play once", which is exactly what an effective 'once'
       // means — so inheritance costs the wire format nothing.
@@ -887,6 +914,62 @@ function renderNode(node, ctx) {
     })
     return linkWrap(
       `<${tag}${attrs} data-slider="${escapeHtml(wire)}">${track}${arrows}${dots}</${tag}>`,
+      node,
+      ctx,
+    )
+  }
+
+  // a form. With `enabled` it posts to this instance's public endpoint and
+  // carries the runtime's own hidden fields; without it, it is the plain form
+  // it always was (or, with an externalAction, posts to a third party).
+  if (node.type === 'form') {
+    const config = resolveInstanceValue(node, ctx.mm.get(node.id), 'form')
+    const enabled = formEnabled(config)
+    // the fields render inline; the state blocks are emitted hidden and shown
+    // by the runtime (or by the ?form=sent landing for a visitor without JS)
+    const template = node.children.filter((c) => !FORM_STATE_TYPES.includes(c.type))
+    const states = node.children.filter((c) => FORM_STATE_TYPES.includes(c.type))
+    const fieldsHtml = template.map((child) => renderNode(child, ctx)).join('')
+    const statesHtml = states
+      .map((child) => {
+        const mark = child.type === 'form-success' ? 'data-form-success' : 'data-form-error'
+        // hidden by the attribute, not a class: a class could be overridden by
+        // the author's own styling and the block would show on first paint
+        return `<div ${mark} hidden>${renderNode(child, ctx)}</div>`
+      })
+      .join('')
+
+    let extra = ''
+    let formAttrs = ''
+    if (enabled) {
+      // `action`/`method` are NOT in the attribute allowlist, so the exporter
+      // owns them outright — an author cannot repoint a form at another host.
+      const action = `${ctx.apiOrigin}/_guano/forms/${encodeURIComponent(node.id)}`
+      formAttrs = ` method="post" action="${escapeHtml(action)}" data-form="${escapeHtml(node.id)}" accept-charset="utf-8"`
+      // the runtime navigates here on success. Re-validated at export: a blob
+      // can arrive by import, merge or agent without passing any writer, and
+      // an open redirect on someone else's site is not ours to ship.
+      if (config.redirect && isInternalRoute(config.redirect)) {
+        formAttrs += ` data-form-redirect="${escapeHtml(config.redirect)}"`
+      }
+      // the honeypot and the elapsed-time field do the spam work a constant
+      // embedded token never could (a static page can only carry a constant,
+      // which a scraper copies). `_route` is checked against the manifest.
+      extra =
+        `<input type="text" name="_hp" tabindex="-1" autocomplete="off" aria-hidden="true" class="${HONEYPOT_CLASS}">` +
+        `<input type="hidden" name="_route" value="${escapeHtml(ctx.routePath ? `/${String(ctx.routePath).replace(/^\/+/, '')}` : '/')}">`
+      if (ctx.scope?.entry?.id) {
+        extra += `<input type="hidden" name="_entry" value="${escapeHtml(ctx.scope.entry.id)}">`
+      }
+      ctx.forms.set(node.id, { node, config, mm: ctx.mm, scope: ctx.scope ?? null })
+    } else if (config?.externalAction) {
+      // the escape hatch: a third-party endpoint. Nothing is stored here, and
+      // the publish warns that submissions leave the instance.
+      formAttrs = ` method="post" action="${escapeHtml(config.externalAction)}"`
+    }
+    const attrs = attrsFor(node, ctx)
+    return linkWrap(
+      `<${tag}${attrs}${formAttrs}>${fieldsHtml}${extra}${statesHtml}</${tag}>`,
       node,
       ctx,
     )
@@ -1159,6 +1242,14 @@ function renderPage(route, project, media) {
     // sliders rendered on this route — a Set so it survives the `{...ctx}`
     // spread every nested scope makes (same reason fx/animUsed are objects)
     sliderIds: new Set(),
+    // forms rendered on this route → the manifest the endpoint validates
+    // against. A Map for the same reason sliderIds is a Set: it must survive
+    // the `{...ctx}` spread every nested scope makes.
+    forms: new Map(),
+    // where a published page reaches this instance. Empty = the same host,
+    // which is what the `server` publish method is; a zip/github site is
+    // served elsewhere and carries the studio's public origin.
+    apiOrigin: apiOriginOf(project),
     rewrite: media.rewrite,
     altFor: media.altFor,
     kindFor: media.kindFor,
@@ -1180,7 +1271,12 @@ function renderPage(route, project, media) {
     }
   }
   const hasInteractions = Object.keys(ctx.fx).length > 0
-  const needsRuntime = hasInteractions
+  // A form needs the runtime for its own reasons (the fetch submit, the
+  // success/error swap, the ?form=sent landing), and a page can carry a form
+  // with no interactions at all — which is why this is its own term rather
+  // than something `hasInteractions` could stand in for. Same shape as the
+  // slider gate below.
+  const needsRuntime = hasInteractions || ctx.forms.size > 0
 
   // --- site-wide motion (settings.motion): page transitions + smooth scroll ---
   // Transition timelines join the page's animation library under their own ids
@@ -1266,7 +1362,95 @@ function renderPage(route, project, media) {
   // owner-authored raw body HTML (site-wide, e.g. a tag manager's noscript),
   // then the per-page body script, last before </body> (DOM + runtime ready)
   const siteBody = project.settings?.customCode?.body ?? ''
-  return `${shell}${bodyBgLayer}${body}${tail}${siteBody}${scriptTag(page.customCode?.body)}</body></html>`
+  const html = `${shell}${bodyBgLayer}${body}${tail}${siteBody}${scriptTag(page.customCode?.body)}</body></html>`
+  // the forms are returned, not written: the manifest must be assembled across
+  // every route (one form in a repeat is one form rendered N times) and saved
+  // only AFTER a successful export
+  return { html, forms: ctx.forms, route: '/' + (outPath ?? '').replace(/index\.html$/, '') }
+}
+
+/** does any page or master carry a form that accepts submissions? Decides
+ *  whether the honeypot rule ships at all — a site with no form should not pay
+ *  for it, which is also what keeps the corpus referee honest. */
+function hasEnabledForm(project) {
+  let found = false
+  const scan = (nodes) =>
+    walkNodes(nodes ?? [], (node) => {
+      if (node.type === 'form' && formEnabled(node.form)) found = true
+    })
+  for (const page of project.pages ?? []) scan(page.elements)
+  for (const def of project.components ?? []) if (def?.root) scan([def.root])
+  return found
+}
+
+/** the public origin a published page posts to: the studio's own when the site
+ *  is hosted elsewhere, empty (same host) for the `server` method */
+function apiOriginOf(project) {
+  const raw = String(project.settings?.publishing?.apiOrigin ?? '').trim()
+  if (!raw) return ''
+  try {
+    const url = new URL(raw)
+    const local = url.hostname === 'localhost' || url.hostname === '127.0.0.1'
+    if (url.protocol !== 'https:' && !(url.protocol === 'http:' && local)) return ''
+    return url.origin
+  } catch {
+    // an unparseable origin falls back to the same host rather than emitting a
+    // broken action — the publish warning names it
+    return ''
+  }
+}
+
+/**
+ * Fold one route's forms into the manifest the endpoint validates against.
+ *
+ * The manifest is what makes the endpoint safe without trusting the request:
+ * the server checks the posted `_route` and `_entry` against what was actually
+ * EXPORTED, and allowlists field names against what the form actually
+ * declared. Main may have moved on since, and a draft may not be published at
+ * all — the visitor submitted the published page, so the published page is
+ * what their submission is checked against.
+ *
+ * One form in a repeat is one form rendered on many routes, so `routes` and
+ * `entries` accumulate across them.
+ */
+function collectManifest(manifest, forms, routePath, route) {
+  for (const [id, { node, config, mm }] of forms) {
+    const entry = manifest[id] ?? {
+      name: formName(config),
+      notify: config?.notify === true,
+      forward: config?.forward === true,
+      routes: [],
+      entries: [],
+      fields: [],
+    }
+    // the redirect is validated again here: `isInternalRoute` ran at write
+    // time, but a blob can arrive by import, merge or agent without passing
+    // any writer
+    if (config?.redirect && isInternalRoute(config.redirect)) entry.redirect = config.redirect
+    const path = routePath || '/'
+    if (!entry.routes.includes(path)) entry.routes.push(path)
+    if (route.scope?.entry?.id && !entry.entries.includes(route.scope.entry.id)) {
+      entry.entries.push(route.scope.entry.id)
+    }
+    if (!entry.fields.length) {
+      // read the fields the same way the Data panel does, instance layers
+      // included — one implementation, or a field the author can see is a
+      // field the server discards
+      // the ROUTE's master map, not one rebuilt from the form: a form can sit
+      // inside a component instance, and a map built from the form alone would
+      // pair nothing
+      const { fields } = collectFormFields(node, (child) => {
+        const mapping = mm?.get(child.id)
+        return mergeAttributeLayers(
+          mapping ? mapping.master.attributes : child.attributes,
+          child.instanceAttributes,
+          undefined,
+        )
+      })
+      entry.fields = fields
+    }
+    manifest[id] = entry
+  }
 }
 
 function renderNotFound(project, rewrite) {
@@ -1329,10 +1513,97 @@ function enumerateRoutes(project) {
 
 // ---------- top level ----------
 
-export async function exportSite(project, outDir) {
+/**
+ * Resolve every `{{ENV.<NAME>_<KEY>}}` reference in the project's custom code
+ * against the integrations store, and REFUSE the export over one that cannot
+ * be resolved safely.
+ *
+ * Two refusals, both deliberate:
+ *
+ *   A SECRET key is never substituted. Custom code becomes a `<script>` on a
+ *   public page, so printing a secret there publishes it to every visitor.
+ *   Failing the publish is the only answer that cannot end in a leak — a
+ *   warning would ship the page.
+ *
+ *   An UNKNOWN name is never substituted either. The alternative is shipping
+ *   the literal `{{ENV.TYPO}}` to a visitor, where the author will not see it
+ *   and the integration they meant to use silently does nothing.
+ *
+ * Only custom code is substituted — never node content. Content is data
+ * written by site users; resolving references in it would make a CMS entry a
+ * way to read the operator's plain keys.
+ */
+function resolveCustomCode(project, integrations) {
+  const lookup = envLookup(integrations ?? [])
+  const missing = new Set()
+  const secrets = new Set()
+  const sub = (text) => {
+    if (!text || !String(text).includes('{{')) return text
+    const r = substituteEnvRefs(text, lookup)
+    for (const name of r.missing) missing.add(name)
+    for (const name of r.secrets) secrets.add(name)
+    return r.text
+  }
+
+  const settings = project.settings ?? {}
+  const next = {
+    ...project,
+    settings: {
+      ...settings,
+      ...(settings.customCode
+        ? {
+            customCode: {
+              ...settings.customCode,
+              head: sub(settings.customCode.head),
+              body: sub(settings.customCode.body),
+            },
+          }
+        : {}),
+    },
+    pages: (project.pages ?? []).map((page) =>
+      page.customCode
+        ? {
+            ...page,
+            customCode: {
+              ...page.customCode,
+              head: sub(page.customCode.head),
+              body: sub(page.customCode.body),
+            },
+          }
+        : page,
+    ),
+  }
+
+  if (secrets.size || missing.size) {
+    const parts = []
+    if (secrets.size) {
+      parts.push(
+        `${[...secrets].join(', ')} ${secrets.size === 1 ? 'is a secret key' : 'are secret keys'} — ` +
+          'a secret cannot be printed into a page. Use it from a server feature instead',
+      )
+    }
+    if (missing.size) {
+      parts.push(
+        `${[...missing].join(', ')} ${missing.size === 1 ? 'is not' : 'are not'} a key on any ` +
+          'integration — check Settings → Integrations',
+      )
+    }
+    const err = new Error(`custom code references keys it cannot use: ${parts.join('; ')}`)
+    err.expose = true // safe to show: it names key NAMES, never a value
+    throw err
+  }
+  return next
+}
+
+export async function exportSite(rawProject, outDir, { integrations } = {}) {
+  // substitute (and refuse) BEFORE anything is written: a publish that would
+  // leak a secret must not leave a half-written site behind
+  const project = resolveCustomCode(rawProject, integrations)
   if (usesVariants(project)) await loadVariants()
   const media = await extractMedia(project)
-  const css = await buildCss(collectCandidates(project), project.settings)
+  const css = await buildCss(collectCandidates(project), project.settings, {
+    forms: hasEnabledForm(project),
+  })
   const runtime = await readFile(RUNTIME)
   let motionRuntime = null
   try {
@@ -1376,12 +1647,14 @@ export async function exportSite(project, outDir) {
   let usesMotion = false
   let usesSlider = false
   const rendered = []
+  const manifest = {}
   for (const route of routes) {
     if (written.has(route.outPath)) continue // page paths win over entry collisions
     written.add(route.outPath)
-    const html = renderPage(route, project, media)
+    const { html, forms, route: routePath } = renderPage(route, project, media)
     if (!usesMotion && html.includes('/assets/motion.js')) usesMotion = true
     if (!usesSlider && html.includes('/assets/slider.js')) usesSlider = true
+    collectManifest(manifest, forms, routePath, route)
     rendered.push([route.outPath, html])
   }
   if (usesMotion) {
@@ -1408,5 +1681,5 @@ export async function exportSite(project, outDir) {
   await rename(tmp, outDir)
   await rm(old, { recursive: true, force: true })
 
-  return { routes: written.size, bytes }
+  return { routes: written.size, bytes, forms: manifest }
 }

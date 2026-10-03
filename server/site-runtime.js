@@ -345,3 +345,128 @@
 
   apply()
 })()
+
+// ---------- forms ----------
+//
+// Its own IIFE: the interactions block above returns early when a page has no
+// `#int-fx`, and a page can carry a form with no interactions at all.
+//
+// PROGRESSIVE ENHANCEMENT is the point. The markup already posts natively, so
+// a visitor without JS gets a real submission and a 303 back to the site with
+// `?form=sent`. This block upgrades that to a fetch, so the page does not
+// reload and the values survive an error.
+;(function () {
+  var forms = document.querySelectorAll('form[data-form]')
+  var landed = /[?&]form=sent\b/.test(location.search)
+  if (!forms.length) return
+
+  // how long the visitor had the page open when they submitted. A bot that
+  // posts the instant it parses the HTML trips the server's minimum; a
+  // constant embedded token could not tell the two apart, because a static
+  // page can only ever carry a constant.
+  var openedAt = Date.now()
+
+  var show = function (form, which) {
+    var block = form.querySelector('[data-form-' + which + ']')
+    if (block) block.hidden = false
+    return block
+  }
+  var hideFields = function (form) {
+    // everything except the state blocks: the visitor has submitted, so the
+    // fields are no longer the thing on screen
+    var kids = form.children
+    for (var i = 0; i < kids.length; i++) {
+      var kid = kids[i]
+      if (!kid.hasAttribute('data-form-success') && !kid.hasAttribute('data-form-error')) {
+        kid.hidden = true
+      }
+    }
+  }
+
+  Array.prototype.forEach.call(forms, function (form) {
+    // a native post that already succeeded comes back as ?form=sent, so the
+    // visitor lands on the SITE rather than on a bare JSON response
+    if (landed) {
+      hideFields(form)
+      show(form, 'success')
+    }
+
+    form.addEventListener('submit', function (e) {
+      if (!window.fetch || !window.FormData) return // let the native post run
+      e.preventDefault()
+      if (typeof form.reportValidity === 'function' && !form.reportValidity()) return
+
+      var button = form.querySelector('button[type=submit], button:not([type]), input[type=submit]')
+      if (button) button.disabled = true
+      var errorBlock = form.querySelector('[data-form-error]')
+      if (errorBlock) errorBlock.hidden = true
+
+      var body = new URLSearchParams(new FormData(form))
+      body.set('_t', String(Date.now() - openedAt))
+
+      fetch(form.getAttribute('action'), {
+        method: 'POST',
+        headers: { accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' },
+        body: body.toString(),
+        // no cookie is needed or wanted: the endpoint is public, and sending
+        // credentials cross-origin is how a public route becomes a CSRF hole
+        credentials: 'omit',
+        mode: 'cors',
+      })
+        .then(function (res) {
+          return res.json().then(
+            function (data) {
+              return { ok: res.ok, status: res.status, data: data }
+            },
+            function () {
+              return { ok: res.ok, status: res.status, data: {} }
+            },
+          )
+        })
+        .then(function (r) {
+          if (button) button.disabled = false
+          if (r.ok && r.data && r.data.ok) {
+            var to = form.getAttribute('data-form-redirect')
+            if (to) {
+              location.assign(to)
+              return
+            }
+            hideFields(form)
+            show(form, 'success')
+            return
+          }
+          // a named field error goes on the field itself, which is where the
+          // visitor is looking; everything else shows the error block
+          var named = r.data && r.data.field ? form.elements[r.data.field] : null
+          if (named && typeof named.setCustomValidity === 'function') {
+            named.setCustomValidity(r.data.error || 'Please check this field')
+            named.addEventListener(
+              'input',
+              function () {
+                named.setCustomValidity('')
+              },
+              { once: true },
+            )
+            if (typeof form.reportValidity === 'function') form.reportValidity()
+            return
+          }
+          var block = show(form, 'error')
+          if (!block) {
+            // no error block authored: say something rather than nothing, or a
+            // failed submission looks exactly like no click at all
+            var fallback = document.createElement('p')
+            fallback.setAttribute('data-form-fallback', '')
+            fallback.textContent =
+              r.status === 429
+                ? 'Too many submissions — please try again in a minute.'
+                : (r.data && r.data.error) || 'Something went wrong. Please try again.'
+            form.appendChild(fallback)
+          }
+        })
+        .catch(function () {
+          if (button) button.disabled = false
+          show(form, 'error')
+        })
+    })
+  })
+})()

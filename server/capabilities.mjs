@@ -18,8 +18,18 @@ import { smtpVerify } from './smtp.mjs'
  * rest are STARTTLS, which smtp.mjs requires before AUTH. */
 export const SMTP_PORTS = [25, 465, 587, 2525]
 
-/** a hostname, not a URL and not an IP literal with a port */
-const HOSTNAME_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/i
+/**
+ * A mail HOST: a hostname or an IP literal, with no scheme, port or path.
+ *
+ * A SINGLE label is allowed on purpose. Requiring a dot rejected `localhost`
+ * and a container name like `mail` — which is exactly how a self-hosted
+ * instance reaches a local Postfix or a docker-compose relay, the most common
+ * deployment this product has. Unlike the webhook forward, this is not an
+ * SSRF surface: the host is admin-set, the protocol is SMTP, and the only
+ * thing sent is the mail itself.
+ */
+const HOSTNAME_RE =
+  /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$|^\d{1,3}(?:\.\d{1,3}){3}$/i
 
 export const CAPABILITIES = {
   smtp: {
@@ -118,6 +128,28 @@ export async function resolveCapability(capabilityId, integrationId) {
 export async function checkCapability(capabilityId, integrationId) {
   const r = await resolveCapability(capabilityId, integrationId)
   return r.ok ? { ok: true, missing: [] } : { ok: false, missing: r.missing, reason: r.reason }
+}
+
+/**
+ * The structural check PLUS the outbound guard, for the moment an admin PICKS
+ * an integration.
+ *
+ * `checkCapability` stays cheap (no DNS) because the UI calls it on every
+ * read. A pick is a once-in-a-while write, and refusing a webhook pointed at
+ * the operator's own LAN while the admin is still looking at the dialog beats
+ * discovering it in a delivery log weeks later.
+ */
+export async function verifyCapabilityPick(capabilityId, integrationId) {
+  const r = await resolveCapability(capabilityId, integrationId)
+  if (!r.ok) return { ok: false, reason: r.reason }
+  if (capabilityId === 'webhook') {
+    try {
+      await assertPublicUrl(new URL(r.bag.FORWARD_URL), dnsLookup)
+    } catch (err) {
+      return { ok: false, reason: `"${r.integration.name}": ${err.message}` }
+    }
+  }
+  return { ok: true }
 }
 
 /** run a capability's live test against a picked integration */

@@ -78,6 +78,35 @@ export async function preview(projectSnapshot) {
   return res.json()
 }
 
+/** the forms with submissions, and one form's rows. Gated server-side on the
+ *  `allowFormSubmissions` agent policy, which is OFF by default: submissions
+ *  are site visitors' personal details, and an injected agent with read access
+ *  could exfiltrate them through any write it can make. */
+export async function formsList() {
+  const res = await req('GET', '/api/forms')
+  return res.json()
+}
+
+export async function formSubmissions(formId, { limit, before } = {}) {
+  const params = new URLSearchParams()
+  if (limit) params.set('limit', String(limit))
+  if (before) params.set('before', before)
+  const query = params.toString()
+  const res = await req(
+    'GET',
+    `/api/forms/${encodeURIComponent(formId)}/submissions${query ? `?${query}` : ''}`,
+  )
+  return res.json()
+}
+
+/** the integrations, as NAMES only — never a value, plain or secret. An agent
+ *  needs the names to write a valid {{ENV.X}} reference in custom code and
+ *  nothing more. */
+export async function integrationsList() {
+  const res = await req('GET', '/api/integrations')
+  return res.json()
+}
+
 /** the media library index: { assets, folders } */
 export async function mediaIndex() {
   const res = await req('GET', '/api/media')

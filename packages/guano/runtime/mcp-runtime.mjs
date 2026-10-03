@@ -29,7 +29,8 @@ var NODE_STATE_KEYS = [
 	"entryId",
 	"fieldAttrs",
 	"instanceAttributes",
-	"slider"
+	"slider",
+	"form"
 ];
 /** true when a node carries state that would be lost (or wrongly inherited) */
 function hasNodeState(node) {
@@ -486,6 +487,21 @@ var ELEMENTS = {
 		tag: "form",
 		suggest: "input"
 	},
+	/**
+	* A form's SUCCESS and ERROR states: direct children of a `form`, rendered
+	* only after a submission lands (or fails). Their own types rather than a
+	* styled div with a magic class, following the `list-empty` precedent — so
+	* an author styles them like any element, they translate like any content,
+	* and a misplaced one is a diagnostic instead of silently never rendering.
+	*/
+	"form-success": {
+		tag: "div",
+		suggest: "text"
+	},
+	"form-error": {
+		tag: "div",
+		suggest: "text"
+	},
 	input: {
 		tag: "input",
 		void: true
@@ -782,7 +798,8 @@ function defaultSettings() {
 			github: {
 				repo: "",
 				branch: "main"
-			}
+			},
+			apiOrigin: ""
 		},
 		seo: {
 			siteName: "",
@@ -791,17 +808,6 @@ function defaultSettings() {
 			ogImage: void 0
 		},
 		domain: "",
-		smtp: {
-			host: "",
-			port: "",
-			user: "",
-			password: "",
-			from: ""
-		},
-		integrations: {
-			stripe: { publishableKey: "" },
-			mailing: { provider: "" }
-		},
 		tokens: [],
 		customCode: { head: "" },
 		fonts: {
@@ -898,7 +904,9 @@ var TAG_OF = {
 	"collection-list": "collection-list",
 	"collection-item": "collection-item",
 	"list-empty": "list-empty",
-	slider: "slider"
+	slider: "slider",
+	"form-success": "form-success",
+	"form-error": "form-error"
 };
 /**
 * Pure aliases: a type whose tag AND shape are another type's.
@@ -4908,7 +4916,7 @@ function validateTree(root, ctx) {
 	const diags = [];
 	/** every ref seen so far → the node that claimed it */
 	const refAt = /* @__PURE__ */ new Map();
-	const visit = (node, parent, scopes, instances) => {
+	const visit = (node, parent, scopes, instances, forms) => {
 		if (node.ref) {
 			if (refAt.has(node.ref)) diags.push({
 				nodeId: node.id,
@@ -4927,6 +4935,23 @@ function validateTree(root, ctx) {
 				message: "'list-empty' is a list's empty state — it only renders as a DIRECT child of a 'collection-list' or a bound 'slider'. Elsewhere it never renders at all."
 			});
 		}
+		if (node.type === "form-success" || node.type === "form-error") {
+			if (parent?.type !== "form") diags.push({
+				nodeId: node.id,
+				message: `'${node.type}' is a form's ${node.type === "form-success" ? "success" : "error"} state — it only renders as a DIRECT child of a 'form'. Elsewhere it never renders at all.`
+			});
+			else {
+				const twins = (parent.children ?? []).filter((c) => c.type === node.type);
+				if (twins.length > 1 && twins[0] !== node) diags.push({
+					nodeId: node.id,
+					message: `this form already has a '${node.type}' — only the first one renders.`
+				});
+			}
+		}
+		if (node.type === "form" && forms.length) diags.push({
+			nodeId: node.id,
+			message: "a form cannot contain another form — browsers close the outer one, so the inner fields are not submitted."
+		});
 		if (node.link === "@item") {
 			const scope = [...scopes].reverse().find((s) => s.arg && ctx.collectionNames.includes(s.arg));
 			if (scope && ctx.dataOnlyCollections.includes(scope.arg)) diags.push({
@@ -4972,9 +4997,10 @@ function validateTree(root, ctx) {
 			type: node.type,
 			arg: node.arg
 		}];
-		for (const child of node.children) visit(child, node, childScopes, childInstances);
+		const childForms = node.type === "form" ? [...forms, node] : forms;
+		for (const child of node.children) visit(child, node, childScopes, childInstances, childForms);
 	};
-	visit(root, null, [], []);
+	visit(root, null, [], [], []);
 	return diags;
 }
 //#endregion
@@ -6210,6 +6236,12 @@ var EASINGS = {
 	}
 };
 var EASING_KEYS = Object.keys(EASINGS);
+/** what a click does to the play it drives. `toggle` is the default. */
+var ANIMATION_ACTIONS = [
+	"toggle",
+	"on",
+	"off"
+];
 var NUMBER_UNIT_RE = /^\s*(-?\d+(?:\.\d+)?)\s*([a-z%]*)\s*$/i;
 /**
 * Splits a track value into a number and a unit. Numbers adopt the property's
@@ -6380,6 +6412,10 @@ function validateBinding(binding, ctx) {
 	if (known && known.indexOf(binding.animationId) === -1) return fail$1(`no animation "${binding.animationId}" in the library`);
 	if (TRIGGERS.indexOf(binding.trigger) === -1) return fail$1(`trigger must be one of: ${TRIGGERS.join(", ")}`);
 	if (binding.appearMode !== void 0 && APPEAR_MODES.indexOf(binding.appearMode) === -1) return fail$1(`appearMode must be one of: ${APPEAR_MODES.join(", ")}`);
+	if (binding.action !== void 0) {
+		if (ANIMATION_ACTIONS.indexOf(binding.action) === -1) return fail$1(`action must be one of: ${ANIMATION_ACTIONS.join(", ")}`);
+		if (binding.action !== "toggle" && binding.trigger !== "click") return fail$1(`action is only meaningful on a click trigger ('${binding.trigger}' has no state to aim at)`);
+	}
 	if (binding.appearAt !== void 0) {
 		if (typeof binding.appearAt !== "number" || binding.appearAt < 0 || binding.appearAt > 1) return fail$1("appearAt must be a number between 0 and 1 (viewport fraction)");
 	}
@@ -6686,6 +6722,170 @@ function resolveSliderConfig(config, breakpoints = []) {
 var SLIDER_DOT_BASE = "size-2 rounded-full bg-current transition-opacity";
 `${SLIDER_DOT_BASE}`;
 `${SLIDER_DOT_BASE}`;
+//#endregion
+//#region src/lib/shared/forms.js
+/** per-kind caps, in characters. A textarea is the long one by design. */
+var FIELD_CAPS = {
+	text: 1e3,
+	email: 254,
+	tel: 40,
+	url: 2048,
+	number: 40,
+	textarea: 1e4,
+	select: 200,
+	checkbox: 200,
+	radio: 200
+};
+/** which element types are form controls, and the kind each defaults to */
+var CONTROL_KINDS = {
+	input: "text",
+	textarea: "textarea",
+	select: "select",
+	dropdown: "select",
+	checkbox: "checkbox",
+	radio: "radio"
+};
+/** an `<input type="…">` the browser validates, mapped to our kinds.
+*
+* `radio` and `checkbox` are here as well as being element types of their own:
+* the registry bakes the attribute for `:radio`/`:checkbox`, but a plain
+* `:input` can carry `type="radio"` through the Attributes rows, and reading
+* that as text would lose the value grouping AND the option allowlist the
+* endpoint checks against. */
+var INPUT_TYPE_KINDS = {
+	email: "email",
+	tel: "tel",
+	url: "url",
+	number: "number",
+	text: "text",
+	search: "text",
+	password: "text",
+	radio: "radio",
+	checkbox: "checkbox"
+};
+/** the state blocks, which are never submitted and never repeated */
+var FORM_STATE_TYPES = ["form-success", "form-error"];
+/** is this node a form control that could carry a name? */
+var isFormControl = (type) => Object.hasOwn(CONTROL_KINDS, type);
+/**
+* Every named field of one form, plus the controls that have no name.
+*
+* `resolve(node)` gives the effective attributes of a node — the caller passes
+* the one that knows about component instances (a control inside a `<Field>`
+* reads its name from the master, and its per-placement override from
+* `instanceAttributes`). Without that indirection a form built from components
+* would report no fields at all.
+*
+* Returns `{fields, unnamed, duplicates}`. `fields` is what the manifest
+* stores and the endpoint allowlists against.
+*/
+function collectFormFields(formNode, resolve) {
+	const fields = [];
+	const unnamed = [];
+	const seen = /* @__PURE__ */ new Map();
+	const attrsOf = (node) => resolve ? resolve(node) ?? {} : node.attributes ?? {};
+	const walk = (node) => {
+		if (!node || typeof node !== "object") return;
+		if (node !== formNode && node.type === "form") return;
+		if (FORM_STATE_TYPES.includes(node.type)) return;
+		if (isFormControl(node.type)) {
+			const attrs = attrsOf(node);
+			const name = String(attrs.name ?? "").trim();
+			if (!name) unnamed.push({
+				id: node.id,
+				type: node.type
+			});
+			else if (name.startsWith("_")) unnamed.push({
+				id: node.id,
+				type: node.type,
+				reserved: true,
+				name
+			});
+			else {
+				const kind = kindFor(node, attrs);
+				const field = {
+					name,
+					kind,
+					required: attrs.required === "" || attrs.required === "required" || attrs.required === "true",
+					maxLength: capFor(kind, attrs.maxlength)
+				};
+				if (kind === "select") field.options = optionValues(node);
+				if (kind === "radio" || kind === "checkbox") field.value = String(attrs.value ?? "on");
+				const prior = seen.get(name);
+				if (prior) {
+					if (prior.kind === "radio" && kind === "radio") prior.options = [.../* @__PURE__ */ new Set([...prior.options ?? [], field.value])];
+					else prior.duplicate = true;
+				} else {
+					if (kind === "radio") field.options = [field.value];
+					seen.set(name, field);
+					fields.push(field);
+				}
+			}
+		}
+		for (const child of node.children ?? []) walk(child);
+	};
+	walk(formNode);
+	return {
+		fields,
+		unnamed,
+		duplicates: fields.filter((f) => f.duplicate).map((f) => f.name)
+	};
+}
+function kindFor(node, attrs) {
+	const base = CONTROL_KINDS[node.type] ?? "text";
+	if (node.type !== "input") return base;
+	return INPUT_TYPE_KINDS[String(attrs.type ?? "text").toLowerCase()] ?? "text";
+}
+function capFor(kind, maxlength) {
+	const ceiling = FIELD_CAPS[kind] ?? FIELD_CAPS.text;
+	const own = Number(maxlength);
+	return Number.isFinite(own) && own > 0 ? Math.min(own, ceiling) : ceiling;
+}
+/** the values a `<select>` offers, from its option children */
+function optionValues(node) {
+	const out = [];
+	for (const child of node.children ?? []) {
+		if (child.type !== "option") continue;
+		const attrs = child.attributes ?? {};
+		out.push(String(attrs.value ?? child.content ?? ""));
+	}
+	return out;
+}
+/** a redirect must be an internal route: a root-relative path, nothing else */
+function isInternalRoute(value) {
+	const text = String(value ?? "");
+	if (!text) return true;
+	if (!text.startsWith("/")) return false;
+	if (text.startsWith("//")) return false;
+	if (/[\\]/.test(text)) return false;
+	try {
+		if (new URL(text, "https://x.invalid").origin !== "https://x.invalid") return false;
+	} catch {
+		return false;
+	}
+	return true;
+}
+/** the reason this form config is unusable, or null */
+function formConfigError(config) {
+	if (!config || typeof config !== "object") return null;
+	if (config.redirect && !isInternalRoute(config.redirect)) return "redirect must be a path on this site, like /thanks";
+	if (config.name !== void 0 && String(config.name).length > 80) return "a form name is at most 80 characters";
+	if (config.externalAction) {
+		if (config.enabled) return "a form cannot both accept submissions here and post to another service";
+		try {
+			if (new URL(config.externalAction).protocol !== "https:") return "the external action must be an https:// URL";
+		} catch {
+			return "the external action must be an https:// URL";
+		}
+	}
+	return null;
+}
+/** does this form take submissions on this instance? */
+var formEnabled = (config) => !!config && config.enabled === true;
+/** the label a form is listed under */
+var formName = (config) => {
+	return String(config?.name ?? "").trim() || "Form";
+};
 //#endregion
 //#region src/lib/shared/interactionKeys.js
 /**
@@ -8822,4 +9022,4 @@ function materializeCatalogEntry(entry, project, component = (key) => project.co
 	});
 }
 //#endregion
-export { APPEAR_MODES, BUILTIN_LIST_SOURCES, CATALOG, CATALOG_TOKENS, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, ELIDED_DATA_URL, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MAX_DEPTH, MAX_INPUT, MOTION_PROPS, NODE_STATE_KEYS, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, SCHEMA_VERSION, SCROLL_LERP_MAX, SCROLL_LERP_MIN, SLIDER_DEFAULTS, STYLE_SECTIONS, TOKEN_NAME_RE, TRANSITION_DEFAULTS, TRANSITION_PRESET_IDS, VARIANT_NAME_RE, addVariantAxis, addVariantOption, adoptStructure, alignMirrors, alignStructure, applyClass, applyHtml, buildInstanceMap, buildScopeRoots, canNest, catalogDependencies, catalogEntry, cloneForMaster, compileAnimation, componentReaches, componentUsage, contextFromProject, countLocaleSeo, createBody, createNode, createPage, createProject, customSchemaError, deepClone, defaultBreakpoints, defaultSettings, deleteComponent, dependencyOrder, describeMigration, detachInstance, duplicateComponent, effectiveClasses, findNode, findParent, fontError, fontFormatForUrl, hasAncestorOfType, hasNodeState, inheritedInstanceValue, interactionGroupKey, interactionStateKey, isAllowedAttribute, isComponentType, isEmittableToken, isEntryScopeRoot, isInstanceWrapper, isKnownElement, isLeafElement, isLocalizableAttribute, isNodeHidden, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isValidClass, isValidToken, lucideNameOf, lucideSvg, masterToHtml, matchClass, materializeCatalogEntry, mergeAttributeLayers, mergeClassLayers, migrateProject, nestedComponentNames, nodesByShortId, normalizeComponentName, pageToHtml, parseHtml, pickedKeys, purgeLocaleSeo, pushMasterStructure, removeVariantAxis, removeVariantOption, renameComponent, renameVariantAxis, renameVariantOption, resolveInstanceValue, resolvePicks, resolveSliderConfig, sameLayerProperty, sameProperty, sameType, sanitizeAttributes, sanitizeInlineSvg, sanitizeRich, setComponentCategory, setComponentMeta, setInstancePick, setNodeHidden, setStyleTokens, setVariantAxes, setVariantClasses, setVariantDefault, shortIds, slugify, stripExtractedInstanceState, stripNodeState, tagForType, tokenError, typeForTag, typeOptionsFor, validateAnimation, validateBinding, validateMotionSettings, validateSliderConfig, validateTree, variantKey, walkNodes };
+export { APPEAR_MODES, BUILTIN_LIST_SOURCES, CATALOG, CATALOG_TOKENS, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, ELIDED_DATA_URL, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MAX_DEPTH, MAX_INPUT, MOTION_PROPS, NODE_STATE_KEYS, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, SCHEMA_VERSION, SCROLL_LERP_MAX, SCROLL_LERP_MIN, SLIDER_DEFAULTS, STYLE_SECTIONS, TOKEN_NAME_RE, TRANSITION_DEFAULTS, TRANSITION_PRESET_IDS, VARIANT_NAME_RE, addVariantAxis, addVariantOption, adoptStructure, alignMirrors, alignStructure, applyClass, applyHtml, buildInstanceMap, buildScopeRoots, canNest, catalogDependencies, catalogEntry, cloneForMaster, collectFormFields, compileAnimation, componentReaches, componentUsage, contextFromProject, countLocaleSeo, createBody, createNode, createPage, createProject, customSchemaError, deepClone, defaultBreakpoints, defaultSettings, deleteComponent, dependencyOrder, describeMigration, detachInstance, duplicateComponent, effectiveClasses, findNode, findParent, fontError, fontFormatForUrl, formConfigError, formEnabled, formName, hasAncestorOfType, hasNodeState, inheritedInstanceValue, interactionGroupKey, interactionStateKey, isAllowedAttribute, isComponentType, isEmittableToken, isEntryScopeRoot, isInstanceWrapper, isKnownElement, isLeafElement, isLocalizableAttribute, isNodeHidden, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isValidClass, isValidToken, lucideNameOf, lucideSvg, masterToHtml, matchClass, materializeCatalogEntry, mergeAttributeLayers, mergeClassLayers, migrateProject, nestedComponentNames, nodesByShortId, normalizeComponentName, pageToHtml, parseHtml, pickedKeys, purgeLocaleSeo, pushMasterStructure, removeVariantAxis, removeVariantOption, renameComponent, renameVariantAxis, renameVariantOption, resolveInstanceValue, resolvePicks, resolveSliderConfig, sameLayerProperty, sameProperty, sameType, sanitizeAttributes, sanitizeInlineSvg, sanitizeRich, setComponentCategory, setComponentMeta, setInstancePick, setNodeHidden, setStyleTokens, setVariantAxes, setVariantClasses, setVariantDefault, shortIds, slugify, stripExtractedInstanceState, stripNodeState, tagForType, tokenError, typeForTag, typeOptionsFor, validateAnimation, validateBinding, validateMotionSettings, validateSliderConfig, validateTree, variantKey, walkNodes };

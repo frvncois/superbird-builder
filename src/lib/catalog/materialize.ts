@@ -157,6 +157,7 @@ export function materialize(
       if (svg) node.svg = svg
     }
     if (source.slider) node.slider = JSON.parse(JSON.stringify(source.slider))
+    if (source.form) node.form = JSON.parse(JSON.stringify(source.form))
     if (source.variantClasses && Object.keys(source.variantClasses).length) {
       // in axis order, then option order: the canonical key order
       const kept: Record<string, string> = {}

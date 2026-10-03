@@ -1,5 +1,5 @@
 import type { CatalogEntry, CatalogNode } from '../types'
-import { FIELD, FIELD_TOKENS, FOCUS, PLACEHOLDER, icon, words } from './helpers'
+import { button, CARD, CARD_TOKENS, FIELD, FIELD_TOKENS, FOCUS, PLACEHOLDER, icon, words } from './helpers'
 
 /**
  * Form controls.
@@ -213,6 +213,113 @@ export const FORMS: CatalogEntry[] = [
         { type: 'checkbox', key: 'input', classes: 'sr-only', attributes: { name: 'bold' } },
         icon('bold', 'size-4 shrink-0', { key: 'icon' }),
         { type: 'span', key: 'label', content: 'Bold' },
+      ],
+    },
+  },
+  {
+    key: 'contact-form',
+    name: 'ContactForm',
+    category: 'Forms',
+    description: 'A contact form that stores and emails its submissions.',
+    tokens: [...FIELD_TOKENS, ...CARD_TOKENS, 'muted-foreground', 'primary', 'primary-foreground', 'muted', 'destructive'],
+    root: {
+      type: 'form',
+      // `enabled` is what turns the backend on: without it this is a plain
+      // form that posts nowhere. `notify` only says WHETHER to email — the
+      // recipients are an admin's server-side setting, never the node's.
+      form: { enabled: true, name: 'Contact', notify: true },
+      classes: `flex w-full max-w-md flex-col gap-4 p-6 ${CARD}`,
+      children: [
+        { type: 'h3', key: 'title', content: 'Get in touch', classes: 'text-lg font-semibold' },
+        {
+          type: 'label',
+          classes: 'flex flex-col gap-1.5',
+          children: [
+            { type: 'span', key: 'email-label', content: 'Email', classes: LABEL },
+            {
+              type: 'input',
+              key: 'email',
+              classes: `h-9 ${FIELD} ${PLACEHOLDER}`,
+              // `name` is what makes a control submit at all, and `type`
+              // email is validated by the browser AND the server
+              attributes: { type: 'email', name: 'email', required: '', placeholder: 'you@example.com' },
+            },
+          ],
+        },
+        {
+          type: 'label',
+          classes: 'flex flex-col gap-1.5',
+          children: [
+            { type: 'span', key: 'message-label', content: 'Message', classes: LABEL },
+            {
+              type: 'textarea',
+              key: 'message',
+              classes: `min-h-24 py-2 ${FIELD} ${PLACEHOLDER}`,
+              attributes: { name: 'message', required: '', placeholder: 'How can we help?' },
+            },
+          ],
+        },
+        button('Send message'),
+        // the two states: emitted hidden and shown after a submission, so the
+        // visitor never sees "Thanks" before they have sent anything
+        {
+          type: 'form-success',
+          key: 'success',
+          classes: 'rounded-lg bg-muted p-3 text-sm text-foreground',
+          children: [
+            { type: 'span', key: 'success-text', content: 'Thanks — we’ll be in touch shortly.' },
+          ],
+        },
+        {
+          type: 'form-error',
+          key: 'error',
+          classes: 'rounded-lg bg-destructive/10 p-3 text-sm text-destructive',
+          children: [
+            { type: 'span', key: 'error-text', content: 'That didn’t send. Please try again.' },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    key: 'newsletter-signup',
+    name: 'NewsletterSignup',
+    category: 'Forms',
+    description: 'An email field and a button, on one line.',
+    tokens: [...FIELD_TOKENS, 'muted-foreground', 'primary', 'primary-foreground', 'muted', 'destructive'],
+    root: {
+      type: 'form',
+      // `forward` sends each signup on to whatever the site's webhook
+      // integration points at — a mailing provider, Zapier, a sheet
+      form: { enabled: true, name: 'Newsletter', forward: true },
+      classes: 'flex w-full max-w-md flex-col gap-2',
+      children: [
+        {
+          type: 'div',
+          key: 'row',
+          classes: 'flex w-full items-center gap-2',
+          children: [
+            {
+              type: 'input',
+              key: 'email',
+              classes: `h-9 flex-1 ${FIELD} ${PLACEHOLDER}`,
+              attributes: { type: 'email', name: 'email', required: '', placeholder: 'you@example.com' },
+            },
+            button('Subscribe'),
+          ],
+        },
+        {
+          type: 'form-success',
+          key: 'success',
+          classes: 'text-sm text-muted-foreground',
+          children: [{ type: 'span', key: 'success-text', content: 'You’re on the list.' }],
+        },
+        {
+          type: 'form-error',
+          key: 'error',
+          classes: 'text-sm text-destructive',
+          children: [{ type: 'span', key: 'error-text', content: 'That didn’t work. Please try again.' }],
+        },
       ],
     },
   },
