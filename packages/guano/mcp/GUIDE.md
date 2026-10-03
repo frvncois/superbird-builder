@@ -801,7 +801,13 @@ any `data-*` or `aria-*` name, plus: `target`, `rel`, `download`, `title`, `role
 `autofocus`, `autocomplete`, `min`, `max`, `step`, `rows`, `cols`, `maxlength`,
 `minlength`, `pattern`, `inputmode`, `accept` and `translate`. Anything the renderer
 already manages (`id`, `class`, `style`, `src`, `href`) and anything executable (`on*`)
-is refused, and the refusal names what it dropped. A boolean attribute (`download`,
+is refused, and the refusal names what it dropped. A handful of `data-*` names are
+reserved too, because they are the channel between the exporter and its own published
+runtime: `data-form*`, `data-int`, `data-anim`, `data-tgt`, `data-atgt`, `data-slider`,
+`data-sl-*`, `data-node-id`, `data-id`, `data-ref`, `data-type`, `data-source`. Setting
+one would shadow the renderer's own value (HTML resolves a duplicate attribute to the
+first), so they are refused by name. Use `form`, `bindInteractions`, `bindAnimations`,
+`slider`, `setRef` and `arg` — the tools that own those behaviours. A boolean attribute (`download`,
 `hidden`, `required`, `disabled`, `checked`…) is expressed with `""` and serializes bare;
 a value of `false` means the attribute is absent.
 

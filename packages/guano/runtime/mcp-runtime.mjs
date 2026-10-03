@@ -4846,12 +4846,59 @@ var ATTR_ALLOW = /* @__PURE__ */ new Set([
 ]);
 /** allowed name prefixes (data-*, aria-*) */
 var ATTR_PREFIXES = ["data-", "aria-"];
+/**
+* `data-*` names the RENDERERS own, refused as custom attributes.
+*
+* `data-` is an open prefix, so without this an authored attribute can collide
+* with the wiring a renderer emits — and because a duplicate attribute in HTML
+* resolves to the FIRST occurrence, the authored one SHADOWS the renderer's.
+*
+* That was a real hole: `data-form-redirect` carries the post-submission
+* navigation, validated at write AND at export as an internal route
+* (`isInternalRoute`), and the published runtime calls `location.assign` on it.
+* Set as a custom attribute it bypassed both checks, which bought an
+* unconditional open redirect and — because `location.assign` honours a
+* `javascript:` URL — script execution on the published origin. Under the
+* `server` publish method that origin is the one serving `/admin` and `/api`,
+* and setting an attribute is not gated by the agent policy's
+* `allowCustomCode`, so a prompt-injected agent with publish rights could ship
+* it.
+*
+* Matched by exact name or by prefix for the families (`data-sl-*`). Nothing an
+* author could usefully want is in here: every one of these is a channel
+* between the exporter and its own runtime.
+*/
+var RESERVED_DATA_ATTRS = /* @__PURE__ */ new Set([
+	"data-form",
+	"data-form-redirect",
+	"data-form-success",
+	"data-form-error",
+	"data-form-fallback",
+	"data-int",
+	"data-anim",
+	"data-tgt",
+	"data-atgt",
+	"data-slider",
+	"data-node-id",
+	"data-id",
+	"data-ref",
+	"data-type",
+	"data-source"
+]);
+/** reserved FAMILIES — a prefix the renderer owns outright */
+var RESERVED_DATA_PREFIXES = ["data-sl-", "data-form-"];
 /** a syntactically valid attribute name (lowercase, no colons/uppercase) */
 var NAME_RE = /^[a-z][a-z0-9-]*$/;
+/** does the renderer own this `data-*` name? (see RESERVED_DATA_ATTRS) */
+function isReservedAttribute(name) {
+	const n = String(name).toLowerCase().trim();
+	return RESERVED_DATA_ATTRS.has(n) || RESERVED_DATA_PREFIXES.some((p) => n.startsWith(p));
+}
 /** is `name` an allowed custom attribute? */
 function isAllowedAttribute(name) {
 	const n = String(name).toLowerCase().trim();
 	if (!NAME_RE.test(n)) return false;
+	if (isReservedAttribute(n)) return false;
 	if (ATTR_ALLOW.has(n)) return true;
 	return ATTR_PREFIXES.some((p) => n.startsWith(p) && n.length > p.length);
 }
@@ -7552,6 +7599,159 @@ var FORMS = [
 		}
 	},
 	{
+		key: "contact-form",
+		name: "ContactForm",
+		category: "Forms",
+		description: "A contact form that stores and emails its submissions.",
+		tokens: [
+			...FIELD_TOKENS,
+			...CARD_TOKENS,
+			"muted-foreground",
+			"primary",
+			"primary-foreground",
+			"muted",
+			"destructive"
+		],
+		root: {
+			type: "form",
+			form: {
+				enabled: true,
+				name: "Contact",
+				notify: true
+			},
+			classes: `flex w-full max-w-md flex-col gap-4 p-6 ${CARD}`,
+			children: [
+				{
+					type: "h3",
+					key: "title",
+					content: "Get in touch",
+					classes: "text-lg font-semibold"
+				},
+				{
+					type: "label",
+					classes: "flex flex-col gap-1.5",
+					children: [{
+						type: "span",
+						key: "email-label",
+						content: "Email",
+						classes: LABEL
+					}, {
+						type: "input",
+						key: "email",
+						classes: `h-9 ${FIELD} ${PLACEHOLDER}`,
+						attributes: {
+							type: "email",
+							name: "email",
+							required: "",
+							placeholder: "you@example.com"
+						}
+					}]
+				},
+				{
+					type: "label",
+					classes: "flex flex-col gap-1.5",
+					children: [{
+						type: "span",
+						key: "message-label",
+						content: "Message",
+						classes: LABEL
+					}, {
+						type: "textarea",
+						key: "message",
+						classes: `min-h-24 py-2 ${FIELD} ${PLACEHOLDER}`,
+						attributes: {
+							name: "message",
+							required: "",
+							placeholder: "How can we help?"
+						}
+					}]
+				},
+				button("Send message"),
+				{
+					type: "form-success",
+					key: "success",
+					classes: "rounded-lg bg-muted p-3 text-sm text-foreground",
+					children: [{
+						type: "span",
+						key: "success-text",
+						content: "Thanks — we’ll be in touch shortly."
+					}]
+				},
+				{
+					type: "form-error",
+					key: "error",
+					classes: "rounded-lg bg-destructive/10 p-3 text-sm text-destructive",
+					children: [{
+						type: "span",
+						key: "error-text",
+						content: "That didn’t send. Please try again."
+					}]
+				}
+			]
+		}
+	},
+	{
+		key: "newsletter-signup",
+		name: "NewsletterSignup",
+		category: "Forms",
+		description: "An email field and a button, on one line.",
+		tokens: [
+			...FIELD_TOKENS,
+			"muted-foreground",
+			"primary",
+			"primary-foreground",
+			"muted",
+			"destructive"
+		],
+		root: {
+			type: "form",
+			form: {
+				enabled: true,
+				name: "Newsletter",
+				forward: true
+			},
+			classes: "flex w-full max-w-md flex-col gap-2",
+			children: [
+				{
+					type: "div",
+					key: "row",
+					classes: "flex w-full items-center gap-2",
+					children: [{
+						type: "input",
+						key: "email",
+						classes: `h-9 flex-1 ${FIELD} ${PLACEHOLDER}`,
+						attributes: {
+							type: "email",
+							name: "email",
+							required: "",
+							placeholder: "you@example.com"
+						}
+					}, button("Subscribe")]
+				},
+				{
+					type: "form-success",
+					key: "success",
+					classes: "text-sm text-muted-foreground",
+					children: [{
+						type: "span",
+						key: "success-text",
+						content: "You’re on the list."
+					}]
+				},
+				{
+					type: "form-error",
+					key: "error",
+					classes: "text-sm text-destructive",
+					children: [{
+						type: "span",
+						key: "error-text",
+						content: "That didn’t work. Please try again."
+					}]
+				}
+			]
+		}
+	},
+	{
 		key: "toggle-group",
 		name: "ToggleGroup",
 		category: "Forms",
@@ -8914,6 +9114,7 @@ function materialize(entry, project, context) {
 			if (svg) node.svg = svg;
 		}
 		if (source.slider) node.slider = JSON.parse(JSON.stringify(source.slider));
+		if (source.form) node.form = JSON.parse(JSON.stringify(source.form));
 		if (source.variantClasses && Object.keys(source.variantClasses).length) {
 			const kept = {};
 			for (const axis of entry.variants ?? []) for (const option of axis.options) {

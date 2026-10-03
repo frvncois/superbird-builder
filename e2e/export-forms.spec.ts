@@ -142,6 +142,83 @@ test.describe('a form in the export', () => {
   })
 })
 
+test.describe('the renderer owns its own data-* attributes', () => {
+  test('an authored data-form-redirect cannot shadow the validated one', async () => {
+    const s = await session()
+    const home = await s.home()
+    // `data-` is an open prefix, so this looked like an ordinary custom
+    // attribute. It is the channel the published runtime navigates on, and a
+    // duplicate attribute in HTML resolves to the FIRST occurrence — so an
+    // authored one shadowed the exporter's, bypassing `isInternalRoute` and
+    // handing a `javascript:` URL to location.assign on the published origin.
+    const r = await s.call('edit_elements', {
+      pageId: home.id,
+      version: home.version,
+      edits: [
+        {
+          ref: 'contact',
+          form: { enabled: true, redirect: '/thanks' },
+          attributes: { 'data-form-redirect': 'javascript:alert(document.domain)' },
+        },
+      ],
+    })
+    // refused by name, not silently dropped
+    expect(JSON.stringify(r)).toContain('data-form-redirect')
+
+    const html = await s.html()
+    expect(html).not.toContain('javascript:')
+    // exactly one redirect attribute, and it is the validated route
+    expect(html.match(/data-form-redirect=/g)?.length).toBe(1)
+    expect(html).toContain('data-form-redirect="/thanks"')
+  })
+
+  test('every renderer-owned data-* name is refused, ordinary ones still work', async () => {
+    const s = await session()
+    const home = await s.home()
+    const r = await s.call('edit_elements', {
+      pageId: home.id,
+      version: home.version,
+      edits: [
+        {
+          ref: 'contact',
+          attributes: {
+            'data-form': 'x',
+            'data-int': 'x',
+            'data-tgt': 'x',
+            'data-slider': 'x',
+            'data-node-id': 'x',
+            // an author's own data attribute is none of our business
+            'data-status': 'waiting',
+          },
+        },
+      ],
+    })
+    const said = JSON.stringify(r)
+    for (const name of ['data-form', 'data-int', 'data-tgt', 'data-slider', 'data-node-id']) {
+      expect(said).toContain(name)
+    }
+    const html = await s.html()
+    expect(html).toContain('data-status="waiting"')
+    expect(html).not.toContain('data-int="x"')
+  })
+
+  test('an externalAction is re-validated at export', async () => {
+    const s = await session()
+    const project = s.stored()
+    // written straight into the blob, as an import or a merge would
+    const walk = (nodes: { type: string; form?: unknown; children?: unknown[] }[]) => {
+      for (const n of nodes) {
+        if (n.type === 'form') n.form = { externalAction: 'javascript:alert(1)' }
+        walk((n.children ?? []) as typeof nodes)
+      }
+    }
+    for (const pg of project.pages) walk(pg.elements)
+    const out = await s.exportWith(project, [])
+    expect(out).not.toContain('javascript:')
+    expect(out).not.toMatch(/<form[^>]*action=/)
+  })
+})
+
 test.describe('publish warnings for forms', () => {
   test('an enabled form that would collect nothing is reported', async () => {
     const s = await mcpSession()

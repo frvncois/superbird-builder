@@ -426,8 +426,13 @@
         .then(function (r) {
           if (button) button.disabled = false
           if (r.ok && r.data && r.data.ok) {
+            // Only ever a ROOT-RELATIVE path. The exporter validates this as an
+            // internal route too, but this runtime is served from static hosts
+            // we do not control, so it does not trust its own markup: a
+            // `javascript:` value would execute here, and an absolute one is an
+            // open redirect off the back of a successful submission.
             var to = form.getAttribute('data-form-redirect')
-            if (to) {
+            if (to && to.charAt(0) === '/' && to.charAt(1) !== '/' && to.indexOf('\\') === -1) {
               location.assign(to)
               return
             }

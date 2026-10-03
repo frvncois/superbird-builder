@@ -962,14 +962,24 @@ function renderNode(node, ctx) {
         extra += `<input type="hidden" name="_entry" value="${escapeHtml(ctx.scope.entry.id)}">`
       }
       ctx.forms.set(node.id, { node, config, mm: ctx.mm, scope: ctx.scope ?? null })
-    } else if (config?.externalAction) {
-      // the escape hatch: a third-party endpoint. Nothing is stored here, and
+    } else if (config?.externalAction && isExternalPostUrl(config.externalAction)) {
+      // The escape hatch: a third-party endpoint. Nothing is stored here, and
       // the publish warns that submissions leave the instance.
+      //
+      // Re-validated HERE as well as at write, for the same reason the redirect
+      // is: a blob can arrive by import, by a 3-way merge or from an agent
+      // without passing any writer, and an unchecked `action` is a `javascript:`
+      // URL away from script on the published origin.
       formAttrs = ` method="post" action="${escapeHtml(config.externalAction)}"`
     }
     const attrs = attrsFor(node, ctx)
+    // formAttrs FIRST: a duplicate attribute resolves to the first occurrence,
+    // so emitting the author's `attrs` ahead of ours let an authored
+    // `data-form-redirect` shadow the validated one. The names are reserved now
+    // (shared/attributes.js), and this ordering means a future gap there cannot
+    // become a hijacked redirect.
     return linkWrap(
-      `<${tag}${attrs}${formAttrs}>${fieldsHtml}${extra}${statesHtml}</${tag}>`,
+      `<${tag}${formAttrs}${attrs}>${fieldsHtml}${extra}${statesHtml}</${tag}>`,
       node,
       ctx,
     )
@@ -1367,6 +1377,16 @@ function renderPage(route, project, media) {
   // every route (one form in a repeat is one form rendered N times) and saved
   // only AFTER a successful export
   return { html, forms: ctx.forms, route: '/' + (outPath ?? '').replace(/index\.html$/, '') }
+}
+
+/** an https:// endpoint a form may post to off-instance. Anything else — a
+ *  `javascript:` URL above all — renders as a plain form with no action. */
+function isExternalPostUrl(value) {
+  try {
+    return new URL(String(value)).protocol === 'https:'
+  } catch {
+    return false
+  }
 }
 
 /** does any page or master carry a form that accepts submissions? Decides

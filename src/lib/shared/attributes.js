@@ -39,6 +39,53 @@ export function isBooleanAttribute(name) {
 const ATTR_PREFIXES = ['data-', 'aria-']
 
 /**
+ * `data-*` names the RENDERERS own, refused as custom attributes.
+ *
+ * `data-` is an open prefix, so without this an authored attribute can collide
+ * with the wiring a renderer emits — and because a duplicate attribute in HTML
+ * resolves to the FIRST occurrence, the authored one SHADOWS the renderer's.
+ *
+ * That was a real hole: `data-form-redirect` carries the post-submission
+ * navigation, validated at write AND at export as an internal route
+ * (`isInternalRoute`), and the published runtime calls `location.assign` on it.
+ * Set as a custom attribute it bypassed both checks, which bought an
+ * unconditional open redirect and — because `location.assign` honours a
+ * `javascript:` URL — script execution on the published origin. Under the
+ * `server` publish method that origin is the one serving `/admin` and `/api`,
+ * and setting an attribute is not gated by the agent policy's
+ * `allowCustomCode`, so a prompt-injected agent with publish rights could ship
+ * it.
+ *
+ * Matched by exact name or by prefix for the families (`data-sl-*`). Nothing an
+ * author could usefully want is in here: every one of these is a channel
+ * between the exporter and its own runtime.
+ */
+const RESERVED_DATA_ATTRS = new Set([
+  // forms: the endpoint, the redirect, the state blocks, the fallback message
+  'data-form',
+  'data-form-redirect',
+  'data-form-success',
+  'data-form-error',
+  'data-form-fallback',
+  // interactions / animations: the state wiring the site runtime reads
+  'data-int',
+  'data-anim',
+  'data-tgt',
+  'data-atgt',
+  // the carousel's config blob and its chrome
+  'data-slider',
+  // identity the editor and the agent format address nodes by
+  'data-node-id',
+  'data-id',
+  'data-ref',
+  'data-type',
+  'data-source',
+])
+
+/** reserved FAMILIES — a prefix the renderer owns outright */
+const RESERVED_DATA_PREFIXES = ['data-sl-', 'data-form-']
+
+/**
  * Attributes that belong to the LINK, not to the element carrying it.
  *
  * A non-anchor element with a link is wrapped in a generated `<a>` (see
@@ -92,10 +139,19 @@ export function withSafeRel(record) {
 /** a syntactically valid attribute name (lowercase, no colons/uppercase) */
 const NAME_RE = /^[a-z][a-z0-9-]*$/
 
+/** does the renderer own this `data-*` name? (see RESERVED_DATA_ATTRS) */
+export function isReservedAttribute(name) {
+  const n = String(name).toLowerCase().trim()
+  return RESERVED_DATA_ATTRS.has(n) || RESERVED_DATA_PREFIXES.some((p) => n.startsWith(p))
+}
+
 /** is `name` an allowed custom attribute? */
 export function isAllowedAttribute(name) {
   const n = String(name).toLowerCase().trim()
   if (!NAME_RE.test(n)) return false
+  // a renderer-owned name is refused even though `data-` is an open prefix:
+  // an authored duplicate shadows the renderer's own value
+  if (isReservedAttribute(n)) return false
   if (ATTR_ALLOW.has(n)) return true
   return ATTR_PREFIXES.some((p) => n.startsWith(p) && n.length > p.length)
 }
