@@ -45,6 +45,14 @@ onMounted(async () => {
   }
 })
 
+/**
+ * `immediate`, which is the whole point when a form is PRESELECTED.
+ *
+ * Opened from the Data panel the modal is given a `formId`, so `selected`
+ * already holds it when the watcher is installed — and a plain watcher does not
+ * fire for its initial value. The list of forms loaded, the right one was
+ * highlighted, and its rows never arrived.
+ */
 watch(selected, async (id) => {
   if (!id) return
   loading.value = true
@@ -67,7 +75,7 @@ watch(selected, async (id) => {
   } finally {
     loading.value = false
   }
-})
+}, { immediate: true })
 
 /** fetch + save, rather than a bare <a href>: the request needs the session
  *  cookie and the filename comes from the server's content-disposition */

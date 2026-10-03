@@ -25,7 +25,7 @@ import { sendMail } from '../smtp.mjs'
  *  digest per hour instead of one mail per lead. */
 const MAIL_PER_HOUR = 60
 
-export function createDeliverer({ readConfig, adminUrl = '' }) {
+export function createDeliverer({ readConfig, adminUrl }) {
   /** formId → the last result of each channel, for the admin view */
   const status = new Map()
   /** rolling timestamps of mail sent this hour */
@@ -70,6 +70,10 @@ export function createDeliverer({ readConfig, adminUrl = '' }) {
       return
     }
 
+    // where to read them. The studio's own public origin is the only address
+    // the server knows at send time — a request's Host header is long gone by
+    // now — and it is exactly what `publishing.apiOrigin` records.
+    const where = (await adminUrl?.()) ?? ''
     const held = pending.get(id) ?? 0
     pending.delete(id)
     const lines = Object.entries(record.values).map(([key, value]) => `${key}: ${value}`)
@@ -86,7 +90,7 @@ export function createDeliverer({ readConfig, adminUrl = '' }) {
       `Route: ${record.route}`,
       `Received: ${new Date(record.at).toISOString()}`,
       ...(held ? ['', `(${held} earlier submission(s) were not mailed — see the editor.)`] : []),
-      ...(adminUrl ? ['', `All submissions: ${adminUrl}`] : []),
+      ...(where ? ['', `All submissions: ${where}`] : []),
     ].join('\n')
 
     sent.push(Date.now())

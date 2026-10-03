@@ -51,37 +51,22 @@ async function publish(page: Page) {
   await expect(page.getByText('Published!')).toBeVisible({ timeout: 60_000 })
 }
 
-async function closeDock(page: Page) {
-  await page.keyboard.press('Escape')
-  await expect(page.locator('[data-dock-tab]').first()).toBeHidden()
-}
-
-async function insertFromDock(page: Page, key: string) {
-  await page.keyboard.press('ControlOrMeta+e')
-  await page.locator(`[data-dock-item="${key}"]`).click()
-  await closeDock(page)
-}
-
 test('a form is turned on in the Data panel, and a real submission reaches the editor', async ({
   page,
   baseURL,
 }) => {
   await openEditor(page)
 
-  // --- author the form on the page's layers ---
+  // The fixture's Home page already has a signup form, which is the one to use:
+  // inserting a second one and then addressing "the first row matching form"
+  // configures one and asserts on the other.
   await page.getByRole('button', { name: 'Pages', exact: true }).click()
   const pageRow = page.locator('[data-page-row="Home"]')
   await pageRow.hover()
   await pageRow.getByRole('button', { name: 'Edit layers' }).click()
-  await page.locator('[data-layer-row]').first().click()
-  await insertFromDock(page, 'form')
 
   const formRow = page.locator('[data-layer-row]').filter({ hasText: 'form' }).first()
   await expect(formRow).toBeVisible({ timeout: 15_000 })
-  await formRow.click()
-  // a form's seed is an input; give it a name so it actually submits
-  const inputRow = page.locator('[data-layer-row]').filter({ hasText: 'input' }).first()
-  await expect(inputRow).toBeVisible({ timeout: 15_000 })
 
   // --- the Data panel: turn it on and add the success state ---
   await formRow.click()
@@ -94,30 +79,60 @@ test('a form is turned on in the Data panel, and a real submission reaches the e
   await page.getByText('Accept submissions').locator('..').getByRole('switch').click()
   // now the rest of the controls appear
   await expect(page.getByText('Email me')).toBeVisible({ timeout: 10_000 })
-  // and the panel reports what will actually be submitted
+  // and the panel reports what will actually be submitted — the fixture's
+  // input has no `name`, so this is the "it would arrive empty" hint
   await expect(page.getByText(/no named fields yet/i)).toBeVisible()
 
-  await page.getByRole('button', { name: 'Success' }).click()
+  await page.getByRole('button', { name: 'Success', exact: true }).click()
   const successRow = page.locator('[data-layer-row]').filter({ hasText: 'form-success' }).first()
   await expect(successRow).toBeVisible({ timeout: 15_000 })
 
   // --- name the input through the Data panel's attributes, then publish ---
   // (done over the API: the attribute rows are covered by their own spec, and
   // this spec is about the form config and the submissions view)
-  const stored = await (await page.request.get('/api/store?keys=guano-project:main')).json()
-  const project = JSON.parse(stored['guano-project:main'])
-  let formNode: { id: string; children: { type: string; attributes?: Record<string, string> }[] } | null = null
-  const walk = (nodes: typeof project.pages[0].elements) => {
-    for (const n of nodes) {
-      if (n.type === 'form') formNode = n
-      walk(n.children ?? [])
-    }
+  interface Node {
+    id: string
+    type: string
+    attributes?: Record<string, string>
+    form?: { enabled?: boolean }
+    children?: Node[]
   }
-  for (const p of project.pages) walk(p.elements)
+  const findForm = async (): Promise<{ project: { pages: { elements: Node[] }[] }; form: Node | null }> => {
+    const stored = await (await page.request.get('/api/store?keys=guano-project:main')).json()
+    const project = JSON.parse(stored['guano-project:main']) as { pages: { elements: Node[] }[] }
+    // the FIRST form on the FIRST page: the same node the Layers row above
+    // addressed. Taking the last form found anywhere read a different node.
+    const first = (nodes: Node[]): Node | null => {
+      for (const n of nodes) {
+        if (n.type === 'form') return n
+        const hit = first(n.children ?? [])
+        if (hit) return hit
+      }
+      return null
+    }
+    return { project, form: first(project.pages[0]!.elements) }
+  }
+
+  // autosave is debounced 500ms by design, so poll rather than read once —
+  // and this IS the assertion: the Data panel's toggle has to reach the store
+  await expect
+    .poll(async () => (await findForm()).form?.form?.enabled, { timeout: 15_000 })
+    .toBe(true)
+
+  const { project, form: formNode } = await findForm()
   expect(formNode).not.toBeNull()
-  // the Data panel's toggle is what wrote this — the point of the assertion
-  expect((formNode as unknown as { form?: { enabled?: boolean } }).form?.enabled).toBe(true)
-  const input = formNode!.children.find((c) => c.type === 'input')
+  const form = formNode as unknown as Node
+  // the control is nested (label + div wrapper), so search the subtree rather
+  // than the form's direct children
+  const findInput = (nodes: Node[]): Node | null => {
+    for (const n of nodes) {
+      if (n.type === 'input') return n
+      const hit = findInput(n.children ?? [])
+      if (hit) return hit
+    }
+    return null
+  }
+  const input = findInput(form.children ?? [])
   expect(input).toBeTruthy()
   input!.attributes = { ...(input!.attributes ?? {}), name: 'email', type: 'email' }
   expect(
@@ -128,15 +143,18 @@ test('a form is turned on in the Data panel, and a real submission reaches the e
     timeout: 30_000,
   })
   await publish(page)
+  // the publish dialog stays up; its overlay swallows every later click
+  await page.keyboard.press('Escape')
+  await expect(page.getByText('Published!')).toBeHidden({ timeout: 15_000 })
 
   // --- the published page carries the endpoint and the hidden state block ---
   const html = await (await page.request.get('/')).text()
-  expect(html).toContain(`action="/_guano/forms/${formNode!.id}"`)
+  expect(html).toContain(`action="/_guano/forms/${form.id}"`)
   expect(html).toContain('name="_hp"')
   expect(html).toContain('data-form-success hidden')
 
   // --- a real visitor submits ---
-  const res = await page.request.post(`/_guano/forms/${formNode!.id}`, {
+  const res = await page.request.post(`/_guano/forms/${form.id}`, {
     headers: {
       'content-type': 'application/x-www-form-urlencoded',
       accept: 'application/json',
@@ -147,7 +165,15 @@ test('a form is turned on in the Data panel, and a real submission reaches the e
   expect(res.status()).toBe(200)
 
   // --- and it shows up in the editor, as text ---
-  await page.getByRole('button', { name: 'Form', exact: true }).first().click({ trial: true })
+  // the reload above closed the panel and cleared the selection, so re-open
+  // the form's Data panel to reach its submissions entry point
+  await page.getByRole('button', { name: 'Pages', exact: true }).click()
+  await pageRow.hover()
+  await pageRow.getByRole('button', { name: 'Edit layers' }).click()
+  const formRowAgain = page.locator('[data-layer-row]').filter({ hasText: 'form' }).first()
+  await expect(formRowAgain).toBeVisible({ timeout: 15_000 })
+  await formRowAgain.click()
+  await page.keyboard.press('d')
   await page.getByRole('button', { name: 'View submissions' }).click()
   const modal = page.getByText('Form submissions')
   await expect(modal).toBeVisible({ timeout: 15_000 })

@@ -15,7 +15,7 @@
 //     never silently drops a real lead.
 //   * Files are 0600 and live outside the published site, so a misconfigured
 //     static handler cannot serve other people's leads.
-import { appendFile, mkdir, readFile, rename, stat, writeFile, readdir, rm } from 'node:fs/promises'
+import { appendFile, mkdir, readFile, rename, writeFile, readdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 
 /** per-form ceilings. Both are generous for a real site and small enough that
@@ -83,13 +83,6 @@ export function createSubmissionStore(dir) {
       spam.set(id, (spam.get(id) ?? 0) + 1)
     },
 
-    spamCount: (id) => spam.get(id) ?? 0,
-
-    /** is this form at its ceiling? (the admin view's badge) */
-    async isFull(id) {
-      const s = await measure(id)
-      return s.count >= MAX_FORM_RECORDS || s.bytes >= MAX_FORM_BYTES
-    },
 
     /** every record for one form, newest first */
     async read(id, { limit = 50, before = null } = {}) {
@@ -180,22 +173,4 @@ async function rewrite(file, newestFirst) {
   const tmp = `${file}.tmp`
   await writeFile(tmp, text ? text + '\n' : '', { mode: 0o600 })
   await rename(tmp, file)
-}
-
-/** bytes on disk across every form, for the admin view */
-export async function formsDiskUsage(dir) {
-  let total = 0
-  try {
-    for (const f of await readdir(dir)) {
-      if (!f.endsWith('.jsonl')) continue
-      try {
-        total += (await stat(join(dir, f))).size
-      } catch {
-        /* vanished mid-scan */
-      }
-    }
-  } catch {
-    /* no dir yet */
-  }
-  return total
 }

@@ -46,7 +46,7 @@ import {
 } from './integrations.mjs'
 import { checkCapability, testCapability, verifyCapabilityPick } from './capabilities.mjs'
 import { createFormsHandler, manifestReader } from './public/forms.mjs'
-import { createSubmissionStore, formsDiskUsage } from './public/store.mjs'
+import { createSubmissionStore } from './public/store.mjs'
 import { createDeliverer } from './public/deliver.mjs'
 import { csvFilename, submissionsCsv } from './public/csv.mjs'
 import { allowedOrigins, corsFor, publishedSettingsReader } from './public/cors.mjs'
@@ -289,8 +289,13 @@ async function publicCors(req) {
 
 const deliverer = createDeliverer({
   readConfig: readPublishConfig,
-  get adminUrl() {
-    return ''
+  // the editor link in a notification email. Resolved per send rather than
+  // captured once: it comes from the PUBLISHED settings, which a publish
+  // replaces while the process runs.
+  adminUrl: async () => {
+    const settings = await publishedSettings()
+    const origin = String(settings?.publishing?.apiOrigin ?? '').trim()
+    return origin ? `${origin.replace(/\/+$/, '')}/admin` : ''
   },
 })
 
