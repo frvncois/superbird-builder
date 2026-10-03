@@ -18,6 +18,7 @@
 import { createServer } from 'node:http'
 import { chmod, cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { existsSync, readFileSync } from 'node:fs'
+import { createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
 import { extname, join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { exportSite } from './export.mjs'
@@ -31,6 +32,19 @@ import { pushSiteToGitHub } from './github.mjs'
 import { createZip, readZip } from './zip.mjs'
 import { mergeContributorProject, redactSecretsForContributor } from './contributor-merge.mjs'
 import { protectedFieldDelta, readAgentPolicy, writeAgentPolicy } from './agent-policy.mjs'
+import {
+  createIntegration,
+  deleteIntegration,
+  deleteIntegrationKey,
+  findIntegration,
+  listIntegrationsPublic,
+  renameIntegration,
+  resetIntegrationsCache,
+  seedLegacyIntegrations,
+  setIntegrationKey,
+} from './integrations.mjs'
+import { checkCapability, testCapability } from './capabilities.mjs'
+import { publicIntegration } from '../src/lib/shared/integrations.js'
 import { DATA_DIR, fail, readDirFiles, send, timingSafeEqualStr, writeAtomic } from './util.mjs'
 import {
   ROLES,
@@ -66,6 +80,7 @@ import {
   revokeInvite,
   updateInvite,
   sessionCookieHeader,
+  parseCookies,
   sessionTokenOf,
   sessionUser,
   setUserRole,
@@ -199,18 +214,34 @@ async function readPublishConfig() {
   }
   return {
     github: { token: parsed?.github?.token ?? '' },
+    // LEGACY per-provider secrets. Integrations are a named set of keys now
+    // (server/integrations.mjs); these three are read once at boot to seed the
+    // new store and are never written again. Kept in the normalized shape so a
+    // read-modify-write from another handler can't drop an un-migrated value.
     stripe: { secretKey: parsed?.stripe?.secretKey ?? '' },
     mailing: { apiKey: parsed?.mailing?.apiKey ?? '' },
     smtp: { password: parsed?.smtp?.password ?? '' },
+    // private site: the visitor password's scrypt hash + whether the gate is on
+    site: {
+      enabled: !!parsed?.site?.enabled,
+      salt: parsed?.site?.salt ?? '',
+      hash: parsed?.site?.hash ?? '',
+    },
+    // form submissions: WHERE a notification goes and WHICH integration sends
+    // it. Deliberately server-side and admin-only — leads are personal data,
+    // and a recipient field in the project blob would let a draft, a merge or
+    // an injected agent quietly redirect them. A form only says *whether* it
+    // notifies.
+    forms: {
+      notifyTo: Array.isArray(parsed?.forms?.notifyTo) ? parsed.forms.notifyTo : [],
+      mailer: parsed?.forms?.mailer ?? '',
+      webhook: parsed?.forms?.webhook ?? '',
+      retentionDays: Number.isFinite(parsed?.forms?.retentionDays)
+        ? parsed.forms.retentionDays
+        : 365,
+    },
   }
 }
-
-/** booleans only — the shape every secret endpoint answers with */
-const secretsSetShape = (cfg) => ({
-  stripe: { secretKeySet: !!cfg.stripe.secretKey },
-  mailing: { apiKeySet: !!cfg.mailing.apiKey },
-  smtp: { passwordSet: !!cfg.smtp.password },
-})
 
 // ---------- auth endpoints ----------
 
@@ -1150,37 +1181,290 @@ async function handlePublishConfig(req, res) {
   return fail(res, 404, 'not found')
 }
 
-// ---------- 🔒 GET/PUT /api/integrations-config (Stripe / mailing / SMTP secrets) ----------
+// ---------- 🔒 /api/integrations (the server-side credential store) ----------
+//
+// An integration is a NAMED SET OF KEYS (server/integrations.mjs). The split of
+// authority here is the whole security model of the feature:
+//
+//   READ  — session OR a `guano_` token, admin/editor. An agent needs the key
+//           NAMES to write a valid `{{ENV.X}}` reference in custom code; it
+//           never sees a secret value, because the read shape has no branch
+//           that can include one.
+//   WRITE — session cookie, admin only. A token that could mint or change a
+//           credential would make every other guard pointless, exactly as with
+//           /api/agent-policy and the GitHub token.
+//
+// A capability TEST is a write-shaped action (it makes an outbound connection
+// with the stored credentials), so it follows the write rule and is rate
+// limited on its own.
 
-async function handleIntegrationsConfig(req, res) {
+const integrationTestAllowed = slidingLimiter(5, 60_000)
+
+async function handleIntegrations(req, res, path) {
+  const rest = path.slice('/api/integrations'.length).replace(/^\//, '')
+
+  if (req.method === 'GET' && !rest) {
+    // requestUser, not sessionUser: a `guano_` token reads the names
+    const user = requestUser(req)
+    if (!user) return fail(res, 401, 'unauthorized')
+    if (user.role === 'contributor') return fail(res, 403, 'forbidden')
+    return send(res, 200, JSON.stringify({ integrations: await listIntegrationsPublic() }))
+  }
+
+  // everything below WRITES (or spends a credential): admin at a browser only
   const user = sessionUser(req)
   if (!user) return fail(res, 401, 'unauthorized')
-  if (user.role === 'contributor') return fail(res, 403, 'forbidden')
+  if (user.role !== 'admin') {
+    return fail(res, 403, 'only an admin can change integrations')
+  }
+
+  const bodyJson = async () => {
+    try {
+      return JSON.parse((await readBody(req)) ?? '')
+    } catch {
+      return null
+    }
+  }
+  const answer = (result) =>
+    result?.error
+      ? fail(res, 400, result.error)
+      : send(
+          res,
+          200,
+          JSON.stringify({
+            ok: true,
+            ...(result.created ? { id: result.created.id } : {}),
+            integrations: result.rows.map(publicIntegration),
+          }),
+        )
+
+  if (req.method === 'POST' && !rest) {
+    const patch = await bodyJson()
+    if (!patch) return fail(res, 400, 'invalid request')
+    return answer(await createIntegration(patch.name))
+  }
+
+  const segments = rest.split('/').map((s) => decodeURIComponent(s))
+  const id = segments[0] ?? ''
+  if (!id) return fail(res, 404, 'not found')
+
+  // POST /api/integrations/:id/test  {capability}
+  if (req.method === 'POST' && segments[1] === 'test' && segments.length === 2) {
+    const limit = integrationTestAllowed(user.id)
+    if (!limit.ok) return tooManyRequests(res, limit.retryAfterSeconds, 'tests')
+    const patch = await bodyJson()
+    const capability = String(patch?.capability ?? '')
+    const result = await testCapability(capability, id)
+    // 200 either way: "the credentials are wrong" is the answer to the
+    // question, not a failure of the request
+    return send(res, 200, JSON.stringify(result))
+  }
+
+  // /api/integrations/:id/keys/:key
+  if (segments[1] === 'keys' && segments.length === 3) {
+    const key = segments[2] ?? ''
+    if (req.method === 'PUT') {
+      const patch = await bodyJson()
+      if (!patch) return fail(res, 400, 'invalid request')
+      return answer(await setIntegrationKey(id, key, patch))
+    }
+    if (req.method === 'DELETE') return answer(await deleteIntegrationKey(id, key))
+    return fail(res, 404, 'not found')
+  }
+
+  if (segments.length !== 1) return fail(res, 404, 'not found')
+  if (req.method === 'PUT') {
+    const patch = await bodyJson()
+    if (!patch) return fail(res, 400, 'invalid request')
+    return answer(await renameIntegration(id, patch.name))
+  }
+  if (req.method === 'DELETE') return answer(await deleteIntegration(id))
+  return fail(res, 404, 'not found')
+}
+
+/** GET/PUT /api/forms-config — recipients, the capability picks, retention.
+ *  Admin + session only, and it never echoes anything but its own settings. */
+async function handleFormsConfig(req, res) {
+  const user = sessionUser(req)
+  if (!user) return fail(res, 401, 'unauthorized')
+  if (user.role !== 'admin') return fail(res, 403, 'only an admin can change form settings')
+
+  const shape = async (cfg) => ({
+    ...cfg.forms,
+    // the UI shows "Postmark is missing PORT" rather than a silent no-op
+    mailerCheck: await checkCapability('smtp', cfg.forms.mailer),
+    webhookCheck: await checkCapability('webhook', cfg.forms.webhook),
+  })
 
   if (req.method === 'GET') {
-    // NEVER return a key in any shape — only whether one is set
-    return send(res, 200, JSON.stringify(secretsSetShape(await readPublishConfig())))
+    return send(res, 200, JSON.stringify(await shape(await readPublishConfig())))
   }
   if (req.method === 'PUT') {
-    const body = await readBody(req)
     let patch
     try {
-      patch = JSON.parse(body ?? '')
+      patch = JSON.parse((await readBody(req)) ?? '')
     } catch {
       return fail(res, 400, 'invalid request')
     }
     const cfg = await readPublishConfig()
-    // field-wise so a patch for one namespace can't clear another; '' clears
-    const set = (ns, field) => {
-      if (patch?.[ns] && field in patch[ns]) cfg[ns][field] = String(patch[ns][field] ?? '').trim()
+    if (Array.isArray(patch?.notifyTo)) {
+      const list = patch.notifyTo.map((v) => String(v).trim()).filter(Boolean)
+      if (list.length > 5) return fail(res, 400, 'at most 5 recipients')
+      const bad = list.find((v) => !isEmail(v))
+      if (bad) return fail(res, 400, `"${bad}" is not an email address`)
+      cfg.forms.notifyTo = list
     }
-    set('stripe', 'secretKey')
-    set('mailing', 'apiKey')
-    set('smtp', 'password')
+    for (const [field, capability] of [
+      ['mailer', 'smtp'],
+      ['webhook', 'webhook'],
+    ]) {
+      if (typeof patch?.[field] !== 'string') continue
+      const picked = patch[field].trim()
+      if (picked && !(await findIntegration(picked))) {
+        return fail(res, 400, 'unknown integration')
+      }
+      if (picked) {
+        const check = await checkCapability(capability, picked)
+        // refuse the pick rather than storing one that cannot work: the admin
+        // is looking at the dialog now and can fix the key now
+        if (!check.ok) return fail(res, 400, check.reason)
+      }
+      cfg.forms[field] = picked
+    }
+    if (Number.isFinite(patch?.retentionDays)) {
+      const days = Math.max(0, Math.min(3650, Math.floor(patch.retentionDays)))
+      cfg.forms.retentionDays = days
+    }
     await writeAtomic(PUBLISH_CONFIG, JSON.stringify(cfg))
-    return send(res, 200, JSON.stringify({ ok: true, ...secretsSetShape(cfg) }))
+    return send(res, 200, JSON.stringify({ ok: true, ...(await shape(cfg)) }))
   }
   return fail(res, 404, 'not found')
+}
+
+// ---------- 🔒 GET/PUT /api/site-password (private site) ----------
+//
+// A private site asks every visitor for ONE shared password before the
+// published pages are served. The password's scrypt hash and the on/off switch
+// live in publish.json, never in the project blob (which contributors and
+// agents read). Enforced by THIS server only: a zip or GitHub export is static
+// files and stays public wherever it is hosted.
+
+const SITE_COOKIE = 'guano_site'
+const SITE_COOKIE_TTL = 30 * 24 * 60 * 60 // 30 days
+const siteCookieSecure = process.env.COOKIE_SECURE !== '0' ? '; Secure' : ''
+/** the cookie value that proves a visitor knew the CURRENT password: an HMAC
+ * of the stored hash, so changing the password logs every visitor out */
+const siteUnlockToken = (site) => createHmac('sha256', site.hash).update('unlock').digest('hex')
+const unlockAllowed = slidingLimiter(10, 60_000)
+
+let siteGateCache = null
+async function siteGate() {
+  if (!siteGateCache) siteGateCache = (await readPublishConfig()).site
+  return siteGateCache
+}
+
+async function handleSitePassword(req, res) {
+  const user = sessionUser(req)
+  if (!user) return fail(res, 401, 'unauthorized')
+  if (user.role === 'contributor') return fail(res, 403, 'forbidden')
+  const shape = (site) => ({ enabled: site.enabled, passwordSet: !!site.hash })
+
+  if (req.method === 'GET') return send(res, 200, JSON.stringify(shape(await siteGate())))
+  if (req.method === 'PUT') {
+    let patch
+    try {
+      patch = JSON.parse((await readBody(req)) ?? '')
+    } catch {
+      return fail(res, 400, 'invalid request')
+    }
+    const cfg = await readPublishConfig()
+    if (typeof patch?.enabled === 'boolean') cfg.site.enabled = patch.enabled
+    if (typeof patch?.password === 'string') {
+      const password = patch.password
+      if (password && password.length < 4) return fail(res, 400, 'password must be at least 4 characters')
+      if (password) {
+        cfg.site.salt = randomBytes(16).toString('hex')
+        cfg.site.hash = scryptSync(password, cfg.site.salt, 64).toString('hex')
+      } else {
+        cfg.site.salt = ''
+        cfg.site.hash = ''
+      }
+    }
+    await writeAtomic(PUBLISH_CONFIG, JSON.stringify(cfg))
+    siteGateCache = cfg.site
+    return send(res, 200, JSON.stringify({ ok: true, ...shape(cfg.site) }))
+  }
+  return fail(res, 404, 'not found')
+}
+
+const gatePage = (next, wrong) => `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex">
+<title>Private site</title>
+<style>
+  body{margin:0;min-height:100vh;display:grid;place-items:center;font:15px/1.5 system-ui,sans-serif;background:#f5f5f4;color:#1c1917}
+  form{width:min(92vw,320px);display:flex;flex-direction:column;gap:12px;padding:28px;background:#fff;border-radius:16px;box-shadow:0 1px 2px rgba(0,0,0,.06),0 8px 24px rgba(0,0,0,.06)}
+  h1{margin:0;font-size:17px}p{margin:0;color:#57534e;font-size:13px}
+  input{font:inherit;padding:10px 12px;border:1px solid #d6d3d1;border-radius:10px;outline:none}input:focus{border-color:#1c1917}
+  button{font:inherit;font-weight:600;padding:10px 12px;border:0;border-radius:10px;background:#1c1917;color:#fff;cursor:pointer}
+  .err{color:#b91c1c}
+</style></head><body><form method="post" action="/_guano/unlock">
+<h1>This site is private</h1><p>Enter the password to continue.</p>
+<input type="password" name="password" placeholder="Password" autofocus required>
+<input type="hidden" name="next" value="${escapeAttr(next)}">
+${wrong ? '<p class="err">That password is not right.</p>' : ''}
+<button type="submit">Continue</button></form></body></html>`
+const escapeAttr = (v) => String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')
+
+/** the private-site gate in front of the live site. Returns true when it
+ * answered the request itself (gate page, unlock), false to serve normally. */
+async function siteGateHandled(req, res, path) {
+  const site = await siteGate()
+  if (!site.enabled || !site.hash) return false
+  const token = siteUnlockToken(site)
+  const NOSTORE = { 'cache-control': 'no-store', 'x-robots-tag': 'noindex' }
+  // the unlock is answered whether or not a cookie is already held — a stale
+  // one must not turn a fresh attempt into a 404 from the static site
+  if (path === '/_guano/unlock' && req.method === 'POST') {
+    const ip = req.socket.remoteAddress ?? 'unknown'
+    const limit = unlockAllowed(ip)
+    if (!limit.ok) return tooManyRequests(res, limit.retryAfterSeconds, 'attempts'), true
+    const form = new URLSearchParams((await readBody(req)) ?? '')
+    const password = form.get('password') ?? ''
+    const rawNext = form.get('next') ?? '/'
+    const next = rawNext.startsWith('/') && !rawNext.startsWith('//') ? rawNext : '/'
+    const attempt = scryptSync(password, site.salt, 64)
+    const stored = Buffer.from(site.hash, 'hex')
+    if (attempt.length === stored.length && timingSafeEqual(attempt, stored)) {
+      res.writeHead(303, {
+        location: next,
+        'set-cookie': `${SITE_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SITE_COOKIE_TTL}${siteCookieSecure}`,
+        ...NOSTORE,
+      })
+      res.end()
+      return true
+    }
+    send(res, 401, gatePage(next, true), 'text/html', NOSTORE)
+    return true
+  }
+  const have = parseCookies(req)[SITE_COOKIE] ?? ''
+  if (have.length === token.length && timingSafeEqual(Buffer.from(have), Buffer.from(token))) return false
+  send(res, 401, gatePage(path, false), 'text/html', NOSTORE)
+  return true
+}
+
+// ---------- 🔒 DELETE /api/published (take the site down) ----------
+
+/** removes the exported site and its snapshot: visitors get "Nothing
+ * published yet." until the next publish. Humans with a build role only —
+ * taking a site down is as irreversible as putting one up, so an agent token
+ * never may, policy or not. The github/zip copies are out of reach. */
+async function handleUnpublish(req, res) {
+  const user = sessionUser(req)
+  if (!user) return fail(res, 401, 'unauthorized')
+  if (user.role === 'contributor') return fail(res, 403, 'forbidden')
+  await rm(SITE, { recursive: true, force: true })
+  await rm(SNAPSHOT, { force: true })
+  return send(res, 200, JSON.stringify({ ok: true }))
 }
 
 // ---------- 🔒 project export / import (full backup package) ----------
@@ -1196,11 +1480,8 @@ const PACKAGE_VERSION = 1
 /** GET /api/project-export — admin-only backup package (.zip). Excludes
  * users/sessions/invites/publish.json/published.json/site by construction:
  * none of them live under the store or media dirs we read here. */
-async function handleProjectExport(req, res) {
-  const user = sessionUser(req)
-  if (!user) return fail(res, 401, 'unauthorized')
-  if (user.role !== 'admin') return fail(res, 403, 'forbidden')
-
+/** the whole project as a package zip: manifest + store + media */
+async function buildPackage() {
   const files = [
     {
       path: 'manifest.json',
@@ -1219,7 +1500,14 @@ async function handleProjectExport(req, res) {
   for (const { path, data } of await readDirFiles(MEDIA_DIR)) {
     files.push({ path: `media/${path}`, data })
   }
-  return send(res, 200, createZip(files), 'application/zip', {
+  return createZip(files)
+}
+
+async function handleProjectExport(req, res) {
+  const user = sessionUser(req)
+  if (!user) return fail(res, 401, 'unauthorized')
+  if (user.role !== 'admin') return fail(res, 403, 'forbidden')
+  return send(res, 200, await buildPackage(), 'application/zip', {
     'content-disposition': 'attachment; filename="guano-project.zip"',
   })
 }
@@ -1237,11 +1525,20 @@ async function handleProjectImport(req, res) {
 
   const raw = await readBodyRaw(req, IMPORT_CAP)
   if (raw === null) return fail(res, 413, 'package too large')
+  const problem = await applyPackage(raw)
+  if (problem) return fail(res, 400, problem)
+  return send(res, 200, JSON.stringify({ ok: true }))
+}
+
+/** validate a package zip and swap it in as the live store + media. Returns
+ * null on success, else the reason it was refused (nothing touched). Shared
+ * by the upload import and snapshot restore. */
+async function applyPackage(raw) {
   let entries
   try {
     entries = readZip(raw)
   } catch {
-    return fail(res, 400, 'invalid package (not a readable zip)')
+    return 'invalid package (not a readable zip)'
   }
 
   let manifestOk = false
@@ -1254,21 +1551,21 @@ async function handleProjectImport(req, res) {
           (m.format !== PACKAGE_FORMAT && m.format !== LEGACY_PACKAGE_FORMAT) ||
           m.version !== PACKAGE_VERSION
         ) {
-          return fail(res, 400, 'unrecognized package format')
+          return 'unrecognized package format'
         }
         if (m.format === LEGACY_PACKAGE_FORMAT) {
           console.log('importing a legacy superbird-package backup (deprecated format)')
         }
         manifestOk = true
       } catch {
-        return fail(res, 400, 'invalid manifest')
+        return 'invalid manifest'
       }
     } else if (IMPORT_STORE_RE.test(path)) {
       let parsed
       try {
         parsed = JSON.parse(data.toString('utf8'))
       } catch {
-        return fail(res, 400, `unreadable store entry: ${path}`)
+        return `unreadable store entry: ${path}`
       }
       if (path.startsWith('store/guano-project__') || path.startsWith('store/superbird-project__')) {
         if (Array.isArray(parsed.pages) && parsed.pages.length) hasProject = true
@@ -1277,16 +1574,16 @@ async function handleProjectImport(req, res) {
       try {
         JSON.parse(data.toString('utf8'))
       } catch {
-        return fail(res, 400, 'invalid media index')
+        return 'invalid media index'
       }
     } else if (IMPORT_MEDIA_FILE_RE.test(path) || IMPORT_MEDIA_THUMB_RE.test(path)) {
       // opaque bytes — id shape already validated by the regex
     } else {
-      return fail(res, 400, `unexpected entry: ${path}`)
+      return `unexpected entry: ${path}`
     }
   }
-  if (!manifestOk) return fail(res, 400, 'package is missing its manifest')
-  if (!hasProject) return fail(res, 400, 'package has no project with pages')
+  if (!manifestOk) return 'package is missing its manifest'
+  if (!hasProject) return 'package has no project with pages'
 
   // stage into a tmp dir, then swap live dirs into place
   const tmp = join(DATA_DIR, `import.tmp-${Date.now()}`)
@@ -1306,7 +1603,100 @@ async function handleProjectImport(req, res) {
   await rm(tmp, { recursive: true, force: true })
   await migrateStoreDir() // a legacy backup arrives with old key filenames
   resetMediaIndexCache() // make imported media visible without a restart
-  return send(res, 200, JSON.stringify({ ok: true }))
+  resetIntegrationsCache() // the restored store may carry a legacy settings.smtp
+  return null
+}
+
+// ---------- 🔒 /api/snapshots (server-kept project packages) ----------
+
+// A snapshot is the export package, kept on the server instead of downloaded:
+// data/backups/<id>.zip, where the id is the creation time. Restoring one is
+// the import. Admin-only like both, and the id is validated before it ever
+// touches a path.
+const BACKUPS_DIR = join(DATA_DIR, 'backups')
+const SNAPSHOT_ID_RE = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z$/
+
+// a snapshot's name lives in a sidecar <id>.json, so the zip stays the plain
+// package and a rename never rewrites megabytes
+const SNAPSHOT_NAME_MAX = 80
+async function readSnapshotMeta(id) {
+  const raw = await readFileOrNull(join(BACKUPS_DIR, `${id}.json`))
+  try {
+    const m = raw ? JSON.parse(raw) : {}
+    return { name: typeof m.name === 'string' ? m.name : '' }
+  } catch {
+    return { name: '' }
+  }
+}
+
+async function listSnapshots() {
+  let files = []
+  try {
+    files = await readdir(BACKUPS_DIR)
+  } catch {
+    return []
+  }
+  const out = []
+  for (const f of files) {
+    const id = f.replace(/\.zip$/, '')
+    if (!f.endsWith('.zip') || !SNAPSHOT_ID_RE.test(id)) continue
+    const { size } = await stat(join(BACKUPS_DIR, f))
+    // id → ISO: the time part uses '-' because ':' is not a filename char everywhere
+    const iso = id.replace(/T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/, 'T$1:$2:$3.$4Z')
+    out.push({ id, createdAt: Date.parse(iso), bytes: size, ...(await readSnapshotMeta(id)) })
+  }
+  return out.sort((a, b) => b.createdAt - a.createdAt)
+}
+
+async function handleSnapshots(req, res, path) {
+  const user = sessionUser(req)
+  if (!user) return fail(res, 401, 'unauthorized')
+  if (user.role !== 'admin') return fail(res, 403, 'forbidden')
+
+  if (path === '/api/snapshots') {
+    if (req.method === 'GET') return send(res, 200, JSON.stringify(await listSnapshots()))
+    if (req.method === 'POST') {
+      const id = new Date().toISOString().replace(/:/g, '-').replace('.', '-')
+      await mkdir(BACKUPS_DIR, { recursive: true })
+      const zip = await buildPackage()
+      await writeFile(join(BACKUPS_DIR, `${id}.zip`), zip)
+      return send(res, 200, JSON.stringify({ id, createdAt: Date.now(), bytes: zip.length, name: '' }))
+    }
+    return fail(res, 404, 'not found')
+  }
+
+  const [id, action] = path.slice('/api/snapshots/'.length).split('/')
+  if (!id || !SNAPSHOT_ID_RE.test(id)) return fail(res, 400, 'invalid snapshot id')
+  const file = join(BACKUPS_DIR, `${id}.zip`)
+  if (!existsSync(file)) return fail(res, 404, 'no such snapshot')
+
+  if (!action && req.method === 'GET') {
+    return send(res, 200, await readFile(file), 'application/zip', {
+      'content-disposition': `attachment; filename="guano-snapshot-${id}.zip"`,
+    })
+  }
+  if (!action && req.method === 'PATCH') {
+    let body
+    try {
+      body = JSON.parse((await readBody(req)) ?? '')
+    } catch {
+      return fail(res, 400, 'invalid json')
+    }
+    const name = String(body?.name ?? '').trim().slice(0, SNAPSHOT_NAME_MAX)
+    await writeAtomic(join(BACKUPS_DIR, `${id}.json`), JSON.stringify({ name }))
+    return send(res, 200, JSON.stringify({ ok: true, name }))
+  }
+  if (!action && req.method === 'DELETE') {
+    await rm(file, { force: true })
+    await rm(join(BACKUPS_DIR, `${id}.json`), { force: true })
+    return send(res, 200, JSON.stringify({ ok: true }))
+  }
+  if (action === 'restore' && req.method === 'POST') {
+    const problem = await applyPackage(await readFile(file))
+    if (problem) return fail(res, 400, problem)
+    return send(res, 200, JSON.stringify({ ok: true }))
+  }
+  return fail(res, 404, 'not found')
 }
 
 /** one-time rename of pre-rename store keys (superbird-* → guano-*) on the
@@ -1327,6 +1717,78 @@ async function migrateStoreDir() {
     console.log(`store migration: ${f} -> ${to}`)
   }
   await migrateSchema()
+  await migrateIntegrations()
+}
+
+/**
+ * Move the legacy per-provider credentials into the integrations store, once.
+ *
+ * v1 had one fixed group per provider: `settings.smtp` (host/port/user/from) in
+ * the PROJECT BLOB, and three secrets (`stripe.secretKey`, `mailing.apiKey`,
+ * `smtp.password`) in publish.json. Integrations are a named set of keys now,
+ * entirely server-side, and this carries a working setup across rather than
+ * silently losing it.
+ *
+ * The blob halves are then DELETED. Nothing reads them after this change, and
+ * a dead `settings.smtp` sitting in a blob every editor, draft, merge and agent
+ * token can write is an invitation to wire it back up — which is the exfil path
+ * the move exists to close (point HOST at your own machine, read PASSWORD off
+ * the first AUTH).
+ *
+ * Idempotent: seeding only runs while the integrations file does not exist, and
+ * the blob strip only rewrites a blob that still carries one of the two keys.
+ */
+async function migrateIntegrations() {
+  const cfg = await readPublishConfig()
+  const legacySecrets = { stripe: cfg.stripe, mailing: cfg.mailing, smtp: cfg.smtp }
+  const mainBlob = parseJsonOrNull(await readFileOrNull(storeFile(MAIN_PROJECT_KEY)))
+  const settings = mainBlob?.settings ?? {}
+  const legacySmtp = {
+    ...(settings.smtp ?? {}),
+    stripePublishableKey: settings.integrations?.stripe?.publishableKey ?? '',
+    mailingProvider: settings.integrations?.mailing?.provider ?? '',
+  }
+
+  const created = await seedLegacyIntegrations({ legacySecrets, legacySmtp })
+  for (const row of created) {
+    // by NAME, never a value
+    console.log(`integrations: carried "${row.name}" across (${row.keys.join(', ')})`)
+  }
+
+  // drop the legacy secret namespaces from publish.json once they are stored
+  if (created.length && (cfg.stripe.secretKey || cfg.mailing.apiKey || cfg.smtp.password)) {
+    cfg.stripe = { secretKey: '' }
+    cfg.mailing = { apiKey: '' }
+    cfg.smtp = { password: '' }
+    await writeAtomic(PUBLISH_CONFIG, JSON.stringify(cfg))
+  }
+
+  // strip the blob halves from every project copy (Main, drafts, merge bases)
+  let files = []
+  try {
+    files = await readdir(STORE_DIR)
+  } catch {
+    return
+  }
+  const targets = files
+    .filter((f) => f.endsWith('.json'))
+    .filter((f) => f.startsWith('guano-project__') || f.startsWith('guano-base__'))
+    .map((f) => join(STORE_DIR, f))
+  if (existsSync(SNAPSHOT)) targets.push(SNAPSHOT)
+  let stripped = 0
+  for (const file of targets) {
+    const project = parseJsonOrNull(await readFileOrNull(file))
+    if (!project?.settings) continue
+    if (!('smtp' in project.settings) && !('integrations' in project.settings)) continue
+    delete project.settings.smtp
+    delete project.settings.integrations
+    await writeAtomic(file, JSON.stringify(project))
+    stripped++
+  }
+  if (stripped) {
+    console.log(`integrations: removed the legacy settings block from ${stripped} project blob(s)`)
+    storeSize.at = 0 // the blobs changed size; force a recount
+  }
 }
 
 /**
@@ -1454,7 +1916,9 @@ async function handleStatic(req, res) {
   }
 
   // the published static site — owns everything outside /admin and /api,
-  // including /assets/* (style.css, script.js, media)
+  // including /assets/* (style.css, script.js, media). A private site asks
+  // for its password first.
+  if (await siteGateHandled(req, res, path)) return
   return await serveSiteDir(req, res, SITE)
 }
 
@@ -1516,14 +1980,24 @@ const server = createServer(async (req, res) => {
     if (path === '/api/published' && req.method === 'POST') {
       return await handlePost(req, res, url.searchParams)
     }
+    if (path === '/api/published' && req.method === 'DELETE') {
+      return await handleUnpublish(req, res)
+    }
     if (path === '/api/publish-config') return await handlePublishConfig(req, res)
+    if (path === '/api/site-password') return await handleSitePassword(req, res)
     if (path === '/api/agent-policy') return await handleAgentPolicy(req, res)
-    if (path === '/api/integrations-config') return await handleIntegrationsConfig(req, res)
+    if (path === '/api/integrations' || path.startsWith('/api/integrations/')) {
+      return await handleIntegrations(req, res, path)
+    }
+    if (path === '/api/forms-config') return await handleFormsConfig(req, res)
     if (path === '/api/project-export' && req.method === 'GET') {
       return await handleProjectExport(req, res)
     }
     if (path === '/api/project-import' && req.method === 'POST') {
       return await handleProjectImport(req, res)
+    }
+    if (path === '/api/snapshots' || path.startsWith('/api/snapshots/')) {
+      return await handleSnapshots(req, res, path)
     }
     if (path.startsWith('/api/auth/')) return await handleAuth(req, res, path)
     if (path.startsWith('/api/invite/')) return await handleInvite(req, res, path)

@@ -92,9 +92,15 @@ test('merge-base snapshots get the same guards as project blobs', async ({ baseU
   // a base snapshot is a full project copy — same secrets, same structure
   expect((await admin.put(`/api/store/${BASE}`, { data: mainBody })).ok()).toBeTruthy()
 
-  // read: smtp must be redacted for a contributor, exactly as for guano-project:*
+  // read: the legacy secret block must be redacted for a contributor, exactly as
+  // for guano-project:*. It is REMOVED rather than nulled — integrations live
+  // entirely server-side now (server/integrations.mjs), so the key must not be
+  // there at all for a blob that arrived with one (an import, a restore).
   const read = (await (await contrib.get(`/api/store?keys=${BASE}`)).json()) as Record<string, string>
-  expect(JSON.parse(read[BASE]).settings.smtp).toBeNull()
+  const redacted = JSON.parse(read[BASE]).settings
+  expect(redacted.smtp).toBeUndefined()
+  expect(redacted.integrations).toBeUndefined()
+  expect('smtp' in redacted).toBe(false)
 
   // write: a contributor's structural edit is merged away, not persisted —
   // otherwise a poisoned base makes the editor's 3-way merge propose changes

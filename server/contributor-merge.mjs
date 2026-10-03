@@ -279,8 +279,14 @@ export function redactSecretsForContributor(str) {
   const project = parseOrNull(str)
   if (!project || typeof project !== 'object') return str
   if (project.settings && typeof project.settings === 'object') {
-    project.settings.smtp = null
-    project.settings.integrations = null
+    // Both are DEPRECATED and deleted from every blob by the boot migration
+    // (server/index.mjs migrateIntegrations) — integrations live entirely
+    // server-side now. This stays as the defence for a blob that arrived some
+    // other way (an import, a restore) before that boot ran. `delete`, not
+    // `= null`: a contributor write ignores `settings` wholesale, so the key
+    // simply must not be there.
+    delete project.settings.smtp
+    delete project.settings.integrations
   }
   return JSON.stringify(project)
 }

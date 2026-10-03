@@ -119,6 +119,13 @@ export interface AnimationBinding {
   trigger: 'load' | 'appear' | 'scrub' | 'hover' | 'click'
   /** node the animation moves; null = the trigger element itself */
   targetId: string | null
+  /** click only: force the play forward ('on') or backward ('off') instead of
+   * toggling it. Together with a click play being keyed by (animation, target)
+   * — see animationStateKey in lib/shared/motion.js — this is what lets an open
+   * button, a close button and an overlay drive ONE timeline, exactly as
+   * InteractionBinding.action does for a class change.
+   * `undefined` = 'toggle'. */
+  action?: 'on' | 'off'
   /** appear only. Omitted = inherit settings.motion.appearMode (default 'once'). */
   appearMode?: 'once' | 'replay' | 'reverse'
   /** appear only: the viewport fraction the element's top must cross before
@@ -247,7 +254,42 @@ export interface ElementNode {
   /** slider only: carousel configuration (node-only state, like listQuery).
    * Absent = every default; see shared/slider.js */
   slider?: SliderConfig
+  /** form only: does this form take submissions, and what happens when one
+   * lands. Node-only state, per-instance with a component default like
+   * `slider`/`listQuery` — a Newsletter component's form keeps its config at
+   * the master and a placement can override it. Absent = a plain `<form>` with
+   * no backend, which is what every form was before. See shared/forms.js */
+  form?: FormConfig
   children: ElementNode[]
+}
+
+/**
+ * What a `form` does with a submission.
+ *
+ * Deliberately NOT where the submission GOES: recipients, the mailer and the
+ * webhook are server-side and admin-only (publish.json → `forms`). A form says
+ * only *whether* it notifies, because the project blob is written by editors,
+ * drafts, merges, contributors and agent tokens — a recipient field here would
+ * let any of them quietly redirect other people's leads.
+ */
+export interface FormConfig {
+  /** false or absent = a plain <form>, no endpoint, nothing stored */
+  enabled?: boolean
+  /** label in the submissions list and the notification subject */
+  name?: string
+  /** email the site's recipients (Settings → Forms) */
+  notify?: boolean
+  /** POST the validated submission to the site's webhook integration */
+  forward?: boolean
+  /** an internal route to send the visitor to on success; empty = show the
+   * `form-success` block in place. Validated by `isInternalRoute` at write AND
+   * against the manifest's routes at submit, so it can't become an open
+   * redirect. */
+  redirect?: string
+  /** ESCAPE HATCH: post to a third party (Formspree, Web3Forms…) instead.
+   * Mutually exclusive with `enabled` — nothing is stored or sent here, and
+   * the publish warns that submissions leave the instance. */
+  externalAction?: string
 }
 
 /** :slider configuration. Every field is optional — an absent config renders a
@@ -448,8 +490,20 @@ export interface ProjectSettings {
   /** the dark-mode variant, served with media="(prefers-color-scheme: dark)" */
   faviconDark?: string
   /** how the header Publish button ships the site. github config here is
-   * NON-secret — the token lives server-side only (server/data/publish.json) */
-  publishing: { method: PublishMethod; github: { repo: string; branch: string } }
+   * NON-secret — the token lives server-side only (server/data/publish.json).
+   *
+   * `apiOrigin` is where a published page reaches THIS instance for the
+   * server-backed features (form submissions). Empty means "the same host",
+   * which is what the `server` method is; a zip or GitHub export is served from
+   * somewhere else, so it has to carry the studio's public origin. It lives in
+   * `publishing` because that namespace is already refused to contributors and
+   * agent tokens (protectedFieldDelta) — an injected agent must not be able to
+   * redirect a site's submissions. */
+  publishing: {
+    method: PublishMethod
+    github: { repo: string; branch: string }
+    apiOrigin?: string
+  }
   seo: {
     siteName: string
     /** '%s' = page name */
@@ -463,13 +517,15 @@ export interface ProjectSettings {
   }
   /** bare domain (example.com) — canonical/og URLs in exports when set */
   domain: string
-  /** stored config only; redacted from the public snapshot endpoint.
-   * `password` is legacy — new saves keep it server-side (see integrations) */
-  smtp: { host: string; port: string; user: string; password: string; from: string }
-  /** NON-secret halves of third-party integrations. Every secret (Stripe
-   * secret key, mailing API key, SMTP password) lives server-side only, in
-   * server/data/publish.json via /api/integrations-config */
-  integrations: {
+  /** DEPRECATED — an integration is a named set of keys now, stored entirely
+   * server-side in server/data/integrations.json and reached over
+   * /api/integrations. Nothing reads either field; `migrateIntegrations` (in
+   * server/index.mjs) carries a configured value across at boot and then
+   * deletes it from every blob. Kept optional so a blob written before that
+   * boot still type-checks. Never add a reader. */
+  smtp?: { host: string; port: string; user: string; password: string; from: string }
+  /** DEPRECATED — see `smtp` above. */
+  integrations?: {
     stripe: { publishableKey: string }
     mailing: { provider: string }
   }

@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import {
-  Archive, Check, Code2, Copy, KeyRound, Languages, LogOut, Palette, Plug,
-  Plus, Rocket, ScanSearch, Search, Settings2, Trash2, Type, UserRound, Users, X,
+  Archive, Check, ChevronRight, Code2, Copy, KeyRound, Languages, Palette, Pencil, Plug,
+  Plus, Rocket, ScanSearch, Search, Settings, Settings2, Trash2, Type, UserRound, Users, X,
 } from 'lucide-vue-next'
 import ModalHost from '@/components/modal/ModalHost.vue'
 import TabsUI from '@/components/tabs/TabsUI.vue'
@@ -16,6 +16,7 @@ import TextareaUI from '@/components/ui/TextareaUI.vue'
 import IconTileUI from '@/components/ui/IconTileUI.vue'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import MenuUI from '@/components/ui/MenuUI.vue'
+import EmptyListUI from '@/components/ui/EmptyListUI.vue'
 import BadgeUI from '@/components/ui/BadgeUI.vue'
 import ColorPickerUI from '@/components/ui/ColorPickerUI.vue'
 import ToggleUI from '@/components/ui/ToggleUI.vue'
@@ -30,9 +31,20 @@ import { useBranches } from '@/composables/useBranches'
 import { useAuth } from '@/composables/useAuth'
 import { useModal } from '@/composables/useModal'
 import { useApiTokens } from '@/composables/useApiTokens'
+import { useIntegrations } from '@/composables/useIntegrations'
+import RenameModal from '@/components/modal/RenameModal.vue'
+import {
+  envRef,
+  integrationNameError,
+  keyNameError,
+  normalizeKeyName,
+  type Integration,
+  type IntegrationField,
+} from '@/lib/integrations'
 import type { CustomFont, StructuredDataType } from '@/types/editor'
 import { SCHEMA_TYPES, customSchemaError } from '@/lib/shared/structuredData.js'
 import UsersSettings from '@/components/shared/UsersSettings.vue'
+import PublishDialog from '@/components/shared/PublishDialog.vue'
 import MediaPickerControl from '@/components/editor/content/MediaPickerControl.vue'
 import {
   FONT_STACKS,
@@ -64,10 +76,10 @@ async function confirmDeleteLocale(loc: string) {
   if (ok) deleteLocale(loc)
 }
 const { pages, activePage } = usePage()
-const { publishedInfo } = usePublish()
+const { publishedInfo, unpublish } = usePublish()
 const { onMain } = useBranches()
-const { email: authEmail, name: authName, isAdmin, canBuild, logout, updateAccount } = useAuth()
-const { confirm } = useModal()
+const { email: authEmail, name: authName, isAdmin, canBuild, updateAccount } = useAuth()
+const { confirm, openModal } = useModal()
 
 // opened via useModal (mounted = open); Esc/backdrop close through the host
 const props = defineProps<{ initialSection?: string }>()
@@ -240,6 +252,46 @@ const faviconDark = computed({
   set: (v: string) => (settings.value.faviconDark = v || undefined),
 })
 
+// private site: one visitor password, kept hashed on the server (publish.json)
+const siteGate = ref({ enabled: false, passwordSet: false })
+const sitePasswordInput = ref('')
+const siteGateBusy = ref(false)
+const siteGateError = ref<string | null>(null)
+onMounted(async () => {
+  if (!canBuild.value) return
+  try {
+    const res = await fetch('/api/site-password')
+    if (res.ok) siteGate.value = await res.json()
+  } catch {
+    /* best-effort */
+  }
+})
+async function putSiteGate(patch: { enabled?: boolean; password?: string }) {
+  siteGateBusy.value = true
+  siteGateError.value = null
+  try {
+    const res = await fetch('/api/site-password', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(patch),
+    })
+    if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? 'Save failed')
+    const data = await res.json()
+    siteGate.value = { enabled: data.enabled, passwordSet: data.passwordSet }
+    return true
+  } catch (e) {
+    siteGateError.value = e instanceof Error ? e.message : 'Save failed'
+    return false
+  } finally {
+    siteGateBusy.value = false
+  }
+}
+const setSiteGateEnabled = (enabled: boolean) => putSiteGate({ enabled })
+async function saveSitePassword() {
+  if (!sitePasswordInput.value) return
+  if (await putSiteGate({ password: sitePasswordInput.value })) sitePasswordInput.value = ''
+}
+
 // smooth scrolling (settings.motion.scroll): the slider reads as intensity —
 // higher is snappier; lerp is the per-frame catch-up fraction underneath
 const scrollLerp = computed({
@@ -258,8 +310,25 @@ const siteBodyCode = computed({
 })
 
 const newLocale = ref('')
+const addingLocale = ref(false)
+const localeError = ref<string | null>(null)
+function closeAddLocale() {
+  addingLocale.value = false
+  newLocale.value = ''
+  localeError.value = null
+}
 function onAddLocale() {
-  if (addLocale(newLocale.value)) newLocale.value = ''
+  const raw = newLocale.value.trim()
+  if (!raw) return
+  if (locales.value.includes(raw.toLowerCase())) {
+    localeError.value = `${raw.toLowerCase()} is already a locale`
+    return
+  }
+  if (!addLocale(raw)) {
+    localeError.value = 'A locale is a language code like fr, or a language-region pair like pt-br'
+    return
+  }
+  closeAddLocale()
 }
 
 
@@ -389,22 +458,52 @@ const googleFontsUrl = computed({
 
 const { assetForSrc } = useMedia()
 
-/** picking a file also records its format() hint, taken from the library
- *  asset's mime — assets are stored extensionless, so the URL alone can't
- *  tell us, and the exporter must not need the media index to emit the CSS */
-function setFontSrc(font: CustomFont, src: string) {
-  font.src = src
-  const asset = assetForSrc(src)
-  font.format = (asset && fontFormatForMime(asset.mime)) || fontFormatForUrl(src)
-  // an unnamed font takes its family from the filename ("OffSans.ttf" → OffSans)
-  if (!font.family.trim() && asset?.name) {
-    font.family = asset.name.replace(/\.[^.]+$/, '').replace(/[^A-Za-z0-9 -]/g, ' ').trim()
-  }
+// --- add-font form: a local draft, committed as one entry ---
+// the format() hint comes from the library asset's mime — assets are stored
+// extensionless, so the URL alone can't tell us, and the exporter must not
+// need the media index to emit the CSS
+const addingFont = ref(false)
+const fontDraft = ref({ src: '', family: '' })
+// an unnamed draft takes its family from the filename ("OffSans.ttf" → OffSans)
+watch(
+  () => fontDraft.value.src,
+  (src) => {
+    const asset = assetForSrc(src)
+    if (src && !fontDraft.value.family.trim() && asset?.name) {
+      fontDraft.value.family = asset.name.replace(/\.[^.]+$/, '').replace(/[^A-Za-z0-9 -]/g, ' ').trim()
+    }
+  },
+)
+const fontDraftError = computed(() => {
+  const d = fontDraft.value
+  if (!d.src || !d.family.trim()) return null
+  const err = fontError({ id: '', family: d.family, src: d.src }, customFonts.value)
+  return err && !INCOMPLETE_FONT.has(err) ? err : null
+})
+function closeAddFont() {
+  addingFont.value = false
+  fontDraft.value = { src: '', family: '' }
+}
+function submitFont() {
+  const d = fontDraft.value
+  if (!d.src || !d.family.trim() || fontDraftError.value) return
+  const asset = assetForSrc(d.src)
+  addFont({
+    family: d.family.trim(),
+    src: d.src,
+    format: (asset && fontFormatForMime(asset.mime)) || fontFormatForUrl(d.src),
+  })
+  closeAddFont()
+}
+
+/** the row's subline: the library file it points at */
+function fontFileLabel(font: CustomFont) {
+  const asset = assetForSrc(font.src)
+  return asset ? `${asset.name}${font.format ? ` · ${font.format}` : ''}` : font.src
 }
 
 // the shared validator also reports a row that is merely unfinished (no name
-// yet, no file yet) — the empty controls say that already, so only real
-// problems are shown
+// yet, no file yet) — only real problems are shown
 const INCOMPLETE_FONT = new Set(['Family name required', 'Pick a font file'])
 const fontIssue = (font: CustomFont) => {
   const err = fontError(font, customFonts.value)
@@ -453,6 +552,27 @@ function normalizeDomain() {
     .replace(/\/+$/, '')
 }
 
+const unpublishing = ref(false)
+const unpublishError = ref<string | null>(null)
+async function onUnpublish() {
+  const ok = await confirm({
+    title: 'Take the site down?',
+    message:
+      'Visitors get "Nothing published yet." until you publish again. Your pages are untouched — only the exported site is removed.',
+    confirmLabel: 'Unpublish',
+  })
+  if (!ok) return
+  unpublishing.value = true
+  unpublishError.value = null
+  try {
+    await unpublish()
+  } catch (e) {
+    unpublishError.value = e instanceof Error ? e.message : 'Unpublish failed'
+  } finally {
+    unpublishing.value = false
+  }
+}
+
 // --- publish method ---
 
 const publishMethodOptions = [
@@ -497,85 +617,310 @@ async function saveGhToken() {
   }
 }
 
-// --- integration secrets (Stripe / mailing / SMTP password) ---
-// Same contract as the GitHub token: the server stores them and only ever
-// reports whether one is set, so nothing secret reaches the project blob.
+// --- apiOrigin: where a statically hosted page reaches this instance ---
+//
+// Only the zip/GitHub methods need it (the `server` method IS this host), and
+// it is validated here as well as at export: a typo would make every form on
+// the published site post into nowhere, and the publish warning that catches
+// that is one round trip later than the author.
 
-type SecretField = 'stripeSecret' | 'mailingKey' | 'smtpPassword'
-
-const secretsSet = ref({
-  stripe: { secretKeySet: false },
-  mailing: { apiKeySet: false },
-  smtp: { passwordSet: false },
+const apiOriginError = ref<string | null>(null)
+const apiOrigin = computed({
+  get: () => settings.value.publishing.apiOrigin ?? '',
+  set(next: string) {
+    const trimmed = next.trim().replace(/\/+$/, '')
+    settings.value.publishing.apiOrigin = trimmed
+    apiOriginError.value = originError(trimmed)
+  },
 })
-const secretInput = ref<Record<SecretField, string>>({
-  stripeSecret: '',
-  mailingKey: '',
-  smtpPassword: '',
-})
-const secretBusy = ref<SecretField | null>(null)
-const secretError = ref<string | null>(null)
 
-onMounted(async () => {
-  if (!canBuild.value) return
+/** https:// with no path, or http:// for localhost only */
+function originError(value: string): string | null {
+  if (!value) return null
+  let url: URL
   try {
-    const res = await fetch('/api/integrations-config')
-    if (res.ok) secretsSet.value = await res.json()
+    url = new URL(value)
   } catch {
-    /* best-effort — leave everything unset */
+    return 'That is not a URL — include https://'
   }
+  const local = url.hostname === 'localhost' || url.hostname === '127.0.0.1'
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && local)) {
+    return 'Use https:// — a form posts credentials-free, but in the clear otherwise'
+  }
+  if (url.pathname !== '/' && url.pathname !== '') return 'Just the origin, with no path'
+  if (url.search || url.hash) return 'Just the origin, with no query or fragment'
+  return null
+}
+
+// --- integrations: a named set of keys, stored server-side ---
+//
+// The values live in server/data/integrations.json and are reached over
+// /api/integrations (useIntegrations). A SECRET key's value never arrives
+// here — the server's read shape omits it — so a secret row is masked because
+// there is nothing to show, not because the UI hides it.
+//
+// Writes are admin-only server-side, so the add/rename/delete affordances are
+// gated on isAdmin: offering an editor a button that always 403s is worse than
+// not offering it.
+
+const {
+  integrations,
+  loaded: integrationsLoaded,
+  loadError: integrationsLoadError,
+  load: loadIntegrations,
+  create: createIntegration,
+  rename: renameIntegrationOnServer,
+  remove: removeIntegration,
+  setKey: setIntegrationKey,
+  removeKey: removeIntegrationKey,
+} = useIntegrations()
+
+onMounted(() => {
+  if (canBuild.value) loadIntegrations()
 })
 
-async function saveSecret(field: SecretField, patch: Record<string, unknown>) {
-  secretBusy.value = field
-  secretError.value = null
+/** how custom code references a PLAIN key. Secrets get no reference: the
+ *  exporter refuses to substitute one (it would print the credential into a
+ *  <script> on a public page), so showing it would only invite the attempt. */
+const refFor = (ig: Integration, f: IntegrationField) => envRef(ig.name, f.name)
+
+/** which rows are open. An integration is a LIST ITEM that expands in place,
+ *  so the panel stays one section however many there are — a section each put
+ *  the keys of the fifth integration five screens down. */
+const openIntegrations = ref(new Set<string>())
+const isIntegrationOpen = (id: string) => openIntegrations.value.has(id)
+function toggleIntegration(id: string) {
+  if (openIntegrations.value.delete(id)) {
+    // collapsing the row it belongs to would leave the form open but unreachable
+    if (fieldAdding.value === id) closeAddField()
+    openIntegrations.value = new Set(openIntegrations.value)
+    return
+  }
+  openIntegrations.value = new Set(openIntegrations.value).add(id)
+}
+
+const addingIntegration = ref(false)
+const integrationDraft = ref('')
+const integrationError = ref<string | null>(null)
+const integrationBusy = ref(false)
+function closeAddIntegration() {
+  addingIntegration.value = false
+  integrationDraft.value = ''
+  integrationError.value = null
+}
+async function submitIntegration() {
+  const name = integrationDraft.value.trim()
+  if (!name || integrationBusy.value) return
+  const bad = integrationNameError(name)
+  if (bad) {
+    integrationError.value = bad
+    return
+  }
+  integrationBusy.value = true
   try {
-    const res = await fetch('/api/integrations-config', {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(patch),
-    })
-    if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? 'Save failed')
-    const data = await res.json()
-    secretsSet.value = { stripe: data.stripe, mailing: data.mailing, smtp: data.smtp }
-    secretInput.value[field] = ''
+    const id = await createIntegration(name)
+    // it has no keys yet, so open it on its empty state
+    openIntegrations.value = new Set(openIntegrations.value).add(id)
+    closeAddIntegration()
   } catch (e) {
-    secretError.value = e instanceof Error ? e.message : 'Save failed'
+    integrationError.value = e instanceof Error ? e.message : 'Could not add it'
   } finally {
-    secretBusy.value = null
+    integrationBusy.value = false
+  }
+}
+
+async function renameIntegration(ig: Integration) {
+  const name = await openModal<string | undefined>(RenameModal, {
+    title: 'Rename integration',
+    value: ig.name,
+    placeholder: 'SMTP, Stripe, Mailchimp…',
+  })
+  if (!name || name === ig.name) return
+  try {
+    await renameIntegrationOnServer(ig.id, name)
+  } catch (e) {
+    integrationError.value = e instanceof Error ? e.message : 'Rename failed'
+  }
+}
+
+async function deleteIntegration(ig: Integration) {
+  const ok = await confirm({
+    title: 'Delete integration',
+    message: `Delete ${ig.name} and its ${ig.fields.length} ${ig.fields.length === 1 ? 'key' : 'keys'}? Anything referencing them stops working.`,
+    confirmLabel: 'Delete',
+  })
+  if (!ok) return
+  try {
+    await removeIntegration(ig.id)
+  } catch (e) {
+    integrationError.value = e instanceof Error ? e.message : 'Delete failed'
+    return
+  }
+  openIntegrations.value.delete(ig.id)
+  if (fieldAdding.value === ig.id) closeAddField()
+}
+
+const fieldAdding = ref<string | null>(null)
+const fieldReplacing = ref<string | null>(null)
+const fieldDraft = ref({ name: '', value: '', secret: true })
+const fieldError = ref<string | null>(null)
+const fieldBusy = ref(false)
+function startAddField(ig: Integration) {
+  openIntegrations.value = new Set(openIntegrations.value).add(ig.id)
+  fieldAdding.value = ig.id
+  fieldReplacing.value = null
+  fieldDraft.value = { name: '', value: '', secret: true }
+  fieldError.value = null
+}
+function startReplaceField(ig: Integration, f: IntegrationField) {
+  openIntegrations.value = new Set(openIntegrations.value).add(ig.id)
+  fieldAdding.value = ig.id
+  fieldReplacing.value = f.name
+  // a secret's value was never sent to us, so there is nothing to prefill
+  fieldDraft.value = { name: f.name, value: f.secret ? '' : f.value ?? '', secret: f.secret }
+  fieldError.value = null
+}
+function closeAddField() {
+  fieldAdding.value = null
+  fieldReplacing.value = null
+  fieldDraft.value = { name: '', value: '', secret: true }
+  fieldError.value = null
+}
+async function submitField(ig: Integration) {
+  const name = normalizeKeyName(fieldDraft.value.name)
+  const { value, secret } = fieldDraft.value
+  if (!name || !value || fieldBusy.value) return
+  const bad = keyNameError(name)
+  if (bad) {
+    fieldError.value = bad
+    return
+  }
+  if (!fieldReplacing.value && ig.fields.some((f) => f.name === name)) {
+    fieldError.value = `${name} already exists — edit it from the list`
+    return
+  }
+  fieldBusy.value = true
+  try {
+    await setIntegrationKey(ig.id, name, value, secret)
+    closeAddField()
+  } catch (e) {
+    fieldError.value = e instanceof Error ? e.message : 'Could not save it'
+  } finally {
+    fieldBusy.value = false
+  }
+}
+async function deleteField(ig: Integration, f: IntegrationField) {
+  const ok = await confirm({
+    title: 'Delete key',
+    message: `Delete ${f.name} from ${ig.name}?`,
+    confirmLabel: 'Delete',
+  })
+  if (!ok) return
+  try {
+    await removeIntegrationKey(ig.id, f.name)
+  } catch (e) {
+    fieldError.value = e instanceof Error ? e.message : 'Delete failed'
   }
 }
 
 const savedPlaceholder = (isSet: boolean, hint: string) =>
   isSet ? 'Saved — enter to replace' : hint
 
-// a password saved before secrets moved server-side still counts as configured
-const smtpHasPassword = computed(
-  () => secretsSet.value.smtp.passwordSet || !!settings.value.smtp.password,
-)
 const ghConfigured = computed(() => !!settings.value.publishing.github.repo && ghTokenSet.value)
-const smtpConfigured = computed(() => !!settings.value.smtp.host && smtpHasPassword.value)
-const mailingConfigured = computed(
-  () => !!settings.value.integrations.mailing.provider && secretsSet.value.mailing.apiKeySet,
-)
-const stripeConfigured = computed(() => secretsSet.value.stripe.secretKeySet)
 
-// --- export / import ---
+// --- snapshots: server-kept project packages (the export, listed) ---
 
-const exporting = ref(false)
-const exportError = ref<string | null>(null)
-async function exportPackage() {
-  exporting.value = true
-  exportError.value = null
+type Snapshot = { id: string; createdAt: number; bytes: number; name: string }
+const snapshots = ref<Snapshot[]>([])
+const snapshotBusy = ref(false)
+const snapshotError = ref<string | null>(null)
+
+async function loadSnapshots() {
   try {
-    const res = await fetch('/api/project-export')
-    if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? 'Export failed')
-    downloadBlob(await res.blob(), 'guano-project.zip')
-  } catch (e) {
-    exportError.value = e instanceof Error ? e.message : 'Export failed'
-  } finally {
-    exporting.value = false
+    const res = await fetch('/api/snapshots')
+    if (res.ok) snapshots.value = await res.json()
+  } catch {
+    /* best-effort */
   }
+}
+onMounted(() => {
+  if (isAdmin.value) loadSnapshots()
+})
+
+async function takeSnapshot() {
+  if (snapshotBusy.value) return
+  snapshotBusy.value = true
+  snapshotError.value = null
+  try {
+    const res = await fetch('/api/snapshots', { method: 'POST' })
+    if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? 'Snapshot failed')
+    await loadSnapshots()
+  } catch (e) {
+    snapshotError.value = e instanceof Error ? e.message : 'Snapshot failed'
+  } finally {
+    snapshotBusy.value = false
+  }
+}
+
+async function restoreSnapshot(snap: Snapshot) {
+  const ok = await confirm({
+    title: 'Restore this snapshot?',
+    message: `Every page, draft, setting and media file goes back to how it was ${timeAgo(snap.createdAt)}, for every user. Take a snapshot first if you want to keep what is there now.`,
+    confirmLabel: 'Restore',
+  })
+  if (!ok) return
+  snapshotError.value = null
+  try {
+    const res = await fetch(`/api/snapshots/${snap.id}/restore`, { method: 'POST' })
+    if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? 'Restore failed')
+    location.reload()
+  } catch (e) {
+    snapshotError.value = e instanceof Error ? e.message : 'Restore failed'
+  }
+}
+
+async function downloadSnapshot(snap: Snapshot) {
+  snapshotError.value = null
+  try {
+    const res = await fetch(`/api/snapshots/${snap.id}`)
+    if (!res.ok) throw new Error('Download failed')
+    downloadBlob(await res.blob(), `guano-snapshot-${snap.id}.zip`)
+  } catch (e) {
+    snapshotError.value = e instanceof Error ? e.message : 'Download failed'
+  }
+}
+
+// rename: the row's title turns into an input; Enter commits, Escape cancels
+const renamingSnapshot = ref<string | null>(null)
+const snapshotDraftName = ref('')
+function startRenameSnapshot(snap: Snapshot) {
+  renamingSnapshot.value = snap.id
+  snapshotDraftName.value = snap.name
+}
+async function commitRenameSnapshot(snap: Snapshot) {
+  const id = renamingSnapshot.value
+  renamingSnapshot.value = null
+  if (id !== snap.id) return
+  const name = snapshotDraftName.value.trim()
+  if (name === snap.name) return
+  snap.name = name // optimistic; the list reload below is the truth
+  await fetch(`/api/snapshots/${snap.id}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name }),
+  }).catch(() => {})
+  await loadSnapshots()
+}
+
+async function deleteSnapshot(snap: Snapshot) {
+  const ok = await confirm({
+    title: 'Delete snapshot',
+    message: `Delete the snapshot from ${new Date(snap.createdAt).toLocaleString()}? This cannot be undone.`,
+    confirmLabel: 'Delete',
+  })
+  if (!ok) return
+  await fetch(`/api/snapshots/${snap.id}`, { method: 'DELETE' }).catch(() => {})
+  await loadSnapshots()
 }
 
 const importInput = ref<HTMLInputElement>()
@@ -607,9 +952,9 @@ async function onImportFile(e: Event) {
 <template>
   <ModalHost size="xl" @close="emit('close')">
     <div class="flex h-full flex-col">
-      <!-- top bar: [icon] [title] ——— [search] -->
-      <div class="flex shrink-0 items-center gap-2 border-b border-input px-4 py-2.5">
-        <Settings2 class="size-4 shrink-0 text-muted-foreground" />
+      <!-- top bar: [icon] [title] ——— [search] [close] -->
+      <div class="flex shrink-0 items-center gap-2 border-b border-input py-2.5 pr-1.5 pl-4">
+        <Settings class="size-4 shrink-0 text-muted-foreground" />
         <span class="text-xs font-medium">Project settings</span>
         <div class="flex-1" />
         <div class="relative w-64">
@@ -624,17 +969,18 @@ async function onImportFile(e: Event) {
             class="h-8 w-full rounded-lg bg-input pr-2 pl-8 text-xs outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-accent"
           />
         </div>
+        <ButtonUI variant="icon" size="sm" :icon="X" class="mr-1 w-7 text-muted-foreground" @click="emit('close')" />
       </div>
 
       <TabsUI v-model:active="active" class="flex min-h-0 min-w-0 flex-1 !flex-row !gap-0">
       <!-- left sidebar: grouped nav + pinned account footer -->
       <div class="flex w-48 shrink-0 flex-col border-r border-input">
-        <nav class="flex flex-1 flex-col gap-2 overflow-y-auto p-2">
-          <p v-if="!filteredNav.length" class="px-2 py-1 text-[10px] text-muted-foreground">
+        <nav class="custom-scrollbar flex flex-1 flex-col gap-2 overflow-y-auto p-2">
+          <p v-if="!filteredNav.length" class="px-2 py-1 text-[9px] text-muted-foreground">
             No matching settings.
           </p>
           <div v-for="group in filteredNav" :key="group.label" class="flex flex-col gap-0.5">
-            <p class="px-2 pb-1 text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
+            <p class="px-2 pb-1 text-[9px] font-medium tracking-wide text-muted-foreground uppercase">
               {{ group.label }}
             </p>
             <TabUI
@@ -650,7 +996,7 @@ async function onImportFile(e: Event) {
             </TabUI>
           </div>
         </nav>
-        <!-- user card: click to open the account tab; log out stays here -->
+        <!-- user card: click to open the account tab -->
         <div class="flex items-center gap-2 border-t border-input p-2">
           <button
             type="button"
@@ -663,25 +1009,23 @@ async function onImportFile(e: Event) {
             </span>
             <span class="min-w-0 flex-1">
               <span class="block truncate text-xs font-medium">{{ authName || 'Your account' }}</span>
-              <span class="block truncate text-[10px] text-muted-foreground">{{ authEmail }}</span>
+              <span class="block truncate text-[9px] text-muted-foreground">{{ authEmail }}</span>
             </span>
           </button>
-          <ButtonUI
-            variant="icon"
-            size="sm"
-            :icon="LogOut"
-            tooltip="Sign out"
-            class="shrink-0 text-muted-foreground hover:!text-danger"
-            @click="logout"
-          />
         </div>
       </div>
 
       <!-- right pane: section content -->
-      <div class="min-w-0 flex-1 overflow-y-auto">
+      <!-- gutter reserved (inline: .custom-scrollbar is unlayered, so a utility
+           can't override its `auto`) so a tab that scrolls doesn't shift the
+           fields of one that doesn't -->
+      <div
+        class="custom-scrollbar min-w-0 flex-1 overflow-y-auto [&_[data-row]]:px-0"
+        style="scrollbar-gutter: stable"
+      >
         <div class="flex flex-col gap-9 p-6">
           <TabPanelUI class="gap-9" id="general">
-            <SettingsGroup title="Project" description="How your project shows up in the editor and in browser tabs.">
+            <SettingsGroup title="Project" description="Your project's name and browser-tab icon.">
               <RowUI label="Name">
                 <InputUI v-model="projectName" placeholder="Untitled project" />
               </RowUI>
@@ -700,16 +1044,41 @@ async function onImportFile(e: Event) {
                     accept="image/png,image/svg+xml,image/x-icon"
                   />
                 </div>
-                <p class="ml-2 self-start pt-1 text-[10px] text-muted-foreground">
-                  Square PNG, SVG or ICO. The dark one is used by browsers in dark mode when set;
-                  otherwise the light one everywhere.
-                </p>
               </RowUI>
             </SettingsGroup>
             <SettingsGroup
               v-if="canBuild"
+              title="Private site"
+              description="Visitors need a password before they see the site."
+            >
+              <template #action>
+                <ToggleUI :model-value="siteGate.enabled" @update:model-value="setSiteGateEnabled" />
+              </template>
+              <RowUI v-if="siteGate.enabled" label="Password">
+                <div class="flex w-full gap-1.5">
+                  <InputUI
+                    v-model="sitePasswordInput"
+                    type="password"
+                    :placeholder="savedPlaceholder(siteGate.passwordSet, 'At least 4 characters')"
+                    @keydown.enter="saveSitePassword"
+                  />
+                  <ButtonUI
+                    variant="outline"
+                    size="xs"
+                    class="!h-7 px-2.5"
+                    :disabled="siteGateBusy || !sitePasswordInput"
+                    @click="saveSitePassword"
+                  >
+                    {{ siteGateBusy ? 'Saving…' : 'Save' }}
+                  </ButtonUI>
+                </div>
+              </RowUI>
+              <p v-if="siteGateError" class="text-[10px] text-danger">{{ siteGateError }}</p>
+            </SettingsGroup>
+            <SettingsGroup
+              v-if="canBuild"
               title="Smooth scrolling"
-              description="The page glides toward where you scrolled instead of jumping there. Applies to Play and the published site; off on touch devices and for reduced-motion visitors."
+              description="Inertia scrolling on Play and the published site."
             >
               <template #action>
                 <ToggleUI v-model="smoothScroll.enabled" />
@@ -726,9 +1095,9 @@ async function onImportFile(e: Event) {
           <TabPanelUI class="gap-9" id="seo">
             <SettingsGroup
               title="Search & social"
-              description="Used on every page unless a page overrides them. The domain makes canonical, social-image and structured-data URLs absolute; %s in the title template is the page name."
+              description="Site-wide defaults; %s in the title is the page name."
             >
-              <RowUI label="Logo" class="!items-start">
+              <RowUI label="Logo" align="start">
                 <IconTileUI v-model="seoLogo" />
               </RowUI>
               <RowUI label="Site name">
@@ -745,7 +1114,7 @@ async function onImportFile(e: Event) {
               <RowUI label="Title">
                 <InputUI v-model="settings.seo.titleTemplate" placeholder="%s — My Site" />
               </RowUI>
-              <RowUI label="Description" class="!items-start">
+              <RowUI label="Description" align="start">
                 <TextareaUI v-model="settings.seo.description" placeholder="Shown in search results" :rows="2" />
               </RowUI>
               <!-- structured data (schema.org JSON-LD): "None" turns it off -->
@@ -770,10 +1139,10 @@ async function onImportFile(e: Event) {
                   </div>
                 </div>
               </RowUI>
-              <RowUI label="OG image" class="!items-start">
+              <RowUI label="OG image" align="start">
                 <IconTileUI v-model="ogImage" wide />
               </RowUI>
-              <RowUI v-if="schemaOn" label="JSON-LD" class="!items-start">
+              <RowUI v-if="schemaOn" label="JSON-LD" align="start">
                 <div class="flex min-w-0 flex-1 flex-col gap-1">
                   <TextareaUI
                     v-model="schemaCustom"
@@ -781,8 +1150,8 @@ async function onImportFile(e: Event) {
                     :rows="4"
                     class="font-mono"
                   />
-                  <p v-if="schemaCustomError" class="text-[10px] text-danger">{{ schemaCustomError }}</p>
-                  <p v-else class="text-[10px] text-muted-foreground">
+                  <p v-if="schemaCustomError" class="text-[9px] text-danger">{{ schemaCustomError }}</p>
+                  <p v-else class="text-[9px] text-muted-foreground">
                     Optional. One object or an array, added after the generated entries.
                   </p>
                 </div>
@@ -793,7 +1162,7 @@ async function onImportFile(e: Event) {
           <TabPanelUI class="gap-9" id="design">
             <SettingsGroup
               title="Design tokens"
-              description="Project colors, usable in classes as bg-<name>, text-<name>, border-<name>."
+              description="Project colors, used as bg-<name>, text-<name>, border-<name>."
             >
               <div v-for="token in settings.tokens" :key="token.id" class="flex flex-col gap-0.5">
                 <div class="flex items-center gap-1.5">
@@ -801,12 +1170,12 @@ async function onImportFile(e: Event) {
                   <ColorPickerUI v-model="token.value" output="hex" />
                   <ButtonUI variant="ghost" size="xs" :icon="Trash2" @click="removeToken(token.id)" />
                 </div>
-                <p v-if="tokenError(token.id, token.name)" class="text-[10px] text-danger">
+                <p v-if="tokenError(token.id, token.name)" class="text-[9px] text-danger">
                   {{ tokenError(token.id, token.name) }}
                 </p>
                 <p
                   v-else-if="tokenNameNote(token.name)"
-                  class="text-[10px] text-pending"
+                  class="text-[9px] text-pending"
                 >
                   {{ tokenNameNote(token.name) }}
                 </p>
@@ -818,7 +1187,7 @@ async function onImportFile(e: Event) {
 
             <SettingsGroup
               title="Type scale"
-              description="Override Tailwind's defaults when your design isn't built on them. Blank means the default."
+              description="Override the default scale. Blank keeps the default."
             >
               <RowUI label="Root size">
                 <InputUI
@@ -833,10 +1202,10 @@ async function onImportFile(e: Event) {
               <RowUI label="Spacing unit">
                 <InputUI v-model="themeSpacing" placeholder="0.25rem" class="font-mono" />
               </RowUI>
-              <p v-if="themeInvalid.length" class="px-1 text-[10px] text-danger">
+              <p v-if="themeInvalid.length" class="px-1 text-[9px] text-danger">
                 Not a CSS length: {{ themeInvalid.join(', ') }}
               </p>
-              <p v-else-if="settings.theme?.rootFontSize" class="px-1 text-[10px] text-muted-foreground">
+              <p v-else-if="settings.theme?.rootFontSize" class="px-1 text-[9px] text-muted-foreground">
                 The root size applies exactly on the published site. In the editor it is scoped to
                 the canvas so it can't resize the editor itself, so rem-based spacing previews at
                 the default there.
@@ -852,7 +1221,7 @@ async function onImportFile(e: Event) {
             <SettingsGroup
               v-if="legacyHeadFonts.length"
               title="Fonts found in your head code"
-              description="These @font-face rules only reach the published site — the editor and preview can't see them. Import them to fix that."
+              description="These @font-face rules never reach the editor. Import them."
             >
               <div class="flex flex-col divide-y divide-input rounded-xl border border-input">
                 <div
@@ -861,7 +1230,7 @@ async function onImportFile(e: Event) {
                   class="flex items-center justify-between gap-2 px-3 py-2"
                 >
                   <span class="text-xs font-medium">{{ f.family }}</span>
-                  <span class="truncate font-mono text-[10px] text-muted-foreground">{{ f.src }}</span>
+                  <span class="truncate font-mono text-[9px] text-muted-foreground">{{ f.src }}</span>
                 </div>
               </div>
               <ButtonUI variant="outline" size="sm" class="w-full" @click="onImportLegacyFonts">
@@ -872,7 +1241,7 @@ async function onImportFile(e: Event) {
             <SettingsGroup
               v-else-if="legacyImported"
               title="Fonts imported"
-              description="Your fonts now render in the editor, the preview and the published site. The old @font-face rules in your head code are now redundant."
+              description="Imported — the @font-face rules in your head code are redundant."
             >
               <ButtonUI variant="outline" size="sm" class="w-full" @click="clearLegacyHeadFonts">
                 Remove them from the head code
@@ -881,34 +1250,77 @@ async function onImportFile(e: Event) {
 
             <SettingsGroup
               title="Custom fonts"
-              description="A font file from the media library and the family name it registers. It renders everywhere — canvas, preview and export."
+              description="Font files from the library, under a family name."
             >
-              <div v-for="font in customFonts" :key="font.id" class="flex flex-col gap-1.5">
-                <div class="flex items-start gap-1.5">
-                  <MediaPickerControl
-                    :model-value="font.src"
-                    kind="font"
-                    compact
-                    class="min-w-0 flex-1"
-                    @update:model-value="(v) => setFontSrc(font, v)"
-                  />
-                  <InputUI v-model="font.family" placeholder="Family name" size="lg" class="!w-40 shrink-0" />
-                  <ButtonUI variant="ghost" size="xs" :icon="Trash2" class="!h-12" @click="removeFont(font.id)" />
+              <template #action>
+                <ButtonUI
+                  size="xs"
+                  :variant="addingFont ? 'outline' : 'default'"
+                  :icon="addingFont ? X : Plus"
+                  @click="addingFont ? closeAddFont() : (addingFont = true)"
+                >
+                  {{ addingFont ? 'Close' : 'Add font' }}
+                </ButtonUI>
+              </template>
+
+              <!-- inline add form (before the list), like Users' add form -->
+              <div v-if="addingFont" class="flex flex-col gap-2 rounded-xl border border-input p-3">
+                <RowUI label="File" align="start">
+                  <MediaPickerControl v-model="fontDraft.src" kind="font" compact class="min-w-0 flex-1" />
+                </RowUI>
+                <RowUI label="Family">
+                  <InputUI v-model="fontDraft.family" placeholder="OffSans" @keydown.enter="submitFont" />
+                </RowUI>
+                <p v-if="fontDraftError" class="text-[9px] text-danger">{{ fontDraftError }}</p>
+                <div class="flex justify-end gap-1.5">
+                  <ButtonUI variant="outline" size="xs" @click="closeAddFont">Cancel</ButtonUI>
+                  <ButtonUI size="xs" :disabled="!fontDraft.src || !fontDraft.family.trim()" @click="submitFont">
+                    Add font
+                  </ButtonUI>
                 </div>
-                <p v-if="fontIssue(font)" class="text-[10px] text-danger">{{ fontIssue(font) }}</p>
-                <p v-else-if="font.family.trim() && font.src" class="text-[10px] text-muted-foreground">
-                  Use it with <span class="font-mono">font-[{{ font.family.trim().replace(/ /g, '_') }}]</span>
-                  or set it as the base font below.
-                </p>
               </div>
-              <ButtonUI variant="outline" size="sm" :icon="Plus" class="w-full" @click="addFont()">
-                Add font
-              </ButtonUI>
+
+              <!-- registered fonts, laid out like the members list -->
+              <div v-if="customFonts.length" class="flex flex-col rounded-xl border border-input">
+                <div
+                  v-for="font in customFonts"
+                  :key="font.id"
+                  class="flex items-center gap-2 border-b border-input px-3 py-2 last:border-b-0"
+                >
+                  <span
+                    class="size-1.5 shrink-0 rounded-full"
+                    :class="fontIssue(font) ? 'bg-danger' : 'bg-success'"
+                  />
+                  <div class="min-w-0 flex-1">
+                    <p class="truncate text-xs font-medium" :style="{ fontFamily: fontIssue(font) ? undefined : `'${font.family}'` }">
+                      {{ font.family || 'Unnamed' }}
+                    </p>
+                    <p class="truncate text-[9px]" :class="fontIssue(font) ? 'text-danger' : 'text-muted-foreground'">
+                      {{ fontIssue(font) ?? fontFileLabel(font) }}
+                    </p>
+                  </div>
+                  <span v-if="!fontIssue(font)" class="shrink-0 font-mono text-[9px] text-muted-foreground">
+                    font-[{{ font.family.trim().replace(/ /g, '_') }}]
+                  </span>
+                  <MenuUI>
+                    <template #default="{ close }">
+                      <button
+                        type="button"
+                        class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-danger outline-none hover:bg-accent/30"
+                        @click="(removeFont(font.id), close())"
+                      >
+                        <Trash2 class="size-3.5" /> Remove
+                      </button>
+                    </template>
+                  </MenuUI>
+                </div>
+              </div>
+              <EmptyListUI v-else>No custom fonts yet — the site uses the stacks below.</EmptyListUI>
             </SettingsGroup>
 
             <SettingsGroup
               title="Google Fonts"
-              description="A hosted stylesheet, loaded on every page. Use the family name it defines as the base font below."
+              description="A hosted stylesheet, loaded on every page."
             >
               <RowUI label="URL">
                 <InputUI
@@ -921,7 +1333,7 @@ async function onImportFile(e: Event) {
 
             <SettingsGroup
               title="Typography"
-              description="Which family the site uses by default, and what font-mono / font-serif resolve to."
+              description="The default family, and what font-mono / font-serif resolve to."
             >
               <RowUI label="Base">
                 <SelectUI v-model="settings.fonts.family" :options="familyOptions" />
@@ -938,46 +1350,67 @@ async function onImportFile(e: Event) {
           <TabPanelUI v-if="canBuild" class="gap-9" id="locales">
             <SettingsGroup
               title="Locales"
-              description="Languages your site is translated into. The default locale holds the base content; the others store translations on top of it."
+              description="Languages your site is translated into."
             >
-              <div class="flex flex-col divide-y divide-input rounded-xl border border-input">
-                <div v-for="l in locales" :key="l" class="flex h-9 items-center gap-3 px-3">
-                  <span class="w-16 shrink-0 font-mono text-xs">{{ l }}</span>
-                  <span class="min-w-0 flex-1 text-[10px] text-muted-foreground">
-                    <template v-if="l === defaultLocale">Default — base content</template>
-                    <template v-else>Translations fall back to {{ defaultLocale }}</template>
-                  </span>
-                  <ButtonUI
-                    v-if="l !== defaultLocale"
-                    variant="ghost"
-                    size="xs"
-                    class="text-muted-foreground"
-                    @click="setDefaultLocale(l)"
-                  >
-                    Make default
-                  </ButtonUI>
-                  <BadgeUI v-else>default</BadgeUI>
-                  <ButtonUI
-                    variant="ghost"
-                    size="xs"
-                    :icon="Trash2"
-                    :disabled="l === defaultLocale"
-                    tooltip="Delete locale"
-                    class="hover:!text-danger"
-                    @click="confirmDeleteLocale(l)"
-                  />
+              <template #action>
+                <ButtonUI
+                  size="xs"
+                  :variant="addingLocale ? 'outline' : 'default'"
+                  :icon="addingLocale ? X : Plus"
+                  @click="addingLocale ? closeAddLocale() : (addingLocale = true)"
+                >
+                  {{ addingLocale ? 'Close' : 'Add locale' }}
+                </ButtonUI>
+              </template>
+
+              <!-- inline add form (before the list), like Users' add form -->
+              <div v-if="addingLocale" class="flex flex-col gap-2 rounded-xl border border-input p-3">
+                <RowUI label="Code">
+                  <InputUI v-model="newLocale" placeholder="fr, pt-br, zh-hant" class="font-mono" @keydown.enter="onAddLocale" />
+                </RowUI>
+                <p v-if="localeError" class="text-[9px] text-danger">{{ localeError }}</p>
+                <div class="flex justify-end gap-1.5">
+                  <ButtonUI variant="outline" size="xs" @click="closeAddLocale">Cancel</ButtonUI>
+                  <ButtonUI size="xs" :disabled="!newLocale.trim()" @click="onAddLocale">Add locale</ButtonUI>
                 </div>
               </div>
-              <div class="flex gap-1.5">
-                <InputUI
-                  v-model="newLocale"
-                  placeholder="Locale code, e.g. fr or pt-br"
-                  class="font-mono"
-                  @keydown.enter="onAddLocale"
-                />
-                <ButtonUI variant="outline" size="xs" class="!h-7 px-2.5" :icon="Plus" @click="onAddLocale">Add</ButtonUI>
+
+              <div class="flex flex-col rounded-xl border border-input">
+                <div
+                  v-for="l in locales"
+                  :key="l"
+                  class="flex items-center gap-2 border-b border-input px-3 py-2 last:border-b-0"
+                >
+                  <span class="size-1.5 shrink-0 rounded-full" :class="l === defaultLocale ? 'bg-success' : 'bg-muted-foreground/40'" />
+                  <div class="min-w-0 flex-1">
+                    <p class="truncate font-mono text-xs font-medium">{{ l }}</p>
+                    <p class="truncate text-[9px] text-muted-foreground">
+                      <template v-if="l === defaultLocale">Default — holds the base content</template>
+                      <template v-else>Falls back to {{ defaultLocale }} where untranslated</template>
+                    </p>
+                  </div>
+                  <BadgeUI v-if="l === defaultLocale">default</BadgeUI>
+                  <MenuUI v-else>
+                    <template #default="{ close }">
+                      <button
+                        type="button"
+                        class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs outline-none hover:bg-accent/30"
+                        @click="(setDefaultLocale(l), close())"
+                      >
+                        <Check class="size-3.5" /> Make default
+                      </button>
+                      <button
+                        type="button"
+                        class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-danger outline-none hover:bg-accent/30"
+                        @click="(confirmDeleteLocale(l), close())"
+                      >
+                        <Trash2 class="size-3.5" /> Delete
+                      </button>
+                    </template>
+                  </MenuUI>
+                </div>
               </div>
-              <p class="text-[10px] text-muted-foreground">
+              <p class="text-[9px] text-muted-foreground">
                 Changing the default does not move content between locales.
               </p>
             </SettingsGroup>
@@ -986,11 +1419,39 @@ async function onImportFile(e: Event) {
           <TabPanelUI v-if="canBuild" class="gap-9" id="publish">
             <SettingsGroup
               title="Publish method"
-              description="How the Publish button ships your site. The local preview at / always refreshes too."
+              description="How the Publish button ships your site."
             >
               <RowUI label="Method">
                 <SelectUI v-model="settings.publishing.method" :options="publishMethodOptions" />
               </RowUI>
+            </SettingsGroup>
+
+            <SettingsGroup
+              v-if="settings.publishing.method !== 'server'"
+              title="Site backend"
+              description="Where a page hosted elsewhere reaches this instance."
+            >
+              <template #action>
+                <span
+                  class="shrink-0 text-[9px]"
+                  :class="apiOriginError ? 'text-danger' : apiOrigin ? 'text-success' : 'text-muted-foreground'"
+                >
+                  {{ apiOriginError ? 'Invalid' : apiOrigin ? 'Set' : 'Not set' }}
+                </span>
+              </template>
+              <RowUI label="Studio URL">
+                <InputUI
+                  v-model="apiOrigin"
+                  placeholder="https://studio.example.com"
+                  class="font-mono"
+                />
+              </RowUI>
+              <p v-if="apiOriginError" class="text-[9px] text-danger">{{ apiOriginError }}</p>
+              <p class="text-[9px] text-muted-foreground">
+                A downloaded or pushed site is static files, so form submissions post back here.
+                This is the public address of this instance. Leave it empty if the site is served
+                from this host.
+              </p>
             </SettingsGroup>
 
             <SettingsGroup
@@ -999,7 +1460,7 @@ async function onImportFile(e: Event) {
               description="The repository branch the exported site is pushed to."
             >
               <template #action>
-                <span class="shrink-0 text-[10px]" :class="ghConfigured ? 'text-success' : 'text-muted-foreground'">
+                <span class="shrink-0 text-[9px]" :class="ghConfigured ? 'text-success' : 'text-muted-foreground'">
                   {{ ghConfigured ? 'Configured' : 'Not configured' }}
                 </span>
               </template>
@@ -1022,36 +1483,59 @@ async function onImportFile(e: Event) {
                   </ButtonUI>
                 </div>
               </RowUI>
-              <p class="text-[10px] text-muted-foreground">
+              <p class="text-[9px] text-muted-foreground">
                 The branch is fully replaced on every publish — a root README or CNAME would be
                 deleted. The token is kept on the server, never in the project file or an export.
               </p>
-              <p v-if="ghError" class="text-[10px] text-danger">{{ ghError }}</p>
+              <p v-if="ghError" class="text-[9px] text-danger">{{ ghError }}</p>
             </SettingsGroup>
 
             <SettingsGroup title="Status" description="The last build of the static site from Main.">
-              <p v-if="!onMain" class="text-[10px] text-pending">
-                You're on a draft — publishing ships Main; draft changes are not included.
-              </p>
-              <template v-if="publishedInfo">
-                <p class="text-xs">Last published {{ timeAgo(publishedInfo.publishedAt) }}</p>
-                <p class="text-[10px] text-muted-foreground">
-                  {{ publishedInfo.routes }} routes · {{ formatBytes(publishedInfo.bytes) }}
-                  <template v-if="publishedInfo.commit">
-                    · {{ publishedInfo.commit.slice(0, 7) }}
-                  </template>
-                </p>
-              </template>
-              <p v-else class="text-xs text-muted-foreground">Never published yet.</p>
+              <div class="flex flex-col rounded-xl border border-input">
+                <div class="flex items-center gap-2 px-3 py-2">
+                  <span
+                    class="size-1.5 shrink-0 rounded-full"
+                    :class="publishedInfo ? 'bg-success' : 'bg-pending'"
+                  />
+                  <div class="min-w-0 flex-1">
+                    <template v-if="publishedInfo">
+                      <p class="truncate text-xs font-medium">Published {{ timeAgo(publishedInfo.publishedAt) }}</p>
+                      <p class="truncate text-[10px] text-muted-foreground">
+                        {{ publishedInfo.routes }} routes · {{ formatBytes(publishedInfo.bytes) }}
+                        <template v-if="publishedInfo.commit"> · {{ publishedInfo.commit.slice(0, 7) }}</template>
+                      </p>
+                    </template>
+                    <template v-else>
+                      <p class="truncate text-xs font-medium">Not published</p>
+                      <p class="truncate text-[10px] text-muted-foreground">Visitors see nothing until you publish.</p>
+                    </template>
+                  </div>
+                  <span v-if="!onMain" class="shrink-0 text-[10px] text-pending">
+                    On a draft — publishing ships Main
+                  </span>
+                  <ButtonUI
+                    v-if="publishedInfo"
+                    variant="outline"
+                    size="xs"
+                    class="hover:!text-danger"
+                    :disabled="unpublishing"
+                    @click="onUnpublish"
+                  >
+                    {{ unpublishing ? 'Removing…' : 'Unpublish' }}
+                  </ButtonUI>
+                  <ButtonUI v-else size="xs" :icon="Rocket" @click="openModal(PublishDialog)">Publish</ButtonUI>
+                </div>
+              </div>
+              <p v-if="unpublishError" class="text-[10px] text-danger">{{ unpublishError }}</p>
             </SettingsGroup>
           </TabPanelUI>
 
           <TabPanelUI v-if="isAdmin" class="gap-9" id="code">
             <SettingsGroup
               title="Custom code"
-              description="Raw HTML added to every exported page — export only, the editor and Play never run it. It has full access to your published site."
+              description="Raw HTML on every exported page. Export only."
             >
-              <RowUI label="Head" class="!items-start">
+              <RowUI label="Head" align="start">
                 <TextareaUI
                   v-model="settings.customCode.head"
                   :rows="8"
@@ -1059,7 +1543,7 @@ async function onImportFile(e: Event) {
                   placeholder="Inside <head> — analytics, meta tags, styles…"
                 />
               </RowUI>
-              <RowUI label="Body" class="!items-start">
+              <RowUI label="Body" align="start">
                 <TextareaUI
                   v-model="siteBodyCode"
                   :rows="8"
@@ -1071,126 +1555,205 @@ async function onImportFile(e: Event) {
           </TabPanelUI>
 
           <TabPanelUI v-if="canBuild" class="gap-9" id="integrations">
-            <p class="text-[10px] text-muted-foreground">
-              Keys are stored on the server, never in the project file or an export, and are never
-              shown again once saved.
-            </p>
-
             <SettingsGroup
-              v-if="isAdmin"
-              title="Email (SMTP)"
-              description="Outgoing mail credentials, stored for future use — nothing sends mail yet."
+              title="Integrations"
+              description="Each one is a named set of keys, secret or plain."
             >
-              <template #action>
-                <span class="shrink-0 text-[10px]" :class="smtpConfigured ? 'text-success' : 'text-muted-foreground'">
-                  {{ smtpConfigured ? 'Configured' : 'Not configured' }}
-                </span>
+              <template v-if="isAdmin" #action>
+                <ButtonUI
+                  size="xs"
+                  :variant="addingIntegration ? 'outline' : 'default'"
+                  :icon="addingIntegration ? X : Plus"
+                  @click="addingIntegration ? closeAddIntegration() : (addingIntegration = true)"
+                >
+                  {{ addingIntegration ? 'Close' : 'Add integration' }}
+                </ButtonUI>
               </template>
-              <RowUI label="Host"><InputUI v-model="settings.smtp.host" placeholder="smtp.example.com" /></RowUI>
-              <RowUI label="Port"><InputUI v-model="settings.smtp.port" placeholder="587" /></RowUI>
-              <RowUI label="User"><InputUI v-model="settings.smtp.user" /></RowUI>
-              <RowUI label="From"><InputUI v-model="settings.smtp.from" placeholder="hello@example.com" /></RowUI>
-              <RowUI label="Password">
-                <div class="flex w-full gap-1.5">
-                  <InputUI
-                    v-model="secretInput.smtpPassword"
-                    type="password"
-                    :placeholder="savedPlaceholder(smtpHasPassword, '••••••••')"
-                  />
+
+              <p v-if="integrationsLoadError" class="text-[10px] text-danger">
+                {{ integrationsLoadError }}
+              </p>
+
+              <!-- new integration: just a name; its fields are added on its card -->
+              <div v-if="addingIntegration" class="flex flex-col gap-2 rounded-xl border border-input p-3">
+                <RowUI label="Name">
+                  <InputUI v-model="integrationDraft" placeholder="SMTP, Stripe, Mailchimp…" @keydown.enter="submitIntegration" />
+                </RowUI>
+                <p v-if="integrationError" class="text-[10px] text-danger">{{ integrationError }}</p>
+                <div class="flex justify-end gap-1.5">
+                  <ButtonUI variant="outline" size="xs" @click="closeAddIntegration">Cancel</ButtonUI>
                   <ButtonUI
-                    variant="outline"
-                    size="sm"
-                    :disabled="secretBusy === 'smtpPassword' || !secretInput.smtpPassword"
-                    @click="saveSecret('smtpPassword', { smtp: { password: secretInput.smtpPassword } })"
+                    size="xs"
+                    :disabled="!integrationDraft.trim() || integrationBusy"
+                    @click="submitIntegration"
                   >
-                    {{ secretBusy === 'smtpPassword' ? 'Saving…' : 'Save' }}
+                    {{ integrationBusy ? 'Adding…' : 'Add integration' }}
                   </ButtonUI>
                 </div>
-              </RowUI>
-            </SettingsGroup>
+              </div>
 
-            <SettingsGroup
-              title="Mailing list"
-              description="An API key for your newsletter provider, ready for form blocks to use."
-            >
-              <template #action>
-                <span class="shrink-0 text-[10px]" :class="mailingConfigured ? 'text-success' : 'text-muted-foreground'">
-                  {{ mailingConfigured ? 'Configured' : 'Not configured' }}
-                </span>
-              </template>
-              <RowUI label="Provider">
-                <InputUI
-                  v-model="settings.integrations.mailing.provider"
-                  placeholder="Mailchimp, Kit, Buttondown…"
-                />
-              </RowUI>
-              <RowUI label="API key">
-                <div class="flex w-full gap-1.5">
-                  <InputUI
-                    v-model="secretInput.mailingKey"
-                    type="password"
-                    :placeholder="savedPlaceholder(secretsSet.mailing.apiKeySet, 'API key')"
-                    class="font-mono"
-                  />
-                  <ButtonUI
-                    variant="outline"
-                    size="sm"
-                    :disabled="secretBusy === 'mailingKey' || !secretInput.mailingKey"
-                    @click="saveSecret('mailingKey', { mailing: { apiKey: secretInput.mailingKey } })"
+              <!-- one row per integration, expanding in place to show its keys -->
+              <div v-if="integrations.length" class="flex flex-col rounded-xl border border-input">
+                <div v-for="ig in integrations" :key="ig.id" class="border-b border-input last:border-b-0">
+                  <div
+                    class="flex cursor-pointer items-center gap-2 px-3 py-2 select-none"
+                    @click="toggleIntegration(ig.id)"
                   >
-                    {{ secretBusy === 'mailingKey' ? 'Saving…' : 'Save' }}
-                  </ButtonUI>
-                </div>
-              </RowUI>
-            </SettingsGroup>
+                    <ChevronRight
+                      class="size-3.5 shrink-0 text-muted-foreground transition-transform"
+                      :class="isIntegrationOpen(ig.id) && 'rotate-90'"
+                    />
+                    <div class="min-w-0 flex-1">
+                      <p class="truncate text-xs font-medium">{{ ig.name }}</p>
+                      <p class="truncate text-[10px] text-muted-foreground">
+                        {{ ig.fields.length }} {{ ig.fields.length === 1 ? 'key' : 'keys' }}
+                      </p>
+                    </div>
+                    <div v-if="isAdmin" class="flex shrink-0 items-center gap-1.5" @click.stop>
+                      <ButtonUI
+                        size="xs"
+                        :variant="fieldAdding === ig.id ? 'outline' : 'default'"
+                        :icon="fieldAdding === ig.id ? X : Plus"
+                        @click="fieldAdding === ig.id ? closeAddField() : startAddField(ig)"
+                      >
+                        {{ fieldAdding === ig.id ? 'Close' : 'Add key' }}
+                      </ButtonUI>
+                      <MenuUI>
+                        <template #default="{ close }">
+                          <button
+                            type="button"
+                            class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs outline-none hover:bg-accent/30"
+                            @click="(renameIntegration(ig), close())"
+                          >
+                            <Pencil class="size-3.5" /> Rename
+                          </button>
+                          <button
+                            type="button"
+                            class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-danger outline-none hover:bg-accent/30"
+                            @click="(deleteIntegration(ig), close())"
+                          >
+                            <Trash2 class="size-3.5" /> Delete
+                          </button>
+                        </template>
+                      </MenuUI>
+                    </div>
+                  </div>
 
-            <SettingsGroup
-              title="Stripe"
-              description="Keys for selling online. The publishable key ships with your site; the secret key never leaves the server."
-            >
-              <template #action>
-                <span class="shrink-0 text-[10px]" :class="stripeConfigured ? 'text-success' : 'text-muted-foreground'">
-                  {{ stripeConfigured ? 'Configured' : 'Not configured' }}
-                </span>
-              </template>
-              <RowUI label="Publishable">
-                <InputUI
-                  v-model="settings.integrations.stripe.publishableKey"
-                  placeholder="pk_live_…"
-                  class="font-mono"
-                />
-              </RowUI>
-              <RowUI label="Secret">
-                <div class="flex w-full gap-1.5">
-                  <InputUI
-                    v-model="secretInput.stripeSecret"
-                    type="password"
-                    :placeholder="savedPlaceholder(secretsSet.stripe.secretKeySet, 'sk_live_…')"
-                    class="font-mono"
-                  />
-                  <ButtonUI
-                    variant="outline"
-                    size="sm"
-                    :disabled="secretBusy === 'stripeSecret' || !secretInput.stripeSecret"
-                    @click="saveSecret('stripeSecret', { stripe: { secretKey: secretInput.stripeSecret } })"
+                  <div
+                    v-if="isIntegrationOpen(ig.id)"
+                    class="flex flex-col gap-2 border-t border-input px-3 py-2.5"
                   >
-                    {{ secretBusy === 'stripeSecret' ? 'Saving…' : 'Save' }}
-                  </ButtonUI>
-                </div>
-              </RowUI>
-            </SettingsGroup>
+                    <!-- inline add / replace form, like Users' add form -->
+                    <div v-if="fieldAdding === ig.id" class="flex flex-col gap-2 rounded-xl border border-input p-3">
+                      <RowUI label="Key">
+                        <InputUI
+                          v-model="fieldDraft.name"
+                          placeholder="HOST, PORT, API_KEY…"
+                          class="font-mono uppercase"
+                          :disabled="!!fieldReplacing"
+                          @keydown.enter="submitField(ig)"
+                        />
+                      </RowUI>
+                      <RowUI label="Value">
+                        <InputUI
+                          v-model="fieldDraft.value"
+                          :type="fieldDraft.secret ? 'password' : 'text'"
+                          :placeholder="fieldDraft.secret ? 'Never shown again once saved' : 'smtp.example.com'"
+                          class="font-mono"
+                          @keydown.enter="submitField(ig)"
+                        />
+                      </RowUI>
+                      <RowUI label="Secret">
+                        <ToggleUI v-model="fieldDraft.secret" :disabled="!!fieldReplacing" />
+                        <span class="text-[10px] text-muted-foreground">
+                          {{
+                            fieldReplacing
+                              ? 'Delete the key and add it again to change this'
+                              : fieldDraft.secret
+                                ? 'Server-side only — never shown again, never in an export'
+                                : 'Readable here and substituted into custom code'
+                          }}
+                        </span>
+                      </RowUI>
+                      <p v-if="fieldError" class="text-[10px] text-danger">{{ fieldError }}</p>
+                      <div class="flex justify-end gap-1.5">
+                        <ButtonUI variant="outline" size="xs" @click="closeAddField">Cancel</ButtonUI>
+                        <ButtonUI
+                          size="xs"
+                          :disabled="!fieldDraft.name.trim() || !fieldDraft.value || fieldBusy"
+                          @click="submitField(ig)"
+                        >
+                          {{ fieldBusy ? 'Saving…' : fieldReplacing ? 'Replace value' : 'Add key' }}
+                        </ButtonUI>
+                      </div>
+                    </div>
 
-            <p v-if="secretError" class="text-[10px] text-danger">{{ secretError }}</p>
+                    <div v-if="ig.fields.length" class="flex flex-col rounded-xl border border-input">
+                      <div
+                        v-for="f in ig.fields"
+                        :key="f.name"
+                        class="flex items-center gap-2 border-b border-input px-3 py-2 last:border-b-0"
+                      >
+                        <span class="size-1.5 shrink-0 rounded-full bg-success" />
+                        <div class="min-w-0 flex-1">
+                          <p class="truncate font-mono text-xs font-medium">{{ f.name }}</p>
+                          <p class="truncate text-[10px] text-muted-foreground">
+                            <template v-if="f.secret">
+                              Secret · set {{ timeAgo(f.updatedAt) }} · used by server features only
+                            </template>
+                            <template v-else>
+                              Plain · set {{ timeAgo(f.updatedAt) }} ·
+                              <span class="font-mono">{{ refFor(ig, f) }}</span>
+                            </template>
+                          </p>
+                        </div>
+                        <span class="max-w-40 shrink-0 truncate font-mono text-[10px] text-muted-foreground">
+                          {{ f.secret ? '••••••••' : f.value }}
+                        </span>
+                        <MenuUI v-if="isAdmin">
+                          <template #default="{ close }">
+                            <button
+                              type="button"
+                              class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs outline-none hover:bg-accent/30"
+                              @click="(startReplaceField(ig, f), close())"
+                            >
+                              <Pencil class="size-3.5" /> {{ f.secret ? 'Replace value' : 'Edit' }}
+                            </button>
+                            <button
+                              type="button"
+                              class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-danger outline-none hover:bg-accent/30"
+                              @click="(deleteField(ig, f), close())"
+                            >
+                              <Trash2 class="size-3.5" /> Delete
+                            </button>
+                          </template>
+                        </MenuUI>
+                      </div>
+                    </div>
+                    <EmptyListUI v-else-if="fieldAdding !== ig.id">No keys yet.</EmptyListUI>
+                  </div>
+                </div>
+              </div>
+
+              <EmptyListUI v-else-if="!addingIntegration && integrationsLoaded">
+                {{
+                  isAdmin
+                    ? 'No integrations yet — add one and give it its keys.'
+                    : 'No integrations yet — an admin sets these up.'
+                }}
+              </EmptyListUI>
+            </SettingsGroup>
           </TabPanelUI>
 
           <TabPanelUI v-if="canBuild" class="gap-9" id="mcp">
             <SettingsGroup
               title="MCP access"
-              description="Bearer credentials for the Guano MCP server and scripts. Each carries your role — treat it like a password."
+              description="Tokens for the MCP server. Treat them like passwords."
             >
               <template #action>
                 <ButtonUI
                   size="xs"
+                  :variant="addingToken ? 'outline' : 'default'"
                   :icon="addingToken ? X : Plus"
                   @click="addingToken ? closeAddToken() : (addingToken = true)"
                 >
@@ -1205,7 +1768,7 @@ async function onImportFile(e: Event) {
                   <RowUI label="Name">
                     <InputUI v-model="apiTokenName" placeholder="e.g. mcp-laptop" @keydown.enter="onCreateToken" />
                   </RowUI>
-                  <p v-if="apiTokenError" class="text-[10px] text-danger">{{ apiTokenError }}</p>
+                  <p v-if="apiTokenError" class="text-[9px] text-danger">{{ apiTokenError }}</p>
                   <div class="flex justify-end gap-1.5">
                     <ButtonUI variant="outline" size="xs" @click="closeAddToken">Cancel</ButtonUI>
                     <ButtonUI size="xs" :disabled="apiTokenBusy" @click="onCreateToken">
@@ -1221,20 +1784,20 @@ async function onImportFile(e: Event) {
                     <span class="font-medium">{{ freshApiName }}</span>
                     <span class="text-muted-foreground">· created</span>
                   </p>
-                  <code class="block rounded-lg bg-input px-2 py-1.5 font-mono text-[10px] break-all select-all">
+                  <code class="block rounded-lg bg-input px-2 py-1.5 font-mono text-[9px] break-all select-all">
                     {{ freshApiToken }}
                   </code>
                   <ButtonUI :icon="apiTokenCopied ? Check : Copy" size="sm" class="w-full justify-center" @click="copyToken">
                     {{ apiTokenCopied ? 'Copied to clipboard' : 'Copy token' }}
                   </ButtonUI>
-                  <p class="text-[10px] text-muted-foreground">Copy it now — it won't be shown again.</p>
+                  <p class="text-[9px] text-muted-foreground">Copy it now — it won't be shown again.</p>
                   <div class="flex justify-end gap-1.5">
                     <ButtonUI variant="outline" size="xs" @click="freshApiToken = null">Add another</ButtonUI>
                     <ButtonUI size="xs" @click="closeAddToken">Done</ButtonUI>
                   </div>
                 </template>
               </div>
-              <p v-else-if="apiTokenError" class="text-[10px] text-danger">{{ apiTokenError }}</p>
+              <p v-else-if="apiTokenError" class="text-[9px] text-danger">{{ apiTokenError }}</p>
 
               <!-- existing tokens, laid out like the members list -->
               <div v-if="tokens.length" class="flex flex-col rounded-xl border border-input">
@@ -1246,7 +1809,7 @@ async function onImportFile(e: Event) {
                   <span class="size-1.5 shrink-0 rounded-full" :class="t.lastUsedAt ? 'bg-success' : 'bg-muted-foreground/40'" />
                   <div class="min-w-0 flex-1">
                     <p class="truncate text-xs font-medium">{{ t.name }}</p>
-                    <p class="truncate text-[10px] text-muted-foreground">
+                    <p class="truncate text-[9px] text-muted-foreground">
                       Created {{ timeAgo(t.createdAt) }} ·
                       {{ t.lastUsedAt ? `last used ${timeAgo(t.lastUsedAt)}` : 'never used' }}
                     </p>
@@ -1264,50 +1827,104 @@ async function onImportFile(e: Event) {
                   </MenuUI>
                 </div>
               </div>
-              <p v-else class="text-[10px] text-muted-foreground">No tokens yet.</p>
+              <EmptyListUI v-else>No tokens yet — add one to connect an MCP client.</EmptyListUI>
             </SettingsGroup>
           </TabPanelUI>
 
-          <TabPanelUI v-if="isAdmin" id="users">
+          <TabPanelUI v-if="isAdmin" class="gap-9" id="users">
             <UsersSettings />
           </TabPanelUI>
 
           <TabPanelUI v-if="isAdmin" class="gap-9" id="backup">
             <SettingsGroup
-              title="Export"
-              description="A zip of every page, draft, setting and media file — your restore point."
+              title="Snapshots"
+              description="Restore points of every page, draft, setting and media file."
             >
-              <ButtonUI
-                variant="outline"
-                size="sm"
-                class="w-full"
-                :disabled="exporting"
-                @click="exportPackage"
-              >
-                {{ exporting ? 'Preparing…' : 'Download project package (.zip)' }}
-              </ButtonUI>
-              <p v-if="exportError" class="text-[10px] text-danger">{{ exportError }}</p>
+              <template #action>
+                <ButtonUI size="xs" :icon="Plus" :disabled="snapshotBusy" @click="takeSnapshot">
+                  {{ snapshotBusy ? 'Saving…' : 'Snapshot' }}
+                </ButtonUI>
+              </template>
+              <div v-if="snapshots.length" class="flex flex-col rounded-xl border border-input">
+                <div
+                  v-for="snap in snapshots"
+                  :key="snap.id"
+                  class="flex items-center gap-2 border-b border-input px-3 py-2 last:border-b-0"
+                >
+                  <span class="size-1.5 shrink-0 rounded-full bg-success" />
+                  <div class="min-w-0 flex-1">
+                    <input
+                      v-if="renamingSnapshot === snap.id"
+                      v-model="snapshotDraftName"
+                      :ref="(el) => (el as HTMLInputElement | null)?.focus()"
+                      type="text"
+                      spellcheck="false"
+                      :placeholder="new Date(snap.createdAt).toLocaleString()"
+                      class="h-5 w-full rounded-md bg-input px-1.5 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                      @keydown.enter.prevent="commitRenameSnapshot(snap)"
+                      @keydown.escape.stop.prevent="renamingSnapshot = null"
+                      @blur="commitRenameSnapshot(snap)"
+                    />
+                    <p
+                      v-else
+                      class="cursor-text truncate text-xs font-medium"
+                      @dblclick="startRenameSnapshot(snap)"
+                    >
+                      {{ snap.name || new Date(snap.createdAt).toLocaleString() }}
+                    </p>
+                    <p class="truncate text-[10px] text-muted-foreground">
+                      <template v-if="snap.name">{{ new Date(snap.createdAt).toLocaleString() }} · </template>
+                      {{ timeAgo(snap.createdAt) }} · {{ formatBytes(snap.bytes) }}
+                    </p>
+                  </div>
+                  <ButtonUI variant="outline" size="xs" @click="restoreSnapshot(snap)">Restore</ButtonUI>
+                  <MenuUI>
+                    <template #default="{ close }">
+                      <button
+                        type="button"
+                        class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs outline-none hover:bg-accent/30"
+                        @click="(startRenameSnapshot(snap), close())"
+                      >
+                        <Pencil class="size-3.5" /> Rename
+                      </button>
+                      <button
+                        type="button"
+                        class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs outline-none hover:bg-accent/30"
+                        @click="(downloadSnapshot(snap), close())"
+                      >
+                        <Archive class="size-3.5" /> Download
+                      </button>
+                      <button
+                        type="button"
+                        class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-danger outline-none hover:bg-accent/30"
+                        @click="(deleteSnapshot(snap), close())"
+                      >
+                        <Trash2 class="size-3.5" /> Delete
+                      </button>
+                    </template>
+                  </MenuUI>
+                </div>
+              </div>
+              <EmptyListUI v-else>No snapshots yet — take one before a big change.</EmptyListUI>
+              <p v-if="snapshotError" class="text-[10px] text-danger">{{ snapshotError }}</p>
             </SettingsGroup>
 
             <SettingsGroup
               title="Import"
-              description="Restores a project package. Replaces ALL pages, drafts, settings and media, for every user."
+              description="Restores a downloaded package, replacing everything for every user."
             >
-              <input
-                ref="importInput"
-                type="file"
-                accept=".zip,application/zip"
-                class="hidden"
-                @change="onImportFile"
-              />
-              <ButtonUI
-                variant="outline"
-                size="sm"
-                :disabled="importing"
-                @click="importInput?.click()"
-              >
-                {{ importing ? 'Importing…' : 'Choose package…' }}
-              </ButtonUI>
+              <template #action>
+                <input
+                  ref="importInput"
+                  type="file"
+                  accept=".zip,application/zip"
+                  class="hidden"
+                  @change="onImportFile"
+                />
+                <ButtonUI size="xs" :icon="Archive" :disabled="importing" @click="importInput?.click()">
+                  {{ importing ? 'Importing…' : 'Import' }}
+                </ButtonUI>
+              </template>
               <p v-if="importError" class="text-[10px] text-danger">{{ importError }}</p>
             </SettingsGroup>
           </TabPanelUI>
@@ -1333,10 +1950,10 @@ async function onImportFile(e: Event) {
               <ButtonUI variant="default" size="sm" :disabled="accBusy" @click="saveAccount">
                 {{ accBusy ? 'Saving…' : 'Save changes' }}
               </ButtonUI>
-              <span v-if="accSaved" class="flex items-center gap-1 text-[10px] text-success">
+              <span v-if="accSaved" class="flex items-center gap-1 text-[9px] text-success">
                 <Check class="size-3.5" /> Saved
               </span>
-              <span v-if="accError" class="text-[10px] text-danger">{{ accError }}</span>
+              <span v-if="accError" class="text-[9px] text-danger">{{ accError }}</span>
             </div>
           </TabPanelUI>
         </div>

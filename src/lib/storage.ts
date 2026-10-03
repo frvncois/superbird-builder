@@ -88,7 +88,6 @@ export function migrateStoredProject(parsed: Project): Project | null {
     const defaults = defaultSettings()
     parsed.settings ??= defaults
     parsed.settings.seo ??= defaults.seo
-    parsed.settings.smtp ??= defaults.smtp
     parsed.settings.tokens ??= []
     parsed.settings.customCode ??= defaults.customCode
     parsed.settings.fonts ??= defaults.fonts
@@ -97,9 +96,10 @@ export function migrateStoredProject(parsed: Project): Project | null {
     parsed.settings.domain ??= ''
     parsed.settings.publishing ??= defaults.publishing
     parsed.settings.publishing.github ??= { repo: '', branch: 'main' }
-    parsed.settings.integrations ??= defaults.integrations
-    parsed.settings.integrations.stripe ??= { publishableKey: '' }
-    parsed.settings.integrations.mailing ??= { provider: '' }
+    parsed.settings.publishing.apiOrigin ??= ''
+    // `settings.smtp` / `settings.integrations` are deliberately NOT backfilled:
+    // both are deprecated, the server deletes them from every blob at boot, and
+    // re-adding them here would put them straight back.
     // locale backfills (list before pages: the migration reads it)
     parsed.defaultLocale ||= 'en'
     parsed.locales ??= [parsed.defaultLocale]

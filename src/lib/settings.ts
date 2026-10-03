@@ -62,11 +62,12 @@ export const FONT_STACKS: { label: string; value: string }[] = [
 export function defaultSettings(): ProjectSettings {
   return {
     favicon: undefined,
-    publishing: { method: 'server', github: { repo: '', branch: 'main' } },
+    publishing: { method: 'server', github: { repo: '', branch: 'main' }, apiOrigin: '' },
     seo: { siteName: '', titleTemplate: '%s', description: '', ogImage: undefined },
     domain: '',
-    smtp: { host: '', port: '', user: '', password: '', from: '' },
-    integrations: { stripe: { publishableKey: '' }, mailing: { provider: '' } },
+    // no `smtp` / `integrations`: both are deprecated and server-side now
+    // (server/integrations.mjs). Minting them here would recreate the blob
+    // fields the boot migration deletes.
     tokens: [],
     customCode: { head: '' },
     fonts: { family: '', googleFontsUrl: undefined, custom: [] },
