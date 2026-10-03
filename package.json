@@ -19,6 +19,7 @@
     "build:icons": "npx -y tsx --tsconfig tsconfig.app.json scripts/build-icons.ts",
     "type-check": "vue-tsc --build",
     "check:mcp": "node scripts/measure-mcp.mjs",
+    "check:corpus": "node scripts/corpus.mjs check",
     "check:catalog": "npx -y tsx --tsconfig tsconfig.app.json scripts/check-catalog.ts",
     "test:e2e": "playwright test"
   },

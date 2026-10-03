@@ -49,3 +49,6 @@ playwright-report
 
 # local agent config/permissions — never ship
 .claude/
+
+# tree-source migration render referee (scripts/corpus.mjs)
+.corpus
