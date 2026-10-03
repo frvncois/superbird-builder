@@ -324,15 +324,20 @@ test.describe('the public form endpoint', () => {
     }
   })
 
-  test('the endpoint is not reachable under /api', async ({ baseURL }) => {
+  test('a submission is not accepted under /api', async ({ baseURL }) => {
     const v = await visitor(baseURL)
-    // the two prefixes are disjoint on purpose: a guard regression on one must
-    // never expose the other
+    // The two prefixes are disjoint on purpose: /api/forms IS a route, but the
+    // AUTHED read API, so an unauthenticated submission posted there is turned
+    // away by auth and never reaches any submission handling.
     const res = await v.post(`/api/forms/${FORM_ID}`, {
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       data: body(GOOD),
     })
-    expect(res.status()).not.toBe(200)
+    expect(res.status()).toBe(401)
+    // and nothing in that namespace is readable without a session either
+    expect((await v.get('/api/forms')).status()).toBe(401)
+    expect((await v.get(`/api/forms/${FORM_ID}/submissions`)).status()).toBe(401)
+    expect((await v.get(`/api/forms/${FORM_ID}/submissions.csv`)).status()).toBe(401)
     await v.dispose()
   })
 })
