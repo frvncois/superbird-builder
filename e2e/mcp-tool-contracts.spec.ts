@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { mcpSession, pageCode } from './fixtures/mcpSession'
+import { mcpSession, pageHtml } from './fixtures/mcpSession'
 
 // The tool CONTRACTS an agent depends on, driven in-process. Every case here
 // comes from something that cost the Cocoapp session real calls: a response too
@@ -46,9 +46,9 @@ test.describe('get_page', () => {
   test('diagnostics is always present, so "clean" and "not checked" differ', async () => {
     const s = await mcpSession()
     const home = await s.home()
-    await s.call('set_page_code', {
+    await s.call('set_page_html', {
       pageId: home.id,
-      code: pageCode('\t:h1:'),
+      html: pageHtml('<h1 />'),
       version: home.version,
     })
     const page = await s.call('get_page', { pageId: home.id, elements: 'none' })
@@ -125,9 +125,9 @@ test.describe('design tokens', () => {
     const s = await mcpSession()
     await s.call('update_settings', { tokens: [{ name: 'brand', value: '#0D594A' }] })
     const home = await s.home()
-    await s.call('set_page_code', {
+    await s.call('set_page_html', {
       pageId: home.id,
-      code: pageCode('\t:h1#title:'),
+      html: pageHtml('<h1 data-ref="title" />'),
       version: home.version,
     })
     const after = await s.home()
@@ -206,9 +206,9 @@ test.describe('extracting a component', () => {
   test('create_component takes a ref, and reports the master’s nodes', async () => {
     const s = await mcpSession()
     const home = await s.home()
-    await s.call('set_page_code', {
+    await s.call('set_page_html', {
       pageId: home.id,
-      code: pageCode('\t:div#card\n\t\t:h3:\n\t\t:paragraph:\n\tdiv:'),
+      html: pageHtml('<div data-ref="card">\n  <h3 />\n  <p />\n</div>'),
       version: home.version,
     })
     const after = await s.home()
@@ -227,7 +227,11 @@ test.describe('extracting a component', () => {
     // the extracted element stays inside the master, under the :Card root
     expect(made.nodes.map((n: { type: string }) => n.type)).toEqual(['Card', 'div', 'h3', 'paragraph'])
     expect(made.nodes[0].root).toBe(true)
-    expect(s.stored().pages[0].code).toContain(':Card')
+    // the page keeps its own nodes, now wrapped in the instance, and the
+    // instance took the extracted block's ref
+    const page = await s.call('get_page', { pageId: after.id })
+    expect(page.html).toMatch(/<Card [^>]*data-ref="card">/)
+    expect(page.html).toContain('<h3 ')
   })
 
   test('an unknown ref is refused by name, not by throwing', async () => {
@@ -247,9 +251,9 @@ test.describe('extracting a component', () => {
   test('create_components resolves each item’s ref as the batch rewrites the page', async () => {
     const s = await mcpSession()
     const home = await s.home()
-    await s.call('set_page_code', {
+    await s.call('set_page_html', {
       pageId: home.id,
-      code: pageCode('\t:header#top\n\t\t:h1:\n\theader:\n\t:footer#bottom\n\t\t:span:\n\tfooter:'),
+      html: pageHtml('<header data-ref="top">\n  <h1 />\n</header>\n<footer data-ref="bottom">\n  <span />\n</footer>'),
       version: home.version,
     })
     const after = await s.home()
@@ -262,9 +266,9 @@ test.describe('extracting a component', () => {
     })
     expect(r.saved).toBe(true)
     expect(r.created).toBe(2)
-    const code = s.stored().pages[0].code
-    expect(code).toContain(':SiteHeader')
-    expect(code).toContain(':SiteFooter')
+    const page = await s.call('get_page', { pageId: after.id })
+    expect(page.html).toMatch(/<SiteHeader [^>]*data-ref="top">/)
+    expect(page.html).toMatch(/<SiteFooter [^>]*data-ref="bottom">/)
   })
 })
 
@@ -416,9 +420,9 @@ test.describe('breakpoints', () => {
     const base = s.stored().breakpoints
     const mobile = base[base.length - 1]
     const home = await s.home()
-    await s.call('set_page_code', {
+    await s.call('set_page_html', {
       pageId: home.id,
-      code: pageCode('\t:slider#deck\n\t\t:div\n\t\t\t:span:\n\t\tdiv:\n\tslider:'),
+      html: pageHtml('<slider data-ref="deck">\n  <div>\n    <span />\n  </div>\n</slider>'),
       version: home.version,
     })
     const after = await s.home()
@@ -447,13 +451,20 @@ test.describe('breakpoints', () => {
   })
 })
 
-test.describe('set_page_code reparenting', () => {
-  test('a wrapped element reports WHAT it was carrying, so it can be put back', async () => {
+test.describe('set_page_html identity', () => {
+  test('wrapping an element keeps everything it was carrying', async () => {
+    // The DSL path could not do this: a node that changed PARENT kept its id
+    // but had its classes, content and bindings DROPPED, because a line diff
+    // could not tell a deliberate wrap from a coincidental match, and carrying
+    // state across would have styled new structure with old presentation. It
+    // reported what it dropped so an agent could put it back by hand. Matching
+    // a tree by `data-ref`/`data-id` has no such ambiguity, so the state simply
+    // survives and there is nothing to put back.
     const s = await mcpSession()
     const home = await s.home()
-    await s.call('set_page_code', {
+    await s.call('set_page_html', {
       pageId: home.id,
-      code: pageCode('\t:h1#title:'),
+      html: pageHtml('<h1 data-ref="title" />'),
       version: home.version,
     })
     let after = await s.home()
@@ -472,70 +483,30 @@ test.describe('set_page_code reparenting', () => {
         },
       ],
     })
+    const before = await s.call('get_page', { pageId: after.id, elements: 'refs' })
+    const titleId = before.elements.find((e: { ref?: string }) => e.ref === 'title').id
 
-    // wrap it in a new div: the node keeps its identity but changes parent, so
-    // its state is dropped rather than re-seated onto unrelated content
     after = await s.home()
-    const r = await s.call('set_page_code', {
+    const r = await s.call('set_page_html', {
       pageId: after.id,
-      code: pageCode('\t:div#wrap\n\t\t:h1#title:\n\tdiv:'),
+      html: pageHtml('<div data-ref="wrap">\n  <h1 data-ref="title" class="text-3xl font-bold">Dashboard</h1>\n</div>'),
       version: after.version,
     })
     expect(r.saved).toBe(true)
-    expect(r.reparented).toHaveLength(1)
-    // the whole cost of this used to be reconstructing the state from memory,
-    // including binding ids the agent happened to still have in context
-    const dropped = r.reparented[0].dropped
-    expect(dropped.classes).toContain('text-3xl')
-    expect(dropped.content).toBe('Dashboard')
-    expect(dropped.interactionIds).toEqual([created[0].id])
-    expect(r.note ?? JSON.stringify(r.notes)).toContain('dropped')
+    expect(r.applied.removed).toBe(0)
 
-    // and putting it back is one call, from what the response just said
-    const back = await s.home()
-    const redo = await s.call('edit_elements', {
-      pageId: back.id,
-      version: back.version,
-      edits: [
-        {
-          ref: 'title',
-          addClasses: dropped.classes.split(' '),
-          content: dropped.content,
-          bindInteractions: dropped.interactionIds.map((id: string) => ({
-            interactionId: id,
-            trigger: 'hover',
-          })),
-        },
-      ],
-    })
-    expect(redo.failed).toBe(0)
-  })
-})
-
-test.describe('untrusted content', () => {
-  test('the translation worklist fences every string, like every other tool', async () => {
-    const s = await mcpSession()
-    await s.call('update_settings', { addLocales: ['fr'] })
-    const home = await s.home()
-    await s.call('set_page_code', {
-      pageId: home.id,
-      code: pageCode('\t:h1#title:'),
-      version: home.version,
-    })
-    const after = await s.home()
-    await s.call('edit_elements', {
+    const page = await s.call('get_page', {
       pageId: after.id,
-      version: after.version,
-      edits: [{ ref: 'title', content: 'Good morning, Camille' }],
+      includeContent: true,
+      includeInteractions: true,
     })
-
-    const wl = await s.call('get_translation_worklist', { locale: 'fr' })
-    const item = wl.items.find((i: { type: string }) => i.type === 'h1')
-    // a single note at the top of a 275-item response sits a long way from item
-    // 200, which is where an injected string would be; the guide states ONE
-    // fencing rule and this was its only exception
-    expect(item.base).toEqual({ untrusted: true, text: 'Good morning, Camille' })
-    expect(wl._untrusted).toContain('untrusted')
+    const title = page.elements.find((e: { ref?: string }) => e.ref === 'title')
+    expect(title.id).toBe(titleId) // the same element, under a new parent
+    expect(title.classes).toContain('text-3xl')
+    expect(title.content.text).toBe('Dashboard')
+    expect(title.interactions[0].interactionId).toBe(created[0].id)
+    // and it really is inside the wrapper
+    expect(page.html).toMatch(/<div [^>]*data-ref="wrap">\n\s+<h1 /)
   })
 })
 
@@ -545,9 +516,9 @@ test.describe('addressing a component instance’s parts', () => {
     const s = await mcpSession()
     await s.call('add_library_components', { keys: ['button'] })
     const home = await s.home()
-    await s.call('set_page_code', {
+    await s.call('set_page_html', {
       pageId: home.id,
-      code: pageCode('\t:Button#save:\n\t:Button#cancel:'),
+      html: pageHtml('<Button data-ref="save" />\n<Button data-ref="cancel" />'),
       version: home.version,
     })
     return s
@@ -609,9 +580,9 @@ test.describe('addressing a component instance’s parts', () => {
   test('part on a plain element says so rather than guessing', async () => {
     const s = await mcpSession()
     const home = await s.home()
-    await s.call('set_page_code', {
+    await s.call('set_page_html', {
       pageId: home.id,
-      code: pageCode('\t:h1#title:'),
+      html: pageHtml('<h1 data-ref="title" />'),
       version: home.version,
     })
     const after = await s.home()

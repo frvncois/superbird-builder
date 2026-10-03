@@ -19,8 +19,7 @@ const runtimePromise = import(
   /* @vite-ignore */ '../packages/guano/runtime/mcp-runtime.mjs' as string
 ).catch(() => null)
 
-const page = (body: string) =>
-  `@setup\n\tname: Home\n\tslug: /\n\tstatus: published\n\tlocale: en\n:body\n${body}\nbody:`
+const page = (body: string) => `<body>\n${body}\n</body>`
 
 async function session() {
   const runtime = await runtimePromise
@@ -63,7 +62,7 @@ test('the library is listed, copied in by key or name, and never copied twice', 
   expect(library.library.every((e: { added: boolean }) => e.added === false)).toBe(true)
   // looking — even in detail — adds nothing
   const detail = await call('list_library', { keys: ['card'] })
-  expect(detail.library[0].structure).toContain(':Button')
+  expect(detail.library[0].html).toContain('<Button')
   expect(stored().components).toEqual([])
 
   // a card holds a button: it comes along, with the tokens both name
@@ -89,19 +88,23 @@ test('the library is listed, copied in by key or name, and never copied twice', 
 test('an unknown component the library has says how to get it', async () => {
   const { call, home } = await session()
   const h = await home()
-  const refused = await call('set_page_code', { pageId: h.id, version: h.version, code: page('\t:Hero:') })
-  expect(refused.saved).toBe(false)
-  expect(refused.diagnostics[0].message).toContain('add_library_components {keys: ["hero"]}')
+  const written = await call('set_page_html', { pageId: h.id, version: h.version, html: page('<Hero />') })
+  // the markup is well-formed and storable, so this is a diagnostic rather
+  // than a refusal — and a diagnostic can name the element, which only exists
+  // once the write landed. The library hint is what makes it actionable.
+  expect(written.saved).toBe(true)
+  expect(written.diagnostics[0].message).toContain('add_library_components {keys: ["hero"]}')
+  expect(written.diagnostics[0].nodeId).toBeTruthy()
 })
 
 test('an instance written with a ref expands, and lists the parts to fill', async () => {
   const { call, home, html } = await session()
   await call('add_library_components', { keys: ['card'] })
   const h = await home()
-  const written = await call('set_page_code', {
+  const written = await call('set_page_html', {
     pageId: h.id,
     version: h.version,
-    code: page('\t:Button#cta:\n\t:Card#one:'),
+    html: page('<Button data-ref="cta" />\n<Card data-ref="one" />'),
   })
   expect(written.saved).toBe(true)
   const cta = written.elements.find((e: { ref?: string }) => e.ref === 'cta')
@@ -138,10 +141,10 @@ test("an instance's own line takes no classes or bindings", async () => {
   const { call, home, stored, html } = await session()
   await call('add_library_components', { keys: ['card'] })
   const h = await home()
-  const written = await call('set_page_code', {
+  const written = await call('set_page_html', {
     pageId: h.id,
     version: h.version,
-    code: page('\t:Button#cta:\n\t:Card#one:'),
+    html: page('<Button data-ref="cta" />\n<Card data-ref="one" />'),
   })
   const one = written.elements.find((e: { ref?: string }) => e.ref === 'one')
   const nested = one.parts.find((p: { type: string }) => p.type === 'Button')
@@ -171,7 +174,7 @@ test('a component is written from scratch, and edited as the board edits it', as
   const made = await call('create_component', {
     name: 'promo',
     category: 'Sections',
-    code: ':section\n\t:h2:\n\t:Button:\nsection:',
+    html: '<section>\n  <h2 />\n  <Button />\n</section>',
   })
   expect(made.saved).toBe(true)
   expect(made.name).toBe('Promo')
@@ -203,10 +206,10 @@ test('a component is written from scratch, and edited as the board edits it', as
   expect(button.root.children[0].children[1].content).toBe('Button')
 
   const h = await home()
-  const written = await call('set_page_code', {
+  const written = await call('set_page_html', {
     pageId: h.id,
     version: h.version,
-    code: page('\t:Promo:\n\t:Button:'),
+    html: page('<Promo />\n<Button />'),
   })
   expect(written.saved).toBe(true)
   const out = await html()
@@ -221,17 +224,17 @@ test('rename, duplicate, detach and delete keep every page in step', async () =>
   const added = await call('add_library_components', { keys: ['card'] })
   const card = added.added.find((a: { name: string }) => a.name === 'Card')
   const h = await home()
-  let written = await call('set_page_code', {
+  let written = await call('set_page_html', {
     pageId: h.id,
     version: h.version,
-    code: page('\t:Card#one:\n\t:Card#two:'),
+    html: page('<Card data-ref="one" />\n<Card data-ref="two" />'),
   })
 
   const renamed = await call('update_component', { componentId: card.componentId, name: 'tile', category: 'Cards' })
   expect(renamed.renamed).toEqual({ from: 'Card', to: 'Tile' })
   expect(renamed.versions).toHaveLength(1)
-  expect(stored().pages[0].code).toContain(':Tile#one')
-  expect(stored().pages[0].code).not.toContain('Card')
+  const types = stored().pages[0].elements[0].children.map((n: { type: string }) => n.type)
+  expect(types).toEqual(['Tile', 'Tile'])
 
   const copy = await call('duplicate_component', { componentId: card.componentId, name: 'WideTile' })
   expect(copy.name).toBe('WideTile')
@@ -271,10 +274,10 @@ test('a list keeps its filter inside a component, and an instance can narrow it'
     ],
   })
   const h = await home()
-  let w = await call('set_page_code', {
+  let w = await call('set_page_html', {
     pageId: h.id,
     version: h.version,
-    code: page('\t:div#inbox\n\t\t:collection-list#list[conversation]\n\t\t\t:h3[title]:\n\t\tcollection-list:\n\tdiv:'),
+    html: page('<div data-ref="inbox">\n  <collection-list data-ref="list" source="conversation">\n    <h3 data-field="title" />\n  </collection-list>\n</div>'),
   })
   await call('edit_elements', {
     pageId: h.id,
@@ -320,11 +323,11 @@ test('a list keeps its filter inside a component, and an instance can narrow it'
 test("an instance wears the default even when its host picked otherwise", async () => {
   const { call, home, html } = await session()
   await call('add_library_components', { keys: ['button'] })
-  const card = await call('create_component', { name: 'Card', code: ':div\n\t:Button:\ndiv:' })
+  const card = await call('create_component', { name: 'Card', html: '<div>\n  <Button />\n</div>' })
   const mirror = card.nodes.find((n: { type: string }) => n.type === 'Button')
   await call('edit_elements', { componentId: card.componentId, edits: [{ id: mirror.id, variants: { variant: 'outline' } }] })
   const h = await home()
-  const w = await call('set_page_code', { pageId: h.id, version: h.version, code: page('\t:Card#c1:\n\t:Card#c2:') })
+  const w = await call('set_page_html', { pageId: h.id, version: h.version, html: page('<Card data-ref="c1" />\n<Card data-ref="c2" />') })
   const c2 = w.elements.find((e: { ref?: string }) => e.ref === 'c2').parts.find((p: { type: string }) => p.type === 'Button')
   await call('edit_elements', { pageId: h.id, version: w.version, edits: [{ id: c2.id, variants: { variant: 'default' } }] })
   const looks = [...(await html()).matchAll(/<button class="([^"]*)"/g)].map((m) =>
@@ -336,21 +339,24 @@ test("an instance wears the default even when its host picked otherwise", async 
 test('what a host cannot say about an instance is refused, not dropped', async () => {
   const { call, home } = await session()
   await call('add_library_components', { keys: ['button'] })
-  const card = await call('create_component', { name: 'Card', code: ':div\n\t:Button:\ndiv:' })
+  const card = await call('create_component', { name: 'Card', html: '<div>\n  <Button />\n</div>' })
 
   // a link on the instance's own line renders nowhere
   const h = await home()
-  const link = await call('set_page_code', { pageId: h.id, version: h.version, code: page('\t:Card#c1:@/messages') })
-  expect(link.saved).toBe(false)
-  expect(link.diagnostics[0].message).toContain(":div@/messages")
+  const link = await call('set_page_html', { pageId: h.id, version: h.version, html: page('<Card data-ref="c1" href="/messages" />') })
+  // refused by NAME rather than dropped: the wrapper emits no element, so the
+  // link had nowhere to go
+  expect(link.refused[0].message).toContain('no element')
+  expect(link.refused[0].path).toContain('Card')
 
   // a binding inside the nested block would be Button's — it used to be stripped silently
   const nested = await call('update_component', {
     componentId: card.componentId,
-    code: ':Card\n\t:div\n\t\t:Button\n\t\t\t:button\n\t\t\t\t:icon:\n\t\t\t\t:span[title]:\n\t\t\t\t:icon:\n\t\t\tbutton:\n\t\tButton:\n\tdiv:\nCard:',
+    version: card.version,
+    html: '<Card>\n  <div>\n    <Button>\n      <button>\n        <svg />\n        <span data-field="title" />\n        <svg />\n      </button>\n    </Button>\n  </div>\n</Card>',
   })
   expect(nested.saved).toBe(false)
-  expect(nested.message).toContain("Button's")
+  expect(JSON.stringify(nested.refused)).toContain("the component's")
 
   // and the same through an arg edit on the mirror
   const span = card.nodes.find((n: { type: string }) => n.type === 'span')
@@ -365,15 +371,15 @@ test('publish warns about what a design review would send back', async () => {
   await call('create_interactions', { items: [{ name: 'Never bound', toClasses: 'hidden' }] })
   await call('update_settings', { motion: { transitions: { enabled: true, preset: 'fade' } } })
   const h = await home()
-  const w = await call('set_page_code', {
+  const w = await call('set_page_html', {
     pageId: h.id,
     version: h.version,
-    code: page('\t:Navbar:\n\t:Select:\n\t:select#raw\n\t\t:option:\n\tselect:'),
+    html: page('<Navbar />\n<Select />\n<select data-ref="raw">\n  <option />\n</select>'),
   })
   await call('edit_elements', { pageId: h.id, version: w.version, edits: [{ ref: 'raw', addClasses: ['h-9', 'rounded-lg'] }] })
   await call('create_page', { name: 'Two', slug: '/two' })
   const two = (await call('list_pages')).pages.find((p: { name: string }) => p.name === 'Two')
-  await call('set_page_code', { pageId: two.id, version: two.version, code: page('\t:Navbar:') })
+  await call('set_page_html', { pageId: two.id, version: two.version, html: page('<Navbar />') })
 
   const kinds = (await call('publish')).warnings.map((x: { kind: string }) => x.kind)
   // the raw select, not the library one (it has appearance-none and a drawn chevron)

@@ -16,9 +16,9 @@ const runtimePromise = import(
   /* @vite-ignore */ '../../packages/guano/runtime/mcp-runtime.mjs' as string
 ).catch(() => null)
 
-/** a page document with `body` as its body lines */
-export const pageCode = (body: string) =>
-  `@setup\n\tname: Home\n\tslug: /\n\tstatus: published\n\tlocale: en\n:body\n${body}\nbody:`
+/** a page body: `body` is the markup that goes inside `<body>`. Written out
+ *  rather than passed bare so the body element's own state is exercised too. */
+export const pageHtml = (body: string) => `<body>\n${body}\n</body>`
 
 export interface McpSession {
   call: (name: string, args?: Record<string, unknown>) => Promise<any>

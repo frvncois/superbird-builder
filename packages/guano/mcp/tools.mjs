@@ -12,7 +12,7 @@ import { lookup as dnsLookup } from 'node:dns/promises'
 import { readFile, realpath, stat } from 'node:fs/promises'
 import { basename, extname, isAbsolute, resolve as resolvePath, sep } from 'node:path'
 
-// the AI-first handbook (DSL grammar, element registry, style rules, workflow) —
+// the AI-first handbook (the HTML format, element registry, style rules, workflow) —
 // served by get_guide, a section at a time.
 // Ships next to this file in the npm package (mcp/ is in package.json files).
 export const GUIDE = (() => {
@@ -28,7 +28,7 @@ export const GUIDE = (() => {
  * golden rules and the workflow recipe, then a pointer to the rest.
  *
  * NOT the whole handbook, which is ~100 KB and was sent in full. A client that
- * injects instructions pays that on every turn of every session, and the DSL and
+ * injects instructions pays that on every turn of every session, and the format and
  * animation sections only matter once an agent reaches that work — which
  * get_guide serves on demand.
  */
@@ -44,7 +44,7 @@ export const GUIDE_INSTRUCTIONS = (() => {
     parts[0].trimEnd(),
     ...kept,
     '## The rest of the handbook',
-    'Everything else — the DSL grammar, the element registry, styling, content and data,' +
+    'Everything else — the HTML format, the element registry, styling, content and data,' +
       ' components, variants, nesting, icons, class interactions, project settings,' +
       ' interactions, animations, sliders, publishing — is in the handbook, a section at a' +
       ' time. Call `get_guide` with no argument for the section list, then fetch what the job' +
@@ -84,16 +84,18 @@ export function createToolSet({ api, runtime, elicit, hasElicitation = () => nul
   const { whoami, storeGetRaw, storeGetJson, storePutRaw, publish, preview, mediaIndex, mediaUpload } =
     api
   const {
-    validateDocument,
-    parseSyntax,
-    normalizeSyntax,
-    parseSetup,
-    replaceSetup,
-    buildDocument,
+    // the agent format: the read, the strict reader, the identity-carrying
+    // write, and the tree validator behind all three (src/lib/html/)
+    pageToHtml,
+    masterToHtml,
+    parseHtml,
+    applyHtml,
+    contextFromProject,
+    validateTree,
+    tagForType,
     slugify,
-    reconcile,
-    hasNodeState,
-    stripNodeState,
+    createBody,
+    createNode,
     BUILTIN_LIST_SOURCES,
     walkNodes,
     findNode,
@@ -101,19 +103,10 @@ export function createToolSet({ api, runtime, elicit, hasElicitation = () => nul
     isValidClass,
     isComponentType,
     buildScopeRoots,
-    styleMarkerOf,
-    withStyleMarker,
-    interactionMarkerOf,
-    withInteractionMarker,
-    dataMarkerOf,
-    withDataMarker,
-    hasOpenArgBracket,
-    REF_SLOT,
-    refOf,
-    withoutRef,
     isLeafElement,
     isRich,
     sanitizeRich,
+    isKnownElement,
     SAFE_SRC,
     customSchemaError,
     sanitizeAttributes,
@@ -129,12 +122,9 @@ export function createToolSet({ api, runtime, elicit, hasElicitation = () => nul
     createPage,
     defaultSettings,
     normalizeComponentName,
-    hoistBlockRef,
-    serializeNode,
-    expandComponentInstances,
-    adoptStructure,
     cloneForMaster,
     stripExtractedInstanceState,
+    alignStructure,
     purgeLocaleSeo,
     countLocaleSeo,
     fontError,
@@ -264,7 +254,7 @@ export function createToolSet({ api, runtime, elicit, hasElicitation = () => nul
     return list
   }
 
-  /** read a raw text payload (page DSL) from a local absolute path */
+  /** read a raw text payload (page HTML) from a local absolute path */
   async function readTextFile(file, label) {
     const path = String(file)
     const full = await resolveInputPath(path, label)
@@ -437,47 +427,39 @@ export function createToolSet({ api, runtime, elicit, hasElicitation = () => nul
   // and it is why `action` exists. Schema and construction live here once so
   // bind_interaction and edit_elements.bindInteractions cannot drift.
 
+  // The recipes these options build — menus, modals, accordions, sheets — are in
+  // get_guide {section: "class-interactions"}, so each one says only what it is.
   const INTERACTION_BINDING_PROPS = {
     trigger: {
       type: 'string',
       enum: INTERACTION_TRIGGERS,
       description:
-        'hover (on while hovered) · click (discrete; honours `action`) · appear (once, on ' +
-        'scroll into view) · scrolled (on while scrolled past `scrollAt`) · change (on while ' +
-        'an input is checked / non-empty)',
+        'hover/scrolled/change are symmetric (they drive both directions and reject an ' +
+        '`action`); click is discrete; appear fires once on scroll into view',
     },
     action: {
       type: 'string',
       enum: INTERACTION_ACTIONS,
-      description:
-        "click only. 'toggle' (default) flips the effect, 'on' always opens, 'off' always " +
-        'closes. State is shared per (interaction, target), so an `on` button plus an `off` ' +
-        'close button and overlay give you a working modal.',
+      description: "click only: toggle (default), or always-on/always-off. State is shared per (interaction, target).",
     },
     closeOn: {
       type: 'array',
       items: { type: 'string', enum: INTERACTION_CLOSE_ON },
-      description:
-        "gestures that force the effect off: 'outside' (a pointerdown outside trigger and " +
-        "target) and/or 'escape' — the usual pairing for menus and modals",
+      description: 'gestures that force the effect off — the usual pairing for menus and modals',
     },
     group: {
       type: 'string',
-      description:
-        'exclusive group name — turning this effect on turns off every other effect in the ' +
-        "same group (\"one accordion open at a time\"), independent per component instance",
+      description: 'exclusive group: turning this on turns off every other effect in the same group',
     },
     once: {
       type: 'string',
       enum: INTERACTION_ONCE,
-      description:
-        "remember the effect's state so a dismissal sticks (cookie notices). Published site " +
-        'only — the editor always shows the element so it stays authorable.',
+      description: "remember the state so a dismissal sticks. Published site only.",
     },
     scrollAt: {
       type: 'integer',
       minimum: 0,
-      description: "'scrolled' only: px of page scroll past which the effect is on (default 50)",
+      description: "'scrolled' only: px of page scroll past which it is on (default 50)",
     },
     breakpoints: {
       type: 'array',
@@ -546,9 +528,9 @@ const sha256 = (s) => createHash('sha256').update(s).digest('hex')
  * human's open editor can legitimately advance the version between two calls,
  * not just its own stale read */
 const STALE_MESSAGE =
-  'the page code changed since your last read/write. If the human has the editor open, ' +
-  'its autosave/marker sync can advance the version between your calls — retrying with ' +
-  'currentVersion is safe when you made the only content edits'
+  'the page changed since your last read/write. If the human has the editor open, their own ' +
+  'edits advance the version between your calls — retrying with currentVersion is safe when ' +
+  'you made the only changes since'
 
 // ---------- session state (this MCP process only) ----------
 
@@ -737,11 +719,67 @@ function knownNames(project) {
   return { componentNames, collectionNames, listFieldNames, dataOnlyCollections }
 }
 
-/** per-element summary keyed by 0-based source line. Inside component
+/** per-element summary, in document order. Inside component
  * instances the summary is MASTER-AWARE: classes/interactions/content live on
  * (or fall back to) the shared master, so an instance node with no own state
  * still shows what it will render with — without this, a freshly expanded
  * instance looked wiped even when the master was fully styled. */
+/**
+ * A page's version: a hash of exactly what `get_page` shows.
+ *
+ * The canonical HTML plus the three meta fields a write can change.
+ * Deliberately NOT `seo` (set_page_seo owns that and a structure write never
+ * touches it, so an seo edit must not invalidate a pending one) and not the
+ * node state the HTML does not carry — interactions, animations, slider config,
+ * listQuery and translations all survive an HTML write by construction, so a
+ * change to one can never make a pending write unsafe.
+ */
+const pageVersion = (project, page) =>
+  sha256(
+    `${page.name}\n${page.path}\n${page.status}\n` +
+      pageToHtml(page, project, { effects: false }),
+  )
+
+/** a component's version: the hash of its own HTML */
+const componentVersion = (project, def) => sha256(masterToHtml(def, project, { effects: false }))
+
+/** every page's version right now — the before-snapshot a component push is
+ *  reported against */
+const pageVersions = (project) =>
+  new Map((project.pages ?? []).map((p) => [p.id, pageVersion(project, p)]))
+
+/** the components a name can resolve to, for the parser and the writer */
+const componentNamesOf = (project) => (project.components ?? []).map((c) => c.name)
+
+/**
+ * Read HTML, parse it, and refuse before touching anything.
+ *
+ * One funnel for every write that takes markup, so the refusal shape is the
+ * same everywhere: `line:col` diagnostics against the text the agent sent.
+ */
+function readHtml(project, html) {
+  const parsed = parseHtml(String(html ?? ''), componentNamesOf(project))
+  if (parsed.errors.length) {
+    return {
+      ok: false,
+      reason: 'invalid-html',
+      diagnostics: parsed.errors.map((e) => ({ line: e.line, col: e.col, message: e.message })),
+    }
+  }
+  return { ok: true, roots: parsed.roots, notes: parsed.notes }
+}
+
+/**
+ * The diagnostics an agent sees.
+ *
+ * `validateTree` reports the fact; `libraryHints` turns "Unknown component
+ * 'Hero'" into the `add_library_components` call that fixes it when Hero is
+ * sitting in the bundled library. One funnel, so a reporting path cannot be
+ * added without the hint.
+ */
+const diagnose = (project, root) =>
+  root ? libraryHints(project, validateTree(root, contextFromProject(project))) : []
+
 function elementSummary(project, page, opts = {}) {
   // "own" (default) collapses each component instance to a single row and drops
   // the master class STRING (a boolean `styledOnMaster` says all an agent needs)
@@ -760,8 +798,8 @@ function elementSummary(project, page, opts = {}) {
     for (const c of nodes) n += 1 + countDescendants(c.children ?? [])
     return n
   }
-  const summarize = (n) => {
-    if (mode === 'refs') return { line: n.line, id: n.id, type: n.type, ...(n.ref ? { ref: n.ref } : {}) }
+  const summarize = (n, path) => {
+    if (mode === 'refs') return { path, id: n.id, type: n.type, ...(n.ref ? { ref: n.ref } : {}) }
     const mapping = instMap.get(n.id)
     const master = mapping?.master
     // what the node shows when it says nothing itself: the first host that
@@ -825,7 +863,10 @@ function elementSummary(project, page, opts = {}) {
       }
     }
     return {
-      line: n.line,
+      // where it sits: the child-index path from the body, which is also this
+      // list's order. The HTML carries the same `data-id`, so a row and its
+      // element are findable from each other without counting anything.
+      path,
       // the node's stable id — what bind_interaction's targetId refers to
       id: n.id,
       type: n.type,
@@ -904,12 +945,9 @@ function elementSummary(project, page, opts = {}) {
     walk(wrapper.children, null)
     return parts
   }
-  const visit = (nodes, inComponent) => {
-    for (const n of nodes) {
-      if (n.line === undefined) {
-        visit(n.children ?? [], inComponent)
-        continue
-      }
+  const visit = (nodes, inComponent, prefix) => {
+    nodes.forEach((n, i) => {
+      const path = prefix === null ? '' : prefix ? `${prefix}.${i}` : String(i)
       // "refs" collapses instances like "own" does — the element tools refuse
       // writes to instance children anyway, so listing them is pure volume
       if (mode === 'ref-parts') {
@@ -919,7 +957,7 @@ function elementSummary(project, page, opts = {}) {
         // fell back to counting lines instead.
         if (!inComponent && isComponentType(n.type) && n.ref) {
           out.push({
-            line: n.line,
+            path,
             id: n.id,
             type: n.type,
             ref: n.ref,
@@ -927,18 +965,18 @@ function elementSummary(project, page, opts = {}) {
             ...(n.variants ? { variants: n.variants } : {}),
             parts: partsOf(n),
           })
-          continue
+          return
         }
-        visit(n.children ?? [], inComponent || isComponentType(n.type))
-        continue
+        visit(n.children ?? [], inComponent || isComponentType(n.type), path)
+        return
       }
       if ((mode === 'own' || mode === 'refs') && !inComponent && isComponentType(n.type)) {
         out.push({
-          line: n.line,
+          path,
           id: n.id,
           type: n.type,
-          // a ref on the instance's OWN line is legal (that node is a real page
-          // node) and is the only ref an instance can carry
+          // a ref on the instance's own wrapper is legal (that node is a real
+          // page node) and is the only ref an instance can carry
           ...(n.ref ? { ref: n.ref } : {}),
           component: n.type,
           childCount: countDescendants(n.children ?? []),
@@ -946,47 +984,21 @@ function elementSummary(project, page, opts = {}) {
           ...(n.hidden !== undefined ? { hidden: n.hidden } : {}),
           ...(mode === 'own' ? { parts: partsOf(n) } : {}),
         })
-        continue // collapse the whole instance subtree
+        return // collapse the whole instance subtree
       }
-      out.push(summarize(n))
-      visit(n.children ?? [], inComponent || isComponentType(n.type))
-    }
+      out.push(summarize(n, path))
+      visit(n.children ?? [], inComponent || isComponentType(n.type), path)
+    })
   }
-  visit(page.elements ?? [], false)
-  return out.sort((a, b) => a.line - b.line)
-}
-
-const numbered = (code) =>
-  code
-    .split('\n')
-    .map((l, i) => `${i + 1}\t${l}`)
-    .join('\n')
-
-/**
- * Resolve a 0-based source line to its node, tracking whether the node is inside
- * a component instance (its styles/interactions live on the master, not here).
- * Returns { node, inComponent } or throws when no node owns the line.
- */
-function nodeAtLine(page, line) {
-  let found = null
-  let foundInComponent = false
-  const visit = (nodes, inComponent) => {
-    for (const n of nodes) {
-      if (n.line === line) {
-        found = n
-        foundInComponent = inComponent
-        return true
-      }
-      // a component instance's subtree is master-backed; the instance node's own
-      // type is the component name
-      const childInComponent = inComponent || isComponentType(n.type)
-      if (visit(n.children ?? [], childInComponent)) return true
-    }
-    return false
+  // the body is the root: its own path is empty, and its children count from 0.
+  // "ref-parts" is ONLY the ref'd instances, so it gets no body row.
+  const body = (page.elements ?? []).find((n) => n.type === 'body')
+  if (body) {
+    if (mode !== 'ref-parts') out.push(summarize(body, ''))
+    visit(body.children ?? [], false, '')
   }
-  visit(page.elements ?? [], false)
-  if (!found) throw new Error(`no element at line ${line} (use get_page to see line → element)`)
-  return { node: found, inComponent: foundInComponent }
+  // document order, which is what the walk already produced
+  return out
 }
 
 /**
@@ -1024,11 +1036,11 @@ function instanceParts(wrapper) {
 
 /**
  * Resolve an edit's element by stable `id` (preferred — survives structural
- * edits) or 0-based `line`. Same component-instance tracking as nodeAtLine.
+ * edits), tracking whether the node sits inside a component instance.
  */
 function resolveEditNode(page, edit, project = null, scopeDef = null) {
-  // a '#ref' typed in the page code is the friendliest address: it survives
-  // lines moving, and unlike `line` it can't drift when a component instance
+  // a '#ref' is the friendliest address: it is the author's own name for the
+  // element, and unlike a position it can't drift when something above it
   // expands. Resolved first because it is the most specific thing a caller
   // can have said.
   if (edit.ref && !scopeDef) {
@@ -1115,44 +1127,7 @@ function resolveEditNode(page, edit, project = null, scopeDef = null) {
     )
   }
   if (scopeDef) throw new Error('a component\'s elements are addressed by `id` (list_components {includeNodes: true})')
-  if (edit.line === undefined) throw new Error('each edit needs a `ref`, an `id` or a `line`')
-  return nodeAtLine(page, edit.line)
-}
-
-/**
- * Keep a node's display-only code markers ([+] own data, (+) styled, {+}
- * interactions or animations) in step with its state — mirrors syncNodeMarkers for one node.
- * The editor's truth-sync does NOT run on load, so an MCP write must maintain
- * them or the stored code carries a stale marker. Returns true when page.code
- * changed.
- */
-function syncMarkersForNode(page, node) {
-  if (node.line === undefined) return false
-  const lines = page.code.split('\n')
-  let line = lines[node.line]
-  if (line === undefined || hasOpenArgBracket(line)) return false
-  if (node.type !== 'body' && node.arg === undefined) {
-    // a real [name] binding owns the slot — withDataMarker no-ops on it.
-    // a slider's config is Data-panel state too, so it earns the marker
-    const want = !!(node.content || node.src || node.svg || node.slider) || node.hidden !== undefined
-    if (want !== (dataMarkerOf(line) === '[+]')) line = withDataMarker(line, want)
-  }
-  const style = styleMarkerOf(line)
-  if (style === undefined || style === '(+)') {
-    const want = !!node.classes?.trim()
-    if (want !== (style === '(+)')) line = withStyleMarker(line, want)
-  }
-  const inter = interactionMarkerOf(line)
-  if (inter === undefined || inter === '{+}') {
-    // one marker covers both motion systems — a node that only animates still
-    // shows {+} so the marker stays truthful
-    const want = !!node.interactions?.length || !!node.animations?.length
-    if (want !== (inter === '{+}')) line = withInteractionMarker(line, want)
-  }
-  if (line === lines[node.line]) return false
-  lines[node.line] = line
-  page.code = lines.join('\n')
-  return true
+  throw new Error('each edit needs a `ref` (+ optional `part`) or an `id`')
 }
 
 /**
@@ -1180,7 +1155,7 @@ function masterNodeFor(project, page, instanceNode) {
  * matches master ids) and must live in the SAME instance. Returns
  * { targetId } or { error }.
  *
- * `rawRef` is the friendlier address: a '#ref' from the page code, resolved to
+ * `rawRef` is the friendlier address: a '#ref' on the page, resolved to
  * a node id here so the rest of the rules (in-instance scoping, master
  * translation) apply unchanged. Refs never enter STORED bindings — `targetId`
  * remains the only stored form.
@@ -1401,7 +1376,7 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
           type: node.type,
           applied: [],
           errors: [
-            `${refused.join(', ')} refused: ':${node.type}' is a component instance, which has no box of ` +
+            `${refused.join(', ')} refused: '${node.type}' is a component instance, which has no box of ` +
               'its own — it takes `variants`, `hidden` and (on a page) `setRef`. To restyle the ' +
               `component, edit the element INSIDE it (shared by every ${node.type}) or give it a ` +
               'variant option; to space or size ONE placement, wrap the instance in a :div and ' +
@@ -1416,7 +1391,7 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
         line: node.line,
         id: node.id,
         type: node.type,
-        errors: [`expectType mismatch: element here is ':${node.type}', not ':${edit.expectType}' — re-read get_page`],
+        errors: [`expectType mismatch: element here is '${node.type}', not '${edit.expectType}' — re-read get_page`],
       })
       continue
     }
@@ -1513,7 +1488,7 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
       if (isComponentType(node.type)) {
         errors.push('content refused: a component instance token has no own text')
       } else if (!isLeafElement(node.type)) {
-        errors.push(`content refused: ':${node.type}' is a container — put text on a leaf inside it`)
+        errors.push(`content refused: '${node.type}' is a container — put text on a leaf inside it`)
       } else if (dataTargetError) {
         errors.push(dataTargetError)
       } else {
@@ -1533,7 +1508,7 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
     // --- media src (image/video only; scheme allowlist) ---
     if (edit.src !== undefined) {
       if (node.type !== 'image' && node.type !== 'video') {
-        errors.push(`src refused: ':${node.type}' is not an image/video element`)
+        errors.push(`src refused: '${node.type}' is not an image/video element`)
       } else if (edit.src && !SAFE_SRC.test(edit.src)) {
         errors.push('src refused: use a /media/… path, https:// URL, or data:image|video URL')
       } else if (dataTargetError) {
@@ -1557,12 +1532,12 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
       if (node === masterDef?.root) {
         errors.push(
           `variants refused: this is ${masterDef.name} itself, not an instance of it — an option is WORN by ` +
-            "an instance (its ':Name' line on a page, or in a component that holds one). To change what " +
+            'an instance (its own `<Name>` element on a page, or in a component that holds one). To change what ' +
             'an option looks like, pass `variant: "axis:option"` with addClasses on an element inside.',
         )
       } else if (!isComponentType(node.type) || !owner) {
         errors.push(
-          `variants refused: ':${node.type}' is not a component instance — address the ':Name' line of the instance`,
+          `variants refused: '${node.type}' is not a component instance — address the instance's own element`,
         )
       } else if (edit.variants !== null && (typeof edit.variants !== 'object' || Array.isArray(edit.variants))) {
         errors.push('variants must be an object of axis → option, or null to clear every pick')
@@ -1607,7 +1582,7 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
     // sanitized markup on `node.svg` — the one thing a renderer ever reads.
     if (edit.icon !== undefined || edit.svg !== undefined) {
       if (node.type !== 'icon') {
-        errors.push(`icon/svg refused: ':${node.type}' is not an icon element`)
+        errors.push(`icon/svg refused: '${node.type}' is not an icon element`)
       } else if (edit.icon !== undefined && edit.svg !== undefined) {
         errors.push('pass `icon` (a bundled icon name) or `svg` (custom markup), not both')
       } else if (localized) {
@@ -1665,7 +1640,7 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
       const structural = !!masterDef || inComponent
       const inNested = masterDef ? inMirror : !!mapping?.mirrors?.length
       if (node.type === 'body' || isWrapper) {
-        errors.push(`arg refused: ':${node.type}' carries no field binding`)
+        errors.push(`arg refused: '${node.type}' carries no field binding`)
       } else if (structural && inNested) {
         errors.push(
           `arg refused: this element is inside the ${mapping.def.name} that ${sharedOwner === mapping.def ? 'this component' : (masterDef?.name ?? 'the host')} holds, ` +
@@ -1692,7 +1667,7 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
         })()
       ) {
         errors.push(
-          `arg refused: ':${node.type}' needs a real collection name` +
+          `arg refused: '${node.type}' needs a real collection name` +
             (node.type === 'collection-list' || node.type === 'slider'
               ? ` (or a built-in source: ${BUILTIN_LIST_SOURCES.join(', ')})`
               : ''),
@@ -1703,30 +1678,16 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
         applied.push(`arg (on ${sharedOwner.name} — every instance)`)
         changed = true
       } else {
-        const lines = page.code.split('\n')
-        // group 1 swallows the '#ref' — the arg slot sits AFTER it, so without
-        // this the arg would land in front of the ref (':h1[title]#hero')
-        const head = lines[node.line]?.match(
-          new RegExp(`^(\\s*:[a-zA-Z][a-zA-Z0-9-]*${REF_SLOT})(\\[[a-z0-9.@+-]*\\])?`),
-        )
-        if (!head) {
-          errors.push('arg refused: could not locate the element token on its line')
-        } else {
-          const rest = lines[node.line].slice(head[1].length + (head[2]?.length ?? 0))
-          lines[node.line] = head[1] + (value ? `[${value}]` : '') + rest
-          const newCode = lines.join('\n')
-          const identity = new Map(lines.map((_, i) => [i, i]))
-          page.elements = reconcile(page.code, newCode, page.elements, identity)
-          page.code = newCode
-          node.arg = value || undefined
-          applied.push('arg')
-          changed = true
-        }
+        // plain node state now: the binding used to be owned by the element's
+        // code line, which is why writing it meant patching text and reparsing
+        if (value) node.arg = value
+        else delete node.arg
+        applied.push('arg')
+        changed = true
       }
     }
 
-    // --- setRef (the token's '#ref' — CODE-owned like arg, so patch the line
-    //     and reconcile with a same-line identity map; no line count change) ---
+    // --- setRef (the element's '#ref': a page-unique, human-readable address) ---
     if (edit.setRef !== undefined) {
       const value = String(edit.setRef)
       const dup = []
@@ -1736,10 +1697,10 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
       if (masterDef) {
         errors.push(
           'setRef refused: refs are page-scope — a component cannot carry one. Put it on the ' +
-            "':Name' line of an instance, in a page's code.",
+            "own `<Name>` element on a page.",
         )
-      } else if (node.line === undefined || node.type === 'body') {
-        errors.push("setRef refused: ':body' is the page root and carries no ref")
+      } else if (node.type === 'body') {
+        errors.push('setRef refused: the page body is the page root and carries no ref')
       } else if (value && !/^[a-zA-Z][a-zA-Z0-9-]*$/.test(value)) {
         errors.push('setRef refused: a ref starts with a letter, then letters/digits/hyphens')
       } else if (dup.length) {
@@ -1751,34 +1712,20 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
         // a ref here would be duplicated across instances and pages
         errors.push(
           'setRef refused: refs are page-scope and cannot live inside a component instance ' +
-            "block. Put the ref on the instance's own ':Name' line instead.",
+            "subtree. Put the ref on the instance's own `<Name>` element instead.",
         )
       } else {
-        const lines = page.code.split('\n')
-        const line = lines[node.line]
-        const head = line?.match(new RegExp(`^(\\s*:[a-zA-Z][a-zA-Z0-9-]*)${REF_SLOT}`))
-        if (!head) {
-          errors.push('setRef refused: could not locate the element token on its line')
-        } else {
-          lines[node.line] = withoutRef(line).replace(
-            new RegExp(`^(\\s*:[a-zA-Z][a-zA-Z0-9-]*)`),
-            value ? `$1#${value}` : '$1',
-          )
-          const newCode = lines.join('\n')
-          const identity = new Map(lines.map((_, i) => [i, i]))
-          page.elements = reconcile(page.code, newCode, page.elements, identity)
-          page.code = newCode
-          node.ref = value || undefined
-          applied.push('setRef')
-          changed = true
-        }
+        if (value) node.ref = value
+        else delete node.ref
+        applied.push('setRef')
+        changed = true
       }
     }
 
     // --- listQuery (collection-list / bound slider; filter → sort → limit) ---
     if (edit.listQuery !== undefined) {
       if (node.type !== 'collection-list' && node.type !== 'slider') {
-        errors.push(`listQuery refused: ':${node.type}' is not a collection-list or slider`)
+        errors.push(`listQuery refused: '${node.type}' is not a collection-list or slider`)
       } else {
         const q = edit.listQuery
         const empty = q === null || (typeof q === 'object' && !Object.keys(q).length)
@@ -1814,7 +1761,7 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
     //     the element ships an empty slot; mirrors DataEditor's entry picker) ---
     if (edit.entryId !== undefined) {
       if (node.type !== 'collection-item') {
-        errors.push(`entryId refused: ':${node.type}' is not a collection-item`)
+        errors.push(`entryId refused: '${node.type}' is not a collection-item`)
       } else if (!edit.entryId) {
         delete node.entryId
         applied.push('entryId')
@@ -1836,7 +1783,7 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
     // --- slider (slider only: the carousel's own chrome/timing config) ---
     if (edit.slider !== undefined) {
       if (node.type !== 'slider') {
-        errors.push(`slider refused: ':${node.type}' is not a slider`)
+        errors.push(`slider refused: '${node.type}' is not a slider`)
       } else {
         const config = edit.slider
         const empty = config === null || (typeof config === 'object' && !Object.keys(config).length)
@@ -2084,11 +2031,9 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
       }
     }
 
-    // marker truth-sync skips component-instance subtrees, like the editor
-    if (!inComponent && !masterDef && syncMarkersForNode(page, node)) changed = true
     // echo the element's identity so a misaddressed edit is visible
     results.push({
-      ...(masterDef ? { component: masterDef.name } : { line: node.line }),
+      ...(masterDef ? { component: masterDef.name } : {}),
       id: node.id,
       type: node.type,
       applied,
@@ -2184,115 +2129,52 @@ function masterNodeRows(project, def, opts = {}) {
  * update_component and create_component {code}, so a component written from
  * scratch passes exactly the checks a rewritten one does.
  */
-function applyComponentCode(project, def, code) {
-  // a `:Button:` inside the block is an instance of another component:
-  // expanded here to the full block its master has, exactly as it would be
-  // on a page
-  const blockLines = expandComponentInstances(
-    String(code ?? ''),
-    (project.components ?? []).filter((c) => c !== def),
-  )
-    .split('\n')
-    .filter((l) => l.trim())
-  if (blockLines[0]?.trim() !== `:${def.name}` || blockLines[blockLines.length - 1]?.trim() !== `${def.name}:`) {
-    return {
-      ok: false,
-      reason: 'invalid-block',
-      message: `the code must open with ':${def.name}' and close with '${def.name}:'`,
-    }
-  }
-  // cycles first, and by name: the validator would catch one too, but only
-  // as "can't contain itself" on some line of the expanded block
-  {
-    const editedRoot = parseSyntax(blockLines.join('\n')).find((n) => n.type === def.name)
-    if (editedRoot) {
-      const held = nestedComponentNames({ root: editedRoot })
-      const cycle = held.find((name) => !canNest(project.components ?? [], def.name, name))
-      if (cycle) {
-        return {
-          ok: false,
-          reason: 'invalid-block',
-          message:
-            `':${cycle}' cannot go inside ':${def.name}': ${cycle} already holds ${def.name} ` +
-            '(directly or through another component), so each would contain the other',
-        }
-      }
-    }
-  }
+/**
+ * Write a component master from HTML.
+ *
+ * One `applyHtml` call does what the DSL path needed six passes for: the cycle
+ * check, the nested-instance "what is inside an instance is that component's"
+ * rule, the class and media validation, the identity carry and the
+ * diagnostics are all the writer's, because a master is just another tree.
+ *
+ * `html` is the master's own element (`<Card>…</Card>`) or just its children.
+ */
+function applyComponentHtml(project, def, html) {
+  const read = readHtml(project, html)
+  if (!read.ok) return { ok: false, reason: read.reason, diagnostics: read.diagnostics }
 
-  // validate the inner structure through the normal document validator.
-  // normalizeSyntax re-indents the block from its TOKEN structure (depth
-  // starts at 1, i.e. one level inside :body) so the indentation-
-  // consistency check never trips on however the agent spaced the block —
-  // the parser is indentation-insensitive, so validation must be too.
-  const doc = [
-    '@setup', '\tname: x', '\tslug: /x', '\tstatus: draft', '\tlocale: en',
-    ':body', normalizeSyntax(blockLines.join('\n')), 'body:',
-  ].join('\n')
-  const { collectionNames, listFieldNames, dataOnlyCollections } = knownNames(project)
-  const diagnostics = libraryHints(
+  const before = pageVersions(project)
+  const result = applyHtml(def.root, read.roots, {
     project,
-    validateDocument(
-      doc,
-      (project.components ?? []).map((c) => c.name),
-      collectionNames,
-      listFieldNames,
-      dataOnlyCollections,
-    ),
-  )
-  if (diagnostics.length) {
-    return {
-      ok: false,
-      reason: 'invalid-code',
-      // lines of the BLOCK (its `:Name` line is 0), not of the scaffold it was
-      // checked in — after any `:Name:` inside it has expanded
-      diagnostics: diagnostics.map((d) =>
-        typeof d.line === 'number' ? { ...d, line: Math.max(0, d.line - 6) } : d,
-      ),
-    }
+    def,
+    validate: contextFromProject(project),
+  })
+  if (result.refused.length) {
+    return { ok: false, reason: 'refused', refused: result.refused }
   }
-  const parsed = parseSyntax(blockLines.join('\n'))
-  const editedRoot = parsed.find((n) => n.type === def.name)
-  if (!editedRoot) return { ok: false, reason: 'invalid-block', message: 'could not parse the block' }
-  {
-    const links = instanceLinkDiagnostics(blockLines.slice(1, -1).join('\n')).map((d) => ({ ...d, line: d.line + 1 }))
-    if (links.length) return { ok: false, reason: 'invalid-code', diagnostics: links }
-    const divergent = divergentNestedBlock(editedRoot, project.components ?? [], def)
-    if (divergent) {
-      return {
-        ok: false,
-        reason: 'invalid-block',
-        message:
-          `the ':${divergent.name}' block inside differs from ${divergent.name}'s own structure. What is ` +
-          `inside an instance is ${divergent.name}'s — a field binding, a link or an extra element there ` +
-          `would apply to every ${divergent.name} everywhere, so it is not something ${def.name} can say. ` +
-          `Write it as ':${divergent.name}:' (it expands to the component's block); change ${divergent.name} ` +
-          `itself with update_component/edit_elements {componentId} if every instance should change; or ` +
-          `use plain elements here for what only ${def.name} shows.`,
-      }
-    }
-  }
-  // adopt the new shape into the master (identity carried by code
-  // signature + LCS), then push it to every instance. The adopt result
-  // surfaces any master node that lost its place — so dropped
-  // classes/interaction bindings are never a silent success.
-  const adopt = adoptStructure(def.root, editedRoot, def.name)
-  const codeBefore = new Map((project.pages ?? []).map((p) => [p.id, p.code]))
-  // the push brings every mirror back in step first (a nested instance
-  // adopted from code arrives as plain nodes), then rewrites the blocks —
-  // the editor's own code, from the runtime bundle
+  // the push brings every mirror back in step first (a nested instance written
+  // as markup arrives as plain nodes), then realigns every instance on every
+  // page — the editor's own code, from the runtime bundle
   const updatedInstances = pushMasterStructure(project, def)
-  const touchedPages = (project.pages ?? []).filter((p) => codeBefore.get(p.id) !== p.code)
-  return { ok: true, adopt, updatedInstances, touchedPages }
+  const touchedPages = (project.pages ?? []).filter(
+    (p) => before.get(p.id) !== pageVersion(project, p),
+  )
+  return {
+    ok: true,
+    applied: { kept: result.kept, created: result.created, removed: result.removed },
+    ...(result.warnings.length ? { warnings: result.warnings } : {}),
+    diagnostics: libraryHints(project, result.diagnostics),
+    updatedInstances,
+    touchedPages,
+  }
 }
 
-/** pages whose code an operation rewrote, with the version each now has */
-function touchedVersions(project, codeBefore) {
+/** pages an operation rewrote, with the version each now has */
+function touchedVersions(project, before) {
   return (project.pages ?? [])
-    .filter((p) => codeBefore.get(p.id) !== p.code)
-    .map((p) => ({ pageId: p.id, version: sha256(p.code) }))
+    .filter((p) => before.get(p.id) !== pageVersion(project, p))
+    .map((p) => ({ pageId: p.id, version: pageVersion(project, p) }))
 }
-const pageCodes = (project) => new Map((project.pages ?? []).map((p) => [p.id, p.code]))
 
 // ---------- the bundled library ----------
 
@@ -2402,51 +2284,11 @@ function refNodeId(page, ref) {
   return found
 }
 
-/** an instance token carrying an `@link`. The `:Name` line renders no element
- * of its own, so the link would be dropped on the floor — say so, with the
- * two ways that work. Lines are 0-based over `code`. */
-function instanceLinkDiagnostics(code) {
-  const out = []
-  code.split('\n').forEach((line, i) => {
-    const m = /^\s*:([A-Z][a-zA-Z0-9-]*)(?:#[a-zA-Z0-9-]*)?(?:\[[^\]]*\])?(?:\(\+?\)?)?(?:\{\+?\}?)?:?@(\S+)/.exec(line)
-    if (!m) return
-    out.push({
-      line: i,
-      message:
-        `':${m[1]}' cannot carry a link — an instance's own line renders no element, so '@${m[2]}' ` +
-        `would be lost. Wrap it: ':div@${m[2]}' › ':${m[1]}:' › 'div:' (a linked :div renders as the <a>), ` +
-        `or put the link on an element inside ${m[1]} itself if every instance links the same way.`,
-    })
-  })
-  return out
-}
-
-/** types, args and links of a subtree — what a nested instance block must
- * share with the component it is an instance of */
-const structureSig = (nodes) =>
-  (nodes ?? [])
-    .map((n) => `${n.type}${n.arg ? `[${n.arg}]` : ''}${n.link ? `@${n.link}` : ''}(${structureSig(n.children)})`)
-    .join(',')
-
-/** the first nested instance whose block differs from its component's
- * structure: what is inside it is that component's, so a per-host arg or link
- * written there would be silently realigned away */
-function divergentNestedBlock(root, components, self) {
-  let found = null
-  walkNodes(root.children ?? [], (n) => {
-    if (found || !isComponentType(n.type)) return
-    const inner = components.find((c) => c.name === n.type && c !== self)
-    if (!inner) return
-    if (structureSig(n.children) !== structureSig(inner.root.children)) found = inner
-  })
-  return found
-}
-
-/** "Unknown component ':Hero:'" is a dead end when Hero is sitting in the
+/** "Unknown component 'Hero'" is a dead end when Hero is sitting in the
  * library: say which tool turns the name into a component */
 function libraryHints(project, diagnostics) {
   return diagnostics.map((d) => {
-    const m = /^Unknown component ':([A-Z][a-zA-Z0-9-]*)/.exec(d.message ?? '')
+    const m = /^Unknown component '([A-Z][a-zA-Z0-9-]*)'/.exec(d.message ?? '')
     const entry = m ? CATALOG.find((e) => e.name === m[1]) : null
     if (!entry || libraryComponent(project, entry.key)) return d
     return {
@@ -2465,7 +2307,7 @@ function libraryHints(project, diagnostics) {
  */
 function makeComponentFrom(project, page, elementId, rawName, category) {
   const { node: source, inComponent } = resolveEditNode(page, { id: elementId })
-  if (source.line === undefined || source.type === 'body') {
+  if (source.type === 'body') {
     return { ok: false, reason: 'invalid-source', message: 'pick a real element, not the body' }
   }
   if (isComponentType(source.type) || inComponent) {
@@ -2501,32 +2343,22 @@ function makeComponentFrom(project, page, elementId, rawName, category) {
   if (category && String(category).trim()) def.category = String(category).trim()
   project.components.push(def)
 
-  // wrap the source block: open line, inner one level deeper, close line
-  // (exact line map — mirrors the editor's createComponent)
-  const lines = page.code.split('\n')
-  const start = source.line
-  const end = source.endLine ?? source.line
-  const indent = lines[start].match(/^\t*/)[0]
-  // a ref on the extracted block's root moves onto the instance wrapper; refs
-  // further in are dropped (they'd be cloned into every instance) — same
-  // helper the editor's createComponent uses
-  const hoisted = hoistBlockRef(lines.slice(start, end + 1))
-  const rest = [
-    ...lines.slice(0, start),
-    `${indent}:${name}${hoisted.ref ? `#${hoisted.ref}` : ''}`,
-    ...hoisted.lines.map((l) => `\t${l}`),
-    `${indent}${name}:`,
-    ...lines.slice(end + 1),
-  ]
-  const map = new Map()
-  for (let i = 0; i < rest.length; i++) {
-    if (i < start) map.set(i, i)
-    else if (i >= start + 1 && i <= end + 1) map.set(i, i - 1)
-    else if (i > end + 2) map.set(i, i - 2)
-  }
-  const before = page.code
-  page.code = rest.join('\n')
-  page.elements = reconcile(before, page.code, page.elements, map)
+  // the page KEEPS its own nodes — the wrapper takes the extracted block's
+  // place, with its ref. Every id survives, which matters because comment
+  // anchors and interaction targetIds address page nodes by id. The editor's
+  // createComponent does exactly this.
+  const parent = findParentOf(page, source.id)
+  if (!parent) return { ok: false, reason: 'not-found', message: 'that element has no parent' }
+  const wrapper = { id: randomUUID(), type: name, content: '', children: [source] }
+  // refs further in are dropped: they are inside a component now, where one
+  // would be duplicated across every instance on every page
+  if (source.ref) wrapper.ref = source.ref
+  walkNodes([source], (n) => delete n.ref)
+  parent.children.splice(parent.children.indexOf(source), 1, wrapper)
+  // a nested instance inside the extracted block came across as plain nodes:
+  // what the master holds has to be a MIRROR of its component, and the page
+  // copy has to match that mirror — both are the push's job
+  pushMasterStructure(project, def)
   const result = { ok: true, componentId, name }
   if (brokenOutsideBindings.length) {
     result.warnings = [
@@ -2542,6 +2374,170 @@ function makeComponentFrom(project, page, elementId, rawName, category) {
   return result
 }
 
+/**
+ * One `edit_structure` op, against a tree.
+ *
+ * Addressing is by `#ref` or id, never by position: a path or an index is
+ * invalidated by the edit before it, which is exactly how the line arithmetic
+ * this replaces used to go wrong.
+ *
+ * Every op that takes markup runs it through the same reader and the same
+ * identity-carrying write as `set_page_html`, so an inserted subtree is held to
+ * the same rules and a `replace` that echoes back `data-id`s keeps those nodes.
+ */
+function runStructureOp(project, root, op, def, where) {
+  const find = (key) => {
+    if (!key) return null
+    // the COMPONENT's id addresses its root: that is the id list_components
+    // reports for the component, and it is the obvious thing to pass for
+    // "inside this component"
+    if (def && key === def.id) return root
+    let hit = null
+    walkNodes([root], (n) => {
+      if (!hit && (n.id === key || n.ref === key)) hit = n
+    })
+    return hit
+  }
+  const parentOf = (node) => {
+    let found = null
+    const visit = (n) => {
+      for (const child of n.children ?? []) {
+        if (child === node) found = n
+        else visit(child)
+      }
+    }
+    visit(root)
+    return found
+  }
+  const read = (html) => {
+    if (typeof html !== 'string' || !html.trim()) return { error: '`html` is required' }
+    const parsed = parseHtml(html, (project.components ?? []).map((c) => c.name))
+    if (parsed.errors.length) {
+      const first = parsed.errors[0]
+      return { error: `${first.line}:${first.col} ${first.message}` }
+    }
+    return { roots: parsed.roots }
+  }
+  /** apply `roots` as the children of a throwaway holder, then splice them in */
+  const build = (roots, holderType) => {
+    const holder = { id: randomUUID(), type: holderType, content: '', children: [] }
+    const res = applyHtml(holder, roots, { project, def, validate: contextFromProject(project) })
+    return { nodes: holder.children, res }
+  }
+  const slotFor = () => {
+    const named = ['parent', 'before', 'after'].filter((k) => op[k])
+    if (named.length > 1) return { error: `pass one of parent/before/after, not ${named.join(' + ')}` }
+    if (op.parent) {
+      const parent = find(op.parent)
+      if (!parent) return { error: `no element "${op.parent}"` }
+      return { parent, index: parent.children.length }
+    }
+    const key = op.before || op.after
+    if (!key) return { error: 'pass `parent`, `before` or `after`' }
+    const sibling = find(key)
+    if (!sibling) return { error: `no element "${key}"` }
+    const parent = parentOf(sibling)
+    if (!parent) return { error: `"${key}" is the root; insert inside it with \`parent\`` }
+    const at = parent.children.indexOf(sibling)
+    return { parent, index: op.before ? at : at + 1 }
+  }
+
+  if (op.op === 'remove') {
+    const node = find(op.target)
+    if (!node) return { error: `no element "${op.target}"` }
+    const parent = parentOf(node)
+    if (!parent) return { error: 'the root cannot be removed' }
+    let gone = 0
+    walkNodes([node], () => gone++)
+    parent.children.splice(parent.children.indexOf(node), 1)
+    return { removed: gone }
+  }
+
+  if (op.op === 'move') {
+    const node = find(op.target)
+    if (!node) return { error: `no element "${op.target}"` }
+    const parent = parentOf(node)
+    if (!parent) return { error: 'the root cannot be moved' }
+    const slot = slotFor()
+    if (slot.error) return { error: slot.error }
+    // a node may never move into its own subtree: the tree would hold a cycle
+    let inside = false
+    walkNodes([node], (n) => {
+      if (n === slot.parent) inside = true
+    })
+    if (inside) return { error: `"${op.target}" cannot move inside itself` }
+    const anchor = slot.parent.children[slot.index] ?? null
+    parent.children.splice(parent.children.indexOf(node), 1)
+    const at = anchor ? slot.parent.children.indexOf(anchor) : slot.parent.children.length
+    slot.parent.children.splice(at === -1 ? slot.parent.children.length : at, 0, node)
+    return { kept: 1 }
+  }
+
+  if (op.op === 'insert') {
+    const slot = slotFor()
+    if (slot.error) return { error: slot.error }
+    const parsed = read(op.html)
+    if (parsed.error) return { error: parsed.error }
+    const { nodes, res } = build(parsed.roots, slot.parent.type)
+    slot.parent.children.splice(slot.index, 0, ...nodes)
+    return { ...res, refused: res.refused.map((r) => ({ ...r, path: `${where} > ${r.path}` })) }
+  }
+
+  if (op.op === 'replace') {
+    const node = find(op.target)
+    if (!node) return { error: `no element "${op.target}"` }
+    const parent = parentOf(node)
+    if (!parent) return { error: 'the root cannot be replaced; use set_page_html' }
+    const parsed = read(op.html)
+    if (parsed.error) return { error: parsed.error }
+    // the markup is applied ONTO the existing node when it is one element of
+    // the same kind, so echoing its `data-id` back keeps everything it carries
+    if (parsed.roots.length === 1) {
+      const holder = { id: randomUUID(), type: parent.type, content: '', children: [node] }
+      const res = applyHtml(holder, parsed.roots, { project, def, validate: contextFromProject(project) })
+      parent.children.splice(parent.children.indexOf(node), 1, ...holder.children)
+      return { ...res, refused: res.refused.map((r) => ({ ...r, path: `${where} > ${r.path}` })) }
+    }
+    let gone = 0
+    walkNodes([node], () => gone++)
+    const { nodes, res } = build(parsed.roots, parent.type)
+    parent.children.splice(parent.children.indexOf(node), 1, ...nodes)
+    return {
+      ...res,
+      removed: (res.removed ?? 0) + gone,
+      refused: res.refused.map((r) => ({ ...r, path: `${where} > ${r.path}` })),
+    }
+  }
+
+  if (op.op === 'wrap') {
+    const keys = op.targets?.length ? op.targets : op.target ? [op.target] : []
+    if (!keys.length) return { error: 'pass `targets` (or a single `target`)' }
+    const nodes = keys.map(find)
+    const missing = keys.filter((k, i) => !nodes[i])
+    if (missing.length) return { error: `no element ${missing.map((m) => `"${m}"`).join(', ')}` }
+    const parent = parentOf(nodes[0])
+    if (!parent || nodes.some((n) => parentOf(n) !== parent)) {
+      return { error: 'all targets must be siblings' }
+    }
+    const parsed = read(op.html)
+    if (parsed.error) return { error: parsed.error }
+    if (parsed.roots.length !== 1) return { error: '`html` must be exactly one element to wrap in' }
+    const { nodes: made, res } = build(parsed.roots, parent.type)
+    const wrapper = made[0]
+    if (!wrapper) return { error: 'could not build the wrapper' }
+    if (wrapper.children.length) {
+      return { error: 'the wrapper must be empty — what it wraps is `targets`' }
+    }
+    const at = parent.children.indexOf(nodes[0])
+    for (const node of nodes) parent.children.splice(parent.children.indexOf(node), 1)
+    wrapper.children = nodes
+    parent.children.splice(at, 0, wrapper)
+    return { ...res, kept: nodes.length }
+  }
+
+  return { error: `unknown op "${op.op}"` }
+}
+
 /** a short human summary of an interaction library entry */
 const interactionView = (it) => ({
   id: it.id,
@@ -2550,6 +2546,23 @@ const interactionView = (it) => ({
   duration: it.duration,
   easing: it.easing,
 })
+
+/** the parent of a page node, or null for the body */
+function findParentOf(page, id) {
+  let found = null
+  const visit = (nodes) => {
+    for (const node of nodes) {
+      if ((node.children ?? []).some((c) => c.id === id)) {
+        found = node
+        return true
+      }
+      if (visit(node.children ?? [])) return true
+    }
+    return false
+  }
+  visit(page.elements ?? [])
+  return found
+}
 
 function findCollection(project, id) {
   const c = (project.collections ?? []).find((c) => c.id === id)
@@ -3349,7 +3362,7 @@ const tools = [
   {
     name: 'get_guide',
     description:
-      'The Guano handbook: the page DSL grammar, the full element registry, how styling/' +
+      'The Guano handbook: the page HTML format, the full element registry, how styling/' +
       'content/interactions attach to elements, the class-validation rules, and the intended ' +
       'workflow. READ THIS BEFORE YOUR FIRST WRITE — it answers every "how do I express X" ' +
       'question; nothing needs to be discovered by trial and error. Call it with NO argument ' +
@@ -3363,7 +3376,7 @@ const tools = [
         section: {
           type: 'string',
           description:
-            'one "## " section by slug ("the-dsl", "styling", "animations", …), "toc" for the ' +
+            'one "## " section by slug ("page-html", "styling", "animations", …), "toc" for the ' +
             'section list alone, or "all" for the whole handbook. Omitting it returns the ' +
             'golden rules plus the section list, which is where to start.',
         },
@@ -3399,7 +3412,7 @@ const tools = [
             ? {}
             : {
                 next:
-                  'Fetch the sections this job needs, e.g. get_guide {section: "the-dsl"}. ' +
+                  'Fetch the sections this job needs, e.g. get_guide {section: "page-html"}. ' +
                   'get_guide {section: "all"} returns the whole handbook.',
               }),
         }
@@ -3736,7 +3749,7 @@ const tools = [
     name: 'list_pages',
     description:
       'The target project\'s pages: id, name, slug, status, and the `version` hash (pass it to ' +
-      'set_page_code/edit_elements without a get_page round trip first). Requires a target.',
+      'set_page_html/edit_elements without a get_page round trip first). Requires a target.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     handler: async () => {
       const { project } = await loadTargetProject()
@@ -3748,7 +3761,7 @@ const tools = [
           slug: p.path,
           status: p.status,
           isCollectionTemplate: !!p.collectionId,
-          version: sha256(p.code),
+          version: pageVersion(project, p),
           // the stored SEO (incl. per-locale buckets) — the only other
           // readback used to be the export itself
           ...(p.seo ? { seo: p.seo } : {}),
@@ -3759,14 +3772,13 @@ const tools = [
   {
     name: 'get_page',
     description:
-      'A page\'s DSL `code`, a version hash, and a per-element summary (line, id, type, plus ' +
-      'classes/interactionCount/hasOwnContent when set; inside component instances the ' +
-      'styledOnMaster/masterInteractionCount/inheritsMasterContent fields show the shared state ' +
-      'the element renders with). Pass the version to every write so a stale one is rejected. ' +
+      "A page's HTML, a version hash, diagnostics, and a per-element summary (path, id, type, " +
+      'plus classes/interactionCount/hasOwnContent when set; inside a component instance the ' +
+      'styledOnMaster/masterInteractionCount/inheritsMasterContent fields show the shared ' +
+      'state the element renders with). Pass the version to every write. ' +
       '`includeInteractions` adds the binding ids needed to UNBIND, `includeContent` the ' +
-      'existing text. Big pages: `summaryOnly` drops the code, `numberedCode` adds line numbers ' +
-      '(nearly doubles the payload), and `elementIds`/`codeRange`/`offset`+`limit` return a ' +
-      'slice. Requires a target. See get_guide {section: "looking-at-your-work"}.',
+      'existing text. For a big page, read less: see get_guide {section: "page-html"}. ' +
+      'Requires a target.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -3778,22 +3790,29 @@ const tools = [
             '"own" (default) collapses each component instance to one row and reduces master ' +
             'styling to a boolean; "all" expands instance subtrees and echoes each master\'s ' +
             '`masterClasses`, for restyling an inherited component; "refs" trims every row to ' +
-            "the addresses {line, id, type, ref?}; \"ref-parts\" returns ONLY the instances " +
-            'carrying a #ref, each with the `parts` edit_elements {ref, part} takes — the ' +
-            'small, targeted read for filling a page of components, where "own" repeats every ' +
-            'instance\'s parts on every page; "none" omits the summary (same modes ' +
-            'set_page_code accepts)',
+            '{path, id, type, ref?}; "ref-parts" returns ONLY the instances carrying a #ref, ' +
+            'each with the `parts` edit_elements {ref, part} takes — the small, targeted read ' +
+            'for filling a page of components, where "own" repeats every instance\'s parts on ' +
+            'every page; "none" omits the summary',
         },
-        summaryOnly: { type: 'boolean', description: 'omit the code fields entirely' },
-        includeContent: { type: 'boolean', description: 'include each element\'s text (content/masterContent)' },
+        mode: {
+          type: 'string',
+          enum: ['full', 'structure'],
+          description:
+            '"structure" drops content and classes from the HTML — the shape of a page too ' +
+            'large to read whole, to find your way around before reading a subtree',
+        },
+        ref: { type: 'string', description: 'return only this element\'s subtree (a #ref, without the #)' },
+        id: { type: 'string', description: 'return only this element\'s subtree (an element id)' },
+        summaryOnly: { type: 'boolean', description: 'omit the HTML entirely' },
+        includeContent: { type: 'boolean', description: "include each element's text (content/masterContent)" },
         includeInteractions: {
           type: 'boolean',
           description:
-            'include each element\'s interaction BINDINGS ({bindingId, interactionId, trigger, ' +
+            "include each element's interaction BINDINGS ({bindingId, interactionId, trigger, " +
             'targetId}) instead of just a count — bindingId is what unbindInteractionIds needs, ' +
             'so this is the only way to remove an inherited binding',
         },
-        numberedCode: { type: 'boolean', description: 'also return a 1-based line-numbered copy of the code (heavy)' },
         elementIds: {
           type: 'array',
           items: { type: 'string' },
@@ -3801,16 +3820,6 @@ const tools = [
         },
         offset: { type: 'integer', minimum: 0, description: 'element-summary pagination: skip the first N elements' },
         limit: { type: 'integer', minimum: 1, description: 'element-summary pagination: return at most N elements' },
-        codeRange: {
-          type: 'array',
-          items: { type: 'integer', minimum: 0 },
-          minItems: 2,
-          maxItems: 2,
-          description:
-            '[startLine, endLine] (0-based, inclusive) — return only this slice of the code ' +
-            '(as numberedCode with true line numbers) plus only the elements on those lines. ' +
-            'The way to read part of a page too large for one response.',
-        },
       },
       required: ['pageId'],
       additionalProperties: false,
@@ -3828,19 +3837,14 @@ const tools = [
         const wanted = new Set(args.elementIds)
         elements = elements.filter((e) => wanted.has(e.id))
       }
-      const lines = page.code.split('\n')
-      // code by default; numberedCode only on request (it ~doubles the payload)
-      let codeFields = args.summaryOnly
-        ? {}
-        : { code: page.code, ...(args.numberedCode ? { numberedCode: numbered(page.code) } : {}) }
-      if (args.codeRange) {
-        const [lo, hi] = args.codeRange
-        const slice = lines
-          .slice(lo, hi + 1)
-          .map((l, i) => `${lo + i + 1}\t${l}`)
-          .join('\n')
-        codeFields = { numberedCode: slice, codeRange: [lo, Math.min(hi, lines.length - 1)] }
-        elements = elements.filter((e) => e.line >= lo && e.line <= hi)
+      const subtree = args.ref || args.id
+      const html = args.summaryOnly
+        ? undefined
+        : pageToHtml(page, project, { mode: args.mode, subtree })
+      if (subtree && html === '') {
+        throw new Error(
+          `no element "${subtree}" on this page (get_page {elements: "refs"} lists the addresses)`,
+        )
       }
       // element pagination — for a page whose summary alone overflows a response
       let pageInfo = {}
@@ -3853,17 +3857,11 @@ const tools = [
         }
         elements = window
       }
-      // surface stored-but-now-invalid code (e.g. a list whose collection was
+      // surface stored-but-now-invalid structure (a list whose collection was
       // deleted since) — without this the problem only appeared on the next
-      // set_page_code, while reads and element edits looked perfectly healthy
-      const kn = knownNames(project)
-      const check = validateDocument(
-        page.code,
-        kn.componentNames,
-        kn.collectionNames,
-        kn.listFieldNames,
-        kn.dataOnlyCollections,
-      )
+      // write, while reads and element edits looked perfectly healthy
+      const body = (page.elements ?? []).find((n) => n.type === 'body')
+      const check = diagnose(project, body)
       return {
         // page copy is authored by site users, so it carries the same fence as
         // comments whenever it is actually included
@@ -3874,271 +3872,258 @@ const tools = [
         slug: page.path,
         status: page.status,
         ...(page.seo ? { seo: page.seo } : {}),
-        totalLines: lines.length,
-        version: sha256(page.code),
+        version: pageVersion(project, page),
         // ALWAYS present, empty array and all: omitted when clean, a validated
         // page and a page nobody checked read identically, and "no diagnostics
         // key" is the same shape as "this tool doesn't report them"
         diagnostics: check,
-        ...codeFields,
+        ...(html === undefined ? {} : { html }),
+        ...(subtree ? { subtree } : {}),
         ...pageInfo,
         elements,
       }
     },
   },
   {
-    name: 'set_page_code',
+    name: 'set_page_html',
     description:
-      'Replace a page\'s DSL code. Invalid code comes back as diagnostics WITHOUT saving. On ' +
-      'success the tree is re-derived carrying node identity, styling, interactions and content ' +
-      'exactly like the editor, and the response\'s `elements` (ids by line) feeds edit_elements ' +
-      'directly — no get_page in between. Component instances expand in the stored code, so ' +
-      'submitted line numbers can drift: `lineShifts` tells you how to re-offset a ' +
-      'line-addressed batch, and ids never drift. Nodes landing under a DIFFERENT parent keep ' +
-      'their id but lose their carried state (listed in `reparented`); `reconciled` separates ' +
-      '`keptWithState` from `keptBlank` and `created`. Pass `fresh: true` when the new code has ' +
-      'nothing to do with what the page held, so every node starts clean. Requires a target; ' +
-      'pass the `version` from get_page. See get_guide {section: "the-dsl"}.',
+      "Replace a page's body with HTML. Invalid markup comes back as line:col diagnostics " +
+      'WITHOUT saving. Structure, classes and text all land in this ONE call. Node identity is ' +
+      'carried by the `data-id` you read back, then by `data-ref`, then by a tree match — so ' +
+      'interactions, animations, translations, slider config and list filters survive on every ' +
+      'element you did not replace. `refused` lists what could not land and why; nothing is ' +
+      'ever dropped silently. Prefer edit_structure for a local change. Requires a target; ' +
+      'pass the `version` from get_page. See get_guide {section: "page-html"}.',
     inputSchema: {
       type: 'object',
       properties: {
         pageId: { type: 'string' },
-        code: { type: 'string', description: 'full page DSL (the @setup block + :body … body:)' },
-        codePath: pathProp('the full page DSL as raw text (alternative to `code`)'),
+        html: {
+          type: 'string',
+          description: "the page body — a <body> element, or just the elements inside it",
+        },
+        htmlPath: pathProp('the page HTML as raw text (alternative to `html`)'),
         version: { type: 'string', description: 'the version hash from get_page' },
         elements: {
           type: 'string',
           enum: ['own', 'all', 'refs', 'none'],
           description:
-            'shape of the returned per-element summary: "own" (default) or "all" (see ' +
-            'get_page), "refs" for just the addresses {line, id, type, ref?}, or "none" to omit ' +
-            'it entirely — a 300-node page returns 300 rows you may already know, so say so',
+            'shape of the returned per-element summary: "own" (default), "all", "refs" for ' +
+            'just {path, id, type, ref?}, or "none" to omit it — a 300-node page returns 300 ' +
+            'rows you may already know, so say so',
         },
         fresh: {
           type: 'boolean',
           description:
-            'start every node CLEAN: structure is re-derived as usual, but no classes, ' +
-            'content, src, background, htmlId, attributes, interaction bindings or locale ' +
-            'overrides are carried onto adopted nodes. Use when replacing a page with ' +
-            'unrelated content, so it does not inherit the old page\'s styling.',
+            'start every node CLEAN: nothing is adopted, so no interactions, animations, ' +
+            'translations, slider config or list filters are carried over. Use when replacing ' +
+            'a page with unrelated content, so it does not inherit the old one.',
         },
       },
       required: ['pageId', 'version'],
       additionalProperties: false,
     },
     handler: async (args) => {
-      if (args.codePath) args = { ...args, code: await readTextFile(args.codePath, 'codePath') }
-      if (typeof args.code !== 'string') {
-        throw new Error('pass `code` (or `codePath` pointing at a file holding the page DSL)')
+      if (args.htmlPath) args = { ...args, html: await readTextFile(args.htmlPath, 'htmlPath') }
+      if (typeof args.html !== 'string') {
+        throw new Error('pass `html` (or `htmlPath` pointing at a file holding the page HTML)')
       }
       const { project } = await loadTargetProject()
       const page = findPage(project, args.pageId)
 
-      const current = sha256(page.code)
+      const current = pageVersion(project, page)
       if (args.version !== current) {
-        return {
-          saved: false,
-          reason: 'stale-version',
-          message: 'the page changed since get_page — re-read it and retry',
-          currentVersion: current,
-        }
+        return { saved: false, reason: 'stale-version', message: STALE_MESSAGE, currentVersion: current }
       }
+      const read = readHtml(project, args.html)
+      if (!read.ok) return { saved: false, reason: read.reason, diagnostics: read.diagnostics }
 
-      // 1. validate what the agent typed — the agent gets a compiler
-      const { componentNames, collectionNames, listFieldNames, dataOnlyCollections } =
-        knownNames(project)
-      const diagnostics = libraryHints(
-        project,
-        validateDocument(
-          args.code,
-          componentNames,
-          collectionNames,
-          listFieldNames,
-          dataOnlyCollections,
-        ),
-      )
-      diagnostics.push(...instanceLinkDiagnostics(args.code).filter((d) => componentNames.includes(
-        /^\s*:([A-Z][a-zA-Z0-9-]*)/.exec(args.code.split('\n')[d.line])?.[1],
-      )))
-      if (diagnostics.length) {
-        return { saved: false, reason: 'invalid-code', diagnostics }
+      let body = (page.elements ?? []).find((n) => n.type === 'body')
+      if (!body) {
+        body = createBody()
+        page.elements = [body]
       }
+      // `fresh`: an empty body has nothing to adopt FROM, so every node is
+      // created clean. Stated this way rather than as a post-hoc strip, which
+      // is what the DSL path had to do with a post-hoc strip.
+      if (args.fresh) body.children = []
 
-      // 2. expand freshly written component references (`:Card:` or an empty
-      //    `:Card`/`Card:` pair) into their full editable block, exactly like
-      //    the editor — instances carry the structure; a bare token would
-      //    render empty
-      const expandMap = []
-      const expanded = expandComponentInstances(args.code, project.components ?? [], expandMap)
-
-      // 3. protect the @setup + :body scaffold and pin the stored locale line to
-      //    the default (like the editor), but keep the body lines VERBATIM —
-      //    re-normalizing indentation would diverge from the stored code and
-      //    defeat reconcile's line diff. Then re-derive the element tree from the
-      //    OLD code → new code so node identity + node-only state survive.
-      const meta = parseSetup(expanded)
-      const rebuilt = replaceSetup(expanded, {
-        name: meta.name,
-        slug: meta.slug,
-        status: meta.status,
-        locale: project.defaultLocale || 'en',
-      })
-      // capture the ids of nodes carrying non-code state BEFORE the re-derive:
-      // reconcile keeps a node's id when it adopts it, so an id that carried
-      // styling/content/bindings and is GONE afterwards was orphaned (its state
-      // lost). That — not the raw `created` count — is the real failure mode
-      // (a first write to a blank scaffold re-creates everything by design).
-      // one definition of "carries state", shared with reconcile's reparent guard
-      // (it used to be spelled out here and again in `fresh` below, and the two
-      // had already drifted — animations were missing from both)
-      const hasState = hasNodeState
-      const statefulBefore = []
-      walkNodes(page.elements ?? [], (n) => {
-        if (hasState(n)) statefulBefore.push({ id: n.id, type: n.type })
-      })
-
-      const stats = { adopted: 0, created: 0, reparented: [] }
-      // guardReparent: a line diff can map an old line onto a same-type line in a
-      // different part of the tree, which silently re-seated classes/src/bindings
-      // onto unrelated nodes. Here the structure is author-submitted rather than a
-      // known move, so carrying state across a change of parent is never what was
-      // meant — the node keeps its id, but not its old presentation.
-      page.elements = reconcile(page.code, rebuilt, page.elements, undefined, stats, {
-        guardReparent: true,
-      })
-      page.code = rebuilt
-      page.name = meta.name
-      page.path = meta.slug
-      page.status = meta.status
-
-      // `fresh`: keep the structure reconcile derived (ids stay stable for the
-      // returned summary) but drop everything the old page carried, so an
-      // unrelated rewrite doesn't inherit the previous site's presentation
-      if (args.fresh) {
-        walkNodes(page.elements ?? [], stripNodeState)
-        // the display-only [+]/(+)/{+} markers must follow the state they mirror
-        walkNodes(page.elements ?? [], (n) => {
-          syncMarkersForNode(page, n)
-        })
-      }
-
-      // which adopted nodes brought state along — the difference between "the
-      // page kept its styling" and "the page inherited a stranger's styling".
-      // Under `fresh` this is zero by construction.
-      const inherited = args.fresh
-        ? []
-        : statefulBefore
-            .map((s) => ({ s, node: findNode(page.elements ?? [], s.id) }))
-            .filter((x) => x.node)
-            .map(({ node }) => ({
-              id: node.id,
-              type: node.type,
-              ...(node.classes ? { classes: node.classes } : {}),
-              ...(node.content ? { hasContent: true } : {}),
-              ...(node.interactions?.length ? { interactionCount: node.interactions.length } : {}),
-            }))
-
+      const result = applyHtml(body, read.roots, { project, validate: contextFromProject(project) })
+      result.diagnostics = libraryHints(project, result.diagnostics)
       await saveTargetProject(project)
 
-      // component instances expand inline (`:Card:` → its full block), and the
-      // canonical @setup rebuild can move the body start — so the STORED line
-      // numbers can differ from the submitted source's. Report the shift
-      // piecewise ({fromLine, delta} segments over SOURCE lines) so a
-      // pre-generated line-addressed edit batch can be re-offset mechanically
-      // instead of by hand.
-      const bodyStartIn = (text) => text.split('\n').findIndex((l) => l.trim().startsWith(':body'))
-      const setupDelta = bodyStartIn(rebuilt) - bodyStartIn(expanded)
-      const srcLineCount = args.code.split('\n').length
-      const lineShifts = []
-      let lastShift = null
-      for (let i = 0; i < srcLineCount; i++) {
-        const shift = (expandMap[i] ?? i) + setupDelta - i
-        if (shift !== lastShift) {
-          lineShifts.push({ fromLine: i, delta: shift })
-          lastShift = shift
-        }
-      }
-      const linesShifted = lineShifts.some((s) => s.delta !== 0)
-
-      const notes = []
-      if (linesShifted) {
+      const notes = [...(read.notes ?? [])]
+      // diagnostics address a NODE, which only exists once the write landed —
+      // so they are reported rather than refused. Said out loud, because
+      // `saved: true` beside a list bound to a collection that does not exist
+      // is exactly the kind of success an agent skims past.
+      if (result.diagnostics.length) {
         notes.push(
-          'stored line numbers DIFFER from your submitted source (component instances expand ' +
-            'to their full block inline; the @setup scaffold is canonicalized). Use `lineShifts` ' +
-            'to re-offset any pre-generated line-addressed edits: for a source line >= fromLine, ' +
-            'stored line = source line + delta (later segments win). The `elements` summary ' +
-            'already uses stored lines — prefer its ids.',
+          `saved, but ${result.diagnostics.length} thing(s) about this page are wrong — see ` +
+            '`diagnostics`. Each names the element; they do not refuse the write, and they do ' +
+            'not go away on their own.',
         )
       }
-      // FIRST, and loudest: these nodes moved to a different parent, so whatever
-      // they were carrying was dropped rather than re-seated onto new content.
-      // This is the silent-corruption case, so it leads the report.
-      if (stats.reparented.length) {
-        const shown = stats.reparented.slice(0, 12).map((r) => `${r.id} (:${r.type})`).join(', ')
+      if (result.removed) {
         notes.push(
-          `${stats.reparented.length} element(s) kept their identity but moved under a ` +
-            'DIFFERENT parent, so the classes/content/bindings they were carrying were ' +
-            `DROPPED rather than applied to unrelated content: ${shown}` +
-            `${stats.reparented.length > 12 ? ', …' : ''}. Each one's \`dropped\` field holds ` +
-            'what it was carrying — classes, content, src and the interaction/animation ids — ' +
-            'so put it back with ONE edit_elements call rather than reconstructing it. ' +
-            '(Carrying it across automatically would have silently styled the new structure ' +
-            'with the old one\'s presentation.)',
-        )
-      }
-      if (inherited.length) {
-        const shown = inherited.slice(0, 8).map((i) => `${i.id} (:${i.type})`).join(', ')
-        notes.push(
-          `${inherited.length} adopted element(s) CARRIED OVER existing classes/content/` +
-            `bindings from what this page held before: ${shown}` +
-            `${inherited.length > 8 ? ', …' : ''}. That is intended when you are editing a page ` +
-            'in place, and usually NOT when you are replacing it with unrelated content — in ' +
-            'that case strip them with edit_elements removeClasses, or re-send with fresh: true.',
-        )
-      }
-      // under `fresh` every node started blank by request: nothing was lost
-      // that the caller wanted, so the orphan note would only be noise
-      const orphaned = args.fresh ? [] : statefulBefore.filter((s) => !findNode(page.elements ?? [], s.id))
-      if (orphaned.length) {
-        const shown = orphaned.slice(0, 12).map((o) => `${o.id} (:${o.type})`).join(', ')
-        notes.push(
-          `${orphaned.length} previously-styled element(s) were ORPHANED — their ` +
-            'classes/content/bindings are lost because the submitted code no longer lines up ' +
-            `with the stored structure for them: ${shown}${orphaned.length > 12 ? ', …' : ''}. ` +
-            'If unintended, re-read get_page and edit that text minimally.',
-        )
-      }
-      if (meta.locale && meta.locale !== (project.defaultLocale || 'en')) {
-        notes.push(
-          `the @setup \`locale: ${meta.locale}\` line was pinned back to the default — it is ` +
-            'page metadata, NOT how localization works. Register locales via update_settings ' +
-            '{locales: [...]}, write overrides via edit_elements/upsert_entries with `locale`; ' +
-            'the export then renders /<code>/… routes automatically',
+          `${result.removed} element(s) are gone, with whatever they carried — interactions, ` +
+            'animations, translations, list filters. If that was not intended, the usual cause ' +
+            'is a rewritten subtree whose `data-id`s were not echoed back: read the page again ' +
+            'and keep them.',
         )
       }
       return {
         saved: true,
         pageId: page.id,
-        version: sha256(page.code),
-        reconciled: {
-          kept: stats.adopted,
-          keptWithState: inherited.length,
-          keptBlank: Math.max(0, stats.adopted - inherited.length),
-          created: stats.created,
-          ...(stats.reparented.length ? { reparentedStateDropped: stats.reparented.length } : {}),
+        version: pageVersion(project, page),
+        applied: {
+          kept: result.kept,
+          created: result.created,
+          removed: result.removed,
           ...(args.fresh ? { fresh: true } : {}),
         },
-        ...(stats.reparented.length ? { reparented: stats.reparented.slice(0, 40) } : {}),
-        // the note above names the first few; the list is for acting on them,
-        // and a caller who asked for no elements did not ask for 40 of these
-        ...(inherited.length ? { inherited: inherited.slice(0, args.elements === 'none' || args.elements === 'refs' ? 8 : 40) } : {}),
-        ...(linesShifted ? { lineShifts } : {}),
-        // the fresh per-element summary — proceed straight to edit_elements,
-        // no follow-up get_page needed just to harvest ids
+        ...(result.refused.length ? { refused: result.refused } : {}),
+        ...(result.warnings.length ? { warnings: result.warnings } : {}),
+        diagnostics: result.diagnostics,
         ...(args.elements === 'none'
           ? {}
           : { elements: elementSummary(project, page, { mode: args.elements }) }),
         ...(notes.length ? { notes } : {}),
+      }
+    },
+  },
+  {
+    name: 'edit_structure',
+    description:
+      'Change PART of a page (or a component master) without rewriting it: insert, replace, ' +
+      'move, remove or wrap, addressed by `ref` or `id`. The cheap path — most edits are local, ' +
+      'and set_page_html re-sends a whole document for them. `html` in an op is the same format ' +
+      'as set_page_html. Ops run in order; one that cannot land refuses the WHOLE batch, so a ' +
+      'page is never left half-edited. Requires a target; pass the `version` from ' +
+      'get_page/list_components. See get_guide {section: "page-html"}.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        pageId: { type: 'string', description: 'the page to edit (or pass componentId)' },
+        componentId: { type: 'string', description: "edit a component MASTER instead — every instance follows" },
+        version: { type: 'string', description: 'the version hash from get_page / list_components' },
+        ops: {
+          type: 'array',
+          minItems: 1,
+          items: {
+            type: 'object',
+            properties: {
+              op: { type: 'string', enum: ['insert', 'replace', 'move', 'remove', 'wrap'] },
+              target: { type: 'string', description: 'a #ref (without the #) or an element id' },
+              targets: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'wrap only: the contiguous run of siblings to wrap',
+              },
+              html: { type: 'string', description: 'insert/replace/wrap: the markup to put there' },
+              parent: { type: 'string', description: 'insert/move: land inside this element, last' },
+              before: { type: 'string', description: 'insert/move: land before this element' },
+              after: { type: 'string', description: 'insert/move: land after this element' },
+            },
+            required: ['op'],
+            additionalProperties: false,
+          },
+        },
+        opsPath: pathProp('the ops array as a JSON file (alternative to `ops`)'),
+        elements: {
+          type: 'string',
+          enum: ['own', 'all', 'refs', 'none'],
+          description: 'shape of the returned per-element summary (default "refs" here — the ops said what changed)',
+        },
+      },
+      required: ['version'],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      if (args.opsPath) {
+        args = {
+          ...args,
+          ops: await readJsonArray(args.opsPath, 'opsPath', {
+            key: 'ops',
+            describe: 'structure ops ({op, target?, html?, parent?/before?/after?})',
+          }),
+        }
+      }
+      if (!Array.isArray(args.ops) || !args.ops.length) throw new Error('pass at least one op')
+      const { project } = await loadTargetProject()
+
+      // a page or a master: one tree either way, and the only difference is
+      // what has to happen afterwards (a master is pushed to its instances)
+      const def = args.componentId
+        ? (project.components ?? []).find((c) => c.id === args.componentId)
+        : null
+      if (args.componentId && !def) {
+        return { saved: false, reason: 'not-found', message: `no component with id "${args.componentId}"` }
+      }
+      const page = def ? null : findPage(project, args.pageId)
+      if (!def && !page) throw new Error('pass a `pageId` or a `componentId`')
+      const current = def ? componentVersion(project, def) : pageVersion(project, page)
+      if (args.version !== current) {
+        return { saved: false, reason: 'stale-version', message: STALE_MESSAGE, currentVersion: current }
+      }
+      const root = def ? def.root : (page.elements ?? []).find((n) => n.type === 'body')
+      if (!root) throw new Error('the page has no body')
+
+      // Applied to a COPY: an op that cannot land refuses the whole batch, so
+      // the stored tree is never left half-edited. Ids are preserved by the
+      // clone, so nothing it keeps changes identity.
+      const scratch = JSON.parse(JSON.stringify(root))
+      const totals = { kept: 0, created: 0, removed: 0 }
+      const refused = []
+      const warnings = []
+      const applied = []
+
+      for (let i = 0; i < args.ops.length; i++) {
+        const op = args.ops[i]
+        const where = `ops[${i}] ${op.op}`
+        const outcome = runStructureOp(project, scratch, op, def, where)
+        if (outcome.error) {
+          return { saved: false, reason: 'invalid-op', message: `${where}: ${outcome.error}` }
+        }
+        if (outcome.refused?.length) refused.push(...outcome.refused)
+        if (outcome.warnings?.length) warnings.push(...outcome.warnings)
+        totals.kept += outcome.kept ?? 0
+        totals.created += outcome.created ?? 0
+        totals.removed += outcome.removed ?? 0
+        applied.push(`${op.op} ${op.target ?? op.targets?.join(', ') ?? ''}`.trim())
+      }
+      if (refused.length) {
+        return { saved: false, reason: 'refused', refused, message: 'nothing was saved' }
+      }
+
+      // commit: the scratch tree replaces the real one, in place so the page's
+      // own node object (and the def's root) keeps its identity
+      root.children = scratch.children
+      Object.assign(root, { ...scratch, children: root.children })
+
+      const before = pageVersions(project)
+      if (def) pushMasterStructure(project, def)
+      const diagnostics = diagnose(project, def ? def.root : root)
+      await saveTargetProject(project)
+
+      return {
+        saved: true,
+        ...(def ? { componentId: def.id, version: componentVersion(project, def) } : {}),
+        ...(page ? { pageId: page.id, version: pageVersion(project, page) } : {}),
+        applied,
+        changed: totals,
+        ...(warnings.length ? { warnings } : {}),
+        diagnostics,
+        ...(def
+          ? {
+              pages: (project.pages ?? [])
+                .filter((p) => before.get(p.id) !== pageVersion(project, p))
+                .map((p) => ({ pageId: p.id, version: pageVersion(project, p) })),
+            }
+          : {}),
+        ...(page && args.elements !== 'none'
+          ? { elements: elementSummary(project, page, { mode: args.elements ?? 'refs' }) }
+          : {}),
       }
     },
   },
@@ -4169,20 +4154,12 @@ const tools = [
         return { saved: false, reason: 'slug-taken', message: `a page with slug "${path}" already exists` }
       }
       const page = createPage(name, path, project.defaultLocale || 'en')
-      if (args.status === 'draft') {
-        page.status = 'draft'
-        page.code = replaceSetup(page.code, {
-          name,
-          slug: path,
-          status: 'draft',
-          locale: project.defaultLocale || 'en',
-        })
-        page.elements = parseSyntax(page.code)
-      }
+      // `status` lives on the Page and nowhere else now
+      if (args.status === 'draft') page.status = 'draft'
       project.pages = project.pages ?? []
       project.pages.push(page)
       await saveTargetProject(project)
-      return { saved: true, pageId: page.id, slug: path, version: sha256(page.code) }
+      return { saved: true, pageId: page.id, slug: path, version: pageVersion(project, page) }
     },
   },
   {
@@ -4204,7 +4181,7 @@ const tools = [
       const page = findPage(project, args.pageId)
       // destructive: a version from before somebody else's edit must not delete
       // their work — the blob-level guard only covers this one handler's window
-      const current = sha256(page.code)
+      const current = pageVersion(project, page)
       if (args.version !== current) {
         return {
           saved: false,
@@ -4302,8 +4279,8 @@ const tools = [
   {
     name: 'list_components',
     description:
-      'The project\'s shared components: id, name, category, source (the library entry it was ' +
-      'copied from), structure as a DSL block, and how many instances exist across pages. Pass ' +
+      "The project's shared components: id, name, category, source (the library entry it was " +
+      'copied from), its HTML, a version hash, and how many instances exist across pages. Pass ' +
       '`includeNodes: true` for each MASTER node\'s id, classes, content, src, attributes and ' +
       'full bindings — the shared state every instance renders with, and where the bindingIds ' +
       'needed to unbind come from. Read that before restyling a component you inherited. ' +
@@ -4356,7 +4333,8 @@ const tools = [
             ...(def.variants?.length ? { variants: def.variants } : {}),
             ...(nestedComponentNames(def).length ? { holds: nestedComponentNames(def) } : {}),
             instances,
-            structure: [`:${def.name}`, ...def.root.children.flatMap((c) => serializeNode(c, '\t')), `${def.name}:`].join('\n'),
+            html: masterToHtml(def, project),
+            version: componentVersion(project, def),
             ...(nodes ? { nodes } : {}),
           }
         }),
@@ -4366,7 +4344,7 @@ const tools = [
   {
     name: 'create_component',
     description:
-      'Make a shared component, either from scratch with `code` (no page involved; the response ' +
+      'Make a shared component, either from scratch with `html` (no page involved; the response ' +
       'returns element ids ready for edit_elements {componentId}) or from an existing element ' +
       'with pageId + id + version, which turns its subtree into the master and wraps the ' +
       'original as an instance. Check list_library first — copying a library entry and ' +
@@ -4392,12 +4370,12 @@ const tools = [
             'optional grouping in the editor\'s Components drawer (e.g. "Cards"); omitted = Uncategorized',
         },
         version: { type: 'string' },
-        code: {
+        html: {
           type: 'string',
           description:
-            'INSTEAD of pageId + id + version: the component\'s structure as a DSL block, written ' +
-            'from scratch — no page involved. Either the full `:Name … Name:` block or just what ' +
-            'goes inside it. May hold instances of other components (`:Button:`).',
+            "INSTEAD of pageId + id + version: the component's markup, written from scratch — no " +
+            'page involved. Its own element (`<Card>…</Card>`) or just what goes inside. May ' +
+            'hold instances of other components (`<Button />`).',
         },
       },
       required: ['name'],
@@ -4405,21 +4383,16 @@ const tools = [
     },
     handler: async (args) => {
       const { project } = await loadTargetProject()
-      if (args.code !== undefined && !args.pageId) {
+      if (args.html !== undefined && !args.pageId) {
         project.components = project.components ?? []
         const name = normalizeComponentName(args.name, project.components.map((c) => c.name))
         const def = { id: randomUUID(), name, root: { id: randomUUID(), type: name, content: '', children: [] } }
         setComponentMeta(def, { category: args.category })
         project.components.push(def)
-        const lines = String(args.code).split('\n').filter((l) => l.trim())
-        const wrapped =
-          lines[0]?.trim() === `:${name}`
-            ? lines.join('\n')
-            : [`:${name}`, ...lines, `${name}:`].join('\n')
-        const done = applyComponentCode(project, def, wrapped)
+        const done = applyComponentHtml(project, def, args.html)
         if (!done.ok || !def.root.children.length) {
           project.components = project.components.filter((c) => c !== def)
-          if (done.ok) return { saved: false, reason: 'invalid-block', message: 'the block holds no element' }
+          if (done.ok) return { saved: false, reason: 'empty', message: 'the markup holds no element' }
           const { ok: _ok, ...why } = done
           return { saved: false, ...why }
         }
@@ -4428,17 +4401,19 @@ const tools = [
           saved: true,
           componentId: def.id,
           name,
-          structure: [`:${name}`, ...def.root.children.flatMap((c) => serializeNode(c, '\t')), `${name}:`].join('\n'),
+          version: componentVersion(project, def),
+          html: masterToHtml(def, project),
           // the addresses edit_elements {componentId} takes — style it now
           nodes: masterNodeRows(project, def),
-          usage: `style it with edit_elements {componentId: "${def.id}", edits: [...]}, then write ':${name}:' in any page's code`,
+          usage: `style it with edit_elements {componentId: "${def.id}", edits: [...]}, then write '<${name} />' on any page`,
+          ...(done.warnings ? { warnings: done.warnings } : {}),
         }
       }
       if (!args.pageId || (!args.id && !args.ref) || !args.version) {
-        throw new Error('pass pageId + id (or ref) + version (extract an element of a page) or code (write the component from scratch)')
+        throw new Error('pass pageId + id (or ref) + version (extract an element of a page) or html (write the component from scratch)')
       }
       const page = findPage(project, args.pageId)
-      const current = sha256(page.code)
+      const current = pageVersion(project, page)
       if (args.version !== current) {
         return { saved: false, reason: 'stale-version', message: STALE_MESSAGE, currentVersion: current }
       }
@@ -4461,8 +4436,8 @@ const tools = [
         // the master's own addresses, so styling it needs no second call — the
         // code path has always returned these and extraction did not
         ...(def ? { nodes: masterNodeRows(project, def) } : {}),
-        usage: `write ':${made.name}:' in any page's code to add an instance`,
-        version: sha256(page.code),
+        usage: `write '<${made.name} />' on any page to add an instance`,
+        version: pageVersion(project, page),
         ...(made.warnings ? { warnings: made.warnings } : {}),
       }
     },
@@ -4538,7 +4513,7 @@ const tools = [
             message: `no version given for page ${pageId} — pass one {pageId, version} per page`,
           }
         }
-        const current = sha256(page.code)
+        const current = pageVersion(project, page)
         if (versionFor.get(pageId) !== current) stale.push({ pageId, currentVersion: current })
       }
       if (stale.length) return { saved: false, reason: 'stale-version', message: STALE_MESSAGE, stale }
@@ -4579,7 +4554,7 @@ const tools = [
         components: results,
         versions: pageIds.map((pageId) => ({
           pageId,
-          version: sha256(findPage(project, pageId).code),
+          version: pageVersion(project, findPage(project, pageId)),
         })),
       }
     },
@@ -4587,27 +4562,25 @@ const tools = [
   {
     name: 'update_component',
     description:
-      'Change a component\'s `name`, `category`, and/or STRUCTURE by passing its full DSL block ' +
-      'as `code`. To restyle or retext one, use edit_elements {componentId} instead. Master ' +
-      'nodes keep their identity wherever the code lines up, matched by signature, and the ' +
-      'response reports `adopted`/`created` plus any `orphaned` nodes so a dropped binding is ' +
-      'never silent. Every instance block on every page is rewritten to match. The block may ' +
-      'hold instances of OTHER components, and a component can never end up holding itself. ' +
-      'There is no `version` here — a master is not page code — so the only guard is the ' +
-      'whole-project one; re-read with list_components right before replacing a block you did ' +
-      'not just write. Requires a target. See get_guide {section: "components"} and {section: ' +
-      '"nesting"}.',
+      "Change a component's `name`, `category`, and/or STRUCTURE by passing its `html`. To " +
+      'restyle or retext one, use edit_elements {componentId}; to change part of it, ' +
+      'edit_structure {componentId}. Master nodes keep their identity wherever the markup lines ' +
+      'up, and `removed` says how many did not — a dropped binding is never silent. Every ' +
+      'instance on every page follows. It may hold instances of OTHER components, and a ' +
+      'component can never end up holding itself. Pass the `version` from list_components. ' +
+      'Requires a target. See get_guide {section: "components"} and {section: "nesting"}.',
     inputSchema: {
       type: 'object',
       properties: {
         componentId: { type: 'string' },
-        code: { type: 'string', description: 'the full block: :Name\\n\\t… \\nName:' },
+        html: { type: 'string', description: "its own element (`<Card>…</Card>`) or just what goes inside" },
+        version: { type: 'string', description: 'the version hash from list_components (required with `html`)' },
         name: {
           type: 'string',
           description:
-            'rename the component — every `:Name … Name:` token on every page, and in every ' +
-            'component holding one, follows. Normalized to CapitalCase and de-duplicated; the ' +
-            'response says what it became. With `code` too, the block uses the NEW name.',
+            'rename the component — every instance on every page, and in every component ' +
+            'holding one, follows. Normalized to CapitalCase and de-duplicated; the response ' +
+            'says what it became. With `html` too, the markup uses the NEW name.',
         },
         category: {
           type: 'string',
@@ -4621,13 +4594,19 @@ const tools = [
       const { project } = await loadTargetProject()
       const def = (project.components ?? []).find((c) => c.id === args.componentId)
       if (!def) throw new Error(`no component with id "${args.componentId}" (use list_components)`)
-      if (args.code === undefined && args.name === undefined && args.category === undefined) {
-        throw new Error('pass at least one of `code`, `name`, `category`')
+      if (args.html === undefined && args.name === undefined && args.category === undefined) {
+        throw new Error('pass at least one of `html`, `name`, `category`')
       }
-      const codeBefore = pageCodes(project)
+      if (args.html !== undefined) {
+        const current = componentVersion(project, def)
+        if (args.version !== current) {
+          return { saved: false, reason: 'stale-version', message: STALE_MESSAGE, currentVersion: current }
+        }
+      }
+      const before = pageVersions(project)
       const out = { saved: true, componentId: def.id }
 
-      // the name first: a block passed along with it is written under the NEW one
+      // the name first: markup passed along with it is written under the NEW one
       if (args.name !== undefined) {
         const was = def.name
         const name = renameComponent(project, def.id, String(args.name))
@@ -4636,38 +4615,32 @@ const tools = [
       if (args.category !== undefined) setComponentCategory(project, def.id, String(args.category ?? ''))
       out.name = def.name
 
-      if (args.code !== undefined) {
-        const done = applyComponentCode(project, def, args.code)
-        // nothing is saved on a refused block — the rename above included
+      if (args.html !== undefined) {
+        const done = applyComponentHtml(project, def, args.html)
+        // nothing is saved when it is refused — the rename above included
         if (!done.ok) {
           const { ok: _ok, ...why } = done
           return { saved: false, ...why }
         }
-        const { adopt } = done
+        out.applied = done.applied
         out.updatedInstances = done.updatedInstances
-        out.adopted = adopt.adopted
-        out.created = adopt.created
-        if (adopt.orphaned.length) {
-          out.orphaned = adopt.orphaned
-          const styled = adopt.orphaned.filter((o) => o.hadClasses || o.hadInteractions)
-          if (styled.length) {
-            out.notes = [
-              `${styled.length} master element(s) lost their place in the new structure and their ` +
-                'classes/interaction bindings no longer render — if that was not intended, the ' +
-                'edited block dropped or reordered nodes past what their code signature (type/arg/' +
-                'link/children) could match. Re-check the block.',
-            ]
-          }
+        out.diagnostics = done.diagnostics
+        if (done.warnings) out.warnings = done.warnings
+        if (done.applied.removed) {
+          out.notes = [
+            `${done.applied.removed} master element(s) are gone, with whatever they carried — ` +
+              'classes, interaction bindings, translations. If that was not intended, echo back ' +
+              'the `data-id`s from list_components so each one is adopted rather than replaced.',
+          ]
         }
         // ids of the new shape — what edit_elements {componentId} addresses
         out.nodes = masterNodeRows(project, def)
+        out.version = componentVersion(project, def)
       }
       await saveTargetProject(project)
-      // instance blocks (and, on a rename, instance tokens) were rewritten IN
-      // the page code, so each touched page has a new version hash — return
-      // them so a cached version from an earlier get_page is not carried into
-      // the next write
-      const versions = touchedVersions(project, codeBefore)
+      // instances were realigned on their pages, so each touched page has a new
+      // version — return them so a cached one is not carried into the next write
+      const versions = touchedVersions(project, before)
       if (versions.length) out.versions = versions
       return out
     },
@@ -4748,7 +4721,7 @@ const tools = [
       if (!def) throw new Error(`no component with id "${args.componentId}" (use list_components)`)
       if (args.detach) {
         const usage = componentUsage(project, def.name)
-        const codeBefore = pageCodes(project)
+        const codeBefore = pageVersions(project)
         deleteComponentDetaching(project, def.id)
         await saveTargetProject(project)
         const versions = touchedVersions(project, codeBefore)
@@ -4821,7 +4794,7 @@ const tools = [
         componentId: copy.id,
         name: copy.name,
         nodes: masterNodeRows(project, copy),
-        usage: `write ':${copy.name}:' in any page's code to add an instance`,
+        usage: `write '<${copy.name} />' on any page to add an instance`,
       }
     },
   },
@@ -4832,7 +4805,7 @@ const tools = [
       'the same — for the one placement that must differ in STRUCTURE (a variant covers a ' +
       'different look, `hidden` a missing part). The block keeps its text and images, takes the ' +
       'component\'s classes and bindings as its own, and no longer follows the component. ' +
-      'Address the instance\'s `:Name` line by `ref`, `id` or `line`. Requires a target.',
+      "Address the instance's own element by `ref` or `id`. Requires a target.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -4840,7 +4813,6 @@ const tools = [
         version: { type: 'string' },
         ref: { type: 'string', description: "the instance's '#ref', without the '#'" },
         id: { type: 'string' },
-        line: { type: 'integer', description: '0-based source line' },
         elements: {
           type: 'string',
           enum: ['own', 'refs', 'none'],
@@ -4855,7 +4827,7 @@ const tools = [
     handler: async (args) => {
       const { project } = await loadTargetProject()
       const page = findPage(project, args.pageId)
-      const current = sha256(page.code)
+      const current = pageVersion(project, page)
       if (args.version !== current) {
         return { saved: false, reason: 'stale-version', message: STALE_MESSAGE, currentVersion: current }
       }
@@ -4864,7 +4836,7 @@ const tools = [
         return {
           saved: false,
           reason: 'not-an-instance',
-          message: `':${node.type}' is not a component instance — address the ':Name' line of one`,
+          message: `'${node.type}' is not a component instance — address an instance's own element`,
         }
       }
       if (inComponent) {
@@ -4872,7 +4844,7 @@ const tools = [
           saved: false,
           reason: 'nested-instance',
           message:
-            `this ':${node.type}' is held by the component around it — what a component holds is ` +
+            `this '${node.type}' is held by the component around it — what a component holds is ` +
             'changed in that component (update_component), for every instance. Detach the OUTER ' +
             'instance first to change just this page.',
         }
@@ -4885,7 +4857,7 @@ const tools = [
         saved: true,
         pageId: page.id,
         detached: node.type,
-        version: sha256(page.code),
+        version: pageVersion(project, page),
         ...(args.elements === 'none'
           ? {}
           : { elements: elementSummary(project, page, { mode: args.elements ?? 'refs' }) }),
@@ -4899,10 +4871,9 @@ const tools = [
       'accordion, dialog, tabs, navbar, hero, footer…) built on the project\'s design tokens. ' +
       'LOOK HERE BEFORE BUILDING a common piece from plain elements: copying an entry with ' +
       'add_library_components and restyling it is less work, and the interactive ones arrive ' +
-      'with their behaviour wired. Each row carries the key, the `:Name:` token it becomes, ' +
+      'with their behaviour wired. Each row carries the key, the `<Name />` it becomes, ' +
       'category, description, variant axes, what it `holds`, and whether the project already ' +
-      'has it. Pass `keys` to also get an entry\'s structure and shipped texts. Requires a ' +
-      'target.',
+      "has it. Pass `keys` to also get an entry's HTML and shipped texts. Requires a target.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -4911,7 +4882,7 @@ const tools = [
         keys: {
           type: 'array',
           items: { type: 'string' },
-          description: 'only these entries — and in DETAIL: structure (DSL block), texts, design tokens',
+          description: 'only these entries — and in DETAIL: their HTML, texts, design tokens',
         },
       },
       additionalProperties: false,
@@ -4956,7 +4927,7 @@ const tools = [
           }
         })
         return {
-          structure: [`:${def.name}`, ...def.root.children.flatMap((c) => serializeNode(c, '\t')), `${def.name}:`].join('\n'),
+          html: masterToHtml(def, scratch),
           ...(texts.length ? { texts } : {}),
           // how the interactive ones work — the recipe, readable without adding
           // the entry just to look at it
@@ -5807,18 +5778,14 @@ const tools = [
     name: 'edit_elements',
     description:
       'Batch-edit elements — classes, content, media src, attributes, variants, hidden, the ' +
-      "code-owned '#ref', and interaction/animation bindings — for MANY elements in ONE call " +
-      '(one save; always prefer this over a call per element). Address each edit by `ref`, by ' +
-      '`id` from get_page, or by 0-based `line`, and add `part` to reach inside a component ' +
-      'instance. Pass pageId+version+edits for one page, `pages: [...]` for several, or ' +
-      "`componentId`+edits to edit a component itself. An instance's own `:Name` line takes " +
-      'only `variants`, `hidden` and `setRef` — it renders no box, so classes, attributes and ' +
-      'bindings there are refused; inside an instance, classes and bindings land on the shared ' +
-      'component. Per-edit failures never abort the batch: `failed` counts edits where nothing ' +
-      'landed, `partial` those where some ops applied beside a refused one, and `failures` ' +
-      'echoes them in full. New bindings echo their ids back, so a later unbind needs no read. ' +
-      'Requires a target; pass the `version` from get_page. See get_guide {section: "the-dsl"}, ' +
-      '{section: "styling"} and {section: "components"}.',
+      "'#ref', and interaction/animation bindings — for MANY elements in ONE call (one save; " +
+      'always prefer this over a call per element). Address each edit by `ref` or by `id`, and ' +
+      'add `part` to reach inside a component instance. Pass pageId+version+edits for one ' +
+      "page, `pages: [...]` for several, or `componentId`+edits for a component itself. An " +
+      "instance's own element takes only `variants`, `hidden` and `setRef`; inside an instance, " +
+      'classes and bindings land on the shared component. Per-edit failures never abort the ' +
+      'batch — `failures` echoes them in full. Requires a target; pass the `version` from ' +
+      'get_page. See get_guide {section: "styling"} and {section: "components"}.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -5846,8 +5813,8 @@ const tools = [
               ref: {
                 type: 'string',
                 description:
-                  "the element's '#ref' from the page code, without the '#' (':div#hero:' → " +
-                  '"hero"). Takes precedence over id/line. Use `setRef` to CHANGE a ref.',
+                  "the element's '#ref' (`data-ref` in the HTML). Takes precedence over `id`. " +
+                  'Use `setRef` to CHANGE one.',
               },
               part: {
                 type: 'string',
@@ -5860,11 +5827,9 @@ const tools = [
               setRef: {
                 type: 'string',
                 description:
-                  "set or clear this element's '#ref' (\"\" clears). Page-scope and must be " +
-                  'unique; not allowed inside a component instance block. Emits nothing in the ' +
-                  'HTML — that is `htmlId`.',
+                  "set or clear this element's '#ref' (\"\" clears). Page-unique, and never " +
+                  'inside a component instance. Emits nothing in the page — that is `htmlId`.',
               },
-              line: { type: 'integer', description: '0-based source line (alternative address)' },
               expectType: { type: 'string', description: 'refuse the edit unless the element is this type' },
               onMaster: {
                 type: 'boolean',
@@ -6125,10 +6090,7 @@ const tools = [
             additionalProperties: false,
           },
         },
-        editsPath: pathProp(
-          'the `edits` array (or `{edits: [...]}` / `{pages: [...]}`) — a page-sized batch of ' +
-          'edits runs tens of KB, and a generator can write the file directly',
-        ),
+        editsPath: pathProp('the `edits` array (or `{edits: […]}` / `{pages: […]}`)'),
         locale: {
           type: 'string',
           description: 'omit for the default locale; a non-default locale localizes content/src',
@@ -6185,7 +6147,7 @@ const tools = [
       const pageResults = []
       // an `arg` on a component's element rewrites every instance block — on
       // pages this call never named, whose cached versions are now stale
-      const codeBefore = pageCodes(project)
+      const codeBefore = pageVersions(project)
       for (const job of jobs) {
         // a COMPONENT job edits the master itself, as the board does: no page,
         // and so no page version — the whole-project guard covers the save
@@ -6208,7 +6170,7 @@ const tools = [
           pageResults.push({ pageId: job.pageId, saved: false, reason: 'not-found', message: e.message })
           continue
         }
-        const current = sha256(page.code)
+        const current = pageVersion(project, page)
         if (scopeDef) {
           // nothing to check
         } else if (typeof job.version !== 'string') {
@@ -6258,7 +6220,7 @@ const tools = [
         pageResults.push({
           ...where,
           saved: changed,
-          ...(scopeDef ? {} : { version: sha256(page.code) }),
+          ...(scopeDef ? {} : { version: pageVersion(project, page) }),
           edited: results.length - failures.length,
           failed: hardFailures.length,
           opsApplied,
@@ -6601,7 +6563,7 @@ const tools = [
             continue
           }
           if (!isLeafElement(node.type)) {
-            fail(item, `':${node.type}' is a container — text lives on leaves`)
+            fail(item, `'${node.type}' is a container — text lives on leaves`)
             continue
           }
           const value = isRich(item.content) ? sanitizeRich(item.content) : item.content
@@ -7009,13 +6971,6 @@ const tools = [
           clearedTransition = true
         }
       }
-      // markers: ONLY the nodes that actually lost a binding lose their {+}.
-      // A project-wide sweep also rewrote pages whose markers had merely
-      // drifted, silently advancing versions no one had written to (run #6, B5)
-      const changed = new Map()
-      for (const { page, node } of touched) {
-        if (syncMarkersForNode(page, node)) changed.set(page.id, page)
-      }
       await saveTargetProject(project)
       return {
         saved: true,
@@ -7024,7 +6979,7 @@ const tools = [
           ? { clearedPageTransition: true, note: 'it was also the site page transition — that slot is now empty' }
           : {}),
         ...(changed.size
-          ? { versions: [...changed.values()].map((p) => ({ pageId: p.id, version: sha256(p.code) })) }
+          ? { versions: [...changed.values()].map((p) => ({ pageId: p.id, version: pageVersion(project, p) })) }
           : {}),
       }
     },
@@ -7069,19 +7024,8 @@ const tools = [
           else delete node.interactions
         })
       }
-      // markers scoped to the nodes that lost a binding — see delete_animation
-      const changed = new Map()
-      for (const { page, node } of touched) {
-        if (syncMarkersForNode(page, node)) changed.set(page.id, page)
-      }
       await saveTargetProject(project)
-      return {
-        saved: true,
-        unbound,
-        ...(changed.size
-          ? { versions: [...changed.values()].map((p) => ({ pageId: p.id, version: sha256(p.code) })) }
-          : {}),
-      }
+      return { saved: true, unbound }
     },
   },
   {
@@ -7089,7 +7033,7 @@ const tools = [
     description:
       'Apply ONE library interaction to an element — for several, batch them through ' +
       'edit_elements.bindInteractions instead (one call, one version). Address by `ref`, ' +
-      'element `id`, or 0-based `line`. `targetId`/`targetRef` is the node the effect animates; ' +
+      'element `id`. `targetId`/`targetRef` is the node the effect animates; ' +
       'omit it for the element itself. Effect state is shared per (interaction, target), so ' +
       'several triggers drive ONE effect: an `action: "on"` button plus `action: "off"` on a ' +
       'close button and an overlay make a working modal. Elements inside a component instance ' +
@@ -7104,7 +7048,6 @@ const tools = [
           description: "the element's '#ref' from the code, without the '#' (takes precedence over id/line)",
         },
         id: { type: 'string', description: 'element id from get_page (preferred address)' },
-        line: { type: 'integer', description: '0-based source line (alternative address)' },
         interactionId: { type: 'string' },
         targetId: { type: ['string', 'null'] },
         targetRef: {
@@ -7120,7 +7063,7 @@ const tools = [
     handler: async (args) => {
       const { project } = await loadTargetProject()
       const page = findPage(project, args.pageId)
-      const current = sha256(page.code)
+      const current = pageVersion(project, page)
       if (args.version !== current) {
         return { saved: false, reason: 'stale-version', message: STALE_MESSAGE, currentVersion: current }
       }
@@ -7133,7 +7076,7 @@ const tools = [
           saved: false,
           reason: 'component-instance',
           message:
-            `':${node.type}' is a component instance, which has no box of its own — a binding on it ` +
+            `'${node.type}' is a component instance, which has no box of its own — a binding on it ` +
             'renders nowhere. Bind on an element inside it (shared by every instance), or wrap the ' +
             'instance in a :div (class `contents`) and bind on that.',
         }
@@ -7155,22 +7098,20 @@ const tools = [
       const binding = buildInteractionBinding(args, resolved.targetId)
       bindNode.interactions = bindNode.interactions ?? []
       bindNode.interactions.push(binding)
-      if (!inComponent) syncMarkersForNode(page, node)
       await saveTargetProject(project)
-      return { saved: true, line: node.line, id: node.id, binding, version: sha256(page.code) }
+      return { saved: true, id: node.id, binding, version: pageVersion(project, page) }
     },
   },
   {
     name: 'unbind_interaction',
     description:
-      'Remove an interaction binding from an element (addressed by `id` or `line`, plus the ' +
+      'Remove an interaction binding from an element (addressed by `id` or `ref`, plus the ' +
       '`bindingId`). Pass the `version` from get_page. Requires a target.',
     inputSchema: {
       type: 'object',
       properties: {
         pageId: { type: 'string' },
         id: { type: 'string', description: 'element id from get_page (preferred address)' },
-        line: { type: 'integer', description: '0-based source line (alternative address)' },
         bindingId: { type: 'string' },
         version: { type: 'string' },
       },
@@ -7180,7 +7121,7 @@ const tools = [
     handler: async (args) => {
       const { project } = await loadTargetProject()
       const page = findPage(project, args.pageId)
-      const current = sha256(page.code)
+      const current = pageVersion(project, page)
       if (args.version !== current) {
         return { saved: false, reason: 'stale-version', message: STALE_MESSAGE, currentVersion: current }
       }
@@ -7191,9 +7132,8 @@ const tools = [
         return { saved: false, reason: 'not-found', message: `no binding "${args.bindingId}" on this element` }
       }
       if (!node.interactions.length) delete node.interactions
-      syncMarkersForNode(page, node)
       await saveTargetProject(project)
-      return { saved: true, line: node.line, id: node.id, version: sha256(page.code) }
+      return { saved: true, id: node.id, version: pageVersion(project, page) }
     },
   },
   {
@@ -7241,7 +7181,7 @@ const tools = [
   {
     name: 'create_collection',
     description:
-      'Create a CMS collection. By default it also gets a template page bound with :body[name], ' +
+      'Create a CMS collection. By default it also gets a template page bound with <body source="name">, ' +
       'which CLAIMS the "/<name>" route with entries at /<name>/<slug> — so name collections ' +
       'SINGULAR and keep the plural free for your index page. Fails if a page already owns that ' +
       'route. Pass `detailRoutes: false` for DATA-ONLY content rendered inside other pages, ' +
@@ -7312,24 +7252,26 @@ const tools = [
           },
           note:
             'data-only: no template page and no entry routes. Render it with ' +
-            `:collection-list[${name}] inside a page; an @item link to it is refused.`,
+            `<collection-list source="${name}"> inside a page; a href="@item" to it is refused.`,
         }
       }
       const label = name.charAt(0).toUpperCase() + name.slice(1)
-      const code = buildDocument(
-        { name: label, slug: `/${name}`, status: 'published', locale: project.defaultLocale || 'en' },
-        ['\t:section', '\t\t:h1[title]:', '\tsection:'],
-        name,
-      )
+      // the template scaffold: a section holding the entry's title, so the page
+      // renders something the moment the collection exists
+      const title = createNode('h1')
+      title.arg = 'title'
+      const section = createNode('section')
+      section.children.push(title)
+      const body = createBody(name)
+      body.children.push(section)
       const page = {
         id: randomUUID(),
-        // matches the @setup `name:` in the scaffold — the two used to diverge
-        // ("Product template" vs "Product") until the first code rewrite
         name: label,
         path: `/${name}`,
         status: 'published',
-        code,
-        elements: parseSyntax(code),
+        // the DSL mirror the editor regenerates from the tree; '' until it does
+        code: '',
+        elements: [body],
         collectionId: '',
       }
       const collection = {
@@ -7355,7 +7297,7 @@ const tools = [
           name,
           templatePageId: page.id,
           templateSlug: `/${name}`,
-          templateVersion: sha256(page.code),
+          templateVersion: pageVersion(project, page),
           ...(collection.routeBase !== undefined ? { routeBase: collection.routeBase } : {}),
           fields: collection.fields.map(fieldView),
         },
@@ -7655,7 +7597,7 @@ const tools = [
               referencingPages,
               warning:
                 `these pages still reference "[${c.name}]" list/item blocks — remove ` +
-                'them (set_page_code will refuse the page as invalid-code until you do)',
+                'them (get_page reports the page as invalid until you do)',
             }
           : {}),
       }

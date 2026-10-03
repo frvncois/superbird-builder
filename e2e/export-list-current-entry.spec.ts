@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { mcpSession, pageCode } from './fixtures/mcpSession'
+import { mcpSession, pageHtml } from './fixtures/mcpSession'
 
 // `listQuery.filter.equalsCurrent` matches the entry being rendered, which is how
 // a parent's page lists its children.
@@ -42,20 +42,17 @@ test.describe('a list filtered by the entry being rendered', () => {
     const pages = (await s.call('list_pages')).pages
     const template = pages.find((p: { name: string }) => p.name !== 'Home')
     expect(template).toBeTruthy()
-    await s.call('set_page_code', {
+    await s.call('set_page_html', {
       pageId: template.id,
-      code: [
-        '@setup',
-        '\tname: Convo',
-        '\tslug: /convo',
-        '\tstatus: published',
-        '\tlocale: en',
-        ':body[convo]',
-        '\t:h1#who[title]:',
-        '\t:collection-list#thread[msg]',
-        '\t\t:paragraph#line[body]:',
-        '\tcollection-list:',
-        'body:',
+      // the body keeps its `source` (the collection it is the template for):
+      // page meta is tool parameters, never markup
+      html: [
+        '<body source="convo">',
+        '  <h1 data-ref="who" data-field="title" />',
+        '  <collection-list data-ref="thread" source="msg">',
+        '    <p data-ref="line" data-field="body" />',
+        '  </collection-list>',
+        '</body>',
       ].join('\n'),
       version: template.version,
     })
@@ -99,10 +96,10 @@ test.describe('a list filtered by the entry being rendered', () => {
       entries: [{ name: 'm1', values: { body: 'Hello Jade', convo: 'jade' } }],
     })
     const home = await s.home()
-    await s.call('set_page_code', {
+    await s.call('set_page_html', {
       pageId: home.id,
-      code: pageCode(
-        ['\t:collection-list#thread[msg]', '\t\t:paragraph#line[body]:', '\tcollection-list:'].join(
+      html: pageHtml(
+        ['<collection-list data-ref="thread" source="msg">\n</collection-list>', '<p data-ref="line" data-field="body" />', '\tcollection-list:'].join(
           '\n',
         ),
       ),

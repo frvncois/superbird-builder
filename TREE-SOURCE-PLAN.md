@@ -188,6 +188,35 @@ version" class of stale writes.
   class being DROPPED rather than kept. The property test is a committed gate rather
   than a throwaway, and an e2e spec on top of the tools lands in Phase 3.
 
+- **Phase 3 — done.** The MCP speaks HTML: `get_page {html}`, `set_page_html`,
+  `edit_structure` (insert/replace/move/remove/wrap, applied to a copy so a bad op
+  refuses the whole batch), `create_component {html}` / `update_component {html}`,
+  components and the library returning `html` + a `version`. Every `line` parameter is
+  gone, along with `nodeAtLine`, `numbered`, `codeRange`, `lineShifts`,
+  `syncMarkersForNode`, `instanceLinkDiagnostics`, `divergentNestedBlock` and
+  `applyComponentCode`'s six passes. `tools.mjs` no longer mentions `page.code`.
+  GUIDE.md's `the-dsl` (14.8 KB) became `page-html` (11.3 KB) and every DSL fence in
+  the other sections is HTML; the guide is 116.6 → 113.3 KB, the instructions 14,084 →
+  13,610 B. e2e: 62 call sites converted across 8 specs plus the new
+  `mcp-page-html.spec.ts` (12 tests), 181 passing.
+
+  Three decisions worth knowing. (1) **Diagnostics are reported, not refused** — a
+  `nodeId` only exists once the write landed, so a well-formed document with an unknown
+  collection saves and comes back with a loud note; only PARSE errors refuse. (2) The
+  **version excludes the read-only effect names** (`{effects: false}`): an effect is node
+  state the HTML reports but does not carry, so a binding change can never make a
+  pending structure write unsafe — this is the "marker sync advanced your version" class
+  of spurious staleness, gone. (3) A write that **drops a `class` attribute clears the
+  classes**, which is the format's declarative rule and also the easiest way to wipe a
+  component's styling from memory — so it now comes back as a named warning.
+
+  Budget: **68,297 / 70,000 B**, not the 65,000 the plan hoped for. The gate passes and
+  the budget was not raised, but the target assumed the two new tools would cost less
+  than `set_page_code` plus the `line`/`codeRange` params saved; `edit_structure`'s
+  schema is 2 KB on its own. Reaching 65,000 now means cutting real information out of
+  `edit_elements` (12.4 KB) or `update_settings` (9.2 KB), which is a separate judgement
+  call rather than trimming prose.
+
 ## Phase 0 — Safety net (½ day)
 - **0.1 Corpus.** `scripts/corpus.mjs` exports every project in `e2e/fixtures/`, the
   bundled catalog (each entry placed on a page), and any local `server/data` store into

@@ -28,6 +28,17 @@ export interface SerializeOptions {
   /** emit `data-id` — on by default, because echoing it back is what carries
    *  node identity through a rewrite */
   ids?: boolean
+  /**
+   * Emit the read-only `data-interactions` / `data-animations` names — on by
+   * default, because seeing what fires on an element saves a second call.
+   *
+   * The page VERSION turns it off. An effect is node state the HTML reports but
+   * does not carry, so it survives every write by construction and can never
+   * make a pending one unsafe — and a version that moved when a binding
+   * changed is exactly the spurious `stale-version` the marker sync used to
+   * cause.
+   */
+  effects?: boolean
   /** `structure` drops content and classes: the shape of a big page, for an
    *  agent that only needs to find its way around */
   mode?: HtmlMode
@@ -51,6 +62,7 @@ const showSrc = (src: string) => (src.startsWith('data:') ? ELIDED_DATA_URL : sr
 interface Ctx {
   mode: HtmlMode
   ids: boolean
+  effects: boolean
   /** when a MASTER is being read, its own root — which is component-typed but
    *  is the component itself, not an instance of it. Without this its children
    *  read as "inside an instance" and their classes, which are exactly what a
@@ -100,7 +112,7 @@ function attrsFor(node: ElementNode, ctx: Ctx, inInstance: boolean): string[] {
   for (const [axis, option] of Object.entries(node.variants ?? {})) {
     rest.push([`data-variant-${axis}`, option])
   }
-  if (ctx.mode === 'full') {
+  if (ctx.mode === 'full' && ctx.effects) {
     const effects = ctx.effectNames(node)
     if (effects.interactions.length) rest.push(['data-interactions', effects.interactions.join(', ')])
     if (effects.animations.length) rest.push(['data-animations', effects.animations.join(', ')])
@@ -162,6 +174,7 @@ function contextFor(
   return {
     mode: opts.mode ?? 'full',
     ids: opts.ids !== false,
+    effects: opts.effects !== false,
     shorts: shortIds(roots),
     map,
     components,

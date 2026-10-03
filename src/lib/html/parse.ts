@@ -232,8 +232,9 @@ export function parseHtml(input: string, components: string[] = []): ParseResult
     if (!text.trim()) return
     const parent = stack[stack.length - 1]
     const quoted = text.trim().slice(0, 40)
+    // point at the TEXT, not at the newline and indentation in front of it
     fail(
-      offset,
+      offset + (text.length - text.trimStart().length),
       parent
         ? `"${quoted}" sits directly inside <${parent.tag}>, which is a container. ` +
             'Put text in a text element: <p>, <span>, <h2>, or <div data-type="text">.'

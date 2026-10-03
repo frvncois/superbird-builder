@@ -4834,7 +4834,7 @@ function attrsFor(node, ctx, inInstance) {
 	for (const [name, value] of Object.entries(node.attributes ?? {})) if (!shared && implied[name] === void 0) rest.push([name, value]);
 	for (const [attr, field] of Object.entries(node.fieldAttrs ?? {})) rest.push([`data-bind-${attr}`, field]);
 	for (const [axis, option] of Object.entries(node.variants ?? {})) rest.push([`data-variant-${axis}`, option]);
-	if (ctx.mode === "full") {
+	if (ctx.mode === "full" && ctx.effects) {
 		const effects = ctx.effectNames(node);
 		if (effects.interactions.length) rest.push(["data-interactions", effects.interactions.join(", ")]);
 		if (effects.animations.length) rest.push(["data-animations", effects.animations.join(", ")]);
@@ -4875,6 +4875,7 @@ function contextFor(project, roots, mapRoots, opts) {
 	return {
 		mode: opts.mode ?? "full",
 		ids: opts.ids !== false,
+		effects: opts.effects !== false,
 		shorts: shortIds(roots),
 		map,
 		components,
@@ -5086,7 +5087,7 @@ function parseHtml(input, components = []) {
 		if (!text.trim()) return;
 		const parent = stack[stack.length - 1];
 		const quoted = text.trim().slice(0, 40);
-		fail(offset, parent ? `"${quoted}" sits directly inside <${parent.tag}>, which is a container. Put text in a text element: <p>, <span>, <h2>, or <div data-type="text">.` : `"${quoted}" is outside any element`);
+		fail(offset + (text.length - text.trimStart().length), parent ? `"${quoted}" sits directly inside <${parent.tag}>, which is a container. Put text in a text element: <p>, <span>, <h2>, or <div data-type="text">.` : `"${quoted}" is outside any element`);
 	}
 	function readAttrs(tag, tagStart) {
 		const attrs = {};
@@ -5434,11 +5435,15 @@ function applyHtml(root, parsed, opts) {
 	/** a readable address for a refusal: the element, with its ref when it has one */
 	const name = (node) => node.ref ? `${node.type}#${node.ref}` : node.type;
 	const under = (parent, node) => `${parent} > ${name(node)}`;
-	const byKey = nodesByShortId([root]);
-	const byRef = /* @__PURE__ */ new Map();
+	const addressable = [root];
 	walkNodes([root], (n) => {
-		if (n.ref) byRef.set(n.ref, n);
+		const mapping = mapped.get(n.id);
+		if (!mapping || isInstanceWrapper$1(mapping)) addressable.push(n);
 	});
+	const byKey = nodesByShortId([root]);
+	for (const [key, node] of [...byKey]) if (!addressable.includes(node)) byKey.delete(key);
+	const byRef = /* @__PURE__ */ new Map();
+	for (const node of addressable) if (node.ref) byRef.set(node.ref, node);
 	const claim = /* @__PURE__ */ new Map();
 	const claimed = /* @__PURE__ */ new Set();
 	const eachParsed = (nodes, visit) => {
@@ -5509,7 +5514,12 @@ function applyHtml(root, parsed, opts) {
 		}
 		const next = [];
 		for (const child of parsedChildren) {
-			const adopted = claim.get(child);
+			let adopted = claim.get(child);
+			if (adopted && (adopted === parent || !!findNode([adopted], parent.id))) {
+				refuse(`${path} > ${name(adopted)}`, `<${child.tag}> is written inside its own subtree; it is kept where it was and a new element is created here`);
+				claim.delete(child);
+				adopted = void 0;
+			}
 			const node = adopted ?? createNode(child.type);
 			if (adopted) result.kept++;
 			else {
@@ -5695,10 +5705,10 @@ function applyHtml(root, parsed, opts) {
 			else if (!isAllowedAttribute(attr)) refuse(path, `'${attr}' is not an allowed attribute`);
 			else setAttr(node, attr, value);
 		}
-		pruneAbsent(node, parsed, isInstance);
+		pruneAbsent(node, parsed, isInstance, () => path);
 		if (!isInstance && isLeafType(type) && parsed.text !== void 0) setContent(node, parsed, path);
 	}
-	function pruneAbsent(node, parsed, isInstance) {
+	function pruneAbsent(node, parsed, isInstance, pathFor) {
 		const has = (attr) => parsed.attrs[attr] !== void 0;
 		if (!has("data-ref") && node.ref !== void 0) delete node.ref;
 		if (!has("id") && node.htmlId !== void 0) delete node.htmlId;
@@ -5719,7 +5729,10 @@ function applyHtml(root, parsed, opts) {
 		}
 		if (node.variants !== void 0) delete node.variants;
 		if (!has("href") && node.link !== void 0) delete node.link;
-		if (!has("class") && node.classes !== void 0) delete node.classes;
+		if (!has("class") && node.classes !== void 0) {
+			if (node.classes.trim()) warn(pathFor(node), `had classes ("${node.classes.trim()}") and the markup gives it none, so they are gone. Write \`class=""\` if that was deliberate; otherwise echo the classes back.`);
+			delete node.classes;
+		}
 		if (!has("src") && node.src !== void 0) delete node.src;
 		const implied = impliedAttrs(node.type);
 		const attrs = {};
@@ -9443,4 +9456,4 @@ function materializeCatalogEntry(entry, project, component = (key) => project.co
 	});
 }
 //#endregion
-export { APPEAR_MODES, BUILTIN_LIST_SOURCES, CATALOG, CATALOG_TOKENS, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, ELIDED_DATA_URL, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MAX_DEPTH, MAX_INPUT, MOTION_PROPS, NODE_STATE_KEYS, REF_SLOT, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, SCROLL_LERP_MAX, SCROLL_LERP_MIN, SLIDER_DEFAULTS, STYLE_SECTIONS, TOKEN_NAME_RE, TRANSITION_DEFAULTS, TRANSITION_PRESET_IDS, VARIANT_NAME_RE, addVariantAxis, addVariantOption, adoptStructure, alignMirrors, applyClass, applyHtml, buildDocument, buildInstanceMap, buildScopeRoots, canNest, catalogDependencies, catalogEntry, cloneForMaster, compileAnimation, componentReaches, componentUsage, contextFromProject, countLocaleSeo, createNode, createPage, createProject, customSchemaError, dataMarkerOf, deepClone, defaultBreakpoints, defaultSettings, deleteComponent, dependencyOrder, detachInstance, duplicateComponent, effectiveClasses, elementBlockLines, enforceDocument, expandComponentInstances, extractBodyArg, extractBodyDecor, extractBodyLines, findNode, findParent, fontError, fontFormatForUrl, hasAncestorOfType, hasNodeState, hasOpenArgBracket, hoistBlockRef, inheritedInstanceValue, interactionGroupKey, interactionMarkerOf, interactionStateKey, isAllowedAttribute, isBodyOpenLine, isComponentType, isEmittableToken, isEntryScopeRoot, isInstanceWrapper, isKnownElement, isLeafElement, isLocalizableAttribute, isNodeHidden, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isValidClass, isValidToken, lexLine, lucideNameOf, lucideSvg, masterToHtml, matchClass, materializeCatalogEntry, mergeAttributeLayers, mergeClassLayers, nestedComponentNames, nodesByShortId, normalizeComponentName, normalizeSyntax, pageToHtml, parseHtml, parseSetup, parseSyntax, pickedKeys, purgeLocaleSeo, pushMasterStructure, reconcile, refOf, removeVariantAxis, removeVariantOption, renameComponent, renameVariantAxis, renameVariantOption, replaceSetup, resolveInstanceValue, resolvePicks, resolveSliderConfig, sameLayerProperty, sameProperty, sameType, sanitizeAttributes, sanitizeInlineSvg, sanitizeRich, serializeNode, setComponentCategory, setComponentMeta, setInstancePick, setNodeHidden, setSetupLocale, setStyleTokens, setVariantAxes, setVariantClasses, setVariantDefault, shortIds, slugify, stripExtractedInstanceState, stripNodeState, styleMarkerOf, tagForType, tokenError, typeForTag, typeOptionsFor, validateAnimation, validateBinding, validateDocument, validateMotionSettings, validateSliderConfig, validateTree, variantKey, walkNodes, withDataMarker, withInteractionMarker, withStyleMarker, withoutRef };
+export { APPEAR_MODES, BUILTIN_LIST_SOURCES, CATALOG, CATALOG_TOKENS, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, ELIDED_DATA_URL, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MAX_DEPTH, MAX_INPUT, MOTION_PROPS, NODE_STATE_KEYS, REF_SLOT, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, SCROLL_LERP_MAX, SCROLL_LERP_MIN, SLIDER_DEFAULTS, STYLE_SECTIONS, TOKEN_NAME_RE, TRANSITION_DEFAULTS, TRANSITION_PRESET_IDS, VARIANT_NAME_RE, addVariantAxis, addVariantOption, adoptStructure, alignMirrors, alignStructure, applyClass, applyHtml, buildDocument, buildInstanceMap, buildScopeRoots, canNest, catalogDependencies, catalogEntry, cloneForMaster, compileAnimation, componentReaches, componentUsage, contextFromProject, countLocaleSeo, createBody, createNode, createPage, createProject, customSchemaError, dataMarkerOf, deepClone, defaultBreakpoints, defaultSettings, deleteComponent, dependencyOrder, detachInstance, duplicateComponent, effectiveClasses, elementBlockLines, enforceDocument, expandComponentInstances, extractBodyArg, extractBodyDecor, extractBodyLines, findNode, findParent, fontError, fontFormatForUrl, hasAncestorOfType, hasNodeState, hasOpenArgBracket, hoistBlockRef, inheritedInstanceValue, interactionGroupKey, interactionMarkerOf, interactionStateKey, isAllowedAttribute, isBodyOpenLine, isComponentType, isEmittableToken, isEntryScopeRoot, isInstanceWrapper, isKnownElement, isLeafElement, isLocalizableAttribute, isNodeHidden, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isValidClass, isValidToken, lexLine, lucideNameOf, lucideSvg, masterToHtml, matchClass, materializeCatalogEntry, mergeAttributeLayers, mergeClassLayers, nestedComponentNames, nodesByShortId, normalizeComponentName, normalizeSyntax, pageToHtml, parseHtml, parseSetup, parseSyntax, pickedKeys, purgeLocaleSeo, pushMasterStructure, reconcile, refOf, removeVariantAxis, removeVariantOption, renameComponent, renameVariantAxis, renameVariantOption, replaceSetup, resolveInstanceValue, resolvePicks, resolveSliderConfig, sameLayerProperty, sameProperty, sameType, sanitizeAttributes, sanitizeInlineSvg, sanitizeRich, serializeNode, setComponentCategory, setComponentMeta, setInstancePick, setNodeHidden, setSetupLocale, setStyleTokens, setVariantAxes, setVariantClasses, setVariantDefault, shortIds, slugify, stripExtractedInstanceState, stripNodeState, styleMarkerOf, tagForType, tokenError, typeForTag, typeOptionsFor, validateAnimation, validateBinding, validateDocument, validateMotionSettings, validateSliderConfig, validateTree, variantKey, walkNodes, withDataMarker, withInteractionMarker, withStyleMarker, withoutRef };

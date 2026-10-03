@@ -27,7 +27,7 @@ function fixture() {
         name: 'Home',
         path: '/',
         status: 'published',
-        code: '@setup\n  name: Home\n  slug: /\n  status: published\n:body\n  :h1:\nbody:',
+        code: '@setup\n  name: Home\n  slug: /\n  status: published\n<body>\n  :h1:\n</body>',
         elements: [],
       },
     ],
@@ -285,12 +285,21 @@ test('set_target: no elicitation capability falls back to the attestation gates'
 test('an agent sets an icon by name, and custom markup is sanitized at write', async () => {
   const { store, api } = fixture()
   const project = JSON.parse(store.get('guano-project:main')!)
-  project.pages[0].code =
-    '@setup\n  name: Home\n  slug: /\n  status: published\n:body\n  :button\n    :icon:\n    :span:\n  button:\n  :h1:\nbody:'
-  // element edits address the parsed tree, which the fixture leaves empty
   const runtime = await runtimePromise
   test.skip(!runtime, 'runtime bundle missing')
-  project.pages[0].elements = runtime.parseSyntax(project.pages[0].code)
+  // element edits address the TREE, which the fixture leaves empty
+  const node = (id: string, type: string, children: unknown[] = [], extra = {}) => ({
+    id, type, content: '', children, ...extra,
+  })
+  project.pages[0].elements = [
+    node('p-body', 'body', [
+      node('p-btn', 'button', [
+        node('p-icon', 'icon', [], { ref: 'mark' }),
+        node('p-span', 'span', [], { content: 'Go' }),
+      ]),
+      node('p-h1', 'h1'),
+    ]),
+  ]
   store.set('guano-project:main', JSON.stringify(project))
   const call = await toolset(api)
 
@@ -298,13 +307,13 @@ test('an agent sets an icon by name, and custom markup is sanitized at write', a
   const found = await call('list_icons', { query: 'arrow right' })
   expect(found.icons[0]).toBe('arrow-right')
 
-  // addressed by line, pinned by type: line 6 is the `:icon:` inside the button
+  // addressed by ref, pinned by type
   const page = await call('get_page', { pageId: 'home' })
   const edit = (patch: Record<string, unknown>, version: string) =>
     call('edit_elements', {
       pageId: 'home',
       version,
-      edits: [{ line: 6, expectType: 'icon', ...patch }],
+      edits: [{ ref: 'mark', expectType: 'icon', ...patch }],
     })
   const nodeOf = () => {
     const stored = JSON.parse(store.get('guano-project:main')!)
@@ -348,7 +357,7 @@ test('an agent sets an icon by name, and custom markup is sanitized at write', a
   const refused = await call('edit_elements', {
     pageId: 'home',
     version: after.version,
-    edits: [{ line: 9, expectType: 'h1', icon: 'star' }],
+    edits: [{ id: 'p-h1', expectType: 'h1', icon: 'star' }],
   })
   expect(JSON.stringify(refused)).toContain('not an icon element')
 })
@@ -370,9 +379,9 @@ test('an agent declares variant axes, styles an option, and an instance wears it
       ]),
     },
   ]
-  project.pages[0].code =
-    '@setup\n  name: Home\n  slug: /\n  status: published\n:body\n  :Button\n    :button\n      :span:\n    button:\n  Button:\nbody:'
-  project.pages[0].elements = runtime.parseSyntax(project.pages[0].code)
+  project.pages[0].elements = [
+    n('p-body', 'body', [n('p-btn', 'Button', [n('p-inner', 'button', [n('p-span', 'span')])], { ref: 'cta' })]),
+  ]
   store.set('guano-project:main', JSON.stringify(project))
   const call = await toolset(api)
   const stored = () => JSON.parse(store.get('guano-project:main')!)
@@ -396,7 +405,9 @@ test('an agent declares variant axes, styles an option, and an instance wears it
   let result = await call('edit_elements', {
     pageId: 'home',
     version: page.version,
-    edits: [{ line: 6, expectType: 'button', variant: 'size:sm', addClasses: ['h-8', 'px-3'] }],
+    // the element INSIDE the instance: its classes are the master's, so the
+    // override lands there
+    edits: [{ id: 'p-inner', expectType: 'button', variant: 'size:sm', addClasses: ['h-8', 'px-3'] }],
   })
   expect(result.saved).toBe(true)
   const master = stored().components[0].root.children[0]
@@ -408,16 +419,16 @@ test('an agent declares variant axes, styles an option, and an instance wears it
   result = await call('edit_elements', {
     pageId: 'home',
     version: page.version,
-    edits: [{ line: 6, variant: 'size:xl', addClasses: ['h-12'] }],
+    edits: [{ id: 'p-inner', variant: 'size:xl', addClasses: ['h-12'] }],
   })
   expect(JSON.stringify(result)).toContain('size:md, size:sm')
 
-  // the instance wears it — on its :Name line, and nowhere else
+  // the instance wears it — on its own element, and nowhere else
   page = await call('get_page', { pageId: 'home' })
   result = await call('edit_elements', {
     pageId: 'home',
     version: page.version,
-    edits: [{ line: 5, expectType: 'Button', variants: { size: 'sm' } }],
+    edits: [{ ref: 'cta', expectType: 'Button', variants: { size: 'sm' } }],
   })
   expect(result.saved).toBe(true)
   expect(stored().pages[0].elements[0].children[0].variants).toEqual({ size: 'sm' })
@@ -427,7 +438,7 @@ test('an agent declares variant axes, styles an option, and an instance wears it
   await call('edit_elements', {
     pageId: 'home',
     version: page.version,
-    edits: [{ line: 5, variants: { size: 'md' } }],
+    edits: [{ ref: 'cta', variants: { size: 'md' } }],
   })
   expect(stored().pages[0].elements[0].children[0].variants).toBeUndefined()
 })
@@ -444,17 +455,22 @@ test('an agent nests a component, and a component can never hold itself', async 
     { id: 'c-button', name: 'Button', root: n('b0', 'Button', [n('b1', 'button', [n('b2', 'span', [], { content: 'Go' })], { classes: 'h-9' })]) },
     { id: 'c-card', name: 'Card', root: n('k0', 'Card', [n('k1', 'div', [n('k2', 'h3', [], { content: 'Title' })], { classes: 'rounded-xl' })]) },
   ]
-  project.pages[0].code =
-    '@setup\n  name: Home\n  slug: /\n  status: published\n:body\n\t:Card\n\t\t:div\n\t\t\t:h3:\n\t\tdiv:\n\tCard:\nbody:'
-  project.pages[0].elements = runtime.parseSyntax(project.pages[0].code)
+  project.pages[0].elements = [
+    n('p-body', 'body', [n('p-card', 'Card', [n('p-div', 'div', [n('p-h3', 'h3')])])]),
+  ]
   store.set('guano-project:main', JSON.stringify(project))
   const call = await toolset(api)
   const stored = () => JSON.parse(store.get('guano-project:main')!)
 
-  // `:Button:` is all the agent writes; it arrives as the component's block
+  // `<Button />` is all the agent writes; it arrives as the component's structure
+  const before = await call('list_components', {})
+  const cardV = before.components.find((c: { id: string }) => c.id === 'c-card').version
   const nested = await call('update_component', {
     componentId: 'c-card',
-    code: ':Card\n\t:div\n\t\t:h3:\n\t\t:Button:\n\tdiv:\nCard:',
+    version: cardV,
+    // the div's classes are echoed back: an absent `class` would CLEAR them,
+    // which the response warns about rather than doing silently
+    html: '<Card>\n  <div class="rounded-xl">\n    <h3>Title</h3>\n    <Button />\n  </div>\n</Card>',
   })
   expect(nested.saved).toBe(true)
   expect(nested.updatedInstances).toBe(1)
@@ -470,16 +486,19 @@ test('an agent nests a component, and a component can never hold itself', async 
   expect(card.root.children[0].classes).toBe('rounded-xl')
   expect(card.root.children[0].children[0].content).toBe('Title')
   // and the page followed
-  expect(stored().pages[0].code).toContain(':Button\n')
-  expect(stored().pages[0].code).toContain('Button:\n')
+  const onPage = stored().pages[0].elements[0].children[0].children[0].children
+  expect(onPage.map((x: { type: string }) => x.type)).toEqual(['h3', 'Button'])
 
   // the other way round would make each hold the other
+  const after = await call('list_components', {})
+  const buttonV = after.components.find((c: { id: string }) => c.id === 'c-button').version
   const cycle = await call('update_component', {
     componentId: 'c-button',
-    code: ':Button\n\t:button\n\t\t:span:\n\t\t:Card:\n\tbutton:\nButton:',
+    version: buttonV,
+    html: '<Button>\n  <button class="h-9">\n    <span>Go</span>\n    <Card />\n  </button>\n</Button>',
   })
   expect(cycle.saved).toBe(false)
-  expect(cycle.message).toContain('already holds')
+  expect(JSON.stringify(cycle.refused)).toContain("can't hold itself")
   expect(stored().components[0].root.children[0].children).toHaveLength(1)
 
   // and a component something holds cannot be deleted from under it

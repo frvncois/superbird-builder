@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { mcpSession, pageCode } from './fixtures/mcpSession'
+import { mcpSession, pageHtml } from './fixtures/mcpSession'
 
 // `node.fieldAttrs` binds an ATTRIBUTE's value to a collection field, which is
 // the only way presentation can follow DATA.
@@ -35,13 +35,13 @@ test.describe('attribute values bound to fields', () => {
   test('a data-* attribute follows the entry, so one pill styles per status', async () => {
     const s = await seeded()
     const home = await s.home()
-    await s.call('set_page_code', {
+    await s.call('set_page_html', {
       pageId: home.id,
-      code: pageCode(
+      html: pageHtml(
         [
-          '\t:collection-list[convo]',
-          '\t\t:span#pill[status]:',
-          '\tcollection-list:',
+          '<collection-list source="convo">',
+          '  <span data-ref="pill" data-field="status" />',
+          '</collection-list>',
         ].join('\n'),
       ),
       version: home.version,
@@ -71,10 +71,14 @@ test.describe('attribute values bound to fields', () => {
   test('an input’s value is pre-filled from the entry it edits', async () => {
     const s = await seeded()
     const home = await s.home()
-    await s.call('set_page_code', {
+    await s.call('set_page_html', {
       pageId: home.id,
-      code: pageCode(
-        ['\t:collection-list[convo]', '\t\t:input#phone:', '\tcollection-list:'].join('\n'),
+      html: pageHtml(
+        [
+          '<collection-list source="convo">',
+          '  <input data-ref="phone" />',
+          '</collection-list>',
+        ].join('\n'),
       ),
       version: home.version,
     })
@@ -108,14 +112,14 @@ test.describe('attribute values bound to fields', () => {
       entries: [{ name: 'Blank', values: { status: '' } }],
     })
     const home = await s.home()
-    await s.call('set_page_code', {
+    await s.call('set_page_html', {
       pageId: home.id,
-      code: pageCode(
+      html: pageHtml(
         [
-          '\t:span#outside:',
-          '\t:collection-list[convo]',
-          '\t\t:span#inside:',
-          '\tcollection-list:',
+          '<span data-ref="outside" />',
+          '<collection-list source="convo">',
+          '  <span data-ref="inside" />',
+          '</collection-list>',
         ].join('\n'),
       ),
       version: home.version,
@@ -140,9 +144,9 @@ test.describe('attribute values bound to fields', () => {
   test('an attribute name outside the allowlist is refused, not silently dropped', async () => {
     const s = await seeded()
     const home = await s.home()
-    await s.call('set_page_code', {
+    await s.call('set_page_html', {
       pageId: home.id,
-      code: pageCode('\t:span#pill:'),
+      html: pageHtml('<span data-ref="pill" />'),
       version: home.version,
     })
     const after = await s.home()

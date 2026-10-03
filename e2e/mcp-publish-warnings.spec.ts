@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { mcpSession, pageCode, type McpSession } from './fixtures/mcpSession'
+import { mcpSession, pageHtml, type McpSession } from './fixtures/mcpSession'
 
 // `publish` returns design warnings, never refusals. They are the only review an
 // agent gets, so a FALSE one costs real work: the Cocoapp session rebound a
@@ -9,15 +9,15 @@ import { mcpSession, pageCode, type McpSession } from './fixtures/mcpSession'
 
 /** a grid of 14 cards — over the 12-descendant threshold the check uses */
 const GRID = [
-  '\t:section#grid',
-  ...Array.from({ length: 14 }, () => '\t\t:span:'),
-  '\tsection:',
+  '<section data-ref="grid">',
+  ...Array.from({ length: 14 }, () => '  <span />'),
+  '</section>',
 ].join('\n')
 
 /** bind `animationId` to #grid with the given trigger */
 async function bindToGrid(s: McpSession, animationId: string, trigger: string) {
   const home = await s.home()
-  await s.call('set_page_code', { pageId: home.id, code: pageCode(GRID), version: home.version })
+  await s.call('set_page_html', { pageId: home.id, html: pageHtml(GRID), version: home.version })
   const after = await s.home()
   await s.call('edit_elements', {
     pageId: after.id,
@@ -80,16 +80,22 @@ test.describe('publish design warnings', () => {
 })
 
 test.describe('what a review sends back', () => {
-  test('a binding whose target is not on the page is flagged', async () => {
+  test('removing an element takes the bindings that pointed at it', async () => {
+    // `binding-target-unreachable` still guards the case a write CANNOT fix —
+    // a trigger and a target in two different repeats (below). But a target
+    // simply deleted from the page no longer leaves a dangling binding behind:
+    // the write drops it, exactly as the editor's own delete does. That is
+    // worth asserting, because the warning used to be the only thing standing
+    // between a deletion and an effect that silently did nothing.
     const s = await mcpSession()
     const { created } = await s.call('create_interactions', {
       items: [{ name: 'Show', toClasses: 'flex' }],
     })
     const home = await s.home()
-    await s.call('set_page_code', {
+    await s.call('set_page_html', {
       pageId: home.id,
-      code: pageCode(
-        '\t:button#open\n\t\t:span:\n\tbutton:\n\t:div#panel\n\t\t:span:\n\tdiv:',
+      html: pageHtml(
+        '<button data-ref="open">\n  <span />\n</button>\n<div data-ref="panel">\n  <span />\n</div>',
       ),
       version: home.version,
     })
@@ -101,26 +107,27 @@ test.describe('what a review sends back', () => {
         { ref: 'open', bindInteractions: [{ interactionId: created[0].id, targetRef: 'panel', trigger: 'click' }] },
       ],
     })
-    // the target is there, so nothing is wrong yet
     expect(await s.kinds()).not.toContain('binding-target-unreachable')
 
-    // now remove the panel but keep the binding: it points at nothing
     after = await s.home()
-    await s.call('set_page_code', {
+    await s.call('set_page_html', {
       pageId: after.id,
-      code: pageCode('\t:button#open\n\t\t:span:\n\tbutton:'),
+      html: pageHtml('<button data-ref="open">\n  <span />\n</button>'),
       version: after.version,
     })
-    expect(await s.kinds()).toContain('binding-target-unreachable')
+    const page = await s.call('get_page', { pageId: after.id, includeInteractions: true })
+    const open = page.elements.find((e: { ref?: string }) => e.ref === 'open')
+    expect(open.interactions).toBeUndefined()
+    expect(await s.kinds()).not.toContain('binding-target-unreachable')
   })
 
   test('a button inside a linked container is flagged', async () => {
     const s = await mcpSession()
     const home = await s.home()
     // :div@/reports exports as <a>…</a>, and a :button inside it is invalid
-    await s.call('set_page_code', {
+    await s.call('set_page_html', {
       pageId: home.id,
-      code: pageCode('\t:div#card@/reports\n\t\t:button\n\t\t\t:span:\n\t\tbutton:\n\tdiv:'),
+      html: pageHtml('<div data-ref="card" href="/reports">\n  <button>\n    <span />\n  </button>\n</div>'),
       version: home.version,
     })
     const kinds = await s.kinds()
@@ -135,29 +142,29 @@ test.describe('what a review sends back', () => {
       entries: Array.from({ length: 12 }, (_, i) => ({ name: `Person ${i}` })),
     })
     const home = await s.home()
-    const smallRow = '\t:collection-list[contact]\n\t\t:div\n\t\t\t:span:\n\t\tdiv:\n\tcollection-list:'
-    await s.call('set_page_code', { pageId: home.id, code: pageCode(smallRow), version: home.version })
+    const smallRow = '<collection-list source="contact">\n  <div>\n    <span />\n  </div>\n</collection-list>'
+    await s.call('set_page_html', { pageId: home.id, html: pageHtml(smallRow), version: home.version })
     expect(await s.kinds()).not.toContain('heavy-repeat')
 
     // a 40-node drawer in every row is what made one route 300 KB
     const heavyRow = [
-      '\t:collection-list[contact]',
-      '\t\t:div',
-      ...Array.from({ length: 45 }, () => '\t\t\t:span:'),
-      '\t\tdiv:',
-      '\tcollection-list:',
+      '<collection-list source="contact">',
+      '  <div>',
+      ...Array.from({ length: 45 }, () => '    <span />'),
+      '  </div>',
+      '</collection-list>',
     ].join('\n')
     const after = await s.home()
-    await s.call('set_page_code', { pageId: after.id, code: pageCode(heavyRow), version: after.version })
+    await s.call('set_page_html', { pageId: after.id, html: pageHtml(heavyRow), version: after.version })
     expect(await s.kinds()).toContain('heavy-repeat')
   })
 
   test('attribute text with no translation is flagged, and a translation clears it', async () => {
     const s = await mcpSession()
     const home = await s.home()
-    await s.call('set_page_code', {
+    await s.call('set_page_html', {
       pageId: home.id,
-      code: pageCode('\t:input#search:'),
+      html: pageHtml('<input data-ref="search" />'),
       version: home.version,
     })
     const after = await s.home()
@@ -196,20 +203,20 @@ test.describe('what a review sends back', () => {
     const home = await s.home()
     // two sibling lists: a trigger in one cannot know WHICH row of the other to
     // drive, so the key can never match and the click does nothing
-    await s.call('set_page_code', {
+    await s.call('set_page_html', {
       pageId: home.id,
-      code: pageCode(
+      html: pageHtml(
         [
-          '\t:collection-list[row]',
-          '\t\t:button#rowOpen',
-          '\t\t\t:span:',
-          '\t\tbutton:',
-          '\tcollection-list:',
-          '\t:collection-list[row]',
-          '\t\t:div#rowPanel',
-          '\t\t\t:span:',
-          '\t\tdiv:',
-          '\tcollection-list:',
+          '<collection-list source="row">',
+          '  <button data-ref="rowOpen">',
+          '    <span />',
+          '  </button>',
+          '</collection-list>',
+          '<collection-list source="row">',
+          '  <div data-ref="rowPanel">',
+          '    <span />',
+          '  </div>',
+          '</collection-list>',
         ].join('\n'),
       ),
       version: home.version,

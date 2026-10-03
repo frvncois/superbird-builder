@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test'
-import { mcpSession, pageCode } from './fixtures/mcpSession'
+import { mcpSession, pageHtml } from './fixtures/mcpSession'
 
-// `:list-empty` is a list's empty state: a direct child that renders only when
+// `<list-empty>` is a list's empty state: a direct child that renders only when
 // there is nothing to repeat, and is never repeated itself.
 //
 // Without it a list that matched nothing rendered as a blank gap. The Cocoapp
@@ -10,27 +10,27 @@ import { mcpSession, pageCode } from './fixtures/mcpSession'
 // appeared in no tab had no "nothing here" to show either.
 
 test.describe('a list’s empty state', () => {
-  async function page(code: string, entries: { name: string }[]) {
+  async function page(html: string, entries: { name: string }[]) {
     const s = await mcpSession()
     const c = (await s.call('create_collection', { name: 'item', detailRoutes: false }))
       .collection
     if (entries.length) await s.call('upsert_entries', { collectionId: c.id, entries })
     const home = await s.home()
-    const r = await s.call('set_page_code', {
+    const r = await s.call('set_page_html', {
       pageId: home.id,
-      code: pageCode(code),
+      html: pageHtml(html),
       version: home.version,
     })
     return { s, r }
   }
 
   const LIST = [
-    '\t:collection-list#rows[item]',
-    '\t\t:paragraph#row:',
-    '\t\t:list-empty#none',
-    '\t\t\t:text#noneText:',
-    '\t\tlist-empty:',
-    '\tcollection-list:',
+    '<collection-list data-ref="rows" source="item">',
+    '  <p data-ref="row" />',
+    '  <list-empty data-ref="none">',
+    '    <div data-type="text" data-ref="noneText" />',
+    '  </list-empty>',
+    '</collection-list>',
   ].join('\n')
 
   test('it renders when the list is empty, and not when it is not', async () => {
@@ -90,7 +90,7 @@ test.describe('a list’s empty state', () => {
       entries: [{ name: 'One', values: { status: 'active' } }],
     })
     const home = await s.home()
-    await s.call('set_page_code', { pageId: home.id, code: pageCode(LIST), version: home.version })
+    await s.call('set_page_html', { pageId: home.id, html: pageHtml(LIST), version: home.version })
     const after = await s.home()
     await s.call('edit_elements', {
       pageId: after.id,
@@ -106,9 +106,13 @@ test.describe('a list’s empty state', () => {
     expect(html).not.toContain('A row')
   })
 
-  test('written outside a list it is refused with a diagnostic', async () => {
-    const { r } = await page('\t:list-empty#none\n\t\t:text:\n\tlist-empty:', [])
-    expect(r.saved).toBe(false)
+  test('written outside a list it is reported as a diagnostic', async () => {
+    // it is a diagnostic rather than a refusal: the markup is well-formed and
+    // storable, and a diagnostic names the ELEMENT, which only exists once the
+    // write landed. The response says so in its notes.
+    const { r } = await page('<list-empty data-ref="none"><div data-type="text" /></list-empty>', [])
+    expect(r.saved).toBe(true)
     expect(JSON.stringify(r.diagnostics)).toContain('empty state')
+    expect(JSON.stringify(r.notes)).toContain('diagnostics')
   })
 })

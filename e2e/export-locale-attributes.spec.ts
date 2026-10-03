@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { mcpSession, pageCode } from './fixtures/mcpSession'
+import { mcpSession, pageHtml } from './fixtures/mcpSession'
 
 // Attribute TEXT a visitor reads — a placeholder, an icon button's aria-label,
 // an image's alt — is translatable, and a component's placement can override it.
@@ -15,9 +15,9 @@ test.describe('attribute text per placement and per locale', () => {
     const s = await mcpSession()
     await s.call('update_settings', { addLocales: ['fr'] })
     const home = await s.home()
-    await s.call('set_page_code', {
+    await s.call('set_page_html', {
       pageId: home.id,
-      code: pageCode('\t:input#search:\n\t:input#name:'),
+      html: pageHtml('<input data-ref="search" />\n<input data-ref="name" />'),
       version: home.version,
     })
     return s
@@ -104,9 +104,9 @@ test.describe('attribute text per placement and per locale', () => {
     const s = await mcpSession()
     await s.call('add_library_components', { keys: ['input'] })
     const home = await s.home()
-    await s.call('set_page_code', {
+    await s.call('set_page_html', {
       pageId: home.id,
-      code: pageCode('\t:Input#a:\n\t:Input#b:'),
+      html: pageHtml('<Input data-ref="a" />\n<Input data-ref="b" />'),
       version: home.version,
     })
     const after = await s.home()

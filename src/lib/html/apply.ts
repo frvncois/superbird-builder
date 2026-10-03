@@ -564,13 +564,18 @@ export function applyHtml(
     // an attribute the agent DROPPED is a removal: the document it wrote is
     // the whole truth for everything the format carries, or an attribute could
     // never be taken off again
-    pruneAbsent(node, parsed, isInstance)
+    pruneAbsent(node, parsed, isInstance, () => path)
     if (!isInstance && isLeafType(type) && parsed.text !== undefined) {
       setContent(node, parsed, path)
     }
   }
 
-  function pruneAbsent(node: ElementNode, parsed: ParsedNode, isInstance: boolean) {
+  function pruneAbsent(
+    node: ElementNode,
+    parsed: ParsedNode,
+    isInstance: boolean,
+    pathFor: (n: ElementNode) => string,
+  ) {
     const has = (attr: string) => parsed.attrs[attr] !== undefined
     if (!has('data-ref') && node.ref !== undefined) delete node.ref
     if (!has('id') && node.htmlId !== undefined) delete node.htmlId
@@ -598,7 +603,22 @@ export function applyHtml(
     }
     if (node.variants !== undefined) delete node.variants
     if (!has('href') && node.link !== undefined) delete node.link
-    if (!has('class') && node.classes !== undefined) delete node.classes
+    if (!has('class') && node.classes !== undefined) {
+      // The document is the whole truth, so an absent `class` CLEARS the
+      // classes — which is right, and is also the easiest way to wipe a
+      // component's styling by writing its structure out from memory. Named,
+      // not silent: a deliberate removal is written as `class=""` or by listing
+      // what remains, so an unmentioned `class` on a styled element is almost
+      // always an accident.
+      if (node.classes.trim()) {
+        warn(
+          pathFor(node),
+          `had classes ("${node.classes.trim()}") and the markup gives it none, so they are ` +
+            'gone. Write `class=""` if that was deliberate; otherwise echo the classes back.',
+        )
+      }
+      delete node.classes
+    }
     if (!has('src') && node.src !== undefined) delete node.src
     const implied = impliedAttrs(node.type)
     const attrs: Record<string, string> = {}
