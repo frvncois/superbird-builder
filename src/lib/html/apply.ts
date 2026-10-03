@@ -26,7 +26,8 @@ import { impliedAttrs, isLeafType, sameType, SOURCE_TYPES } from './tags'
  * replaces, and it runs only for agents, never on a drag.
  *
  * Everything the HTML does not carry (interactions, animations, `locales`,
- * slider config, `listQuery`, `entryId`, `instanceAttributes`) is preserved on
+ * slider config, form config, `listQuery`, `entryId`, `instanceAttributes`) is
+ * preserved on
  * every adopted node, because the node OBJECT itself is reused.
  *
  * A refusal is never silent. Reporting success for a write that renders

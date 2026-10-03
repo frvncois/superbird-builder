@@ -16,7 +16,8 @@ import { impliedAttrs, isLeafType, SOURCE_TYPES, tagForType } from './tags'
  * a write from being rejected for a difference nobody made.
  *
  * What is NOT here is as deliberate as what is: interactions, animations,
- * translations, slider config, `listQuery`, `entryId` and `instanceAttributes`
+ * translations, slider config, form config, `listQuery`, `entryId` and
+ * `instanceAttributes`
  * all stay node state, edited by the tools that own them, and a write
  * preserves them on every node it adopts. Printing them would double the
  * size of a read and tempt an agent into editing them as text.

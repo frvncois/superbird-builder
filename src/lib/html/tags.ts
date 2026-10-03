@@ -31,6 +31,8 @@ const TAG_OF: Record<string, string> = {
   'collection-item': 'collection-item',
   'list-empty': 'list-empty',
   slider: 'slider',
+  'form-success': 'form-success',
+  'form-error': 'form-error',
 }
 
 /**

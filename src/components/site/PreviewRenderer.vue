@@ -26,7 +26,7 @@ function cancelPendingNav() {
 // text to edit it in place, double-click an image/video to replace it, and
 // right-click for "Edit content" / "Replace background". Only content — the
 // server's contributor merge drops anything else.
-import { computed, nextTick, onBeforeUnmount, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import EntryScope from '@/components/shared/EntryScope.vue'
 import { useLocale } from '@/composables/useLocale'
 import { useRenderNode } from '@/composables/useRenderNode'
@@ -71,7 +71,20 @@ const {
   hoverHandlers, fireClickInteractions, fireChangeInteractions, el,
   motionStyle,
   sliderBound, sliderResolved, sliderTrackClass, sliderWire,
+  isForm, formStateChildren, formFieldChildren,
 } = useRenderNode(() => props.node)
+
+// --- forms in Play ---
+//
+// Play runs the site for real, with one deliberate exception: a submission is
+// NOT sent. Play is an editor surface, and a test submission landing in the
+// real inbox (or a real lead list) would be a surprise nobody asked for. So a
+// submit validates natively, shows the success block and says plainly that
+// nothing was sent.
+//
+// Before this, a form in Play had no submit handling at all: it posted to the
+// SPA's own URL and reloaded the editor, losing whatever was unsaved.
+const submitted = ref(false)
 
 const classes = computed(() => [baseClasses.value])
 
@@ -234,6 +247,14 @@ async function followLink(raw: string) {
 }
 
 const handlers = {
+  submit(e: Event) {
+    e.preventDefault()
+    const form = e.target as HTMLFormElement
+    // the browser's own validation still runs, so a required field or a bad
+    // email reads exactly as it will on the site
+    if (typeof form.reportValidity === 'function' && !form.reportValidity()) return
+    submitted.value = true
+  },
   click(e: MouseEvent) {
     if (editing.value) return
     fireClickInteractions()
@@ -403,6 +424,30 @@ const handlers = {
       <EntryScope :collection="itemCollection" :entry="itemEntry">
         <PreviewRenderer v-for="child in itemTemplateChildren" :key="child.id" :node="child" />
       </EntryScope>
+    </template>
+  </component>
+
+  <!-- a form: real native validation, and the success block on submit — but
+       nothing is sent from an editor surface (see `submitted` above) -->
+  <component
+    :is="def?.tag ?? 'form'"
+    v-else-if="isForm"
+    ref="el"
+    v-bind="customAttrs"
+    :id="node.htmlId || undefined"
+    :data-node-id="node.id"
+    :class="[classes, hoverAffordance]"
+    :style="[backgroundInfo?.style, motionStyle]"
+    v-on="handlers"
+  >
+    <template v-if="!submitted">
+      <PreviewRenderer v-for="child in formFieldChildren" :key="child.id" :node="child" />
+    </template>
+    <template v-else>
+      <template v-for="child in formStateChildren" :key="child.id">
+        <PreviewRenderer v-if="child.type === 'form-success'" :node="child" />
+      </template>
+      <p class="mt-2 text-xs opacity-60">Not sent — this is a preview.</p>
     </template>
   </component>
 

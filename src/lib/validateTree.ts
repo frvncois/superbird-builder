@@ -51,6 +51,8 @@ export function validateTree(root: ElementNode, ctx: ValidateContext): TreeDiagn
     scopes: Scope[],
     /** the KNOWN component instances it is inside, outermost first */
     instances: string[],
+    /** the `form` ancestors, so a nested form can be named */
+    forms: ElementNode[],
   ) => {
     if (node.ref) {
       // refs are page-scope addresses, so a second use makes both ambiguous —
@@ -93,6 +95,39 @@ export function validateTree(root: ElementNode, ctx: ValidateContext): TreeDiagn
             "'collection-list' or a bound 'slider'. Elsewhere it never renders at all.",
         })
       }
+    }
+
+    if (node.type === 'form-success' || node.type === 'form-error') {
+      // like `list-empty`: it renders only in one position, so anywhere else is
+      // a silent no-op worth saying out loud.
+      if (parent?.type !== 'form') {
+        diags.push({
+          nodeId: node.id,
+          message:
+            `'${node.type}' is a form's ${node.type === 'form-success' ? 'success' : 'error'} ` +
+            "state — it only renders as a DIRECT child of a 'form'. Elsewhere it never " +
+            'renders at all.',
+        })
+      } else {
+        const twins = (parent.children ?? []).filter((c) => c.type === node.type)
+        if (twins.length > 1 && twins[0] !== node) {
+          diags.push({
+            nodeId: node.id,
+            message: `this form already has a '${node.type}' — only the first one renders.`,
+          })
+        }
+      }
+    }
+
+    if (node.type === 'form' && forms.length) {
+      // the browser does not nest forms: it closes the outer one, so the inner
+      // controls silently submit to the wrong place (or nowhere)
+      diags.push({
+        nodeId: node.id,
+        message:
+          'a form cannot contain another form — browsers close the outer one, so the inner ' +
+          'fields are not submitted.',
+      })
     }
 
     if (node.link === '@item') {
@@ -155,9 +190,12 @@ export function validateTree(root: ElementNode, ctx: ValidateContext): TreeDiagn
       childScopes = [...scopes, { type: node.type, arg: node.arg }]
     }
 
-    for (const child of node.children) visit(child, node, childScopes, childInstances)
+    const childForms = node.type === 'form' ? [...forms, node] : forms
+    for (const child of node.children) {
+      visit(child, node, childScopes, childInstances, childForms)
+    }
   }
 
-  visit(root, null, [], [])
+  visit(root, null, [], [], [])
   return diags
 }

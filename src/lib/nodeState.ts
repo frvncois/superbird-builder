@@ -32,6 +32,7 @@ export const NODE_STATE_KEYS = [
   'fieldAttrs',
   'instanceAttributes',
   'slider',
+  'form',
 ] as const
 
 /** true when a node carries state that would be lost (or wrongly inherited) */

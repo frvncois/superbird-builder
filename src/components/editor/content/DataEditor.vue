@@ -14,7 +14,7 @@ import IconPickerControl from '@/components/editor/content/IconPickerControl.vue
 import { ELEMENTS, typeOptionsFor } from '@/lib/elements'
 import { hasAncestorOfType, walkNodes } from '@/lib/tree'
 import { setInstancePick } from '@/lib/variantOps'
-import { sanitizeAttributes, isAllowedAttribute } from '@/lib/shared/attributes.js'
+import { sanitizeAttributes, isAllowedAttribute, mergeAttributeLayers } from '@/lib/shared/attributes.js'
 import { useElement } from '@/composables/useElement'
 import { useStructure } from '@/composables/useStructure'
 import { FIELD_TYPES, isRefType, setFieldType } from '@/lib/collectionFields'
@@ -23,10 +23,12 @@ import { useCollections } from '@/composables/useCollections'
 import { useLocale } from '@/composables/useLocale'
 import { resolveBinding, refIds, mediaUrls } from '@/lib/shared/fields.js'
 import { resolveSliderConfig, SLIDER_DEFAULTS } from '@/lib/shared/slider.js'
+import { collectFormFields, formConfigError } from '@/lib/shared/forms.js'
 import { useProject } from '@/composables/useProject'
+import { useSettings } from '@/composables/useSettings'
 import { useAuth } from '@/composables/useAuth'
 import { useComponents } from '@/composables/useComponents'
-import type { CollectionEntry, CollectionField } from '@/types/editor'
+import type { CollectionEntry, CollectionField, ElementNode } from '@/types/editor'
 
 const { selectedElement, getElement } = useElement()
 // structural writes go through the backend so they land on the page or on a
@@ -35,8 +37,9 @@ const { backend } = useStructure()
 const changeElementType = (id: string, type: string) => backend.value.retype(id, type)
 const setElementArg = (id: string, arg: string | null) => backend.value.setArg(id, arg)
 const setElementLink = (id: string, link: string | null) => backend.value.setLink(id, link)
-const { activePage } = usePage()
+const { activePage, pages } = usePage()
 const { breakpoints } = useProject()
+const { settings } = useSettings()
 const {
   collections,
   collectionById,
@@ -313,6 +316,93 @@ function patchListQuery(partial: Record<string, unknown>) {
   if (Object.keys(next).length) el.listQuery = next as typeof el.listQuery
   else delete el.listQuery
 }
+
+// --- form config ---
+//
+// The form's node state says WHETHER it accepts submissions and what happens
+// after one. It never says WHERE a submission goes: recipients, the mailer and
+// the webhook are server-side and admin-only, because the project blob is
+// written by editors, drafts, merges, contributors and agent tokens.
+
+const isForm = computed(() => selectedElement.value?.type === 'form')
+const fm = computed(() => selectedElement.value?.form ?? {})
+
+/** merge a partial into node.form, pruning anything back to its default so an
+ * untouched form stays byte-identical (same discipline as patchSlider) */
+function patchForm(partial: Record<string, unknown>) {
+  const el = selectedElement.value
+  if (!el) return
+  const next: Record<string, unknown> = { ...(el.form ?? {}), ...partial }
+  for (const key of Object.keys(next)) {
+    const value = next[key]
+    if (value == null || value === '' || value === false) delete next[key]
+  }
+  // a redirect, a notification and a forward only mean something for a form
+  // this instance actually answers
+  if (!next.enabled) {
+    delete next.notify
+    delete next.forward
+    delete next.redirect
+  }
+  if (Object.keys(next).length) el.form = next as typeof el.form
+  else delete el.form
+}
+
+const formRedirectError = computed(() => formConfigError(fm.value))
+
+/** the published routes a success redirect can point at. A collection template
+ *  is excluded: it renders only through its entries, so it owns no bare route
+ *  (same rule as the exporter's). */
+const routeOptions = computed(() => [
+  { label: 'Show the success message', value: '' },
+  ...pages.value
+    .filter((p) => p.status === 'published' && !p.collectionId)
+    .map((p) => ({
+      label: p.name,
+      value: `/${String(p.path ?? '').replace(/^\/+|\/+$/g, '')}`,
+    })),
+])
+
+/** what the export will declare for this form, read the same way the server
+ * will read it — so the panel and the manifest cannot disagree */
+const formFields = computed(() => {
+  const el = selectedElement.value
+  if (!el || !isForm.value) return { fields: [], unnamed: [], duplicates: [] }
+  return collectFormFields(el, (node: ElementNode) => resolveAttributes(node))
+})
+
+/** a control's effective attributes, instance layers included — the reason a
+ * form built out of components reports its fields at all */
+function resolveAttributes(node: ElementNode): Record<string, string> {
+  // inside a component the `name`/`type`/`required` attributes are the
+  // MASTER's (they are shared, like classes); only this placement's overrides
+  // are the node's own. Reading the node alone reported no fields at all for a
+  // form built out of components.
+  const mapping = masterFor(node.id)
+  const shared = mapping ? mapping.master.attributes : node.attributes
+  return mergeAttributeLayers(shared, node.instanceAttributes, undefined) as Record<string, string>
+}
+
+/** add a success / error block through the structure API, never a hand-rolled
+ * children.push — the host (page or master) decides where it lands */
+function addFormState(type: 'form-success' | 'form-error') {
+  const el = selectedElement.value
+  if (!el) return
+  backend.value.insert({ kind: 'element', type }, el.id, 'inside')
+}
+
+const hasFormState = (type: string) =>
+  (selectedElement.value?.children ?? []).some((c) => c.type === type)
+
+/** an enabled form on a zip/github publish with no studio URL posts nowhere —
+ *  worth saying here rather than only in the publish warnings, which arrive
+ *  one round trip after the author has moved on */
+const apiOriginMissing = computed(
+  () =>
+    fm.value.enabled === true &&
+    settings.value.publishing.method !== 'server' &&
+    !settings.value.publishing.apiOrigin,
+)
 
 // --- slider (carousel) config ---
 
@@ -937,6 +1027,104 @@ const src = computed({
       <p v-if="headField?.type === 'multi-reference'" class="text-[10px] text-muted-foreground">
         Shows the referenced entry names. Use a collection list to repeat per entry.
       </p>
+    </GroupPopover>
+
+    <GroupPopover v-if="isForm" label="Form">
+      <RowUI label="Accept submissions">
+        <ToggleUI
+          :model-value="fm.enabled === true"
+          @update:model-value="(v) => patchForm({ enabled: v })"
+        />
+      </RowUI>
+      <p v-if="!fm.enabled" class="text-[10px] text-muted-foreground">
+        Off: this stays a plain form that posts nowhere. Turn it on and submissions are
+        stored on this instance.
+      </p>
+      <template v-if="fm.enabled">
+        <RowUI label="Name">
+          <InputUI
+            :model-value="fm.name ?? ''"
+            placeholder="Contact"
+            @update:model-value="(v) => patchForm({ name: v })"
+          />
+        </RowUI>
+        <RowUI label="Email me">
+          <ToggleUI
+            :model-value="fm.notify === true"
+            @update:model-value="(v) => patchForm({ notify: v })"
+          />
+        </RowUI>
+        <RowUI label="Send to webhook">
+          <ToggleUI
+            :model-value="fm.forward === true"
+            @update:model-value="(v) => patchForm({ forward: v })"
+          />
+        </RowUI>
+        <p v-if="fm.notify || fm.forward" class="text-[10px] text-muted-foreground">
+          Recipients and the integration that sends are set by an admin in Settings → Forms.
+        </p>
+        <RowUI label="On success">
+          <SelectUI
+            :options="routeOptions"
+            :model-value="fm.redirect ?? ''"
+            @update:model-value="(v) => patchForm({ redirect: v ?? '' })"
+          />
+        </RowUI>
+        <p v-if="formRedirectError" class="text-[10px] text-danger">{{ formRedirectError }}</p>
+
+        <RowUI label="States">
+          <ButtonUI
+            variant="outline"
+            size="sm"
+            :icon="Plus"
+            :disabled="hasFormState('form-success')"
+            @click="addFormState('form-success')"
+          >
+            Success
+          </ButtonUI>
+          <ButtonUI
+            variant="outline"
+            size="sm"
+            :icon="Plus"
+            :disabled="hasFormState('form-error')"
+            @click="addFormState('form-error')"
+          >
+            Error
+          </ButtonUI>
+        </RowUI>
+
+        <div class="flex flex-col gap-1">
+          <p class="text-[10px] font-medium">Fields</p>
+          <p
+            v-for="field in formFields.fields"
+            :key="field.name"
+            class="flex items-center justify-between gap-2 text-[10px] text-muted-foreground"
+          >
+            <span class="truncate font-mono">{{ field.name }}</span>
+            <span class="shrink-0">
+              {{ field.kind }}{{ field.required ? ' · required' : '' }}
+            </span>
+          </p>
+          <p v-if="!formFields.fields.length" class="text-[10px] text-muted-foreground">
+            No named fields yet — give each control a <span class="font-mono">name</span>
+            attribute. Only named controls are submitted.
+          </p>
+          <p v-if="formFields.unnamed.length" class="text-[10px] text-pending">
+            {{ formFields.unnamed.length }}
+            {{ formFields.unnamed.length === 1 ? 'control has' : 'controls have' }}
+            no usable name and will not be submitted.
+          </p>
+          <p v-if="formFields.duplicates.length" class="text-[10px] text-pending">
+            Two controls share the name {{ formFields.duplicates.join(', ') }} — only the first
+            is stored.
+          </p>
+        </div>
+
+        <p v-if="apiOriginMissing" class="text-[10px] text-pending">
+          This site publishes as {{ settings.publishing.method }}, so set the studio URL in
+          Settings → Publish or submissions have nowhere to go.
+        </p>
+      </template>
     </GroupPopover>
 
     <GroupPopover v-if="isSlider" label="Slider">

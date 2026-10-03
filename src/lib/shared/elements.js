@@ -45,6 +45,15 @@ export const ELEMENTS_DATA = {
   icon: { tag: 'svg', void: true },
   video: { tag: 'video' },
   form: { tag: 'form', suggest: 'input' },
+  /**
+   * A form's SUCCESS and ERROR states: direct children of a `form`, rendered
+   * only after a submission lands (or fails). Their own types rather than a
+   * styled div with a magic class, following the `list-empty` precedent — so
+   * an author styles them like any element, they translate like any content,
+   * and a misplaced one is a diagnostic instead of silently never rendering.
+   */
+  'form-success': { tag: 'div', suggest: 'text' },
+  'form-error': { tag: 'div', suggest: 'text' },
   input: { tag: 'input', void: true },
   // a real multi-line control: a tall :input was the only way to express one,
   // which is visibly not the same element and behaves differently

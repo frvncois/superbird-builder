@@ -43,6 +43,9 @@ const {
   listEntries,
   listTemplateChildren,
   listEmptyChildren,
+  isForm,
+  formStateChildren,
+  formFieldChildren,
   itemCollection,
   itemEntry,
   itemTemplateChildren,
@@ -189,8 +192,25 @@ const { editing, editEl, startEditing, finishEditing, onEditKeydown } = useInlin
 const FOCUSING_TAGS = new Set(['input', 'select', 'textarea'])
 const tag = computed(() => def.value?.tag ?? 'div')
 
+/**
+ * A form's success / error block is chrome the visitor sees only AFTER a
+ * submission, so drawing it inline would misrepresent the page. It is shown
+ * while the selection is inside it, which is how it gets styled — the same
+ * bargain `list-empty` and a hidden part make.
+ */
+function stateBlockVisible(child: ElementNode): boolean {
+  const hit = (n: ElementNode): boolean =>
+    isSelected(n.id) || (n.children ?? []).some(hit)
+  return hit(child)
+}
+
 const handlers = {
   dblclick: startEditing,
+  // a form on the EDIT canvas must never submit: the page would reload and
+  // take the editor with it. Preview/Play and the published site own that.
+  submit(e: Event) {
+    e.preventDefault()
+  },
   mousedown(e: MouseEvent) {
     if (editing.value) return
     if (FOCUSING_TAGS.has(tag.value)) e.preventDefault()
@@ -422,6 +442,27 @@ const handlers = {
     <div v-else class="border border-dashed border-input p-2 text-xs text-muted-foreground">
       {{ selfNested ? 'A template can’t embed its own collection' : `Unknown collection (${node.arg || '?'})` }}
     </div>
+  </component>
+
+  <!-- a form: its fields render normally, its success/error blocks only while
+       the selection is inside them (otherwise the canvas would show a state no
+       visitor sees until they have submitted) -->
+  <component
+    :is="def?.tag ?? 'form'"
+    v-else-if="isForm"
+    ref="el"
+    v-bind="customAttrs"
+    :id="node.htmlId || undefined"
+    :data-node-id="node.id"
+    :class="classes"
+    :style="[backgroundInfo?.style, motionStyle]"
+    draggable="true"
+    v-on="handlers"
+  >
+    <ElementRenderer v-for="child in formFieldChildren" :key="child.id" :node="child" />
+    <template v-for="child in formStateChildren" :key="child.id">
+      <ElementRenderer v-if="stateBlockVisible(child)" :node="child" />
+    </template>
   </component>
 
   <!-- an icon: the <svg> is the element itself, so classes, id and listeners

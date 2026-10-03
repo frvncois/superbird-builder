@@ -32,6 +32,8 @@ import {
   Columns3,
   TableProperties,
   Smile,
+  CircleCheck,
+  CircleAlert,
 } from 'lucide-vue-next'
 import { isComponentType } from './components'
 
@@ -62,6 +64,8 @@ const ICONS: Record<string, Component> = {
   video: Video,
   icon: Smile,
   form: RectangleHorizontal,
+  'form-success': CircleCheck,
+  'form-error': CircleAlert,
   input: FormInput,
   textarea: TextCursorInput,
   checkbox: SquareCheck,

@@ -18,6 +18,7 @@ import { isRich, sanitizeRich } from '@/lib/shared/richtext.js'
 import { backgroundRender, backgroundKindFromUrl } from '@/lib/shared/background.js'
 import { conflictingBaseClasses } from '@/lib/shared/interactionClasses.js'
 import { resolveSliderConfig, sliderTrackClasses, sliderWireData } from '@/lib/shared/slider.js'
+import { FORM_STATE_TYPES } from '@/lib/shared/forms.js'
 import { useMedia, kindOfMime } from './useMedia'
 import {
   mergeAttributeLayers,
@@ -194,6 +195,27 @@ export function useRenderNode(
     resolveSliderConfig(sliderConfig.value, project.value.breakpoints),
   )
   const sliderWire = computed(() => sliderWireData(sliderConfig.value))
+
+  // --- form ---
+
+  const isForm = computed(() => node.value.type === 'form')
+  /** the form's config — the instance's own, else what its component says.
+   * Per-instance with a component default, exactly like `slider`/`listQuery`:
+   * a Newsletter component holds the config on its master and one placement
+   * can still turn notification off. */
+  const formConfig = computed(() =>
+    isForm.value ? resolveInstanceValue(node.value, mapping.value, 'form') : undefined,
+  )
+  /** a form's SUCCESS / ERROR children, which never render inline with the
+   * fields — the renderers decide when to show them (never, on the published
+   * site, until the runtime does) */
+  const formStateChildren = computed(() =>
+    node.value.children.filter((c) => FORM_STATE_TYPES.includes(c.type)),
+  )
+  /** the fields: everything that is not a state block */
+  const formFieldChildren = computed(() =>
+    node.value.children.filter((c) => !FORM_STATE_TYPES.includes(c.type)),
+  )
 
   const itemCollection = computed(() =>
     node.value.type === 'collection-item' && node.value.arg ? collectionByName(node.value.arg) : null,
@@ -607,10 +629,10 @@ export function useRenderNode(
       reverse,
     })
   }
-  function toggleAnim(binding: (typeof animTriggers.value)[number]) {
+  function clickAnim(binding: (typeof animTriggers.value)[number]) {
     const animation = animationFor(binding.animationId)
     if (!animation) return
-    motion.toggle(binding, animation, animTargetId(binding), scopeOfOwn(binding))
+    motion.clickAction(binding, animation, animTargetId(binding), scopeOfOwn(binding))
   }
 
   // --- interactions ---
@@ -644,12 +666,12 @@ export function useRenderNode(
     mouseleave() {
       for (const binding of ofTrigger('hover')) applyIn(binding, false)
       // hover-out rewinds rather than cutting, so the element eases back
-      for (const binding of animOf('hover')) motion.reverse(binding, scopeOfOwn(binding))
+      for (const binding of animOf('hover')) motion.reverse(binding, animTargetId(binding), scopeOfOwn(binding))
     },
   }
   function fireClickInteractions() {
     for (const binding of ofTrigger('click')) applyIn(binding)
-    for (const binding of animOf('click')) toggleAnim(binding)
+    for (const binding of animOf('click')) clickAnim(binding)
   }
 
   /** a form control's 'change' trigger: on while checked / non-empty, so an
@@ -719,7 +741,7 @@ export function useRenderNode(
           appeared.add(binding.id)
           playAnim(binding)
         } else if (mode === 'reverse') {
-          motion.reverse(binding, scopeOfOwn(binding))
+          motion.reverse(binding, animTargetId(binding), scopeOfOwn(binding))
         }
       }
     }, at ? { rootMargin: appearRootMargin(at) } : undefined)
@@ -774,6 +796,10 @@ export function useRenderNode(
     sliderResolved,
     sliderTrackClass,
     sliderWire,
+    isForm,
+    formConfig,
+    formStateChildren,
+    formFieldChildren,
     itemCollection,
     itemEntry,
     itemTemplateChildren,
