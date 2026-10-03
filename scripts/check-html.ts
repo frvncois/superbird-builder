@@ -313,6 +313,26 @@ const ids = (n: ElementNode) => { const out: string[] = []; walkNodes([n], (x) =
   ok(res3.diagnostics.some((d) => /Unknown collection/.test(d.message)), 'an unknown collection is a diagnostic')
 }
 
+// ---------- a near miss on the binding attributes is refused, not absorbed ----------
+{
+  // `data-*` is authorable, so these used to land as a custom DOM attribute and
+  // bind nothing while the write reported success — the exact bug class this
+  // whole format exists to stop. Found by driving the toolset as an agent
+  // would (TREE-SOURCE-PLAN.md 5.3).
+  const p = fresh()
+  const res = write(p, '<collection-list data-source="post"><h2 /></collection-list>')
+  ok(res.refused.some((r) => /binds nothing/.test(r.message) && /'source'/.test(r.message)),
+     `data-source on a list is refused (${res.refused[0]?.message.slice(0, 70) ?? 'none'})`)
+  const res2 = write(p, '<h2 data-source="title" />')
+  ok(res2.refused.some((r) => /binds nothing/.test(r.message) && /data-field/.test(r.message)),
+     `data-source on a leaf is refused (${res2.refused[0]?.message.slice(0, 70) ?? 'none'})`)
+  const res3 = write(p, '<h2 field="title" /><p collection="post" />')
+  ok(res3.refused.length === 2, `the other near misses too (${res3.refused.length}/2)`)
+  // and the real ones still work
+  const res4 = write(p, '<h2 data-field="title" />')
+  ok(res4.refused.length === 0 && bodyOf(p).children[0]!.arg === 'title', 'data-field still binds')
+}
+
 
 console.log(fails ? `\n${fails} FAILURES` : `\nHTML layer OK`)
 process.exit(fails ? 1 : 0)

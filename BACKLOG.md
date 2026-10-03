@@ -142,9 +142,7 @@ remains:
 ## Refactors
 
 - **D4 — some exported symbols are single-file** (drop the `export` keyword).
-  Re-grepped 2026-09-15; the live list is `linkFromToken`, `suggestNextLine`
-  (`src/lib/syntax.ts` — read-only per the reconcile invariant, so left alone),
-  `splitClassVariants` (`src/lib/styles.ts`), `getStep`/`BORDER_STEPS`
+  Re-grepped 2026-09-15; the live list is `splitClassVariants` (`src/lib/styles.ts`), `getStep`/`BORDER_STEPS`
   (`src/lib/tieredBox.ts`), `ACCEPTED_UNITS`/`matchesNamedFormat`
   (`src/lib/valueClass.ts`), `breakpointMinVariant`/`isBreakpointToken`
   (`src/lib/responsive.ts`), `MAX_BREAKPOINTS` (`useProject`), `CURRENT_USER`
@@ -222,13 +220,9 @@ patches; each was scoped in the plan and the scoping is reproduced here.
   - **the runtime measures perView from the DOM** rather than shipping the
     breakpoint table, which assumes uniform slide widths. True by construction
     today; a future per-slide width feature would break it.
-  - **a bound `:slider[post]` shows no `[+]` marker.** The data marker lives in
-    the `[…]` slot, which the arg owns — same rule as everywhere else, and the
-    editor and MCP agree, so nothing drifts. It just means the sliders most
-    likely to be configured are the ones whose code line doesn't advertise it.
   - **extracting a configured slider into a component** leaves the original
     instance configured and gives every other instance defaults, because
-    `node.slider` is per-instance state that `adoptStructure` doesn't copy.
+    `node.slider` is per-instance state that `alignStructure` doesn't copy.
     Parity with `listQuery`/`entryId`, but more surprising here since the whole
     carousel behaviour lives in that field.
   - **`sliderHostExtraClass` only looks for bare positioning tokens**, so a host
@@ -283,19 +277,20 @@ element (`src/lib/shared/svg.js`).
 
 ## Layers / structure
 
-- **The e2e fixture has unclosed `:div` blocks and leaf-form `:list-item:` lines**
-  (`e2e/fixtures/project.json`, Home page), so `validateDocument` reports diagnostics on
-  it. The parser is lenient, so it renders, but each unclosed div swallows the siblings
-  that follow it. It is test data only now (the `?demo` URL and its generator were
-  removed), so this costs nothing in the product — but fixing it changes the fixture's
-  structure, so check the UI specs that assert on its content.
-
-- **The element clipboard does not cross between a page and a component.** ⌘C on the
-  board and ⌘V on a page (or the reverse) does nothing: the page clipboard is dedented
-  code plus per-node props, and a master has no code. Either side alone works.
+- **RESOLVED — the e2e fixture's unclosed `:div` blocks.** The fixture had 58 opens to
+  50 closers, so the DSL parser nested the siblings that followed each one — and that
+  nesting was what rendered. The v2 migration (`src/lib/migrate.ts`) keeps the stored
+  TREE, which is exactly that nesting, so there is nothing left to disagree with: the
+  fixture was regenerated through the migration and `validateTree` reports nothing on it.
+- **RESOLVED — the element clipboard crosses a page and a component.** It held dedented
+  DSL code plus a hand-maintained list of per-node props, and a master had no code, so
+  ⌘C on the board and ⌘V on a page did nothing. It is a deep clone of the subtree now
+  (`useStructure`, module-level), which is both hosts' shape — and carries every piece
+  of node state without a key list to keep in step.
 - **Deleting or retyping a node in a component master drops any per-instance content on
-  that node.** The push maps instance lines by `alignInstanceLines`, which cannot match a
-  line that no longer exists or whose type changed. Undo restores it.
+  that node.** The push pairs instance children by `alignStructure`'s signature LCS,
+  which cannot match a node that no longer exists or whose type changed. Undo restores
+  it.
 - **Multi-selection is still one contiguous run of siblings** (`selectedElementIds`), so
   the tree offers no ctrl-click across branches.
 - **`parentIndex` (`useRenderNode`) and `targetIndex` (`useInteraction`) remain
@@ -390,8 +385,9 @@ The `guano mcp` server (`packages/guano/mcp/`) shipped Phases 0–8. Known, deli
   endpoint on the node server is out of scope (would let remote agents connect
   without a local process).
 - **M2 — no optimistic locking on the store.** Writes are latest-wins. Page and
-  element tools take a `version` hash (sha256 of the page code) that guards
-  line-based edits against a stale read, but collection/comment/interaction
+  element tools take a `version` hash (sha256 of the page's canonical HTML plus
+  name/slug/status) that guards a write against a stale read, but
+  collection/comment/interaction
   writes are id-keyed and unguarded — a concurrent human edit to the same item
   can still be clobbered. Drafts are the mitigation (the human picks the target).
 - **M3 — no zip/github publish over MCP.** `publish` only runs the `server`
@@ -406,7 +402,7 @@ The `guano mcp` server (`packages/guano/mcp/`) shipped Phases 0–8. Known, deli
   `get_page {elements: "all"}` (`masterClasses`) read the shared state back.
 - **M7 — no truly empty leaf.** `content: ""` clears back to the element's
   placeholder, so a text leaf can't render empty; build decorative rules and
-  spacers from styled `:div` containers instead.
+  spacers from styled `div` containers instead.
 - **M9 — interactions are class-swap only.** Hover/click/appear toggling Tailwind
   classes. No timeline or scroll-driven animation (scroll smoothing, per-character
   text reveals, clip-path wipes, marquees, route transitions), and no tool for
@@ -434,11 +430,12 @@ full `list_components {includeNodes}` state.
   (≤390 px) is visible but dead from 391–767 px. Cross-checking a binding's
   breakpoints against the trigger's responsive classes is expressible (both are
   known at bind time); documented in the guide meanwhile.
-- **M12 — set_page_code regenerates instance node ids when re-expanding
-  unchanged one-line component references (run #2 F6).** Captured ids survive
-  node-state carry, but an id-addressed follow-up batch written before the call
-  goes stale. The expansion could adopt the existing instance subtree when the
-  reference is unchanged.
+- **M12 — RESOLVED (the HTML layer).** `set_page_code` re-expanded a one-line
+  component reference by minting a fresh instance subtree, so an id-addressed
+  follow-up batch written before the call went stale. There is no expansion pass
+  now: `set_page_html` prints an instance's interior and `lib/html/apply.ts`
+  adopts it by `data-id`, then `data-ref`, then a tree LCS, so the node objects
+  survive the write.
 - **M13 — RESOLVED (2026-09-15).** A fresh install IS drivable headless: the
   server seeds `guano-project:main` at `POST /api/auth/setup` (with the project
   name from the form) and, for pre-existing installs, lazily on the first
@@ -507,11 +504,10 @@ warns that aria-label overrides translated content in every locale.
   cached). Remedy: fully quit + relaunch Claude Desktop (or toggle the server
   in settings) after changing tool schemas. The get_guide/get_status version
   header remains the staleness tell.
-- **M22 — stored page code is not migrated to the container-form serialization.**
-  Pages holding a pre-fix instance block keep the leaf-form `:textarea:` (and a
-  get_page diagnostic) until they are resent through set_page_code, which heals
-  them with zero orphans. Acceptable as-is since the diagnostic is visible;
-  a lazy migrate-on-read would remove the manual step.
+- **M22 — RESOLVED (the v2 migration).** The leaf-vs-container form was a
+  property of the DSL serialization, so a page stored before the fix kept a
+  leaf-form `:textarea:` until it was resent. There is no stored text any more;
+  the tree has always carried the real shape.
 
 Stress run #5 ("guano.dev", 2026-09-13) — full product-site build, shipped on
 the draft. Fixed in the same pass: `prose` accepted by the validator (its CSS
@@ -549,3 +545,37 @@ versions, prose documented as a neutral base to layer accents on.
   (run #6 pre-flight).** set_target with the old id fails with "no draft";
   get_status could record "merged into Main at <time>" per removed draft.
   Needs the editor's merge flow to write a small tombstone the MCP can read.
+
+Scripted pass #7 ("tree-source dogfood", 2026-10-03) — the HTML toolset driven
+as an agent would drive it, in-process, counting calls and response bytes. Built
+a 5-component landing page (navbar, hero, three feature cards, CTA, footer) with
+its copy filled, a `post` collection with three fields, a bound template page
+with entry routes, two entries, and a posts list inserted into the landing page
+as a PARTIAL edit — then exported and checked every string reached the HTML.
+**16 calls, 40 KB of responses, no diagnostics, no publish warnings.** For
+comparison the Cocoapp report addressed ~110 edits by line arithmetic over
+memorized block layouts. Fixed in the same pass: a near miss on the binding
+attributes (`data-source`, `data-collection`, `collection`, `field`) is refused
+by name instead of landing as an ordinary DOM attribute that binds nothing —
+`data-*` is authorable, so the only previous clue was a downstream "Unknown
+collection" diagnostic on a list, and on a leaf there was none at all.
+
+- **M26 — `create_collection` cannot declare its fields.** Every collection
+  takes two calls: `create_collection {name}` then `update_collection
+  {addFields}`. `addFields` already has the schema, so accepting the same array
+  at create would halve it; the entries a session then writes need the field
+  names anyway, so there is no ordering reason for the split.
+- **M27 — a filled page is 3 calls, and the guide has to say so.** The rhythm is
+  `get_page` (for the version) → `set_page_html` → `edit_elements` on the parts,
+  because `set_page_html` already returns the fresh `elements` list WITH each
+  instance's `parts` and the new version. GUIDE.md says it (`page-html`,
+  "Addressing elements"), but the scripted pass re-read the page first anyway —
+  11.6 KB spent on something it had just been handed. Worth stating in
+  `set_page_html`'s own description, which is what an agent reads every turn.
+- **M28 — `publish` reported no warnings on a page that earns one.** The landing
+  page carries a `<Navbar>` on every route and an `<a>` wrapping a heading and a
+  paragraph; neither tripped `designWarnings`. Expected for this page (there is
+  no site-wide transition, and the `<a>` holds no interactive child), but the
+  pass did not exercise a single warning, so the checks have no coverage from
+  it. The publish-warnings spec is the real gate; this is a note that a green
+  publish here does not mean much.

@@ -60,6 +60,23 @@ export interface ApplyOptions {
   validate?: ValidateContext
 }
 
+/**
+ * Attribute names an agent reaches for instead of `source` / `data-field`.
+ *
+ * `data-*` is otherwise authorable, so without this a plausible near miss
+ * lands as a custom DOM attribute and binds NOTHING, reported as success. The
+ * only clue was a downstream "Unknown collection" diagnostic on a list, and on
+ * a leaf there was none at all.
+ */
+const NEAR_MISS_BINDINGS = new Set([
+  'data-source',
+  'data-collection',
+  'data-list',
+  'collection',
+  'field',
+  'data-bind',
+])
+
 /** a node's shallow identity for the LCS: what its own tag encodes */
 const signature = (node: { type: string; arg?: string; link?: string }) =>
   `${node.type}|${node.arg ?? ''}|${node.link ?? ''}`
@@ -437,6 +454,10 @@ export function applyHtml(
           shared(attr, node.arg)
           break
 
+        case NEAR_MISS_BINDINGS.has(attr):
+          refuse(path, `'${attr}' binds nothing — a field binding is 'data-field'`)
+          break
+
         default:
           shared(attr, node.attributes?.[attr])
       }
@@ -536,6 +557,15 @@ export function applyHtml(
               `an icon's markup is not in the HTML — set it with edit_elements {icon: "${value}"}`,
             )
           }
+          break
+
+        case NEAR_MISS_BINDINGS.has(attr):
+          refuse(
+            path,
+            SOURCE_TYPES.has(type)
+              ? `'${attr}' binds nothing — <${parsed.tag}> takes a whole collection as 'source'`
+              : `'${attr}' binds nothing — a field binding is 'data-field'`,
+          )
           break
 
         case attr.startsWith('data-bind-'):

@@ -243,6 +243,29 @@ version" class of stale writes.
   the dock's row key becoming `type:label` and breaking every `[data-dock-item]` query
   in the UI specs, and `mcp-components.spec.ts` asserting on `page.code` text.
 
+- **Phase 5 — done (5.1 and 5.2; 5.3 as a scripted pass).** `CLAUDE.md`'s core
+  invariant and DSL sections became "the tree is the source of truth" and "the v2
+  schema and its migration" + "Elements, refs and validation"; the DSL token shorthand
+  (`:slider`, `:collection-list[name]`, `:icon:`) is gone from its prose in favour of
+  the element names and the HTML. `packages/guano/README.md` lists the real toolset and
+  says pages are HTML. `BACKLOG.md`: M12 and M22 are RESOLVED by the HTML layer and the
+  migration, M2's version hash is described correctly, the fixture's unclosed-`:div`
+  item and the page-vs-component clipboard item are resolved, and the slider's
+  `[+]`-marker limit is gone. `FORMS-PLAN.md` moves to `validateTree`, `nodeState.ts`
+  and `<form data-form>` / `<form-success>` / `<form-error>`.
+
+  **5.3** was run as a scripted agent-shaped session over the real toolset rather than
+  a Claude Desktop one (that is the human's to run): a 5-component landing page with
+  its copy filled, a collection with three fields, a bound template with entry routes,
+  two entries, and a posts list inserted as a partial edit — **16 calls, 40 KB of
+  responses**, every string verified in the export. A filled page is 3 calls, which is
+  what the plan hoped for. It found one real bug, now fixed with its own gate case: a
+  near miss on the binding attributes (`data-source` for `source`) landed as an
+  ordinary DOM attribute and bound nothing while the write reported success. The two
+  other refusals it hit (`<image>`, and `insert` wanting `before`/`after` rather than a
+  `position`) were precise and immediately actionable. Friction is in `BACKLOG.md` as
+  pass #7 plus M26–M28.
+
 ## Phase 0 — Safety net (½ day)
 - **0.1 Corpus.** `scripts/corpus.mjs` exports every project in `e2e/fixtures/`, the
   bundled catalog (each entry placed on a page), and any local `server/data` store into

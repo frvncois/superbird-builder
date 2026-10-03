@@ -3892,8 +3892,10 @@ const tools = [
       'carried by the `data-id` you read back, then by `data-ref`, then by a tree match — so ' +
       'interactions, animations, translations, slider config and list filters survive on every ' +
       'element you did not replace. `refused` lists what could not land and why; nothing is ' +
-      'ever dropped silently. Prefer edit_structure for a local change. Requires a target; ' +
-      'pass the `version` from get_page. See get_guide {section: "page-html"}.',
+      'ever dropped silently. The response carries the fresh `elements` (each instance with ' +
+      'its `parts`) and the new `version`: fill the parts with edit_elements, no re-read. ' +
+      'Prefer edit_structure for a local change. Requires a target; pass the `version` from ' +
+      'get_page. See get_guide {section: "page-html"}.',
     inputSchema: {
       type: 'object',
       properties: {

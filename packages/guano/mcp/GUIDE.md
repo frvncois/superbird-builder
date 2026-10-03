@@ -297,6 +297,11 @@ An attribute you leave OUT is removed — the document you send is the whole tru
 everything the format carries. A `data:` URL reads back as `src="data:…(elided)"`;
 write that marker back to mean "unchanged".
 
+The two binding attributes are `source` (a whole collection) and `data-field` (one
+field). `data-source`, `data-collection`, `collection` and `field` are **refused by
+name** rather than kept — a `data-*` attribute is otherwise authorable, so a near miss
+would land as an ordinary DOM attribute and bind nothing.
+
 **Not in the HTML**, and preserved on every element a write adopts: interactions,
 animations, translations, slider config, `listQuery`, the picked `entryId`, and
 per-placement attribute overrides. Those have their own tools.

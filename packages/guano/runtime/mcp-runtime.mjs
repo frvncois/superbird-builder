@@ -5009,6 +5009,22 @@ function clearBindingsToIds(host, gone) {
 }
 //#endregion
 //#region src/lib/html/apply.ts
+/**
+* Attribute names an agent reaches for instead of `source` / `data-field`.
+*
+* `data-*` is otherwise authorable, so without this a plausible near miss
+* lands as a custom DOM attribute and binds NOTHING, reported as success. The
+* only clue was a downstream "Unknown collection" diagnostic on a list, and on
+* a leaf there was none at all.
+*/
+var NEAR_MISS_BINDINGS = /* @__PURE__ */ new Set([
+	"data-source",
+	"data-collection",
+	"data-list",
+	"collection",
+	"field",
+	"data-bind"
+]);
 /** a node's shallow identity for the LCS: what its own tag encodes */
 var signature = (node) => `${node.type}|${node.arg ?? ""}|${node.link ?? ""}`;
 var parsedSignature = (node) => `${node.type}|${argOf(node) ?? ""}|${node.attrs.href ?? ""}`;
@@ -5280,6 +5296,9 @@ function applyHtml(root, parsed, opts) {
 			case attr === "data-field":
 				shared(attr, node.arg);
 				break;
+			case NEAR_MISS_BINDINGS.has(attr):
+				refuse(path, `'${attr}' binds nothing — a field binding is 'data-field'`);
+				break;
 			default: shared(attr, node.attributes?.[attr]);
 		}
 		const has = (attr) => parsed.attrs[attr] !== void 0;
@@ -5337,6 +5356,9 @@ function applyHtml(root, parsed, opts) {
 				break;
 			case attr === "data-icon":
 				if (value && value !== iconNameOf(node)) refuse(path, `an icon's markup is not in the HTML — set it with edit_elements {icon: "${value}"}`);
+				break;
+			case NEAR_MISS_BINDINGS.has(attr):
+				refuse(path, SOURCE_TYPES.has(type) ? `'${attr}' binds nothing — <${parsed.tag}> takes a whole collection as 'source'` : `'${attr}' binds nothing — a field binding is 'data-field'`);
 				break;
 			case attr.startsWith("data-bind-"):
 				setFieldAttr(node, attr.slice(10), value, path);

@@ -3,7 +3,7 @@
 Source: `BACKLOG.md` → "P2 — form submissions", turned into an executable plan on
 2026-10-02. Line numbers are from that day's tree (`main`, `4247496`) and may drift.
 
-**v1 scope:** a `:form` on a site published with the **server** method posts to the
+**v1 scope:** a `form` on a site published with the **server** method posts to the
 Guano instance, which validates it against what was published, stores it, and emails a
 notification. Admins/editors read submissions in the editor and export CSV; MCP reads
 them only when an admin allows it. **Out of v1:** file uploads (multipart), Stripe,
@@ -31,8 +31,8 @@ writing submissions into a collection, forms on zip/GitHub-hosted sites, captcha
 4. **The server validates against a manifest written at publish, never against the
    live project or the posted field names.** The visitor submitted the *published* form,
    while Main may have moved on and a draft may not be published at all.
-5. **Success/error states are elements:** `:form-success` and `:form-error`, direct
-   children of `:form`, following the `:list-empty` precedent. They're styleable and
+5. **Success/error states are elements:** `form-success` and `form-error`, direct
+   children of `form`, following the `list-empty` precedent. They're styleable and
    translatable like any content, and they need no class-variant knowledge from the author.
 6. **No per-site "submission token".** A static page can only embed a constant, so it
    proves nothing a scraper can't copy. A honeypot, a minimum fill time, rate limits and
@@ -96,15 +96,20 @@ writing submissions into a collection, forms on zip/GitHub-hosted sites, captcha
 
 ---
 
-## Phase 1 — Authoring: the `:form` config and its states
+## Phase 1 — Authoring: the `form` config and its states
 
 ### 1.1 Element registry
 - `src/lib/shared/elements.js:47`: add `form-success` and `form-error`
   (`{ tag: 'div', suggest: 'text' }`), next to `list-empty`.
-- `validateDocument` (`src/lib/document.ts`): each one must be a direct child of
-  `:form`, at most one of each per form. Anywhere else is a diagnostic ("never
-  renders"), mirroring `:list-empty`.
-- Forms may not nest (`:form` inside `:form` is a diagnostic; the browser would merge them).
+- `validateTree` (`src/lib/validateTree.ts`): each one must be a direct child of a
+  `form`, at most one of each per form. Anywhere else is a diagnostic ("never
+  renders"), mirroring `list-empty`.
+- `src/lib/html/tags.ts`: `form` is `<form data-form>` (a bare `<form>` with no config
+  is the plain one), `form-success` / `form-error` are `<form-success>` /
+  `<form-error>` — their own tags rather than a `data-` attribute on a div, so an
+  agent reads the state at a glance and the writer can refuse a misplaced one by name.
+  Add all three to the HTML element table in `GUIDE.md`'s `page-html` section.
+- Forms may not nest (`form` inside `form` is a diagnostic; the browser would merge them).
 
 ### 1.2 `node.form` — node-owned config (`FormConfig` in `src/types/editor.ts`)
 ```ts
@@ -116,9 +121,9 @@ interface FormConfig {
 }
 ```
 - Follow the `slider` precedent everywhere: add `'form'` to `NODE_STATE_KEYS`
-  (`src/lib/syntax.ts:604`), `captureProps`/paste (`useElement.ts`), per-instance with a
-  component default via `resolveInstanceValue` (a "Newsletter" component's form), the
-  `[+]` data marker, and `componentOps` detach bakes it.
+  (`src/lib/nodeState.ts`), the clipboard's deep clone (which needs no list, so
+  nothing to do), per-instance with a component default via `resolveInstanceValue`
+  (a "Newsletter" component's form), and `componentOps` detach bakes it.
 - **Not** in the contributor content allowlist (`server/contributor-merge.mjs`): it's
   structural behaviour, so the server keeps the stored value. Add a regression test.
 - `redirect` is validated at write (`src/lib/shared/forms.js` `isInternalRoute`): a
@@ -137,13 +142,14 @@ never submitted. Reserved names (`_hp`, `_t`, `_route`, anything starting `_`) a
 refused.
 
 ### 1.4 Data panel
-In `DataEditor.vue`, when the selection is a `:form`: an **Accept submissions** toggle,
+In `DataEditor.vue`, when the selection is a `form`: an **Accept submissions** toggle,
 Name, **Email notification** toggle (with an inline "No recipients set — Settings →
 Forms" hint when the server says none), and Redirect (a select over published page
 routes, plus "Show success message"). Below that, a read-only **Fields** list from
 `collectFormFields`, which flags unnamed controls and duplicate names. Buttons for
 **Add success message** / **Add error message** insert the state children through
-`useStructure` (the page-code + `reconcile` path, never `elements`).
+`useStructure` — `insertIn` on whichever host is live, never a hand-rolled
+`children.push`.
 
 ### 1.5 Canvas and Play
 - Both Vue renderers must `preventDefault` on `submit`. Today a form in Play submits to
@@ -172,7 +178,7 @@ For an enabled form, the exporter emits:
   <div data-form-error hidden>…</div>
 </form>
 ```
-- `formId` = the `:form` node's id. Ids are page-unique, and a form inside a component
+- `formId` = the `form` node's id. Ids are page-unique, and a form inside a component
   instance uses the page node's id, so two Newsletter instances are two forms.
 - **A form inside a repeat** (`:collection-list`, bound `:slider`, a template page) is
   one form rendered N times. Its submissions record `_route` and, in a repeat,
@@ -208,9 +214,10 @@ fields: [...from collectFormFields]}}`. Written atomically by `handlePost` (`:10
 **after** a successful export, so a failed publish never leaves a manifest pointing at
 pages that didn't ship. The preview writes `forms-manifest.preview.json` (`:977`).
 
-### 2.4 Candidates and markers
-`collectCandidates` registers any runtime-toggled classes. `applyNodeMarkers` gives a
-`:form` with config the `[+]` data marker.
+### 2.4 Candidates
+`collectCandidates` registers any runtime-toggled classes — the success/error states
+are hidden until the runtime shows them, so their classes reach no element at export
+time and would never make the stylesheet.
 
 ### 2.5 Publish design warnings (`designWarnings`, `packages/guano/mcp/tools.mjs`)
 Each condition below gets a warning. They're never refusals.
@@ -218,7 +225,7 @@ Each condition below gets a warning. They're never refusals.
 - A form with an unnamed control.
 - Duplicate field names. Radios sharing a name are fine.
 - No submit button.
-- No `:form-success` and no redirect.
+- No `form-success` and no redirect.
 - `notify` with no recipients or no SMTP configured.
 - An enabled form on a zip/GitHub publish method.
 - A nested form.
@@ -339,7 +346,7 @@ refused.
     badge).
   - A table on the right with columns from the manifest fields.
   - Download CSV, plus delete for one row or all.
-  - Reached from the Data panel of a selected `:form` ("View submissions") and from the
+  - Reached from the Data panel of a selected `form` ("View submissions") and from the
     Forms settings tab.
 - Values render as **text only** (`{{ }}`, never `v-html`). They're attacker-written.
 - `/api/events` pushes `forms:new {formId}` so an open modal refreshes. It carries the
@@ -349,7 +356,7 @@ refused.
 - `list_form_submissions {formId?, limit?, before?}`. Read-only, every value fenced as
   `{untrusted: true, text}` with the `_untrusted` note (golden rule 6). A 403 explains
   the policy switch and tells the agent to ask the human.
-- `edit_elements` accepts `form: FormConfig | null` on a `:form` node (refused on any
+- `edit_elements` accepts `form: FormConfig | null` on a `form` node (refused on any
   other type and on a `:Name` wrapper, following `slider`).
 - Keep both descriptions to one sentence and point at
   `get_guide {section: "forms"}`, then run `npm run check:mcp`.

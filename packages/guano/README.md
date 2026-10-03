@@ -105,15 +105,26 @@ editor is viewing.
 ### Tools
 
 `get_guide` (the agent handbook — also served as MCP `instructions`) · `get_status`,
-`set_target` · `list_pages`, `get_page`, `set_page_code`, `create_page`, `delete_page`,
-`set_page_seo` · `edit_elements` (batch: classes, text content, media src/background,
-html id) · `get_settings`, `update_settings` (design tokens, SEO defaults, fonts,
-custom head) · `list_interactions`, `create_interactions`,
-`bind_interaction`, `unbind_interaction` · `list_collections`, `get_collection`,
+`set_target` · `list_pages`, `get_page`, `set_page_html`, `edit_structure`,
+`create_page`, `delete_page`, `set_page_seo` · `edit_elements` (batch: classes, text
+content, media src/background, attributes, html id) · `list_components`,
+`create_component`, `update_component`, `duplicate_component`, `detach_instance`,
+`delete_component`, `set_component_variants` · `list_library`,
+`add_library_components` · `get_settings`, `update_settings` (design tokens, SEO
+defaults, fonts, custom head) · `list_interactions`, `create_interactions`,
+`bind_interaction`, `unbind_interaction` · `list_animations`, `create_animations`,
+`update_animation`, `delete_animation` · `list_collections`, `get_collection`,
 `create_collection`, `update_collection`, `delete_collection`, `upsert_entries`,
-`delete_entry` · `list_media`, `upload_media` · `list_comments`,
-`reply_to_comment` · `publish`.
+`delete_entry` · `get_translation_worklist`, `set_translations` · `list_media`,
+`upload_media`, `list_icons` · `list_comments`, `reply_to_comment` · `preview`,
+`publish`.
+
+**Pages are read and written as HTML** — a strict subset where `<Card>` is a
+component instance and `data-ref` is a stable address, so one write carries
+structure, classes and text together. `edit_structure` changes part of a page
+(insert/replace/move/remove/wrap) without resending it.
 
 Page/element edits are guarded by a version hash from `get_page` — a stale write
-(the page changed underneath) is rejected rather than clobbering. Invalid DSL
-comes back as diagnostics without saving.
+(the page changed underneath) is rejected rather than clobbering. Markup that
+does not parse is refused with a `line:col`; a document that parses but has a
+problem (an unknown collection, a duplicate ref) saves and reports it.
