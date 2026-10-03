@@ -22,9 +22,14 @@
 //   node scripts/corpus.mjs                   build (if needed) then save
 //
 // The inputs live in `.corpus/inputs/` and are the referee, NOT the code that
-// built them: Phase 1 makes project construction tree-native, so rebuilding
-// from source after the change would compare a different project to itself.
-// Build once, before Phase 1, and leave `.corpus/` alone afterwards.
+// built them: each phase changes how a project is constructed, so rebuilding
+// from source after a change would compare a different project to itself. Build
+// once and leave `.corpus/` alone — `build` refuses to overwrite existing
+// inputs without --force for exactly that reason.
+//
+// The saved inputs are v1 captures (`page.code` beside the tree). `check` runs
+// each one through `migrateProject` before exporting, because what has to be
+// byte-identical is what the app renders from them TODAY.
 
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
@@ -100,25 +105,18 @@ function catalogProject(rt) {
   project.pages = []
   for (const entry of rt.CATALOG) {
     const def = addLibraryEntry(rt, project, entry.key)
-    // the expanded instance block: a bare `:Name:` leaf is an UNexpanded
-    // instance, which renders nothing until something materializes it
-    const body = [
-      `\t:${def.name}`,
-      ...def.root.children.flatMap((child) => rt.serializeNode(child, '\t\t')),
-      `\t${def.name}:`,
-    ]
     const slug = `/c/${entry.key}`
-    const code = rt.buildDocument(
-      { name: entry.name, slug, status: 'published', locale: 'en' },
-      body,
-    )
+    // the instance, materialized: a childless one renders nothing
+    const wrapper = rt.createNode(def.name)
+    rt.alignStructure(wrapper, def.root)
+    const body = rt.createBody()
+    body.children.push(wrapper)
     project.pages.push({
       id: crypto.randomUUID(),
       name: entry.name,
       path: slug,
       status: 'published',
-      code,
-      elements: rt.parseSyntax(code),
+      elements: [body],
       createdAt: 0,
       updatedAt: 0,
     })
@@ -216,9 +214,12 @@ async function manifestOf(dir) {
 async function exportInto(outRoot) {
   const { exportSite } = await import(join(ROOT, 'server/export.mjs'))
   const rt = await import(RUNTIME)
-  // the schema migration lands in Phase 4; until then there is nothing to run,
-  // and afterwards the referee must be the MIGRATED input's render
-  const migrate = rt.migrateProject ?? ((p) => p)
+  // the referee is the MIGRATED input's render: the saved inputs are v1 blobs
+  // (captured before the migration existed), and what has to be byte-identical
+  // is what the app renders from them TODAY
+  const migrate = rt.migrateProject
+    ? (project) => rt.migrateProject(project).project
+    : (project) => project
 
   const names = (await readdir(INPUTS)).filter((f) => f.endsWith('.json')).sort()
   if (!names.length) throw new Error('no corpus inputs — run `node scripts/corpus.mjs build`')

@@ -46,17 +46,25 @@ test.describe('the bundled library', () => {
     for (const entry of rt.CATALOG) {
       if (!project.components.some((c: { source?: string }) => c.source === entry.key)) add(entry)
     }
-    // one instance of each, written as a leaf and expanded like a page would
-    const body = project.components.map((c: { name: string }) => `\t:${c.name}:`)
+    // one instance of each, materialized the way an insert would
     const page = project.pages[0]
     page.status = 'published'
     page.path = '/'
-    page.code = rt.expandComponentInstances(
-      ['@setup', '\tname: Home', '\tslug: /', '\tstatus: published', 'setup@', ':body', ...body, 'body:'].join('\n'),
-      project.components,
-    )
-    page.elements = rt.parseSyntax(page.code)
-    expect(rt.validateDocument(page.code, project.components.map((c: { name: string }) => c.name), [], [], [])).toEqual([])
+    const body = rt.createBody()
+    for (const def of project.components) {
+      const wrapper = rt.createNode(def.name)
+      rt.alignStructure(wrapper, def.root)
+      body.children.push(wrapper)
+    }
+    page.elements = [body]
+    expect(
+      rt.validateTree(body, {
+        componentNames: project.components.map((c: { name: string }) => c.name),
+        collectionNames: [],
+        listFieldNames: [],
+        dataOnlyCollections: [],
+      }),
+    ).toEqual([])
     await exportSite(project, SITE)
     html = await readFile(join(SITE, 'index.html'), 'utf8')
   })

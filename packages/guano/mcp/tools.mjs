@@ -700,7 +700,7 @@ function projectStats(project) {
   }
 }
 
-// known names for validateDocument (unknown component/collection detection)
+// known names for validateTree (unknown component/collection detection)
 function knownNames(project) {
   const componentNames = (project.components ?? []).map((c) => c.name)
   const collectionNames = (project.collections ?? []).map((c) => c.name)
@@ -2273,7 +2273,7 @@ function breakpointUsage(project, id) {
 }
 
 /** the id of the page node carrying `#ref`, or null. Refs are unique per page
- * (validateDocument enforces it), so the first match is the only one. */
+ * (validateTree enforces it), so the first match is the only one. */
 function refNodeId(page, ref) {
   const want = String(ref ?? '').replace(/^#/, '')
   if (!want) return null
@@ -6165,7 +6165,7 @@ const tools = [
         }
         let page
         try {
-          page = scopeDef ? { id: null, code: '', elements: [] } : findPage(project, job.pageId)
+          page = scopeDef ? { id: null, elements: [] } : findPage(project, job.pageId)
         } catch (e) {
           pageResults.push({ pageId: job.pageId, saved: false, reason: 'not-found', message: e.message })
           continue
@@ -7269,8 +7269,6 @@ const tools = [
         name: label,
         path: `/${name}`,
         status: 'published',
-        // the DSL mirror the editor regenerates from the tree; '' until it does
-        code: '',
         elements: [body],
         collectionId: '',
       }

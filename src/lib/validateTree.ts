@@ -1,6 +1,6 @@
 import type { ElementNode } from '@/types/editor'
 import { isComponentType } from './components'
-import { BUILTIN_LIST_SOURCES } from './syntax'
+import { BUILTIN_LIST_SOURCES } from './nodeState'
 
 /**
  * What is wrong with a page's structure — the only place a human sees that a

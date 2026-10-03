@@ -32,7 +32,24 @@ export interface PaletteItem {
   type: string
   label: string
   icon: Component
+  /**
+   * Classes the insert lands with — what makes this a PRESET rather than a
+   * type. `container` and `grid` used to be their own element types whose only
+   * difference from a `div` was the name in this list; the v2 migration
+   * collapsed them, and what the names were really offering was a styled div.
+   */
+  classes?: string
+  /**
+   * Stable address for this entry, defaulted to the type by `paletteKey`. A
+   * preset needs its own, because several entries now share one type — and it
+   * has to be stable rather than label-derived: it is the row key, and what
+   * `[data-dock-item]` is queried by.
+   */
+  key?: string
 }
+
+/** how a palette entry is addressed: its own key, else its type */
+export const paletteKey = (item: PaletteItem): string => item.key ?? item.type
 
 /** the insertable built-in elements, grouped for browsing — shared by the
  * Elements popover (ElementsPalette) and the ⌘E command palette */
@@ -42,15 +59,27 @@ export const ELEMENT_GROUPS: { title: string; items: PaletteItem[] }[] = [
     items: [
       { type: 'section', label: 'Section', icon: Square },
       { type: 'div', label: 'Div', icon: SquareDashed },
-      { type: 'container', label: 'Container', icon: Container },
-      { type: 'grid', label: 'Grid', icon: LayoutGrid },
+      {
+        type: 'div',
+        label: 'Container',
+        key: 'div:container',
+        icon: Container,
+        classes: 'mx-auto w-full max-w-5xl px-6',
+      },
+      {
+        type: 'div',
+        label: 'Grid',
+        key: 'div:grid',
+        icon: LayoutGrid,
+        classes: 'grid grid-cols-3 gap-6',
+      },
     ],
   },
   {
     title: 'Text',
     items: [
       { type: 'text', label: 'Text', icon: Type },
-      { type: 'heading', label: 'Heading', icon: Heading },
+      { type: 'h2', label: 'Heading', icon: Heading },
       { type: 'paragraph', label: 'Paragraph', icon: Pilcrow },
       { type: 'span', label: 'Span', icon: Baseline },
       { type: 'label', label: 'Label', icon: Tag },

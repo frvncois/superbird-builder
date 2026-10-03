@@ -59,7 +59,6 @@ function fixture(slider: unknown, opts: { bound?: boolean; slider2?: unknown } =
         name: 'Home',
         path: '/',
         status: 'published',
-        code: '',
         elements: [node('p1-body', 'body', { children: body })],
       },
     ],

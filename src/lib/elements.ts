@@ -53,10 +53,19 @@ export function seedChildFor(type: string): ElementNode | null {
   return { ...createNode(seed.type), content: seed.content }
 }
 
-/** types an element can switch between (same structural shape per group) */
+/**
+ * Types an element can switch between (same structural shape per group).
+ *
+ * The pure aliases (`container`, `grid`, `heading`, `dropdown`) are absent:
+ * nothing can create one any more — the v2 migration collapsed every stored
+ * one, and the insert dock offers Container/Grid/Heading as PRESETS (a div or
+ * an h2 plus classes) rather than as types. They stay in the registry above
+ * purely so a blob the migration never saw still renders its real tag instead
+ * of degrading to a bare div; that can go one release after launch.
+ */
 const TYPE_GROUPS: string[][] = [
-  ['section', 'div', 'container', 'grid', 'header', 'footer', 'article', 'nav', 'main', 'aside', 'list-item'],
-  ['heading', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'],
+  ['section', 'div', 'header', 'footer', 'article', 'nav', 'main', 'aside', 'list-item'],
+  ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'],
   ['text', 'paragraph', 'span'],
   // the seeded containers: one shape (a wrapper around its words), so they
   // retype into each other cleanly. `label` left the text group when it became

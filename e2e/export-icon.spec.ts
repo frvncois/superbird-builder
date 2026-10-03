@@ -40,7 +40,6 @@ function fixture() {
         name: 'Home',
         path: '/',
         status: 'published',
-        code: '',
         elements: [
           node('body', 'body', {
             children: [

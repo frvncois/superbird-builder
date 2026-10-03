@@ -1,6 +1,6 @@
 import type { Interaction, InteractionBinding, Project } from '@/types/editor'
 import { slugify } from './shared/slug.js'
-import { syncPageCode } from './pageCode'
+import { migrateProject } from './migrate'
 import { defaultSettings } from './settings'
 import { walkNodes } from './tree'
 import { storeGet } from './store'
@@ -110,19 +110,11 @@ export function migrateStoredProject(parsed: Project): Project | null {
         if (node.link === '@entry') node.link = '@item'
       })
     }
-    // `page.code` is a derived mirror of the tree now (lib/pageCode), kept for
-    // the agent API alone. Normalize it ONCE here, before history starts, or
-    // merely opening an older project would write, autosave, add an undo step
-    // and stamp it as edited.
-    //
-    // The TREE is what wins, deliberately. Stored code can disagree with it in
-    // three ways — markers left stale by the years the truth-sync only ran
-    // while the code column was mounted, blocks whose closer is missing (the
-    // parser nested their siblings, and that nesting is what rendered), and a
-    // `node.link` the line never carried — and in every one of them the tree is
-    // what every renderer reads and therefore what the user has been looking
-    // at. Re-deriving from the text would silently change the published site.
-    for (const page of parsed.pages) syncPageCode(page, parsed.defaultLocale)
+    // the v2 schema: the tree is the only source of truth. Idempotent, so this
+    // is a no-op for anything the server already migrated at boot — it is here
+    // for a snapshot that arrived some other way (an import, a merge base read
+    // straight out of the store).
+    migrateProject(parsed)
     return parsed
   } catch {
     return null

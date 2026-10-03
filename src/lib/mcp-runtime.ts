@@ -13,46 +13,27 @@
 // components) precisely so applyClass can be bundled here. If you add a re-export
 // that drags in Vue/DOM, refactor the import graph — do not externalize it.
 
-// --- DSL parsing, identity-preserving reconcile, validation (src/lib/syntax.ts)
+// --- the node state a write preserves on every element it adopts. One
+// definition, shared by the HTML writer's `fresh` path and anything else that
+// wants a clean slate; it had drifted when spelled out twice.
 export {
-  parseSyntax,
-  reconcile,
-  validateDocument,
-  normalizeSyntax,
-  lexLine,
-  isBodyOpenLine,
-  elementBlockLines,
-  // the node-only state a node carries (classes/content/bindings/…): one
-  // definition, shared by reconcile's reparent guard and by set_page_code's
-  // `fresh`. They had drifted when spelled out separately.
   hasNodeState,
   stripNodeState,
   NODE_STATE_KEYS,
   BUILTIN_LIST_SOURCES,
-  // display-only code markers ((+) styled, {+} interactions) — the MCP keeps
-  // them in step when it writes node.classes / node.interactions, because the
-  // editor's marker truth-sync does NOT run on load (only on later change)
-  styleMarkerOf,
-  withStyleMarker,
-  interactionMarkerOf,
-  withInteractionMarker,
-  dataMarkerOf,
-  withDataMarker,
-  hasOpenArgBracket,
-  REF_SLOT,
-  refOf,
-  withoutRef,
-} from './syntax'
-export type { Diagnostic } from './syntax'
+} from './nodeState'
 
-// components: instance detection, name normalization, master serialization,
-// and instance-block expansion (styles/interactions live on the master)
+// --- the v2 schema migration (src/lib/migrate.ts). The SERVER runs this over
+// every project blob in the store at boot — Main, the drafts, the guano-base
+// merge snapshots and the published baseline — so nothing is left on v1.
+export { migrateProject, describeMigration, SCHEMA_VERSION } from './migrate'
+export type { MigrationReport } from './migrate'
+
+// components: instance detection, name normalization, master adoption, and
+// the realign that carries per-instance state across a structure change
 export {
   isComponentType,
   normalizeComponentName,
-  hoistBlockRef,
-  serializeNode,
-  expandComponentInstances,
   adoptStructure,
   alignStructure,
   cloneForMaster,
@@ -109,19 +90,8 @@ export type {
 export { validateTree } from './validateTree'
 export type { TreeDiagnostic, ValidateContext } from './validateTree'
 
-// --- canonical page document scaffold (src/lib/document.ts)
-export {
-  buildDocument,
-  enforceDocument,
-  extractBodyLines,
-  extractBodyArg,
-  extractBodyDecor,
-  parseSetup,
-  replaceSetup,
-  setSetupLocale,
-  slugify,
-} from './document'
-export type { PageMeta } from './document'
+// --- url slug normalization, shared with the exporter's route paths
+export { slugify } from './shared/slug.js'
 
 // --- element registry + node factory (src/lib/elements.ts)
 export {

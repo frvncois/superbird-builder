@@ -186,12 +186,12 @@ export interface ElementNode {
   >
   /** navigation target for link elements — internal '/path' or absolute URL */
   link?: string
-  /** token argument from the code — field binding or collection name */
+  /** field binding or collection name (the agent-facing HTML's `data-source`) */
   arg?: string
-  /** client ref from the code ('#name') — a stable address for this element.
-   * CODE-OWNED like `arg`: re-read on every parse, never carried by reconcile
-   * as node state, never in NODE_STATE_KEYS or the marker signature. It emits
-   * NOTHING in the HTML — `htmlId` is the separate, node-owned DOM id. */
+  /** client ref — a stable, human-readable address for this element, unique
+   * per page. It is what an agent addresses (`data-ref` in the HTML) and the
+   * strongest signal `applyHtml` adopts by. It emits NOTHING on the published
+   * page — `htmlId` is the separate DOM id. */
   ref?: string
   /** collection-item only: the picked entry */
   entryId?: string
@@ -248,9 +248,6 @@ export interface ElementNode {
    * Absent = every default; see shared/slider.js */
   slider?: SliderConfig
   children: ElementNode[]
-  /** Source range in the page code (0-based line indexes, open → close) */
-  line?: number
-  endLine?: number
 }
 
 /** :slider configuration. Every field is optional — an absent config renders a
@@ -290,8 +287,6 @@ export interface Page {
   name: string
   path: string
   status: string
-  /** Source in the builder syntax; elements is derived from it */
-  code: string
   elements: ElementNode[]
   /** set when this page is a collection's template */
   collectionId?: string
@@ -557,6 +552,12 @@ export interface CustomFont {
 export interface Project {
   id: string
   name: string
+  /**
+   * The stored shape. v2 (`lib/migrate.ts`) is the one where the ElementNode
+   * tree is the only source of truth; v1 carried the indentation DSL beside
+   * it. Absent means v1 — a blob written before the migration existed.
+   */
+  schemaVersion?: number
   pages: Page[]
   components: ComponentDef[]
   collections: Collection[]

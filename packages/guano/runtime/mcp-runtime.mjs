@@ -1,3 +1,372 @@
+//#region src/lib/nodeState.ts
+/**
+* What a node carries beyond its structure.
+*
+* This is what is left of `syntax.ts` after the indentation DSL was deleted
+* (TREE-SOURCE-PLAN.md, Phase 4). The list used to mean "the state the code
+* cannot express, which `reconcile` therefore had to carry across a reparse";
+* it now means "the state a write preserves on every element it adopts", which
+* is the same list for the same reason — it is everything the agent format does
+* not put in the markup.
+*
+* One definition, shared by the HTML writer's `fresh` path and by anything else
+* that wants a clean slate. It had drifted when it was spelled out twice.
+*/
+var NODE_STATE_KEYS = [
+	"classes",
+	"content",
+	"src",
+	"svg",
+	"hidden",
+	"variants",
+	"background",
+	"htmlId",
+	"attributes",
+	"interactions",
+	"animations",
+	"locales",
+	"listQuery",
+	"entryId",
+	"fieldAttrs",
+	"instanceAttributes",
+	"slider"
+];
+/** true when a node carries state that would be lost (or wrongly inherited) */
+function hasNodeState(node) {
+	return NODE_STATE_KEYS.some((key) => {
+		const value = node[key];
+		if (value == null || value === "") return false;
+		if (Array.isArray(value)) return value.length > 0;
+		if (typeof value === "object") return Object.keys(value).length > 0;
+		return true;
+	});
+}
+/** drop everything a node carried, leaving its structure */
+function stripNodeState(node) {
+	for (const key of NODE_STATE_KEYS) delete node[key];
+}
+/**
+* List sources that are not collections: `@pages` iterates the site's own
+* published pages. The `@` prefix is reserved, so it can never collide with a
+* collection someone named "pages".
+*/
+var BUILTIN_LIST_SOURCES = ["@pages"];
+//#endregion
+//#region src/lib/tree.ts
+/** structural deep clone via JSON round-trip — for plain serializable data
+* (pages, nodes, entries, the project itself) */
+function deepClone(value) {
+	return JSON.parse(JSON.stringify(value));
+}
+/** depth-first visit of every node in the element tree */
+function walkNodes(nodes, visit) {
+	for (const node of nodes) {
+		visit(node);
+		walkNodes(node.children, visit);
+	}
+}
+/** finds a node anywhere in the tree by id */
+function findNode(nodes, id) {
+	for (const node of nodes) {
+		if (node.id === id) return node;
+		const match = findNode(node.children, id);
+		if (match) return match;
+	}
+	return null;
+}
+/** finds the parent of a node by id (null for roots / not found) */
+function findParent(nodes, id) {
+	for (const node of nodes) {
+		if (node.children.some((child) => child.id === id)) return node;
+		const match = findParent(node.children, id);
+		if (match) return match;
+	}
+	return null;
+}
+/** true when the node with `id` has an ancestor of the given type */
+function hasAncestorOfType(nodes, id, type) {
+	for (const node of nodes) {
+		if (node.type === type && findNode(node.children, id)) return true;
+		if (hasAncestorOfType(node.children, id, type)) return true;
+	}
+	return false;
+}
+//#endregion
+//#region src/lib/components.ts
+/**
+* Deep-clone a subtree into the master id space: fresh ids, and
+* interaction/animation binding `targetId`s that point INSIDE the subtree
+* rewritten onto the new ids — without the rewrite every internal binding
+* (a modal's close button, an accordion trigger) keeps aiming at the PAGE
+* node ids and goes dead the moment the block becomes a component.
+* Returns the clone plus the old→new id map (the key set doubles as "which
+* page ids are inside the extracted subtree" for outside-target detection).
+*/
+function cloneForMaster(source) {
+	const cloned = JSON.parse(JSON.stringify(source));
+	const idMap = /* @__PURE__ */ new Map();
+	walkNodes([cloned], (n) => {
+		const next = crypto.randomUUID();
+		idMap.set(n.id, next);
+		n.id = next;
+		delete n.ref;
+	});
+	walkNodes([cloned], (n) => {
+		for (const b of n.interactions ?? []) if (b.targetId && idMap.has(b.targetId)) b.targetId = idMap.get(b.targetId);
+		for (const b of n.animations ?? []) if (b.targetId && idMap.has(b.targetId)) b.targetId = idMap.get(b.targetId);
+	});
+	return {
+		cloned,
+		idMap
+	};
+}
+/**
+* After extraction the MASTER owns the subtree's presentation and content —
+* clear the source nodes' node-only state so the new instance INHERITS instead
+* of shadowing. A shadow looks identical at extraction time but bites later:
+* shared chrome gets translated once per page, and a master restructure can
+* re-seat the stale override onto the wrong node. `htmlId` stays (a per-page
+* anchor), `arg`/`link` stay (code-owned).
+*/
+function stripExtractedInstanceState(source) {
+	walkNodes([source], (n) => {
+		delete n.classes;
+		delete n.interactions;
+		delete n.animations;
+		delete n.attributes;
+		delete n.src;
+		delete n.svg;
+		delete n.hidden;
+		delete n.background;
+		delete n.locales;
+		delete n.content;
+	});
+}
+/** component types are Capitalized; built-in elements stay lowercase */
+function isComponentType(type) {
+	return /^[A-Z]/.test(type);
+}
+/** a fresh mirror of a master subtree: its structure, none of its state */
+function createMirror(master) {
+	const node = {
+		id: crypto.randomUUID(),
+		type: master.type,
+		content: "",
+		children: master.children.map(createMirror)
+	};
+	if (master.arg) node.arg = master.arg;
+	if (master.link) node.link = master.link;
+	return node;
+}
+/** `arg` and `link` are CODE-OWNED: inside an instance they belong to the
+*  master, so they are copied down rather than kept. */
+function adoptCodeOwned(node, master, box) {
+	if ((node.arg ?? void 0) !== (master.arg ?? void 0)) {
+		if (master.arg) node.arg = master.arg;
+		else delete node.arg;
+		box.moved = true;
+	}
+	if ((node.link ?? void 0) !== (master.link ?? void 0)) {
+		if (master.link) node.link = master.link;
+		else delete node.link;
+		box.moved = true;
+	}
+}
+/**
+* Reshape one level of children to the master's, KEEPING the node object for
+* each child that survives — which is what carries everything the structure
+* does not: the id, the per-instance text, media, translations, hidden flag and
+* variant picks, and (on a page) the htmlId and comment anchors.
+*
+* Matched like `adoptStructure` matches — by code signature, LCS-aligned, then
+* by type for whatever that left over — so inserting an icon in Button does not
+* slide every Card's button text onto the wrong node.
+*/
+function alignLevel(node, master, box) {
+	const old = node.children;
+	const matches = lcsAlign$1(old.map(nodeSignature), master.children.map(nodeSignature));
+	const used = new Set(matches.values());
+	const freeOld = old.map((_, i) => i).filter((i) => !used.has(i));
+	const freeNew = master.children.map((_, i) => i).filter((i) => !matches.has(i));
+	if (freeOld.length && freeNew.length) {
+		const weak = lcsAlign$1(freeOld.map((i) => old[i].type), freeNew.map((i) => master.children[i].type));
+		for (const [nj, oj] of weak) matches.set(freeNew[nj], freeOld[oj]);
+	}
+	const next = master.children.map((child, i) => {
+		const at = matches.get(i);
+		const kept = at !== void 0 ? old[at] : createMirror(child);
+		if (at === void 0) box.moved = true;
+		adoptCodeOwned(kept, child, box);
+		alignLevel(kept, child, box);
+		return kept;
+	});
+	if (next.length !== old.length || next.some((child, i) => child !== old[i])) {
+		node.children = next;
+		box.moved = true;
+	}
+}
+/**
+* Bring an INSTANCE's subtree in step with the master it stands for, keeping
+* every per-instance value on the nodes that survive. The node's OWN line is
+* left alone — on a page that is a real page node, with its own ref, htmlId and
+* classes; what is below it is the component's.
+*
+* Returns whether anything moved, so a caller can tell a real change from a
+* push that found everything already current.
+*/
+function alignStructure(instance, master) {
+	const box = { moved: false };
+	alignLevel(instance, master, box);
+	return box.moved;
+}
+/**
+* The same, for a MIRROR a master holds: there the wrapper node is part of the
+* host's own tree, so its code-owned slots follow the inner master too (a
+* mirror that lacked them would not be structurally identical to it, which is
+* the invariant the positional pairing relies on).
+*/
+function alignMirror(mirror, master) {
+	const box = { moved: false };
+	adoptCodeOwned(mirror, master, box);
+	alignLevel(mirror, master, box);
+	return box.moved;
+}
+/**
+* Bring every mirror a host holds back in step with the component it mirrors.
+* Returns whether anything changed.
+*/
+function alignHostMirrors(host, components) {
+	let moved = false;
+	const visit = (nodes) => {
+		for (const node of nodes) {
+			if (!isComponentType(node.type)) {
+				visit(node.children);
+				continue;
+			}
+			const inner = components.find((c) => c.name === node.type);
+			if (inner && inner !== host && alignMirror(node, inner.root)) moved = true;
+		}
+	};
+	visit(host.root.children);
+	return moved;
+}
+/** every nested-instance wrapper a master holds directly (not the ones inside
+*  a mirror, which belong to the component being mirrored) */
+function nestedWrappers(def, name) {
+	const out = [];
+	const visit = (nodes) => {
+		for (const node of nodes) if (!isComponentType(node.type)) visit(node.children);
+		else if (!name || node.type === name) out.push(node);
+	};
+	visit(def.root.children);
+	return out;
+}
+/** turns raw user input into a valid, unique component name ('my card' → 'MyCard') */
+function normalizeComponentName(raw, taken) {
+	const cleaned = raw.split(/[^a-zA-Z0-9]+/).filter(Boolean).map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join("");
+	const base = /^[A-Za-z]/.test(cleaned) ? cleaned : `C${cleaned}`;
+	const name = base.charAt(0).toUpperCase() + base.slice(1) || "Component";
+	if (!taken.includes(name)) return name;
+	let n = 2;
+	while (taken.includes(`${name}${n}`)) n++;
+	return `${name}${n}`;
+}
+/** a node's SHALLOW identity: its type, its `[arg]` binding, its link.
+* Deliberately NOT recursive: matching is done one
+* level at a time (like the page reconciler matching by line), so a container
+* keeps its identity even when its children change, while its children realign
+* among themselves. Classes/content/interactions are excluded — they are the
+* off-code state we're carrying across the edit. Two `:h2:@/a` and
+* `:h2:@/b` get distinct signatures; two bare `:h2:` are genuinely
+* indistinguishable (no algorithm can tell which identical sibling was
+* removed — same irreducible case the reconciler faces). */
+function nodeSignature(node) {
+	return `${node.type}|${node.arg ?? ""}|${node.link ?? ""}`;
+}
+/** longest-common-subsequence alignment of two signature lists → a map from
+* b-index to the a-index it matches. Same primitive the page reconciler uses,
+* so component adoption and page edits carry identity the same way — a removed
+* sibling no longer shifts the survivors onto the wrong master nodes. */
+function lcsAlign$1(a, b) {
+	const n = a.length;
+	const m = b.length;
+	const dp = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+	for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+	const map = /* @__PURE__ */ new Map();
+	let i = 0;
+	let j = 0;
+	while (i < n && j < m) if (a[i] === b[j]) {
+		map.set(j, i);
+		i++;
+		j++;
+	} else if (dp[i + 1][j] >= dp[i][j + 1]) i++;
+	else j++;
+	return map;
+}
+/**
+* Re-derive a component master's children from an edited instance's subtree,
+* CARRYING node identity (id/classes/content/interactions) wherever the code
+* structure still lines up, minting fresh nodes only for genuinely new code.
+*
+* Matching is by code signature (type + arg + link + child structure) aligned
+* with an LCS — NOT greedy first-match-by-type, which silently re-seated a
+* survivor onto a removed sibling's master node (dragging its classes and
+* interaction bindings along) whenever a same-type child was deleted.
+*
+* `arg`/`link` are code-owned, so the edited block is authoritative for them.
+* Fills `result` with the adopt/create counts and any orphaned master nodes.
+*/
+function adoptStructure(master, edited, selfName, result = {
+	adopted: 0,
+	created: 0,
+	orphaned: []
+}) {
+	const masterChildren = master.children;
+	const editedChildren = edited.children.filter((child) => child.type !== selfName);
+	const matches = lcsAlign$1(masterChildren.map(nodeSignature), editedChildren.map(nodeSignature));
+	const weakSignature = (n) => `${n.type}|${n.arg ?? ""}`;
+	const freeMaster = masterChildren.map((_, i) => i).filter((i) => ![...matches.values()].includes(i));
+	const freeEdited = editedChildren.map((_, i) => i).filter((i) => !matches.has(i));
+	if (freeMaster.length && freeEdited.length) {
+		const weak = lcsAlign$1(freeMaster.map((i) => weakSignature(masterChildren[i])), freeEdited.map((i) => weakSignature(editedChildren[i])));
+		for (const [ej, mj] of weak) matches.set(freeEdited[ej], freeMaster[mj]);
+	}
+	const usedMaster = new Set(matches.values());
+	master.children = editedChildren.map((child, ei) => {
+		const mi = matches.get(ei);
+		let node;
+		if (mi !== void 0) {
+			node = masterChildren[mi];
+			result.adopted++;
+		} else {
+			node = {
+				id: crypto.randomUUID(),
+				type: child.type,
+				content: child.content,
+				locales: child.locales ? JSON.parse(JSON.stringify(child.locales)) : void 0,
+				attributes: child.attributes ? JSON.parse(JSON.stringify(child.attributes)) : void 0,
+				children: []
+			};
+			result.created++;
+		}
+		if (child.arg) node.arg = child.arg;
+		else delete node.arg;
+		if (child.link) node.link = child.link;
+		else delete node.link;
+		adoptStructure(node, child, selfName, result);
+		return node;
+	});
+	masterChildren.forEach((m, mi) => {
+		if (usedMaster.has(mi)) return;
+		result.orphaned.push({
+			id: m.id,
+			type: m.type,
+			hadClasses: !!m.classes?.trim(),
+			hadInteractions: (m.interactions?.length ?? 0) + (m.animations?.length ?? 0)
+		});
+	});
+	return result;
+}
 //#endregion
 //#region src/lib/elements.ts
 /** the element registry — data lives in the shared plain-JS module so the
@@ -240,13 +609,20 @@ function createNode(type) {
 		children: []
 	};
 }
-/** types an element can switch between (same structural shape per group) */
+/**
+* Types an element can switch between (same structural shape per group).
+*
+* The pure aliases (`container`, `grid`, `heading`, `dropdown`) are absent:
+* nothing can create one any more — the v2 migration collapsed every stored
+* one, and the insert dock offers Container/Grid/Heading as PRESETS (a div or
+* an h2 plus classes) rather than as types. They stay in the registry above
+* purely so a blob the migration never saw still renders its real tag instead
+* of degrading to a bare div; that can go one release after launch.
+*/
 var TYPE_GROUPS = [
 	[
 		"section",
 		"div",
-		"container",
-		"grid",
 		"header",
 		"footer",
 		"article",
@@ -256,7 +632,6 @@ var TYPE_GROUPS = [
 		"list-item"
 	],
 	[
-		"heading",
 		"h1",
 		"h2",
 		"h3",
@@ -282,423 +657,392 @@ function typeOptionsFor(type) {
 	return TYPE_GROUPS.find((group) => group.includes(type)) ?? [];
 }
 //#endregion
-//#region src/lib/tree.ts
-/** structural deep clone via JSON round-trip — for plain serializable data
-* (pages, nodes, entries, the project itself) */
-function deepClone(value) {
-	return JSON.parse(JSON.stringify(value));
-}
-/** depth-first visit of every node in the element tree */
-function walkNodes(nodes, visit) {
-	for (const node of nodes) {
-		visit(node);
-		walkNodes(node.children, visit);
-	}
-}
-/** finds a node anywhere in the tree by id */
-function findNode(nodes, id) {
-	for (const node of nodes) {
-		if (node.id === id) return node;
-		const match = findNode(node.children, id);
-		if (match) return match;
-	}
+//#region src/lib/shared/tokens.js
+var TOKEN_NAME_RE = /^[a-z][a-z0-9-]*$/;
+var HEX_RE = /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+var RESERVED_TOKEN_NAMES = /* @__PURE__ */ new Set([
+	"slate",
+	"gray",
+	"red",
+	"orange",
+	"amber",
+	"yellow",
+	"lime",
+	"green",
+	"emerald",
+	"teal",
+	"cyan",
+	"sky",
+	"blue",
+	"indigo",
+	"violet",
+	"purple",
+	"fuchsia",
+	"pink",
+	"rose",
+	"neutral",
+	"stone",
+	"zinc",
+	"white",
+	"black",
+	"transparent",
+	"current",
+	"inherit"
+]);
+/**
+* Why a token is malformed, or null. Shadowing a palette name is NOT malformed —
+* see isReservedToken.
+* @returns {string|null}
+*/
+function tokenError(token) {
+	if (!TOKEN_NAME_RE.test(token?.name ?? "")) return "token names are kebab-case ([a-z][a-z0-9-]*)";
+	if (!HEX_RE.test(token?.value ?? "")) return "token values are #hex colours";
 	return null;
 }
-/** finds the parent of a node by id (null for roots / not found) */
-function findParent(nodes, id) {
-	for (const node of nodes) {
-		if (node.children.some((child) => child.id === id)) return node;
-		const match = findParent(node.children, id);
-		if (match) return match;
-	}
-	return null;
+/**
+* Does this name shadow a Tailwind palette name or colour keyword?
+*
+* A token compiles to `--color-<name>`, so `blue` defines `bg-blue` — it does
+* NOT redefine `bg-blue-500`, which is a different variable. So this is a
+* legibility hazard, not a breakage: a real brand palette genuinely has colours
+* called "blue" and "orange", and forcing every one of them to be renamed (and
+* every class rewritten to `bg-brand-blue`) was friction with no safety payoff.
+* Callers warn; they no longer refuse.
+*/
+function isReservedToken(name) {
+	return RESERVED_TOKEN_NAMES.has(String(name));
 }
-/** true when the node with `id` has an ancestor of the given type */
-function hasAncestorOfType(nodes, id, type) {
-	for (const node of nodes) {
-		if (node.type === type && findNode(node.children, id)) return true;
-		if (hasAncestorOfType(node.children, id, type)) return true;
-	}
-	return false;
+/** well-formed AND not shadowing a palette name — the conservative default */
+function isValidToken(token) {
+	return tokenError(token) === null && !isReservedToken(token.name);
+}
+/** well-formed, shadowing allowed — what actually reaches the @theme block, so
+* a deliberately-shadowing token really does render */
+function isEmittableToken(token) {
+	return tokenError(token) === null;
+}
+var LENGTH_RE = /^-?\d*\.?\d+(?:px|rem|em|%|vw|vh|ch|ex|pt)?$/;
+var FUNC_RE = /^(?:clamp|calc|min|max)\([-+*/\s\d.a-z%(),]*\)$/i;
+/** a CSS length/number safe to emit into a custom property */
+function isThemeValue(value) {
+	const v = String(value ?? "").trim();
+	if (!v || v.length > 64) return false;
+	if (v.includes(";") || v.includes("}") || v.includes("{")) return false;
+	return LENGTH_RE.test(v) || FUNC_RE.test(v);
 }
 //#endregion
-//#region src/lib/components.ts
-/**
-* Deep-clone a subtree into the master id space: fresh ids, line info dropped,
-* and interaction/animation binding `targetId`s that point INSIDE the subtree
-* rewritten onto the new ids — without the rewrite every internal binding
-* (a modal's close button, an accordion trigger) keeps aiming at the PAGE
-* node ids and goes dead the moment the block becomes a component.
-* Returns the clone plus the old→new id map (the key set doubles as "which
-* page ids are inside the extracted subtree" for outside-target detection).
-*/
-function cloneForMaster(source) {
-	const cloned = JSON.parse(JSON.stringify(source));
-	const idMap = /* @__PURE__ */ new Map();
-	walkNodes([cloned], (n) => {
-		const next = crypto.randomUUID();
-		idMap.set(n.id, next);
-		n.id = next;
-		delete n.line;
-		delete n.endLine;
-		delete n.ref;
-	});
-	walkNodes([cloned], (n) => {
-		for (const b of n.interactions ?? []) if (b.targetId && idMap.has(b.targetId)) b.targetId = idMap.get(b.targetId);
-		for (const b of n.animations ?? []) if (b.targetId && idMap.has(b.targetId)) b.targetId = idMap.get(b.targetId);
-	});
+//#region src/lib/shared/fonts.js
+/** …and the same by file extension, for https URLs that never went through
+*  the library (the mime isn't knowable without fetching) */
+var FORMAT_BY_EXT = {
+	woff2: "woff2",
+	woff: "woff",
+	ttf: "truetype",
+	otf: "opentype",
+	ttc: "truetype"
+};
+var FONT_FORMATS = [
+	"woff2",
+	"woff",
+	"truetype",
+	"opentype"
+];
+/** the `format()` hint guessed from a URL's extension, or undefined */
+function fontFormatForUrl(url) {
+	return FORMAT_BY_EXT[String(url ?? "").toLowerCase().split(/[?#]/)[0].split(".").pop()];
+}
+/** family names are interpolated into CSS, so they are restricted to the same
+*  safe character set as settings.fonts.family — letters, digits, spaces and
+*  hyphens. Anything else could close the declaration and inject rules. */
+var FONT_FAMILY_RE$1 = /^[A-Za-z0-9][A-Za-z0-9 -]*$/;
+/** a weight the CSS accepts: 100–900, or a variable-font range ("100 900") */
+var WEIGHT_RE$1 = /^(?:[1-9]00|normal|bold)(?: (?:[1-9]00))?$/;
+/** only same-origin media paths and https URLs may be fetched as fonts —
+*  mirrors SAFE_SRC's intent, minus the data:/mailto:/tel: cases that make no
+*  sense for a font file */
+var SAFE_FONT_SRC = /^(?:\/|https:\/\/)/i;
+/** human-readable reason a font entry is unusable, or null when it is fine */
+function fontError(font, others = []) {
+	const family = String(font?.family ?? "").trim();
+	if (!family) return "Family name required";
+	if (!FONT_FAMILY_RE$1.test(family)) return "Letters, digits, spaces and hyphens only";
+	if (others.some((f) => f !== font && String(f.family ?? "").trim().toLowerCase() === family.toLowerCase() && (f.weight ?? "400") === (font.weight ?? "400") && (f.style ?? "normal") === (font.style ?? "normal"))) return "Another font already uses this family, weight and style";
+	if (!font?.src) return "Pick a font file";
+	if (!SAFE_FONT_SRC.test(font.src)) return "Font files must be a /media/… path or an https:// URL";
+	if (font.weight && !WEIGHT_RE$1.test(String(font.weight))) return "Weight is 100–900, or a range like \"100 900\"";
+	return null;
+}
+//#endregion
+//#region src/lib/settings.ts
+function defaultSettings() {
 	return {
-		cloned,
-		idMap
-	};
-}
-/**
-* After extraction the MASTER owns the subtree's presentation and content —
-* clear the source nodes' node-only state so the new instance INHERITS instead
-* of shadowing. A shadow looks identical at extraction time but bites later:
-* shared chrome gets translated once per page, and a master restructure can
-* re-seat the stale override onto the wrong node. `htmlId` stays (a per-page
-* anchor), `arg`/`link` stay (code-owned).
-*/
-function stripExtractedInstanceState(source) {
-	walkNodes([source], (n) => {
-		delete n.classes;
-		delete n.interactions;
-		delete n.animations;
-		delete n.attributes;
-		delete n.src;
-		delete n.svg;
-		delete n.hidden;
-		delete n.background;
-		delete n.locales;
-		delete n.content;
-	});
-}
-/** component types are Capitalized in the syntax; built-ins stay lowercase */
-function isComponentType(type) {
-	return /^[A-Z]/.test(type);
-}
-/** a fresh mirror of a master subtree: its structure, none of its state */
-function createMirror(master) {
-	const node = {
-		id: crypto.randomUUID(),
-		type: master.type,
-		content: "",
-		children: master.children.map(createMirror)
-	};
-	if (master.arg) node.arg = master.arg;
-	if (master.link) node.link = master.link;
-	return node;
-}
-/** `arg` and `link` are CODE-OWNED: inside an instance they belong to the
-*  master, so they are copied down rather than kept. */
-function adoptCodeOwned(node, master, box) {
-	if ((node.arg ?? void 0) !== (master.arg ?? void 0)) {
-		if (master.arg) node.arg = master.arg;
-		else delete node.arg;
-		box.moved = true;
-	}
-	if ((node.link ?? void 0) !== (master.link ?? void 0)) {
-		if (master.link) node.link = master.link;
-		else delete node.link;
-		box.moved = true;
-	}
-}
-/**
-* Reshape one level of children to the master's, KEEPING the node object for
-* each child that survives — which is what carries everything the structure
-* does not: the id, the per-instance text, media, translations, hidden flag and
-* variant picks, and (on a page) the htmlId and comment anchors.
-*
-* Matched like `adoptStructure` matches — by code signature, LCS-aligned, then
-* by type for whatever that left over — so inserting an icon in Button does not
-* slide every Card's button text onto the wrong node.
-*/
-function alignLevel(node, master, box) {
-	const old = node.children;
-	const matches = lcsAlign$1(old.map(nodeSignature), master.children.map(nodeSignature));
-	const used = new Set(matches.values());
-	const freeOld = old.map((_, i) => i).filter((i) => !used.has(i));
-	const freeNew = master.children.map((_, i) => i).filter((i) => !matches.has(i));
-	if (freeOld.length && freeNew.length) {
-		const weak = lcsAlign$1(freeOld.map((i) => old[i].type), freeNew.map((i) => master.children[i].type));
-		for (const [nj, oj] of weak) matches.set(freeNew[nj], freeOld[oj]);
-	}
-	const next = master.children.map((child, i) => {
-		const at = matches.get(i);
-		const kept = at !== void 0 ? old[at] : createMirror(child);
-		if (at === void 0) box.moved = true;
-		adoptCodeOwned(kept, child, box);
-		alignLevel(kept, child, box);
-		return kept;
-	});
-	if (next.length !== old.length || next.some((child, i) => child !== old[i])) {
-		node.children = next;
-		box.moved = true;
-	}
-}
-/**
-* Bring an INSTANCE's subtree in step with the master it stands for, keeping
-* every per-instance value on the nodes that survive. The node's OWN line is
-* left alone — on a page that is a real page node, with its own ref, htmlId and
-* classes; what is below it is the component's.
-*
-* Returns whether anything moved, so a caller can tell a real change from a
-* push that found everything already current.
-*/
-function alignStructure(instance, master) {
-	const box = { moved: false };
-	alignLevel(instance, master, box);
-	return box.moved;
-}
-/**
-* The same, for a MIRROR a master holds: there the wrapper node is part of the
-* host's own tree, so its code-owned slots follow the inner master too (a
-* mirror that lacked them would not be structurally identical to it, which is
-* the invariant the positional pairing relies on).
-*/
-function alignMirror(mirror, master) {
-	const box = { moved: false };
-	adoptCodeOwned(mirror, master, box);
-	alignLevel(mirror, master, box);
-	return box.moved;
-}
-/**
-* Bring every mirror a host holds back in step with the component it mirrors.
-* Returns whether anything changed.
-*/
-function alignHostMirrors(host, components) {
-	let moved = false;
-	const visit = (nodes) => {
-		for (const node of nodes) {
-			if (!isComponentType(node.type)) {
-				visit(node.children);
-				continue;
+		favicon: void 0,
+		publishing: {
+			method: "server",
+			github: {
+				repo: "",
+				branch: "main"
 			}
-			const inner = components.find((c) => c.name === node.type);
-			if (inner && inner !== host && alignMirror(node, inner.root)) moved = true;
+		},
+		seo: {
+			siteName: "",
+			titleTemplate: "%s",
+			description: "",
+			ogImage: void 0
+		},
+		domain: "",
+		smtp: {
+			host: "",
+			port: "",
+			user: "",
+			password: "",
+			from: ""
+		},
+		integrations: {
+			stripe: { publishableKey: "" },
+			mailing: { provider: "" }
+		},
+		tokens: [],
+		customCode: { head: "" },
+		fonts: {
+			family: "",
+			googleFontsUrl: void 0,
+			custom: []
 		}
 	};
-	visit(host.root.children);
-	return moved;
 }
-/** every nested-instance wrapper a master holds directly (not the ones inside
-*  a mirror, which belong to the component being mirrored) */
-function nestedWrappers(def, name) {
-	const out = [];
-	const visit = (nodes) => {
-		for (const node of nodes) if (!isComponentType(node.type)) visit(node.children);
-		else if (!name || node.type === name) out.push(node);
-	};
-	visit(def.root.children);
-	return out;
-}
-/** turns raw user input into a valid, unique component name ('my card' → 'MyCard') */
-function normalizeComponentName(raw, taken) {
-	const cleaned = raw.split(/[^a-zA-Z0-9]+/).filter(Boolean).map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join("");
-	const base = /^[A-Za-z]/.test(cleaned) ? cleaned : `C${cleaned}`;
-	const name = base.charAt(0).toUpperCase() + base.slice(1) || "Component";
-	if (!taken.includes(name)) return name;
-	let n = 2;
-	while (taken.includes(`${name}${n}`)) n++;
-	return `${name}${n}`;
-}
-/** serializes a master node back into syntax lines at the given indent —
-* including its code-owned decorations: the [arg] binding and the @link
-* suffix (dropping them would strip bindings/links from every instance on
-* each structure rewrite) */
-function serializeNode(node, indent) {
-	const arg = node.arg ? `[${node.arg}]` : "";
-	const link = node.link ? `@${node.link === "@item" ? "item" : node.link}` : "";
-	if (isLeafElement(node.type)) return [`${indent}:${node.type}${arg}:${link}`];
+//#endregion
+//#region src/lib/factories.ts
+function defaultBreakpoints() {
 	return [
-		`${indent}:${node.type}${arg}${link}`,
-		...node.children.flatMap((child) => serializeNode(child, `${indent}\t`)),
-		`${indent}${node.type}:`
+		{
+			id: crypto.randomUUID(),
+			name: "Desktop",
+			width: 1440,
+			height: 900
+		},
+		{
+			id: crypto.randomUUID(),
+			name: "Tablet",
+			width: 768,
+			height: 1024
+		},
+		{
+			id: crypto.randomUUID(),
+			name: "Mobile",
+			width: 390,
+			height: 844
+		}
 	];
 }
-/**
-* Extraction helper: refs on the lines about to be wrapped in ':Name … Name:'.
-*
-* The block ROOT's ref is hoisted onto the wrapper — the instance root is a
-* real page node, so it keeps its address — and every ref BELOW it is dropped,
-* because those lines become the master's structure and get rewritten into
-* every instance. Shared by the editor's createComponent and MCP's
-* makeComponentFrom so the two can't drift.
-*/
-function hoistBlockRef(innerLines) {
+/** a page's root: the `:body` wrap every document is built around */
+function createBody(arg) {
+	const body = createNode("body");
+	if (arg) body.arg = arg;
+	return body;
+}
+function createPage(name, path, _locale = "en") {
+	const now = Date.now();
 	return {
-		ref: refOf(innerLines[0] ?? ""),
-		lines: innerLines.map(withoutRef)
+		id: crypto.randomUUID(),
+		name,
+		path,
+		status: "published",
+		elements: [createBody()],
+		createdAt: now,
+		updatedAt: now
 	};
 }
-/** a node's SHALLOW code identity — the DSL its own line encodes: type, the
-* [arg] binding, the @link. Deliberately NOT recursive: matching is done one
-* level at a time (like the page reconciler matching by line), so a container
-* keeps its identity even when its children change, while its children realign
-* among themselves. Classes/content/interactions are excluded — they are the
-* off-code state we're carrying across the edit. Two `:h2:@/a` and
-* `:h2:@/b` get distinct signatures; two bare `:h2:` are genuinely
-* indistinguishable (no algorithm can tell which identical sibling was
-* removed — same irreducible case the reconciler faces). */
-function nodeSignature(node) {
-	return `${node.type}|${node.arg ?? ""}|${node.link ?? ""}`;
-}
-/** longest-common-subsequence alignment of two signature lists → a map from
-* b-index to the a-index it matches. Same primitive the page reconciler uses,
-* so component adoption and page edits carry identity the same way — a removed
-* sibling no longer shifts the survivors onto the wrong master nodes. */
-function lcsAlign$1(a, b) {
-	const n = a.length;
-	const m = b.length;
-	const dp = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
-	for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
-	const map = /* @__PURE__ */ new Map();
-	let i = 0;
-	let j = 0;
-	while (i < n && j < m) if (a[i] === b[j]) {
-		map.set(j, i);
-		i++;
-		j++;
-	} else if (dp[i + 1][j] >= dp[i][j + 1]) i++;
-	else j++;
-	return map;
-}
-/**
-* Re-derive a component master's children from an edited instance's subtree,
-* CARRYING node identity (id/classes/content/interactions) wherever the code
-* structure still lines up, minting fresh nodes only for genuinely new code.
-*
-* Matching is by code signature (type + arg + link + child structure) aligned
-* with an LCS — NOT greedy first-match-by-type, which silently re-seated a
-* survivor onto a removed sibling's master node (dragging its classes and
-* interaction bindings along) whenever a same-type child was deleted.
-*
-* `arg`/`link` are code-owned, so the edited block is authoritative for them.
-* Fills `result` with the adopt/create counts and any orphaned master nodes.
-*/
-function adoptStructure(master, edited, selfName, result = {
-	adopted: 0,
-	created: 0,
-	orphaned: []
-}) {
-	const masterChildren = master.children;
-	const editedChildren = edited.children.filter((child) => child.type !== selfName);
-	const matches = lcsAlign$1(masterChildren.map(nodeSignature), editedChildren.map(nodeSignature));
-	const weakSignature = (n) => `${n.type}|${n.arg ?? ""}`;
-	const freeMaster = masterChildren.map((_, i) => i).filter((i) => ![...matches.values()].includes(i));
-	const freeEdited = editedChildren.map((_, i) => i).filter((i) => !matches.has(i));
-	if (freeMaster.length && freeEdited.length) {
-		const weak = lcsAlign$1(freeMaster.map((i) => weakSignature(masterChildren[i])), freeEdited.map((i) => weakSignature(editedChildren[i])));
-		for (const [ej, mj] of weak) matches.set(freeEdited[ej], freeMaster[mj]);
-	}
-	const usedMaster = new Set(matches.values());
-	master.children = editedChildren.map((child, ei) => {
-		const mi = matches.get(ei);
-		let node;
-		if (mi !== void 0) {
-			node = masterChildren[mi];
-			result.adopted++;
-		} else {
-			node = {
-				id: crypto.randomUUID(),
-				type: child.type,
-				content: child.content,
-				locales: child.locales ? JSON.parse(JSON.stringify(child.locales)) : void 0,
-				attributes: child.attributes ? JSON.parse(JSON.stringify(child.attributes)) : void 0,
-				children: []
-			};
-			result.created++;
-		}
-		if (child.arg) node.arg = child.arg;
-		else delete node.arg;
-		if (child.link) node.link = child.link;
-		else delete node.link;
-		adoptStructure(node, child, selfName, result);
-		return node;
-	});
-	masterChildren.forEach((m, mi) => {
-		if (usedMaster.has(mi)) return;
-		result.orphaned.push({
-			id: m.id,
-			type: m.type,
-			hadClasses: !!m.classes?.trim(),
-			hadInteractions: (m.interactions?.length ?? 0) + (m.animations?.length ?? 0)
-		});
-	});
-	return result;
-}
-var instanceTokens = null;
-function instanceMatchers() {
-	if (!instanceTokens) {
-		const head = `:([A-Z][a-zA-Z0-9-]*)(${REF_SLOT})(?:\\[\\+\\])?(?:\\(\\+?\\)?)?(?:\\{\\+?\\}?)?`;
-		instanceTokens = {
-			leaf: new RegExp(`^${head}:$`),
-			open: new RegExp(`^${head}$`)
-		};
-	}
-	return instanceTokens;
-}
-/**
-* Expands freshly typed component references into their full editable
-* block: a `:Card:` leaf, or an empty `:Card` / `Card:` pair, becomes
-* `:Card` + the master's structure + `Card:`.
-*/
-function expandComponentInstances(code, components, lineMap) {
-	if (!components.length) {
-		if (lineMap) code.split("\n").forEach((_, i) => lineMap.push(i));
-		return code;
-	}
-	const { leaf: INSTANCE_LEAF, open: INSTANCE_OPEN } = instanceMatchers();
-	const lines = code.split("\n");
-	const out = [];
-	const mark = () => lineMap?.push(out.length);
-	/** component blocks currently open — a component never expands inside itself */
-	const stack = [];
-	for (let i = 0; i < lines.length; i++) {
-		const line = lines[i];
-		const trimmed = line.trim();
-		const indent = line.match(/^\t*/)[0];
-		const close = trimmed.match(/^([A-Z][a-zA-Z0-9-]*):$/);
-		if (close && stack[stack.length - 1] === close[1]) {
-			stack.pop();
-			mark();
-			out.push(line);
-			continue;
-		}
-		const leaf = trimmed.match(INSTANCE_LEAF);
-		const leafDef = leaf ? components.find((c) => c.name === leaf[1]) : null;
-		if (leafDef && !stack.includes(leafDef.name)) {
-			mark();
-			out.push(`${indent}:${leafDef.name}${leaf[2] ?? ""}`);
-			out.push(...leafDef.root.children.flatMap((c) => serializeNode(c, `${indent}\t`)));
-			out.push(`${indent}${leafDef.name}:`);
-			continue;
-		}
-		const open = trimmed.match(INSTANCE_OPEN);
-		const openDef = open ? components.find((c) => c.name === open[1]) : null;
-		if (openDef && !stack.includes(openDef.name) && lines[i + 1]?.trim() === `${openDef.name}:`) {
-			mark();
-			out.push(line);
-			out.push(...openDef.root.children.flatMap((c) => serializeNode(c, `${indent}\t`)));
-			mark();
-			out.push(lines[i + 1]);
-			i++;
-			continue;
-		}
-		if (open) stack.push(open[1]);
-		mark();
-		out.push(line);
-	}
-	return out.join("\n");
+function createProject(name) {
+	return {
+		id: crypto.randomUUID(),
+		name,
+		schemaVersion: 2,
+		pages: [createPage("Home", "/")],
+		components: [],
+		collections: [],
+		interactions: [],
+		animations: [],
+		breakpoints: defaultBreakpoints(),
+		comments: [],
+		locales: ["en"],
+		defaultLocale: "en",
+		settings: defaultSettings()
+	};
 }
 //#endregion
-//#region src/lib/syntax.ts
-var REF = "(?:#(?<ref>[a-zA-Z][a-zA-Z0-9-]*)?)?";
-/** the same slot, uncaptured — for head-anchored matchers that only need to
-* SKIP it. Exported so line-patching callers (setElementArg, setElementRef)
-* share this one definition instead of each re-spelling the ref grammar. */
-var REF_SLOT = "(?:#[a-zA-Z0-9-]*)?";
+//#region src/lib/html/tags.ts
+/**
+* The element registry ↔ the agent-facing HTML subset.
+*
+* Agents read and write pages as HTML because it is a format every model
+* already knows; the registry is what the app actually renders. This module is
+* the one place the two are reconciled, in both directions.
+*
+* Tag names are CASE-SENSITIVE here. That is what lets `<Card>` mean a
+* component instance, and it is why the parser is hand-rolled rather than
+* parse5 or any other HTML5 parser: they all lowercase tag names.
+*/
+/** registry types whose HTML tag is not their own name */
+var TAG_OF = {
+	body: "body",
+	paragraph: "p",
+	link: "a",
+	list: "ul",
+	"list-item": "li",
+	image: "img",
+	icon: "svg",
+	text: "div",
+	checkbox: "input",
+	radio: "input",
+	"collection-list": "collection-list",
+	"collection-item": "collection-item",
+	"list-empty": "list-empty",
+	slider: "slider"
+};
+/**
+* Pure aliases: a type whose tag AND shape are another type's.
+*
+* They serialize as the target's tag, so reading one back has to resolve to
+* the target — and `sameType` has to treat the pair as equal, or every write
+* would re-mint the node for a difference that renders nowhere. The Phase 4
+* migration collapses them in the stored data; until then this keeps the
+* round-trip exact.
+*/
+var ALIAS_OF = {
+	container: "div",
+	grid: "div",
+	heading: "h2",
+	dropdown: "select"
+};
+/** the HTML tag a node of this type is written as */
+function tagForType(type) {
+	if (isComponentType(type)) return type;
+	const canonical = ALIAS_OF[type] ?? type;
+	return TAG_OF[canonical] ?? canonical;
+}
+/** the registry type a tag reads back as — the reverse of `tagForType`, with
+*  each ambiguous tag resolved to its canonical type */
+var TYPE_OF_TAG = (() => {
+	const out = {};
+	for (const type of Object.keys(ELEMENTS)) {
+		if (ALIAS_OF[type]) continue;
+		const tag = tagForType(type);
+		if (out[tag] === void 0) out[tag] = type;
+	}
+	out.div = "div";
+	out.input = "input";
+	out.select = "select";
+	return out;
+})();
+/** do these two types mean the same element? (an alias and its target do) */
+function sameType(a, b) {
+	if (a === b) return true;
+	return (ALIAS_OF[a] ?? a) === (ALIAS_OF[b] ?? b);
+}
+/**
+* Which element a tag means.
+*
+* `attrs` disambiguates the two tags that carry more than one type: `<input>`
+* splits on its `type` (checkbox/radio are the registry's own types so an
+* author never has to remember the attribute), and `<div data-type="text">` is
+* the text block.
+*
+* `components` lets a lowercase `<card>` resolve to `Card` when exactly one
+* component matches — models lowercase tag names out of habit, and refusing
+* the whole write over it would be the format's most common papercut.
+*/
+function typeForTag(tag, attrs, components) {
+	if (isComponentType(tag)) return { type: tag };
+	if (tag === "input") {
+		const kind = attrs.type;
+		if (kind === "checkbox" || kind === "radio") return { type: kind };
+		return { type: "input" };
+	}
+	if (tag === "div" && attrs["data-type"] === "text") return { type: "text" };
+	const known = TYPE_OF_TAG[tag];
+	if (known) return { type: known };
+	const matches = components.filter((name) => name.toLowerCase() === tag.toLowerCase());
+	if (matches.length === 1) return {
+		type: matches[0],
+		note: `<${tag}> read as the component <${matches[0]}> — component tags are capitalized`
+	};
+	return null;
+}
+/**
+* Void tags that may be written without the self-closing slash.
+*
+* Matched CASE-SENSITIVELY, and never against a component: a component called
+* `Input` or `Link` is not `<input>`, and lowercasing the tag first made
+* `<Input>` a void element, so its closing tag read as a mismatch and its
+* children landed on whatever contained it.
+*/
+var VOID_TAGS = /* @__PURE__ */ new Set([
+	"img",
+	"input",
+	"br",
+	"hr",
+	"meta",
+	"link",
+	"source"
+]);
+var isLenientVoidTag = (tag) => !isComponentType(tag) && VOID_TAGS.has(tag);
+/** tags that are never content, whatever they claim to be */
+var FORBIDDEN_TAGS = /* @__PURE__ */ new Set([
+	"script",
+	"style",
+	"iframe",
+	"object",
+	"embed",
+	"base"
+]);
+/** does this element carry text rather than children? Registry-driven. */
+var isLeafType = (type) => !isComponentType(type) && isLeafElement(type);
+/** is this a type the app can render at all? */
+var isRenderableType = (type) => isComponentType(type) || isKnownElement(type);
+/**
+* `source` carries the collection an element iterates or embeds; `data-field`
+* carries an ordinary element's field binding. Both land on `node.arg` — two
+* names because they read as two different things, and an agent that confuses
+* them is told so rather than silently binding the wrong way.
+*/
+var SOURCE_TYPES = /* @__PURE__ */ new Set([
+	"collection-list",
+	"collection-item",
+	"slider",
+	"body"
+]);
+/**
+* The attributes an element type IMPLIES — `checkbox` is `<input type="checkbox">`.
+*
+* They are part of the element's identity, not state: the registry carries
+* them, every renderer emits them, and the reader uses them to pick the type
+* back out of the tag. So the writer emits them and the reader consumes them,
+* rather than storing them as custom attributes (which would make the type and
+* the attribute two places to disagree).
+*/
+var impliedAttrs = (type) => !isComponentType(type) && ELEMENTS[type]?.attrs || {};
+//#endregion
+//#region src/lib/legacy/dsl.ts
+/**
+* LEGACY: the indentation DSL's parser, kept for ONE purpose.
+*
+* Until the v2 schema migration, a page carried both a tree (`elements`) and
+* the DSL text it was derived from (`code`). The tree is what every renderer
+* read, so the tree is what the migration keeps — re-deriving from the text
+* would be a chance to change the published site, and over the corpus it
+* demonstrably did (one fixture page carries a `link` its line never had).
+*
+* What is left is the SALVAGE case: a stored page with code but no usable
+* tree. That should not exist — the editor kept the two in sync for as long as
+* both existed — but "should not exist" is not a thing to bet a one-way
+* migration on, so the parser stays until a release has passed with no
+* salvage logged. Nothing else may import this.
+*
+* Reduced to what salvage needs: no `adopt` callback (there is no previous
+* tree to carry identity from), no reconcile, no validation, no markers.
+*/
+var REF = "(?:#(?<ref>[a-zA-Z][a-zA-Z0-9-]?[a-zA-Z0-9-]*)?)?";
 var NAME = "[a-zA-Z][a-zA-Z0-9-]*";
 var ARG = "(?:\\[(?<arg>[a-z0-9.@+-]*)\\]?)?";
 var MARKERS = "(?:\\(\\+?\\)?)?(?:\\{\\+?\\}?)?";
@@ -706,9 +1050,7 @@ var LINK = "(?:@(?<link>\\S+))?";
 var LEAF = new RegExp(`^:(?<name>${NAME})${REF}${ARG}${MARKERS}:${LINK}$`);
 var OPEN = new RegExp(`^:(?<name>${NAME})${REF}${ARG}${MARKERS}${LINK}$`);
 var CLOSE = /^([a-zA-Z][a-zA-Z0-9-]*):$/;
-/** the named slots of a LEAF/OPEN match. Every consumer reads the token through
-* this, so adding a slot is a change in exactly one place. */
-function slots(m) {
+var slots = (m) => {
 	const g = m.groups;
 	return {
 		name: g.name,
@@ -716,37 +1058,12 @@ function slots(m) {
 		arg: g.arg,
 		link: g.link
 	};
-}
-/** the '#ref' a line's token carries, or undefined. Reads the code, not a node —
-* callers patching a line need this before the tree has been re-derived. */
-function refOf(line) {
-	const trimmed = line.trim();
-	const m = trimmed.match(LEAF) ?? trimmed.match(OPEN);
-	return m ? slots(m).ref : void 0;
-}
-/** the same line with its '#ref' removed. No-ops on close lines and on lines
-* that never had one. */
-function withoutRef(line) {
-	return line.replace(new RegExp(`^(\\s*:${NAME})${REF_SLOT}`), "$1");
-}
-/** the '@target' suffix a node carries in code → its node.link value
-* ('item' is the current-entry sentinel, stored as '@item'; else verbatim) */
-function linkFromToken(target) {
-	if (!target) return void 0;
-	return target === "item" ? "@item" : target;
-}
-var tabs = (n) => "	".repeat(n);
-/**
-* Splits a line's content into individual syntax tokens, including
-* glued ones: ':div:h1:' → [':div', ':h1:']. A trailing ':' only
-* closes a leaf when it isn't the start of the next token.
-*/
+};
+/** splits a line into its tokens, including glued ones (`:div:h1:`) */
 function lexLine(text) {
 	const tokens = [];
 	let i = 0;
 	while (i < text.length) {
-		while (i < text.length && /\s/.test(text[i])) i++;
-		if (i >= text.length) break;
 		let j = i;
 		if (text[j] === ":") {
 			j++;
@@ -756,21 +1073,16 @@ function lexLine(text) {
 				while (j < text.length && /[a-zA-Z0-9-]/.test(text[j])) j++;
 			}
 			if (text[j] === "[") {
-				let k = j + 1;
-				while (k < text.length && /[a-z0-9.@+-]/.test(text[k])) k++;
-				j = text[k] === "]" ? k + 1 : k;
-			}
-			if (text[j] === "(") {
 				j++;
-				if (text[j] === "+") j++;
-				if (text[j] === ")") j++;
+				while (j < text.length && text[j] !== "]") j++;
+				if (text[j] === "]") j++;
 			}
-			if (text[j] === "{") {
-				j++;
-				if (text[j] === "+") j++;
-				if (text[j] === "}") j++;
+			while (text[j] === "(" || text[j] === "{" || text[j] === "+" || text[j] === ")" || text[j] === "}") j++;
+			if (text[j] === ":") {
+				const next = text[j + 1];
+				if (!next || !/[a-zA-Z]/.test(next)) j++;
+				else if (text.slice(j).match(/^:[a-zA-Z][a-zA-Z0-9-]*[:[(@{]/)) {} else j++;
 			}
-			if (text[j] === ":" && !/[a-zA-Z]/.test(text[j + 1] ?? "")) j++;
 			if (text[j] === "@") {
 				j++;
 				while (j < text.length && !/\s/.test(text[j])) j++;
@@ -785,184 +1097,34 @@ function lexLine(text) {
 	}
 	return tokens;
 }
-var TOKEN_HEAD = new RegExp(`^(\\s*:${NAME}${REF_SLOT}(?:\\[[a-z0-9.@+-]*\\])?)(\\(\\+?\\)?)?`);
-/** the :body wrapper's open line — tolerates an arg and (possibly mid-typing)
-* style/interaction markers: ':body', ':body[post]', ':body(', ':body[post](+){+}'.
-* Every scaffold matcher must use this so a '(' typed on the body line can't
-* make the wrapper look damaged (which would respawn a fresh :body). */
-var isBodyOpenLine = (trimmed) => /^:body(?:$|[[({])/.test(trimmed);
-/** the marker currently on the line's token: '(+)', or a mid-typing '(', '(+', '()' */
-function styleMarkerOf(line) {
-	return line.match(TOKEN_HEAD)?.[2] || void 0;
-}
-/** the line's token has an unclosed '[' arg — an arg edit in progress */
-function hasOpenArgBracket(line) {
-	return new RegExp(`^\\s*:${NAME}${REF_SLOT}\\[[^\\]]*$`).test(line);
-}
-/** rewrites the line's styled marker: on → exactly '(+)', off → none.
-* No-ops on lines that don't start with an element token (close lines, @setup).
-* An existing '{+}' stays in the rest, so ordering '(+){+}' falls out for free. */
-function withStyleMarker(line, on) {
-	const m = line.match(TOKEN_HEAD);
-	if (!m || !m[1]) return line;
-	const head = m[1];
-	const rest = line.slice(head.length + (m[2]?.length ?? 0));
-	return head + (on ? "(+)" : "") + rest;
-}
-var INT_HEAD = new RegExp(`^(\\s*:${NAME}${REF_SLOT}(?:\\[[a-z0-9.@+-]*\\])?(?:\\(\\+?\\)?)?)(\\{\\+?\\}?)?`);
-/** the interactions marker currently on the line's token: '{+}', or a
-* mid-typing '{', '{+', '{}' */
-function interactionMarkerOf(line) {
-	return line.match(INT_HEAD)?.[2] || void 0;
-}
-/** rewrites the line's interactions marker: on → exactly '{+}', off → none */
-function withInteractionMarker(line, on) {
-	const m = line.match(INT_HEAD);
-	if (!m || !m[1]) return line;
-	const head = m[1];
-	const rest = line.slice(head.length + (m[2]?.length ?? 0));
-	return head + (on ? "{+}" : "") + rest;
-}
-var DATA_HEAD = new RegExp(`^(\\s*:${NAME}${REF_SLOT})(\\[[a-z0-9.@+-]*\\]?)?`);
-/** the data marker currently on the line's token — only '[+]' counts; a real
-* arg or a mid-typing '[' is not a marker */
-function dataMarkerOf(line) {
-	const slot = line.match(DATA_HEAD)?.[2];
-	return slot === "[+]" ? slot : void 0;
-}
-/** rewrites the line's data marker: on → exactly '[+]', off → none.
-* No-ops when the slot holds a real '[arg]' (bindings own the slot) or an
-* unclosed '[' (an arg edit in progress). */
-function withDataMarker(line, on) {
-	const m = line.match(DATA_HEAD);
-	if (!m || !m[1]) return line;
-	const slot = m[2];
-	if (slot && slot !== "[+]") return line;
-	const rest = line.slice(m[1].length + (slot?.length ?? 0));
-	return m[1] + (on ? "[+]" : "") + rest;
-}
-/**
-* Brings every token line's three display-only markers — '[+]' own data, '(+)'
-* styled, '{+}' interactions — back in step with the node state they mirror,
-* and returns the code (the SAME string when nothing moved).
-*
-* Pure, so it serves both the editor's live truth-sync on the active page and
-* whole-project operations on pages nobody has open. Component instance
-* subtrees are skipped: their style and interactions live on the master, so
-* these nodes carry none of their own to mark.
-*/
-function applyNodeMarkers(code, elements) {
-	const lines = code.split("\n");
-	let changed = false;
-	const visit = (nodes) => {
-		for (const node of nodes) {
-			const at = node.line;
-			if (at !== void 0 && lines[at] !== void 0) {
-				let line = lines[at];
-				if (!hasOpenArgBracket(line)) {
-					if (node.type !== "body" && node.arg === void 0) {
-						const data = dataMarkerOf(line);
-						const want = !!node.content || !!node.src || !!node.svg || !!node.slider || node.hidden !== void 0;
-						if (want !== (data === "[+]")) line = withDataMarker(line, want);
-					}
-					const style = styleMarkerOf(line);
-					if (style === void 0 || style === "(+)") {
-						const want = !!node.classes?.trim();
-						if (want !== (style === "(+)")) line = withStyleMarker(line, want);
-					}
-					const inter = interactionMarkerOf(line);
-					if (inter === void 0 || inter === "{+}") {
-						const want = !!node.interactions?.length || !!node.animations?.length;
-						if (want !== (inter === "{+}")) line = withInteractionMarker(line, want);
-					}
-					if (line !== lines[at]) {
-						lines[at] = line;
-						changed = true;
-					}
-				}
-			}
-			if (!isComponentType(node.type)) visit(node.children);
-		}
-	};
-	visit(elements);
-	return changed ? lines.join("\n") : code;
-}
-/**
-* Enforces one syntax token per line AND forces indentation from the token
-* structure: every line is re-indented to its nesting depth — one deeper
-* after an open, one shallower before a close — so whatever tabs the author
-* typed are overridden by the true structure. Runs on body content only
-* (called from enforceDocument), which sits one level inside :body, so depth
-* starts at 1. Blank lines are dropped entirely: deleting a line's token
-* removes the line rather than leaving a stranded empty line behind. (The
-* empty-body placeholder is re-added by buildDocument.)
-*/
-function opensDepth(name) {
-	return isComponentType(name) || isKnownElement(name) && name !== "body" && !isLeafElement(name);
-}
-function normalizeSyntax(value) {
-	const out = [];
-	let depth = 1;
-	for (const original of value.split("\n")) {
-		const trimmed = original.trim();
-		if (!trimmed) continue;
-		for (const token of lexLine(trimmed)) {
-			const close = token.match(CLOSE);
-			if (close && opensDepth(close[1])) depth = Math.max(1, depth - 1);
-			out.push(tabs(depth) + token);
-			const open = token.match(OPEN);
-			if (open && opensDepth(slots(open).name)) depth += 1;
-		}
-	}
-	return out.join("\n");
-}
-/**
-* Parses the page syntax into an element tree.
-*
-*   :section        open
-*     :h1:          leaf (self-closing)
-*   section:        close
-*
-* Unknown element names and stray lines are ignored so the
-* tree stays valid while the user is mid-typing.
-*/
-function parseSyntax(code, adopt) {
+/** Parse a stored page document into a tree. Salvage only. */
+function parseLegacyCode(code) {
 	const root = [];
 	const stack = [];
-	const built = /* @__PURE__ */ new Map();
 	const append = (node) => {
 		const parent = stack[stack.length - 1];
-		(parent ? built.get(parent) : root).push(node);
+		(parent ? parent.children : root).push(node);
 	};
-	const nodeFor = (line, type) => {
-		const existing = adopt?.(line, type, stack[stack.length - 1] ?? null) ?? createNode(type);
-		built.set(existing, []);
-		return existing;
+	const make = (name, m) => {
+		const { ref, arg, link } = slots(m);
+		const node = createNode(name);
+		if (arg && arg !== "+") node.arg = arg;
+		if (ref) node.ref = ref;
+		if (link) node.link = link === "item" ? "@item" : link;
+		return node;
 	};
-	const lines = code.split("\n");
-	for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) for (const token of lexLine(lines[lineIndex].trim())) {
+	for (const line of code.split("\n")) for (const token of lexLine(line.trim())) {
 		const leaf = token.match(LEAF);
 		if (leaf) {
-			const { name, ref, arg, link } = slots(leaf);
-			if (isKnownElement(name) || isComponentType(name)) {
-				const node = nodeFor(lineIndex, name);
-				node.line = node.endLine = lineIndex;
-				node.arg = arg && arg !== "+" ? arg : void 0;
-				node.ref = ref;
-				node.link = linkFromToken(link);
-				append(node);
-			}
+			const { name } = slots(leaf);
+			if (isKnownElement(name) || isComponentType(name)) append(make(name, leaf));
 			continue;
 		}
 		const open = token.match(OPEN);
 		if (open) {
-			const { name, ref, arg, link } = slots(open);
+			const { name } = slots(open);
 			if (isKnownElement(name) || isComponentType(name)) {
-				const node = nodeFor(lineIndex, name);
-				node.line = node.endLine = lineIndex;
-				node.arg = arg && arg !== "+" ? arg : void 0;
-				node.ref = ref;
-				node.link = linkFromToken(link);
+				const node = make(name, open);
 				append(node);
 				stack.push(node);
 			}
@@ -971,479 +1133,124 @@ function parseSyntax(code, adopt) {
 		const close = token.match(CLOSE);
 		if (close) {
 			for (let i = stack.length - 1; i >= 0; i--) if (stack[i].type === close[1]) {
-				for (let j = i; j < stack.length; j++) stack[j].endLine = lineIndex;
 				stack.length = i;
 				break;
 			}
 		}
 	}
-	for (const node of stack) node.endLine = lines.length - 1;
-	for (const [node, kids] of built) {
-		const prev = node.children;
-		if (!(prev && prev.length === kids.length && kids.every((child, i) => child === prev[i]))) node.children = kids;
-	}
 	return root;
 }
-/**
-* Maps each line of the new code to the line of the old code it came from.
-* Lines that were inserted or rewritten have no mapping.
-*
-* Patience-style: byte-identical prefix/suffix are mapped directly, then
-* lines UNIQUE in both remainders anchor the alignment (longest increasing
-* subsequence keeps crossings out) and the segments between anchors recurse.
-* Plain LCS runs only inside segments with no anchors. A pure LCS over the
-* whole document is ambiguous on this DSL's highly repetitive lines (`:div`,
-* `div:`, …): a mid-document insertion could shift the alignment and pair
-* surviving nodes with the WRONG downstream lines, silently reassigning
-* their classes/content/bindings (the reconciler adopts by mapped line).
-*/
-/** a line reduced to what the author MEANS: display-only markers ('(+)',
-* '{+}', '[+]') and trailing whitespace stripped. The diff compares canonical
-* lines so a caller that submits marker-stripped code (markers are derived
-* state, so stripping them is a reasonable thing to do) still maps every
-* surviving line — raw comparison made every styled line a mismatch and
-* silently re-seated classes/content on the wrong nodes. */
-function canonicalLine(line) {
-	return withDataMarker(withInteractionMarker(withStyleMarker(line, false), false), false).replace(/\s+$/, "");
-}
-function lineMap(oldCode, newCode) {
-	const a = oldCode.split("\n").map(canonicalLine);
-	const b = newCode.split("\n").map(canonicalLine);
-	const map = /* @__PURE__ */ new Map();
-	mapRange(a, b, 0, a.length, 0, b.length, map);
-	return map;
-}
-/** classic LCS alignment over a slice — the anchorless fallback */
-function lcsRange(a, b, aLo, aHi, bLo, bHi, map) {
-	const n = aHi - aLo;
-	const m = bHi - bLo;
-	if (n <= 0 || m <= 0) return;
-	const dp = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
-	for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) dp[i][j] = a[aLo + i] === b[bLo + j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
-	let i = 0;
-	let j = 0;
-	while (i < n && j < m) if (a[aLo + i] === b[bLo + j]) {
-		map.set(bLo + j, aLo + i);
-		i++;
-		j++;
-	} else if (dp[i + 1][j] >= dp[i][j + 1]) i++;
-	else j++;
-}
-function mapRange(a, b, aLo, aHi, bLo, bHi, map) {
-	while (aLo < aHi && bLo < bHi && a[aLo] === b[bLo]) {
-		map.set(bLo, aLo);
-		aLo++;
-		bLo++;
-	}
-	while (aHi > aLo && bHi > bLo && a[aHi - 1] === b[bHi - 1]) {
-		aHi--;
-		bHi--;
-		map.set(bHi, aHi);
-	}
-	if (aLo >= aHi || bLo >= bHi) return;
-	const occurrences = (lines, lo, hi) => {
-		const m = /* @__PURE__ */ new Map();
-		for (let i = lo; i < hi; i++) {
-			const e = m.get(lines[i]);
-			if (e) e.n++;
-			else m.set(lines[i], {
-				n: 1,
-				at: i
-			});
-		}
-		return m;
-	};
-	const inA = occurrences(a, aLo, aHi);
-	const inB = occurrences(b, bLo, bHi);
-	const pairs = [];
-	for (const [line, eb] of inB) {
-		if (eb.n !== 1) continue;
-		const ea = inA.get(line);
-		if (ea?.n === 1) pairs.push([ea.at, eb.at]);
-	}
-	if (!pairs.length) return lcsRange(a, b, aLo, aHi, bLo, bHi, map);
-	pairs.sort((x, y) => x[1] - y[1]);
-	const tailAt = [];
-	const prev = new Array(pairs.length).fill(-1);
-	for (let p = 0; p < pairs.length; p++) {
-		const ai = pairs[p][0];
-		let lo = 0;
-		let hi = tailAt.length;
-		while (lo < hi) {
-			const mid = lo + hi >> 1;
-			if (pairs[tailAt[mid]][0] < ai) lo = mid + 1;
-			else hi = mid;
-		}
-		if (lo > 0) prev[p] = tailAt[lo - 1];
-		tailAt[lo] = p;
-	}
-	const chain = [];
-	for (let p = tailAt.length ? tailAt[tailAt.length - 1] : -1; p !== -1; p = prev[p]) chain.push(pairs[p]);
-	chain.reverse();
-	let prevA = aLo;
-	let prevB = bLo;
-	for (const [ai, bi] of chain) {
-		mapRange(a, b, prevA, ai, prevB, bi, map);
-		map.set(bi, ai);
-		prevA = ai + 1;
-		prevB = bi + 1;
-	}
-	mapRange(a, b, prevA, aHi, prevB, bHi, map);
-}
-/** the node-only state a node carries that is NOT derivable from the code.
-* Shared by the reparent guard and by callers that want a clean slate. */
-var NODE_STATE_KEYS = [
-	"classes",
-	"content",
-	"src",
-	"svg",
-	"hidden",
-	"variants",
-	"background",
-	"htmlId",
-	"attributes",
-	"interactions",
-	"animations",
-	"locales",
-	"listQuery",
-	"entryId",
-	"fieldAttrs",
-	"instanceAttributes",
-	"slider"
-];
-/** true when a node carries state that would be lost (or wrongly inherited) */
-function hasNodeState(node) {
-	return NODE_STATE_KEYS.some((key) => {
-		const value = node[key];
-		if (value == null || value === "") return false;
-		if (Array.isArray(value)) return value.length > 0;
-		if (typeof value === "object") return Object.keys(value).length > 0;
-		return true;
-	});
-}
-/** drop everything a node carried, leaving the structure the code describes */
-function stripNodeState(node) {
-	for (const key of NODE_STATE_KEYS) delete node[key];
-}
-/**
-* Every unique `#ref` in the code → the line and element type carrying it.
-* A ref used TWICE maps to null: an ambiguous ref gets no special treatment
-* (validateDocument flags it; reconcile just falls back to the line diff).
-*/
-function refLines(code) {
-	const found = /* @__PURE__ */ new Map();
-	const lines = code.split("\n");
-	for (let i = 0; i < lines.length; i++) for (const token of lexLine(lines[i].trim())) {
-		const m = token.match(LEAF) ?? token.match(OPEN);
-		if (!m) continue;
-		const { name, ref } = slots(m);
-		if (!ref) continue;
-		found.set(ref, found.has(ref) ? null : {
-			line: i,
-			type: name
-		});
-	}
-	return found;
-}
-function reconcile(oldCode, newCode, previous, map, stats, opts = {}) {
-	const derived = map === void 0;
-	const lineMapping = map ?? lineMap(oldCode, newCode);
-	const byOldLine = /* @__PURE__ */ new Map();
-	const parentOf = /* @__PURE__ */ new Map();
-	const indexTree = (nodes, parentId) => {
-		for (const node of nodes) {
-			parentOf.set(node.id, parentId);
-			indexTree(node.children ?? [], node.id);
-		}
-	};
-	indexTree(previous, null);
-	walkNodes(previous, (node) => {
-		if (node.line === void 0) return;
-		const list = byOldLine.get(node.line) ?? [];
-		list.push(node);
-		byOldLine.set(node.line, list);
-	});
-	if (derived) {
-		const oldRefs = refLines(oldCode);
-		const takenOldLines = new Set(lineMapping.values());
-		for (const [ref, here] of refLines(newCode)) {
-			if (!here || lineMapping.has(here.line)) continue;
-			const there = oldRefs.get(ref);
-			if (!there || there.type !== here.type || takenOldLines.has(there.line)) continue;
-			lineMapping.set(here.line, there.line);
-			takenOldLines.add(there.line);
-		}
-	}
-	const mappedOldLines = new Set(lineMapping.values());
-	return parseSyntax(newCode, (line, type, parent) => {
-		const oldLine = lineMapping.get(line) ?? (mappedOldLines.has(line) ? void 0 : line);
-		const candidates = oldLine === void 0 ? void 0 : byOldLine.get(oldLine);
-		const at = candidates?.findIndex((n) => n.type === type) ?? -1;
-		if (at === -1) {
-			if (stats) stats.created++;
-			return null;
-		}
-		if (stats) stats.adopted++;
-		const node = candidates.splice(at, 1)[0];
-		if (opts.guardReparent && parentOf.get(node.id) !== (parent?.id ?? null)) {
-			if (hasNodeState(node)) {
-				stats?.reparented?.push({
-					id: node.id,
-					type: node.type,
-					dropped: {
-						...node.classes ? { classes: node.classes } : {},
-						...node.content ? { content: node.content } : {},
-						...node.src ? { src: node.src } : {},
-						...node.interactions?.length ? { interactionIds: node.interactions.map((b) => b.interactionId) } : {},
-						...node.animations?.length ? { animationIds: node.animations.map((b) => b.animationId) } : {}
-					}
-				});
-				stripNodeState(node);
-			}
-		}
-		return node;
-	});
-}
-/** list sources that are not collections: `:collection-list[@pages]` repeats
-* over the site's own published pages (see shared/fields.pagesListScope) */
-var BUILTIN_LIST_SOURCES = ["@pages"];
-/** Flags unclosed elements, unknown components, and unknown collections */
-function validateDocument(code, componentNames = [], collectionNames = [], listFieldNames = [], dataOnlyCollections = []) {
-	const lines = code.split("\n");
-	const trimmed = lines.map((l) => l.trim());
-	const start = trimmed.findIndex(isBodyOpenLine);
-	const end = trimmed.lastIndexOf("body:");
-	const diags = [];
-	const bodyRef = trimmed.findIndex((l) => /^:body#/.test(l));
-	if (bodyRef !== -1) diags.push({
-		line: bodyRef,
-		message: "':body' can't carry a '#ref' — it is the page root and is already addressable"
-	});
-	if (start === -1 || end <= start) return diags;
-	const stack = [];
-	/** every '#ref' seen so far → the line that claimed it, for the duplicate check */
-	const refAt = /* @__PURE__ */ new Map();
-	for (let i = start + 1; i < end; i++) {
-		const lineTokens = lexLine(trimmed[i]);
-		if (!lineTokens.length) continue;
-		const indent = lines[i].length - lines[i].trimStart().length;
-		const firstClose = lineTokens[0].match(CLOSE);
-		while (stack.length) {
-			const top = stack[stack.length - 1];
-			if (indent > top.indent) break;
-			if (firstClose && firstClose[1] === top.type && indent <= top.indent) break;
-			diags.push({
-				line: top.line,
-				message: `':${top.type}' is never closed — line ${i + 1} returns to its indentation level before a matching '${top.type}:'. Add '${top.type}:' after its children (for an empty decorative container, put '${top.type}:' on the very next line)`
-			});
-			stack.pop();
-		}
-		for (const token of lineTokens) {
-			const leaf = token.match(LEAF);
-			const open = token.match(OPEN);
-			const close = token.match(CLOSE);
-			const part = leaf ? slots(leaf) : open ? slots(open) : null;
-			const name = part?.name;
-			if (part?.ref) {
-				const first = refAt.get(part.ref);
-				if (first !== void 0) diags.push({
-					line: i,
-					message: `'#${part.ref}' is already used on line ${first + 1} — refs must be unique on a page`
-				});
-				else refAt.set(part.ref, i);
-				const inInstance = stack.find((sc) => componentNames.includes(sc.type));
-				if (inInstance) diags.push({
-					line: i,
-					message: `'#${part.ref}' is inside the ':${inInstance.type}' component block — refs are page-scope, and a component's structure is copied into every instance. Put the ref on the ':${inInstance.type}' line instead.`
-				});
-			}
-			if (name === "collection-list" || name === "collection-item") {
-				const arg = part?.arg;
-				if (!(!!arg && (collectionNames.includes(arg) || name === "collection-list" && BUILTIN_LIST_SOURCES.includes(arg) || name === "collection-list" && listFieldNames.includes(arg)))) diags.push({
-					line: i,
-					message: `Unknown collection ':${name}[${arg ?? ""}]'`
-				});
-				else if (open) stack.push({
-					type: name,
-					line: i,
-					indent,
-					arg
-				});
-				continue;
-			}
-			if (name === "slider") {
-				const arg = part?.arg;
-				if (arg && !collectionNames.includes(arg) && !BUILTIN_LIST_SOURCES.includes(arg) && !listFieldNames.includes(arg)) diags.push({
-					line: i,
-					message: `Unknown collection ':slider[${arg}]'`
-				});
-				else if (leaf) diags.push({
-					line: i,
-					message: "':slider:' is a container — open it as ':slider … slider:'"
-				});
-				else if (open) stack.push({
-					type: name,
-					line: i,
-					indent,
-					arg
-				});
-				continue;
-			}
-			if (name === "list-empty") {
-				const parent = stack[stack.length - 1];
-				if (!(parent && (parent.type === "collection-list" || parent.type === "slider" && !!parent.arg))) diags.push({
-					line: i,
-					message: "':list-empty' is a list's empty state — it only renders as a DIRECT child of a ':collection-list' or a ':slider[name]'. Elsewhere it never renders at all."
-				});
-			}
-			if (linkFromToken(part?.link) === "@item") {
-				const scope = [...stack].reverse().find((s) => s.arg && collectionNames.includes(s.arg));
-				if (scope && dataOnlyCollections.includes(scope.arg)) diags.push({
-					line: i,
-					message: `'@item' links to an entry's own page, but the collection '${scope.arg}' has no detail routes (detailRoutes: false). Remove the link, or give the collection a template page.`
-				});
-			}
-			if (name && isComponentType(name)) {
-				if (!componentNames.includes(name)) diags.push({
-					line: i,
-					message: `Unknown component ':${name}${leaf ? ":" : ""}'`
-				});
-				else if (stack.some((s) => s.type === name)) diags.push({
-					line: i,
-					message: `':${name}${leaf ? ":" : ""}' can't contain itself`
-				});
-				else if (open) stack.push({
-					type: name,
-					line: i,
-					indent
-				});
-				continue;
-			}
-			if (name && isKnownElement(name) && name !== "body") {
-				if (open && isLeafElement(name)) diags.push({
-					line: i,
-					message: `':${name}' is a leaf — write it as ':${name}:'`
-				});
-				else if (leaf && !isLeafElement(name)) diags.push({
-					line: i,
-					message: `':${name}:' is a container — open it as ':${name} … ${name}:'`
-				});
-				else if (open) stack.push({
-					type: name,
-					line: i,
-					indent
-				});
-				continue;
-			}
-			if (close) {
-				for (let j = stack.length - 1; j >= 0; j--) if (stack[j].type === close[1]) {
-					stack.length = j;
-					break;
-				}
-				continue;
-			}
-			diags.push({
-				line: i,
-				message: `Invalid syntax '${token}'`
-			});
-		}
-	}
-	return diags.concat(stack.map((s) => ({
-		line: s.line,
-		message: `Close ':${s.type}' with '${s.type}:'`
-	}))).sort((a, b) => a.line - b.line);
-}
-/** Elements that carry content/void render as leaves (:h1:), the rest open a block (:div) */
-function tokenFor(type) {
-	return isLeafElement(type) ? `:${type}:` : `:${type}`;
-}
-/**
-* Dedented source lines for a brand-new element of the given type. A seeded
-* container (a button, a link) is born holding its child, so an insert lands
-* something visible rather than an empty box — the child's TEXT is node state
-* and is applied by the caller, not carried by the code.
-*/
-function elementBlockLines(type) {
-	const token = tokenFor(type);
-	if (token.endsWith(":")) return [token];
-	const seed = ELEMENTS[type]?.seed;
-	if (seed) return [
-		token,
-		`\t${tokenFor(seed.type)}`,
-		`${type}:`
-	];
-	return [token, `${type}:`];
-}
 //#endregion
-//#region src/lib/pageCode.ts
+//#region src/lib/migrate.ts
 /**
-* TRANSITIONAL: regenerate `page.code` from the page's tree.
+* The v2 schema: the tree is the only source of truth.
 *
-* The tree is the source of truth for structure now, and nothing in `src/`
-* reads `page.code` any more. The agent API still does — it reads and writes
-* the indentation DSL, addresses edits by line number, and hashes the code for
-* its `version` contract — so the code is kept as a derived MIRROR of the tree
-* until the MCP moves to HTML (TREE-SOURCE-PLAN.md, Phase 3). This whole module
-* goes with that move; so does the DSL itself.
+* v1 carried the indentation DSL beside it — `page.code`, plus a `line` and
+* `endLine` on every node — because the text was authoritative for structure.
+* Nothing reads any of it now (TREE-SOURCE-PLAN.md, Phases 1 and 3), so v2
+* drops it, and with it the pure alias types the DSL's registry carried.
 *
-* It also re-assigns every node's `line`/`endLine`, because that is what the
-* agent API addresses by. Assigning the same number back is a no-op for Vue's
-* reactivity, so a regeneration that changes nothing dirties nothing.
+* This runs ONCE per blob, on the server at boot, over every project blob in
+* the store: the drafts, Main, the `guano-base:*` merge snapshots (which are
+* whole project copies, so a 3-way merge against an unmigrated base would see
+* every page as changed) and the published baseline. It is also applied
+* client-side as a defensive no-op and to anything `/api/project-import`
+* brings in.
+*
+* It is IDEMPOTENT: a project already at v2 is returned untouched, which is
+* what makes "run it on everything, every boot" safe.
 */
-/** the fixed `@setup` block: the body's open line always sits at index 5 */
-var SETUP_LINES = 5;
+var SCHEMA_VERSION = 2;
+var emptyReport = () => ({
+	changed: false,
+	from: 1,
+	pages: 0,
+	collapsed: {},
+	materialized: 0,
+	salvaged: [],
+	textDisagreed: []
+});
 /**
-* Serializes one node and its subtree, recording where each one landed.
+* Migrate a project in place. Returns the same object, plus a report.
 *
-* Unlike `serializeNode` (which writes a MASTER's structure into instance
-* blocks) this emits the `#ref` slot: a ref is a page-scope address, so it
-* belongs in a page's code and nowhere else.
+* Pass `pageToCode` to have the migration compare each page's stored text
+* against the text its tree implies and record the pages that disagree. That
+* is the only reason it would ever want the old serializer, so the caller
+* supplies it rather than this module importing a thing it is deleting.
 */
-function emit$1(node, indent, lines) {
-	node.line = lines.length;
-	const ref = node.ref ? `#${node.ref}` : "";
-	const arg = node.arg ? `[${node.arg}]` : "";
-	const link = node.link ? `@${node.link === "@item" ? "item" : node.link}` : "";
-	if (isLeafElement(node.type)) {
-		lines.push(`${indent}:${node.type}${ref}${arg}:${link}`);
-		node.endLine = node.line;
-		return;
+function migrateProject(project, opts = {}) {
+	const report = emptyReport();
+	if (!project || !Array.isArray(project.pages)) return {
+		project,
+		report
+	};
+	report.from = project.schemaVersion ?? 1;
+	if (report.from >= 2) return {
+		project,
+		report
+	};
+	const components = project.components ?? [];
+	const byName = /* @__PURE__ */ new Map();
+	for (const def of components) if (!byName.has(def.name)) byName.set(def.name, def);
+	const collapse = (node) => {
+		const target = ALIAS_OF[node.type];
+		if (!target) return;
+		report.collapsed[node.type] = (report.collapsed[node.type] ?? 0) + 1;
+		node.type = target;
+	};
+	const dropDsl = (node) => {
+		collapse(node);
+		delete node.line;
+		delete node.endLine;
+	};
+	/** an instance that was never materialized (a stored `:Card:` leaf) has no
+	*  nodes at all — nothing ever expanded it, so it rendered as nothing */
+	const materialize = (node) => {
+		if (!isComponentType(node.type) || node.children.length) return;
+		const def = byName.get(node.type);
+		if (!def?.root.children.length) return;
+		alignStructure(node, def.root);
+		report.materialized++;
+	};
+	for (const page of project.pages) {
+		report.pages++;
+		let body = (page.elements ?? []).find((n) => n.type === "body");
+		if (!body) {
+			body = (page.code ? parseLegacyCode(page.code) : []).find((n) => n.type === "body");
+			if (body) {
+				page.elements = [body];
+				report.salvaged.push(page.name || page.id);
+			} else {
+				body = createBody();
+				page.elements = [body];
+				report.salvaged.push(`${page.name || page.id} (empty)`);
+			}
+		} else if (page.elements.length > 1) page.elements = [body];
+		if (opts.pageToCode && page.code) {
+			if (opts.pageToCode(page, project.defaultLocale || "en") !== page.code) report.textDisagreed.push(page.name || page.id);
+		}
+		walkNodes([body], materialize);
+		walkNodes([body], dropDsl);
+		delete page.code;
 	}
-	lines.push(`${indent}:${node.type}${ref}${arg}${link}`);
-	for (const child of node.children) emit$1(child, `${indent}\t`, lines);
-	lines.push(`${indent}${node.type}:`);
-	node.endLine = lines.length - 1;
+	for (const def of components) walkNodes([def.root], dropDsl);
+	project.schemaVersion = 2;
+	report.changed = true;
+	return {
+		project,
+		report
+	};
 }
-/** the canonical document for a page's current tree, lines assigned as it goes */
-function pageToCode(page, defaultLocale) {
-	const body = page.elements.find((n) => n.type === "body");
-	const lines = [
-		"@setup",
-		`\tname: ${page.name}`,
-		`\tslug: ${page.path}`,
-		`\tstatus: ${page.status}`,
-		`\tlocale: ${defaultLocale}`
-	];
-	if (!body) return [
-		...lines,
-		":body",
-		"	",
-		"body:"
-	].join("\n");
-	body.line = SETUP_LINES;
-	lines.push(`:body${body.arg ? `[${body.arg}]` : ""}`);
-	for (const child of body.children) emit$1(child, "	", lines);
-	if (!body.children.length) lines.push("	");
-	lines.push("body:");
-	body.endLine = lines.length - 1;
-	return applyNodeMarkers(lines.join("\n"), page.elements);
-}
-/** Brings `page.code` back in step with the tree. Returns whether it moved. */
-function syncPageCode(page, defaultLocale) {
-	const next = pageToCode(page, defaultLocale);
-	if (next === page.code) return false;
-	page.code = next;
-	return true;
+/** a one-line summary for a boot log */
+function describeMigration(key, report) {
+	if (!report.changed) return null;
+	const bits = [`${report.pages} page${report.pages === 1 ? "" : "s"}`];
+	const collapsed = Object.entries(report.collapsed);
+	if (collapsed.length) bits.push(`collapsed ${collapsed.map(([t, n]) => `${n}×${t}`).join(", ")}`);
+	if (report.materialized) bits.push(`materialized ${report.materialized} instance(s)`);
+	if (report.textDisagreed.length) bits.push(`${report.textDisagreed.length} page(s) whose stored DSL disagreed with the tree (the tree wins)`);
+	if (report.salvaged.length) bits.push(`SALVAGED from DSL: ${report.salvaged.join(", ")}`);
+	return `${key}: v${report.from} → v2 — ${bits.join("; ")}`;
 }
 //#endregion
 //#region src/lib/shared/instances.js
@@ -1941,14 +1748,14 @@ function sizeClassToText(prefix, token) {
 }
 var LEN_RE = /^\d*\.?\d+(?:px|rem|em|%)$/;
 var TRACK_RE = /^-?\d*\.?\d+(?:em|rem|px)$/;
-var WEIGHT_RE$1 = /^(?:[1-9]\d{0,2}|1000)$/;
+var WEIGHT_RE = /^(?:[1-9]\d{0,2}|1000)$/;
 /** whether free-form text is a valid arbitrary value for a named-scale format */
 function matchesNamedFormat(format, text) {
 	switch (format) {
 		case "length": return LEN_RE.test(text);
 		case "line-height": return /^\d*\.?\d+$/.test(text) || LEN_RE.test(text);
 		case "tracking": return TRACK_RE.test(text);
-		case "weight": return WEIGHT_RE$1.test(text);
+		case "weight": return WEIGHT_RE.test(text);
 	}
 }
 /** whether a token is a value for this named-scale prop (known class or in-format arbitrary) */
@@ -3786,7 +3593,7 @@ var NON_COLOR_BG_RE = /^bg-(?:auto$|cover$|contain$|center$|top|bottom|left|righ
 * `font-mono` and `font-[JetBrains_Mono]` replace each other instead of
 * coexisting (both set font-family; the last emitted would otherwise win at
 * random, leaving the arbitrary face silently inert) */
-var FONT_FAMILY_RE$1 = /^font-(?:sans|serif|mono)$/;
+var FONT_FAMILY_RE = /^font-(?:sans|serif|mono)$/;
 var FONT_ARBITRARY_FAMILY_RE = /^font-\[[^\]]*[A-Za-z][^\]]*\]$/;
 /** Tailwind v4 spacing/size utilities take ANY numeric step (the scale is
 * `calc(var(--spacing) * n)`, so `h-11`, `h-13`, `p-7` are all valid) plus a
@@ -3948,7 +3755,7 @@ function propKey(base) {
 	if (base === "truncate" || base.startsWith("line-clamp-")) return "line-clamp";
 	if (BG_POSITION_RE.test(base) || base.startsWith("bg-position-")) return "background-position";
 	if (base.startsWith("bg-") && !NON_COLOR_BG_RE.test(base)) return "background-color";
-	if (FONT_FAMILY_RE$1.test(base) || FONT_ARBITRARY_FAMILY_RE.test(base)) return "font-family";
+	if (FONT_FAMILY_RE.test(base) || FONT_ARBITRARY_FAMILY_RE.test(base)) return "font-family";
 	if (ORIGIN_RE.test(base)) return "transform-origin";
 	if (base.startsWith("leading-")) return "line-height";
 	const rounded = ROUNDED_RE.exec(base);
@@ -4182,9 +3989,6 @@ function effectiveClasses(node, def, picks) {
 * All of it is pure: a `Project` in, mutations out, no Vue. That is what makes
 * it testable headlessly.
 */
-/** the DSL mirror of a page needs the project's locale for its `@setup` block.
-*  Transitional, with the mirror itself (see lib/pageCode). */
-var mirrorPage = (project, page) => syncPageCode(page, project.defaultLocale || "en");
 /**
 * The ONE writer of the optional keys, so their JSON key order is the same
 * everywhere. `computeMerge` compares whole-object `JSON.stringify`, which is
@@ -4249,15 +4053,10 @@ function renameComponent(project, id, rawName) {
 	for (const host of project.components) walkNodes(host.root.children, (node) => {
 		if (node.type === old) node.type = name;
 	});
-	for (const page of project.pages) {
-		let changed = false;
-		walkNodes(page.elements, (node) => {
-			if (node.type !== old) return;
-			node.type = name;
-			changed = true;
-		});
-		if (changed) mirrorPage(project, page);
-	}
+	for (const page of project.pages) walkNodes(page.elements, (node) => {
+		if (node.type !== old) return;
+		node.type = name;
+	});
 	return name;
 }
 /** An independent copy under a new name. Creates no instances. */
@@ -4412,7 +4211,6 @@ function detachComponentInstances(project, def) {
 		});
 		if (!ids.length) continue;
 		for (const id of ids) if (detachOne(page, def, id, project.components)) detached++;
-		mirrorPage(project, page);
 	}
 	return detached;
 }
@@ -4422,7 +4220,6 @@ function detachInstance(project, page, instanceId) {
 	const def = node ? project.components.find((c) => c.name === node.type) : null;
 	if (!def) return false;
 	if (!detachOne(page, def, instanceId, project.components)) return false;
-	mirrorPage(project, page);
 	return true;
 }
 /**
@@ -4455,7 +4252,6 @@ function pushMasterStructure(project, def) {
 		});
 		if (!instances.length) continue;
 		for (const node of instances) if (alignStructure(node, def.root)) moved++;
-		mirrorPage(project, page);
 	}
 	return moved;
 }
@@ -4651,158 +4447,6 @@ function nodesByShortId(roots) {
 	});
 	return out;
 }
-//#endregion
-//#region src/lib/html/tags.ts
-/**
-* The element registry ↔ the agent-facing HTML subset.
-*
-* Agents read and write pages as HTML because it is a format every model
-* already knows; the registry is what the app actually renders. This module is
-* the one place the two are reconciled, in both directions.
-*
-* Tag names are CASE-SENSITIVE here. That is what lets `<Card>` mean a
-* component instance, and it is why the parser is hand-rolled rather than
-* parse5 or any other HTML5 parser: they all lowercase tag names.
-*/
-/** registry types whose HTML tag is not their own name */
-var TAG_OF = {
-	body: "body",
-	paragraph: "p",
-	link: "a",
-	list: "ul",
-	"list-item": "li",
-	image: "img",
-	icon: "svg",
-	text: "div",
-	checkbox: "input",
-	radio: "input",
-	"collection-list": "collection-list",
-	"collection-item": "collection-item",
-	"list-empty": "list-empty",
-	slider: "slider"
-};
-/**
-* Pure aliases: a type whose tag AND shape are another type's.
-*
-* They serialize as the target's tag, so reading one back has to resolve to
-* the target — and `sameType` has to treat the pair as equal, or every write
-* would re-mint the node for a difference that renders nowhere. The Phase 4
-* migration collapses them in the stored data; until then this keeps the
-* round-trip exact.
-*/
-var ALIAS_OF = {
-	container: "div",
-	grid: "div",
-	heading: "h2",
-	dropdown: "select"
-};
-/** the HTML tag a node of this type is written as */
-function tagForType(type) {
-	if (isComponentType(type)) return type;
-	const canonical = ALIAS_OF[type] ?? type;
-	return TAG_OF[canonical] ?? canonical;
-}
-/** the registry type a tag reads back as — the reverse of `tagForType`, with
-*  each ambiguous tag resolved to its canonical type */
-var TYPE_OF_TAG = (() => {
-	const out = {};
-	for (const type of Object.keys(ELEMENTS)) {
-		if (ALIAS_OF[type]) continue;
-		const tag = tagForType(type);
-		if (out[tag] === void 0) out[tag] = type;
-	}
-	out.div = "div";
-	out.input = "input";
-	out.select = "select";
-	return out;
-})();
-/** do these two types mean the same element? (an alias and its target do) */
-function sameType(a, b) {
-	if (a === b) return true;
-	return (ALIAS_OF[a] ?? a) === (ALIAS_OF[b] ?? b);
-}
-/**
-* Which element a tag means.
-*
-* `attrs` disambiguates the two tags that carry more than one type: `<input>`
-* splits on its `type` (checkbox/radio are the registry's own types so an
-* author never has to remember the attribute), and `<div data-type="text">` is
-* the text block.
-*
-* `components` lets a lowercase `<card>` resolve to `Card` when exactly one
-* component matches — models lowercase tag names out of habit, and refusing
-* the whole write over it would be the format's most common papercut.
-*/
-function typeForTag(tag, attrs, components) {
-	if (isComponentType(tag)) return { type: tag };
-	if (tag === "input") {
-		const kind = attrs.type;
-		if (kind === "checkbox" || kind === "radio") return { type: kind };
-		return { type: "input" };
-	}
-	if (tag === "div" && attrs["data-type"] === "text") return { type: "text" };
-	const known = TYPE_OF_TAG[tag];
-	if (known) return { type: known };
-	const matches = components.filter((name) => name.toLowerCase() === tag.toLowerCase());
-	if (matches.length === 1) return {
-		type: matches[0],
-		note: `<${tag}> read as the component <${matches[0]}> — component tags are capitalized`
-	};
-	return null;
-}
-/**
-* Void tags that may be written without the self-closing slash.
-*
-* Matched CASE-SENSITIVELY, and never against a component: a component called
-* `Input` or `Link` is not `<input>`, and lowercasing the tag first made
-* `<Input>` a void element, so its closing tag read as a mismatch and its
-* children landed on whatever contained it.
-*/
-var VOID_TAGS = /* @__PURE__ */ new Set([
-	"img",
-	"input",
-	"br",
-	"hr",
-	"meta",
-	"link",
-	"source"
-]);
-var isLenientVoidTag = (tag) => !isComponentType(tag) && VOID_TAGS.has(tag);
-/** tags that are never content, whatever they claim to be */
-var FORBIDDEN_TAGS = /* @__PURE__ */ new Set([
-	"script",
-	"style",
-	"iframe",
-	"object",
-	"embed",
-	"base"
-]);
-/** does this element carry text rather than children? Registry-driven. */
-var isLeafType = (type) => !isComponentType(type) && isLeafElement(type);
-/** is this a type the app can render at all? */
-var isRenderableType = (type) => isComponentType(type) || isKnownElement(type);
-/**
-* `source` carries the collection an element iterates or embeds; `data-field`
-* carries an ordinary element's field binding. Both land on `node.arg` — two
-* names because they read as two different things, and an agent that confuses
-* them is told so rather than silently binding the wrong way.
-*/
-var SOURCE_TYPES = /* @__PURE__ */ new Set([
-	"collection-list",
-	"collection-item",
-	"slider",
-	"body"
-]);
-/**
-* The attributes an element type IMPLIES — `checkbox` is `<input type="checkbox">`.
-*
-* They are part of the element's identity, not state: the registry carries
-* them, every renderer emits them, and the reader uses them to pick the type
-* back out of the tag. So the writer emits them and the reader consumes them,
-* rather than storing them as custom attributes (which would make the type and
-* the attribute two places to disagree).
-*/
-var impliedAttrs = (type) => !isComponentType(type) && ELEMENTS[type]?.attrs || {};
 //#endregion
 //#region src/lib/html/serialize.ts
 var INDENT = "  ";
@@ -5866,90 +5510,6 @@ function slugify(value) {
 	return value.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 }
 //#endregion
-//#region src/lib/document.ts
-/**
-* Canonical page document: a protected @setup block, then the :body
-* wrap — body: is always the last line. Only the setup values and the
-* body content are editable; an empty body keeps one indented line so
-* there is always somewhere to type.
-*/
-function buildDocument(meta, bodyLines, bodyArg, bodyDecor) {
-	const body = bodyLines.some((l) => l.trim()) ? bodyLines : ["	"];
-	return [
-		"@setup",
-		`\tname: ${meta.name}`,
-		`\tslug: ${meta.slug}`,
-		`\tstatus: ${meta.status}`,
-		`\tlocale: ${meta.locale}`,
-		(bodyArg ? `:body[${bodyArg}]` : ":body") + (bodyDecor ?? ""),
-		...body,
-		"body:"
-	].join("\n");
-}
-/** the collection bound to the page body, from :body[post] (markers after
-* the arg are tolerated: ':body[post](+)') */
-function extractBodyArg(code) {
-	return code.match(/^:body\[([a-z0-9-]+)\](?:[({].*)?$/m)?.[1];
-}
-/** the style/interaction markers on the :body line — possibly mid-typing
-* ('(', '(+'…) — round-tripped through rebuilds so typing '(' on body (which
-* opens the Style panel) and the synced '(+)'/'{+}' markers survive the
-* scaffold enforcement instead of respawning a fresh :body */
-function extractBodyDecor(code) {
-	return code.split("\n").map((l) => l.trim()).find(isBodyOpenLine)?.match(/^:body(?:\[[a-z0-9-]*\]?)?((?:\(\+?\)?)?(?:\{\+?\}?)?)$/)?.[1] || void 0;
-}
-/** rebuilds a document with new @setup values but the same body */
-function replaceSetup(code, meta) {
-	return buildDocument(meta, extractBodyLines(code), extractBodyArg(code), extractBodyDecor(code));
-}
-/** The editable lines between :body and body: */
-function extractBodyLines(code) {
-	const lines = code.split("\n");
-	const trimmed = lines.map((l) => l.trim());
-	const start = trimmed.findIndex(isBodyOpenLine);
-	const end = trimmed.lastIndexOf("body:");
-	if (start !== -1 && end > start) return lines.slice(start + 1, end);
-	return lines.filter((l) => {
-		const t = l.trim();
-		return t && !t.startsWith("@") && !/^(name|slug|status|locale):/.test(t) && !isBodyOpenLine(t) && t !== "body:";
-	});
-}
-/**
-* Rebuilds the canonical document from whatever the user typed:
-* the scaffold always comes back, setup values and body content
-* survive. Returns the enforced code plus the parsed meta.
-*/
-/** reads the @setup values out of a document */
-function parseSetup(value) {
-	return {
-		name: value.match(/^\s*name: ?(.*)$/m)?.[1] ?? "",
-		slug: value.match(/^\s*slug: ?(.*)$/m)?.[1] ?? "",
-		status: value.match(/^\s*status: ?(.*)$/m)?.[1] || "published",
-		locale: value.match(/^\s*locale: ?(.*)$/m)?.[1] || "en"
-	};
-}
-/**
-* Rewrites the locale value on the @setup line only — never body lines
-* (a body line could trim to `locale: x`). Zero line-count change.
-*/
-function setSetupLocale(code, locale) {
-	const lines = code.split("\n");
-	const bodyOpen = lines.findIndex((l) => isBodyOpenLine(l.trim()));
-	const end = bodyOpen === -1 ? lines.length : bodyOpen;
-	for (let i = 1; i < end; i++) if (/^\s*locale:/.test(lines[i])) {
-		lines[i] = lines[i].replace(/^(\s*locale: ?).*$/, `$1${locale}`);
-		return lines.join("\n");
-	}
-	return code;
-}
-function enforceDocument(value) {
-	const meta = parseSetup(value);
-	return {
-		code: buildDocument(meta, normalizeSyntax(extractBodyLines(value).join("\n")).split("\n").map((l) => l.trim() && !l.startsWith("	") ? "	" + l : l), extractBodyArg(value), extractBodyDecor(value)),
-		meta
-	};
-}
-//#endregion
 //#region src/lib/shared/structuredData.js
 /** validates the `custom` JSON-LD text; null when it is fine, else the reason */
 function customSchemaError(text) {
@@ -6455,122 +6015,6 @@ function countLocaleSeo(project, code) {
 	for (const page of project.pages ?? []) if (page.seo?.locales?.[code]) n++;
 	if (project.settings?.seo?.locales?.[code]) n++;
 	return n;
-}
-//#endregion
-//#region src/lib/shared/tokens.js
-var TOKEN_NAME_RE = /^[a-z][a-z0-9-]*$/;
-var HEX_RE = /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
-var RESERVED_TOKEN_NAMES = /* @__PURE__ */ new Set([
-	"slate",
-	"gray",
-	"red",
-	"orange",
-	"amber",
-	"yellow",
-	"lime",
-	"green",
-	"emerald",
-	"teal",
-	"cyan",
-	"sky",
-	"blue",
-	"indigo",
-	"violet",
-	"purple",
-	"fuchsia",
-	"pink",
-	"rose",
-	"neutral",
-	"stone",
-	"zinc",
-	"white",
-	"black",
-	"transparent",
-	"current",
-	"inherit"
-]);
-/**
-* Why a token is malformed, or null. Shadowing a palette name is NOT malformed —
-* see isReservedToken.
-* @returns {string|null}
-*/
-function tokenError(token) {
-	if (!TOKEN_NAME_RE.test(token?.name ?? "")) return "token names are kebab-case ([a-z][a-z0-9-]*)";
-	if (!HEX_RE.test(token?.value ?? "")) return "token values are #hex colours";
-	return null;
-}
-/**
-* Does this name shadow a Tailwind palette name or colour keyword?
-*
-* A token compiles to `--color-<name>`, so `blue` defines `bg-blue` — it does
-* NOT redefine `bg-blue-500`, which is a different variable. So this is a
-* legibility hazard, not a breakage: a real brand palette genuinely has colours
-* called "blue" and "orange", and forcing every one of them to be renamed (and
-* every class rewritten to `bg-brand-blue`) was friction with no safety payoff.
-* Callers warn; they no longer refuse.
-*/
-function isReservedToken(name) {
-	return RESERVED_TOKEN_NAMES.has(String(name));
-}
-/** well-formed AND not shadowing a palette name — the conservative default */
-function isValidToken(token) {
-	return tokenError(token) === null && !isReservedToken(token.name);
-}
-/** well-formed, shadowing allowed — what actually reaches the @theme block, so
-* a deliberately-shadowing token really does render */
-function isEmittableToken(token) {
-	return tokenError(token) === null;
-}
-var LENGTH_RE = /^-?\d*\.?\d+(?:px|rem|em|%|vw|vh|ch|ex|pt)?$/;
-var FUNC_RE = /^(?:clamp|calc|min|max)\([-+*/\s\d.a-z%(),]*\)$/i;
-/** a CSS length/number safe to emit into a custom property */
-function isThemeValue(value) {
-	const v = String(value ?? "").trim();
-	if (!v || v.length > 64) return false;
-	if (v.includes(";") || v.includes("}") || v.includes("{")) return false;
-	return LENGTH_RE.test(v) || FUNC_RE.test(v);
-}
-//#endregion
-//#region src/lib/shared/fonts.js
-/** …and the same by file extension, for https URLs that never went through
-*  the library (the mime isn't knowable without fetching) */
-var FORMAT_BY_EXT = {
-	woff2: "woff2",
-	woff: "woff",
-	ttf: "truetype",
-	otf: "opentype",
-	ttc: "truetype"
-};
-var FONT_FORMATS = [
-	"woff2",
-	"woff",
-	"truetype",
-	"opentype"
-];
-/** the `format()` hint guessed from a URL's extension, or undefined */
-function fontFormatForUrl(url) {
-	return FORMAT_BY_EXT[String(url ?? "").toLowerCase().split(/[?#]/)[0].split(".").pop()];
-}
-/** family names are interpolated into CSS, so they are restricted to the same
-*  safe character set as settings.fonts.family — letters, digits, spaces and
-*  hyphens. Anything else could close the declaration and inject rules. */
-var FONT_FAMILY_RE = /^[A-Za-z0-9][A-Za-z0-9 -]*$/;
-/** a weight the CSS accepts: 100–900, or a variable-font range ("100 900") */
-var WEIGHT_RE = /^(?:[1-9]00|normal|bold)(?: (?:[1-9]00))?$/;
-/** only same-origin media paths and https URLs may be fetched as fonts —
-*  mirrors SAFE_SRC's intent, minus the data:/mailto:/tel: cases that make no
-*  sense for a font file */
-var SAFE_FONT_SRC = /^(?:\/|https:\/\/)/i;
-/** human-readable reason a font entry is unusable, or null when it is fine */
-function fontError(font, others = []) {
-	const family = String(font?.family ?? "").trim();
-	if (!family) return "Family name required";
-	if (!FONT_FAMILY_RE.test(family)) return "Letters, digits, spaces and hyphens only";
-	if (others.some((f) => f !== font && String(f.family ?? "").trim().toLowerCase() === family.toLowerCase() && (f.weight ?? "400") === (font.weight ?? "400") && (f.style ?? "normal") === (font.style ?? "normal"))) return "Another font already uses this family, weight and style";
-	if (!font?.src) return "Pick a font file";
-	if (!SAFE_FONT_SRC.test(font.src)) return "Font files must be a /media/… path or an https:// URL";
-	if (font.weight && !WEIGHT_RE.test(String(font.weight))) return "Weight is 100–900, or a range like \"100 900\"";
-	return null;
 }
 //#endregion
 //#region src/lib/shared/motion.js
@@ -7125,45 +6569,6 @@ function validateMotionSettings(motion, ctx) {
 	return { ok: true };
 }
 //#endregion
-//#region src/lib/settings.ts
-function defaultSettings() {
-	return {
-		favicon: void 0,
-		publishing: {
-			method: "server",
-			github: {
-				repo: "",
-				branch: "main"
-			}
-		},
-		seo: {
-			siteName: "",
-			titleTemplate: "%s",
-			description: "",
-			ogImage: void 0
-		},
-		domain: "",
-		smtp: {
-			host: "",
-			port: "",
-			user: "",
-			password: "",
-			from: ""
-		},
-		integrations: {
-			stripe: { publishableKey: "" },
-			mailing: { provider: "" }
-		},
-		tokens: [],
-		customCode: { head: "" },
-		fonts: {
-			family: "",
-			googleFontsUrl: void 0,
-			custom: []
-		}
-	};
-}
-//#endregion
 //#region src/lib/shared/slider.js
 /** slides visible at once is capped so a typo can't emit a 10000-column track */
 var PER_VIEW_MIN = 1;
@@ -7321,67 +6726,6 @@ var SYMMETRIC_TRIGGERS = /* @__PURE__ */ new Set([
 /** true when the trigger drives state in both directions on its own */
 function isSymmetricTrigger(trigger) {
 	return SYMMETRIC_TRIGGERS.has(trigger);
-}
-//#endregion
-//#region src/lib/factories.ts
-function defaultBreakpoints() {
-	return [
-		{
-			id: crypto.randomUUID(),
-			name: "Desktop",
-			width: 1440,
-			height: 900
-		},
-		{
-			id: crypto.randomUUID(),
-			name: "Tablet",
-			width: 768,
-			height: 1024
-		},
-		{
-			id: crypto.randomUUID(),
-			name: "Mobile",
-			width: 390,
-			height: 844
-		}
-	];
-}
-/** a page's root: the `:body` wrap every document is built around */
-function createBody(arg) {
-	const body = createNode("body");
-	if (arg) body.arg = arg;
-	return body;
-}
-function createPage(name, path, locale = "en") {
-	const now = Date.now();
-	const page = {
-		id: crypto.randomUUID(),
-		name,
-		path,
-		status: "published",
-		code: "",
-		elements: [createBody()],
-		createdAt: now,
-		updatedAt: now
-	};
-	page.code = pageToCode(page, locale);
-	return page;
-}
-function createProject(name) {
-	return {
-		id: crypto.randomUUID(),
-		name,
-		pages: [createPage("Home", "/")],
-		components: [],
-		collections: [],
-		interactions: [],
-		animations: [],
-		breakpoints: defaultBreakpoints(),
-		comments: [],
-		locales: ["en"],
-		defaultLocale: "en",
-		settings: defaultSettings()
-	};
 }
 //#endregion
 //#region src/lib/catalog/entries/helpers.ts
@@ -9456,4 +8800,4 @@ function materializeCatalogEntry(entry, project, component = (key) => project.co
 	});
 }
 //#endregion
-export { APPEAR_MODES, BUILTIN_LIST_SOURCES, CATALOG, CATALOG_TOKENS, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, ELIDED_DATA_URL, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MAX_DEPTH, MAX_INPUT, MOTION_PROPS, NODE_STATE_KEYS, REF_SLOT, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, SCROLL_LERP_MAX, SCROLL_LERP_MIN, SLIDER_DEFAULTS, STYLE_SECTIONS, TOKEN_NAME_RE, TRANSITION_DEFAULTS, TRANSITION_PRESET_IDS, VARIANT_NAME_RE, addVariantAxis, addVariantOption, adoptStructure, alignMirrors, alignStructure, applyClass, applyHtml, buildDocument, buildInstanceMap, buildScopeRoots, canNest, catalogDependencies, catalogEntry, cloneForMaster, compileAnimation, componentReaches, componentUsage, contextFromProject, countLocaleSeo, createBody, createNode, createPage, createProject, customSchemaError, dataMarkerOf, deepClone, defaultBreakpoints, defaultSettings, deleteComponent, dependencyOrder, detachInstance, duplicateComponent, effectiveClasses, elementBlockLines, enforceDocument, expandComponentInstances, extractBodyArg, extractBodyDecor, extractBodyLines, findNode, findParent, fontError, fontFormatForUrl, hasAncestorOfType, hasNodeState, hasOpenArgBracket, hoistBlockRef, inheritedInstanceValue, interactionGroupKey, interactionMarkerOf, interactionStateKey, isAllowedAttribute, isBodyOpenLine, isComponentType, isEmittableToken, isEntryScopeRoot, isInstanceWrapper, isKnownElement, isLeafElement, isLocalizableAttribute, isNodeHidden, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isValidClass, isValidToken, lexLine, lucideNameOf, lucideSvg, masterToHtml, matchClass, materializeCatalogEntry, mergeAttributeLayers, mergeClassLayers, nestedComponentNames, nodesByShortId, normalizeComponentName, normalizeSyntax, pageToHtml, parseHtml, parseSetup, parseSyntax, pickedKeys, purgeLocaleSeo, pushMasterStructure, reconcile, refOf, removeVariantAxis, removeVariantOption, renameComponent, renameVariantAxis, renameVariantOption, replaceSetup, resolveInstanceValue, resolvePicks, resolveSliderConfig, sameLayerProperty, sameProperty, sameType, sanitizeAttributes, sanitizeInlineSvg, sanitizeRich, serializeNode, setComponentCategory, setComponentMeta, setInstancePick, setNodeHidden, setSetupLocale, setStyleTokens, setVariantAxes, setVariantClasses, setVariantDefault, shortIds, slugify, stripExtractedInstanceState, stripNodeState, styleMarkerOf, tagForType, tokenError, typeForTag, typeOptionsFor, validateAnimation, validateBinding, validateDocument, validateMotionSettings, validateSliderConfig, validateTree, variantKey, walkNodes, withDataMarker, withInteractionMarker, withStyleMarker, withoutRef };
+export { APPEAR_MODES, BUILTIN_LIST_SOURCES, CATALOG, CATALOG_TOKENS, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, ELIDED_DATA_URL, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MAX_DEPTH, MAX_INPUT, MOTION_PROPS, NODE_STATE_KEYS, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, SCHEMA_VERSION, SCROLL_LERP_MAX, SCROLL_LERP_MIN, SLIDER_DEFAULTS, STYLE_SECTIONS, TOKEN_NAME_RE, TRANSITION_DEFAULTS, TRANSITION_PRESET_IDS, VARIANT_NAME_RE, addVariantAxis, addVariantOption, adoptStructure, alignMirrors, alignStructure, applyClass, applyHtml, buildInstanceMap, buildScopeRoots, canNest, catalogDependencies, catalogEntry, cloneForMaster, compileAnimation, componentReaches, componentUsage, contextFromProject, countLocaleSeo, createBody, createNode, createPage, createProject, customSchemaError, deepClone, defaultBreakpoints, defaultSettings, deleteComponent, dependencyOrder, describeMigration, detachInstance, duplicateComponent, effectiveClasses, findNode, findParent, fontError, fontFormatForUrl, hasAncestorOfType, hasNodeState, inheritedInstanceValue, interactionGroupKey, interactionStateKey, isAllowedAttribute, isComponentType, isEmittableToken, isEntryScopeRoot, isInstanceWrapper, isKnownElement, isLeafElement, isLocalizableAttribute, isNodeHidden, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isValidClass, isValidToken, lucideNameOf, lucideSvg, masterToHtml, matchClass, materializeCatalogEntry, mergeAttributeLayers, mergeClassLayers, migrateProject, nestedComponentNames, nodesByShortId, normalizeComponentName, pageToHtml, parseHtml, pickedKeys, purgeLocaleSeo, pushMasterStructure, removeVariantAxis, removeVariantOption, renameComponent, renameVariantAxis, renameVariantOption, resolveInstanceValue, resolvePicks, resolveSliderConfig, sameLayerProperty, sameProperty, sameType, sanitizeAttributes, sanitizeInlineSvg, sanitizeRich, setComponentCategory, setComponentMeta, setInstancePick, setNodeHidden, setStyleTokens, setVariantAxes, setVariantClasses, setVariantDefault, shortIds, slugify, stripExtractedInstanceState, stripNodeState, tagForType, tokenError, typeForTag, typeOptionsFor, validateAnimation, validateBinding, validateMotionSettings, validateSliderConfig, validateTree, variantKey, walkNodes };

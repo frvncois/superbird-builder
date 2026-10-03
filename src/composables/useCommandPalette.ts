@@ -16,7 +16,8 @@ export function useCommandPalette() {
 
   // insert at the current selection with smart position: the backend coerces
   // 'inside' → body appends / container last-child / leaf → after.
-  const insertElement = (type: string) => backend.value.insert({ kind: 'element', type }, null, 'inside')
+  const insertElement = (type: string, classes?: string) =>
+    backend.value.insert({ kind: 'element', type, classes }, null, 'inside')
   const insertComponent = (name: string) => backend.value.insert({ kind: 'component', name }, null, 'inside')
   /** insert a library entry the project hasn't added yet: using it adds it */
   const insertCatalog = (key: string) => backend.value.insert({ kind: 'catalog', key }, null, 'inside')

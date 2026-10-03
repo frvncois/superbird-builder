@@ -16,7 +16,7 @@
 //         PUBLISH_TOKEN optionally allows CI publishes)
 
 import { createServer } from 'node:http'
-import { chmod, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { existsSync, readFileSync } from 'node:fs'
 import { extname, join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -1326,6 +1326,79 @@ async function migrateStoreDir() {
     await rename(join(STORE_DIR, f), join(STORE_DIR, to))
     console.log(`store migration: ${f} -> ${to}`)
   }
+  await migrateSchema()
+}
+
+/**
+ * Bring every project blob to the current schema.
+ *
+ * EVERY blob, not just Main: the drafts, the `guano-base:*` merge snapshots
+ * (a full project copy each — a 3-way merge against an unmigrated base would
+ * read every page as changed) and the published baseline. One left behind is a
+ * project that renders through a code path the app no longer has.
+ *
+ * Idempotent by `schemaVersion`, so this runs on every boot and does nothing
+ * once it has run. Before the first write it copies the whole store to
+ * `store.pre-v2/` — the migration drops `page.code`, which is not something to
+ * do without a way back.
+ */
+async function migrateSchema() {
+  const mod = await import(
+    new URL('../packages/guano/runtime/mcp-runtime.mjs', import.meta.url)
+  ).catch(() =>
+    import(new URL('../runtime/mcp-runtime.mjs', import.meta.url)).catch(() => null),
+  )
+  if (!mod?.migrateProject) {
+    // the bundle is gitignored in the repo and built on demand; the editor
+    // migrates defensively on load, so a missing bundle delays this, never
+    // breaks it
+    console.warn(
+      'schema migration skipped: the editor-logic bundle is missing — run ' +
+        '`npm run build:mcp-runtime`',
+    )
+    return
+  }
+  const { migrateProject, describeMigration, SCHEMA_VERSION } = mod
+
+  const targets = []
+  for (const f of await readdir(STORE_DIR)) {
+    if (!f.endsWith('.json')) continue
+    if (!f.startsWith('guano-project__') && !f.startsWith('guano-base__')) continue
+    targets.push({ label: f.replace(/\.json$/, '').replaceAll('__', ':'), file: join(STORE_DIR, f) })
+  }
+  if (existsSync(SNAPSHOT)) targets.push({ label: 'published baseline', file: SNAPSHOT })
+
+  // read first, decide second: the backup is only worth making if something
+  // actually needs migrating
+  const pending = []
+  for (const target of targets) {
+    const raw = await readFileOrNull(target.file)
+    const project = parseJsonOrNull(raw)
+    if (!project?.pages || (project.schemaVersion ?? 1) >= SCHEMA_VERSION) continue
+    pending.push({ ...target, project })
+  }
+  if (!pending.length) return
+
+  const backup = join(DATA_DIR, `store.pre-v${SCHEMA_VERSION}`)
+  if (!existsSync(backup)) {
+    try {
+      await cp(STORE_DIR, backup, { recursive: true })
+      if (existsSync(SNAPSHOT)) await cp(SNAPSHOT, join(backup, 'published.json'))
+      console.log(`schema migration: kept a copy of the store at ${backup}`)
+    } catch (err) {
+      // no backup, no migration: the alternative is an irreversible rewrite
+      console.error(`schema migration ABORTED — could not back up the store: ${err.message}`)
+      return
+    }
+  }
+
+  for (const { label, file, project } of pending) {
+    const { report } = migrateProject(project)
+    await writeAtomic(file, JSON.stringify(project))
+    const line = describeMigration(label, report)
+    if (line) console.log(`schema migration: ${line}`)
+  }
+  storeSize.at = 0 // the blobs shrank; force a recount rather than guess
 }
 
 /** replace `live` with `staged`: move live aside, staged in, drop the old */

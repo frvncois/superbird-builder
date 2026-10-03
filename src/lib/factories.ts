@@ -1,6 +1,6 @@
 import type { Breakpoint, ElementNode, Page, Project } from '@/types/editor'
 import { createNode } from './elements'
-import { pageToCode } from './pageCode'
+import { SCHEMA_VERSION } from './migrate'
 import { defaultSettings } from './settings'
 
 export function defaultBreakpoints(): Breakpoint[] {
@@ -18,22 +18,17 @@ export function createBody(arg?: string): ElementNode {
   return body
 }
 
-export function createPage(name: string, path: string, locale = 'en'): Page {
+export function createPage(name: string, path: string, _locale = 'en'): Page {
   const now = Date.now()
-  const page: Page = {
+  return {
     id: crypto.randomUUID(),
     name,
     path,
     status: 'published',
-    // the DSL mirror the agent API still reads; derived from the tree, and
-    // deleted with the DSL itself (see lib/pageCode)
-    code: '',
     elements: [createBody()],
     createdAt: now,
     updatedAt: now,
   }
-  page.code = pageToCode(page, locale)
-  return page
 }
 
 // A project always has at least its home page
@@ -41,6 +36,7 @@ export function createProject(name: string): Project {
   return {
     id: crypto.randomUUID(),
     name,
+    schemaVersion: SCHEMA_VERSION,
     pages: [createPage('Home', '/')],
     components: [],
     collections: [],

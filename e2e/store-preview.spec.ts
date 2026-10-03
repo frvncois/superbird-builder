@@ -26,7 +26,6 @@ const snapshot = () => ({
       name: 'Home',
       path: '/',
       status: 'published',
-      code: '',
       elements: [
         {
           id: 'b1',
@@ -40,7 +39,6 @@ const snapshot = () => ({
       name: 'Draft',
       path: '/draft',
       status: 'draft',
-      code: '',
       elements: [
         {
           id: 'b2',

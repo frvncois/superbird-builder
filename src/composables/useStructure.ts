@@ -54,7 +54,9 @@ import type { ComponentDef, ElementNode } from '@/types/editor'
 
 /** what an insert puts down */
 export type InsertPayload =
-  | { kind: 'element'; type: string }
+  /** `classes` makes a dock entry a PRESET (Container, Grid) rather than a
+   *  type of its own — see lib/elementPalette */
+  | { kind: 'element'; type: string; classes?: string }
   | { kind: 'component'; name: string }
   /** a bundled library entry — using it copies it into the project first */
   | { kind: 'catalog'; key: string }
@@ -267,7 +269,14 @@ export function useStructure() {
       if (!type) return null
       let made: ElementNode | null = null
       runOn(resolved.host, () => {
-        made = insertIn(resolved.host, type, resolved.targetId, position, components.value)
+        made = insertIn(
+          resolved.host,
+          type,
+          resolved.targetId,
+          position,
+          components.value,
+          payload.kind === 'element' ? payload.classes : undefined,
+        )
         return !!made
       })
       selectResult(resolved.host, made)
@@ -398,7 +407,14 @@ export function useStructure() {
       if (!type) return null
       let made: ElementNode | null = null
       runOn(h, () => {
-        made = insertIn(h, type, target, position, nestable(h.def!))
+        made = insertIn(
+          h,
+          type,
+          target,
+          position,
+          nestable(h.def!),
+          payload.kind === 'element' ? payload.classes : undefined,
+        )
         return !!made
       })
       if (made) el.selectElement((made as ElementNode).id)

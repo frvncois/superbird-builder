@@ -5,7 +5,6 @@ import { useAuth } from './useAuth'
 import { slugify } from '@/lib/shared/slug.js'
 import { createBody } from '@/lib/factories'
 import { createNode } from '@/lib/elements'
-import { pageToCode } from '@/lib/pageCode'
 import { entrySlug, entryRoutePath } from '@/lib/shared/slug.js'
 import { deepClone, walkNodes } from '@/lib/tree'
 import type { Collection, CollectionEntry, CollectionField, Page } from '@/types/editor'
@@ -60,7 +59,6 @@ export function useCollections() {
       name: label,
       path: `/${name}`,
       status: 'published',
-      code: '',
       elements: [body],
       collectionId: '',
       createdAt: now,
@@ -68,7 +66,6 @@ export function useCollections() {
       createdBy: actor(),
       updatedBy: actor(),
     }
-    page.code = pageToCode(page, project.value.defaultLocale)
     const collection: Collection = {
       id: crypto.randomUUID(),
       name,

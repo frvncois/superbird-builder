@@ -100,13 +100,13 @@ async function writeSlider(page: Page) {
     await insertFromDock(page, 'div')
     // the new div is the selection, so this lands inside it — and gives the
     // slide some height, without which the track measures zero
-    await insertFromDock(page, 'heading')
+    await insertFromDock(page, 'h2')
   }
   // the canvas renders from the parsed tree, so this proves the structure took
   await expect(page.locator('[data-sl-track]').first()).toBeVisible({ timeout: 15_000 })
 }
 
-test('author a slider in code, configure it in the Data panel, and publish it', async ({ page }) => {
+test('author a slider, configure it in the Data panel, and publish it', async ({ page }) => {
   await openEditor(page)
   await writeSlider(page)
 

@@ -245,14 +245,16 @@ test('rename, duplicate, detach and delete keep every page in step', async () =>
     ref: 'two',
   })
   expect(detached.saved).toBe(true)
-  expect(stored().pages[0].code.match(/:Tile/g)).toHaveLength(1)
+  const tiles = () =>
+    stored().pages[0].elements[0].children.filter((n: { type: string }) => n.type === 'Tile')
+  expect(tiles()).toHaveLength(1)
 
   // still used once: refused, then detached and deleted
   const refused = await call('delete_component', { componentId: card.componentId })
   expect(refused.reason).toBe('in-use')
   const deleted = await call('delete_component', { componentId: card.componentId, detach: true })
   expect(deleted.detached).toBe(1)
-  expect(stored().pages[0].code).not.toContain('Tile')
+  expect(tiles()).toHaveLength(0)
 
   // both cards are still on the page, as plain elements
   const out = await html()

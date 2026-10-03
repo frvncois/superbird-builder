@@ -8,7 +8,6 @@ import {
   nestedWrappers,
   normalizeComponentName,
 } from './components'
-import { syncPageCode } from './pageCode'
 import { deepClone, findNode, findParent, walkNodes } from './tree'
 import { buildInstanceMap, dependencyOrder, nestedComponentNames } from './instances'
 import { resolvePicks } from './shared/instances.js'
@@ -29,11 +28,6 @@ import { effectiveClasses } from './variants'
  * All of it is pure: a `Project` in, mutations out, no Vue. That is what makes
  * it testable headlessly.
  */
-
-/** the DSL mirror of a page needs the project's locale for its `@setup` block.
- *  Transitional, with the mirror itself (see lib/pageCode). */
-const mirrorPage = (project: Project, page: Page) =>
-  syncPageCode(page, project.defaultLocale || 'en')
 
 /**
  * The ONE writer of the optional keys, so their JSON key order is the same
@@ -132,7 +126,6 @@ export function renameComponent(project: Project, id: string, rawName: string): 
       node.type = name
       changed = true
     })
-    if (changed) mirrorPage(project, page)
   }
   return name
 }
@@ -330,7 +323,6 @@ export function detachComponentInstances(project: Project, def: ComponentDef): n
     // ids, not nodes: unwrapping one instance can re-parent the next (an
     // instance nested in a bare wrapper), so each is re-found as we reach it
     for (const id of ids) if (detachOne(page, def, id, project.components)) detached++
-    mirrorPage(project, page)
   }
   return detached
 }
@@ -341,7 +333,6 @@ export function detachInstance(project: Project, page: Page, instanceId: string)
   const def = node ? project.components.find((c) => c.name === node.type) : null
   if (!def) return false
   if (!detachOne(page, def, instanceId, project.components)) return false
-  mirrorPage(project, page)
   return true
 }
 
@@ -383,7 +374,6 @@ export function pushMasterStructure(project: Project, def: ComponentDef): number
     })
     if (!instances.length) continue
     for (const node of instances) if (alignStructure(node, def.root)) moved++
-    mirrorPage(project, page)
   }
   return moved
 }

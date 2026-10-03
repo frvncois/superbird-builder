@@ -55,7 +55,7 @@ async function tokenContext(admin: APIRequestContext, baseURL: string | undefine
 async function seedMain(admin: APIRequestContext) {
   const body = JSON.stringify({
     name: 'Sec Co',
-    pages: [{ id: 'home', name: 'Home', path: '/', status: 'published', code: '', elements: [] }],
+    pages: [{ id: 'home', name: 'Home', path: '/', status: 'published', elements: [] }],
     settings: { smtp: { host: 'smtp.example.com', password: 'hunter2' }, customCode: { head: '' } },
   })
   expect((await admin.put(`/api/store/${MAIN}`, { data: body })).ok()).toBeTruthy()
@@ -100,7 +100,7 @@ test('merge-base snapshots get the same guards as project blobs', async ({ baseU
   // otherwise a poisoned base makes the editor's 3-way merge propose changes
   // nobody authored
   const poisoned = JSON.parse(mainBody)
-  poisoned.pages.push({ id: 'evil', name: 'Evil', path: '/evil', status: 'published', code: '', elements: [] })
+  poisoned.pages.push({ id: 'evil', name: 'Evil', path: '/evil', status: 'published', elements: [] })
   expect((await contrib.put(`/api/store/${BASE}`, { data: JSON.stringify(poisoned) })).status()).toBe(200)
   const after = (await (await admin.get(`/api/store?keys=${BASE}`)).json()) as Record<string, string>
   expect(JSON.parse(after[BASE]).pages).toHaveLength(1)

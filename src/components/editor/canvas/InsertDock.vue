@@ -8,7 +8,7 @@ import { useCommandPalette } from '@/composables/useCommandPalette'
 import { useElement } from '@/composables/useElement'
 import { useStructure } from '@/composables/useStructure'
 import { useInsertDrag, type InsertPayload } from '@/composables/useInsertDrag'
-import { ELEMENT_GROUPS } from '@/lib/elementPalette'
+import { ELEMENT_GROUPS, paletteKey } from '@/lib/elementPalette'
 import { fuzzyScore } from '@/lib/fuzzy'
 import { CATALOG } from '@/lib/catalog'
 import { canNest } from '@/lib/instances'
@@ -69,13 +69,21 @@ const allGroups = computed<DockGroup[]>(() => {
     title: g.title,
     tab: 'basic' as const,
     items: g.items.map((item) => ({
-      key: item.type,
+      // a plain entry is addressed by its type; a preset carries its own key,
+      // since Container and Grid are both a `div` now
+      key: paletteKey(item),
       label: item.label,
       keywords: [item.type],
       icon: item.icon,
       accent: false,
-      payload: { kind: 'element', type: item.type, label: item.label, icon: item.icon },
-      run: () => insertElement(item.type),
+      payload: {
+        kind: 'element',
+        type: item.type,
+        classes: item.classes,
+        label: item.label,
+        icon: item.icon,
+      },
+      run: () => insertElement(item.type, item.classes),
     })),
   }))
   // on the board the insert lands in a component, so what it offers is what

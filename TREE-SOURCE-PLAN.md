@@ -217,6 +217,32 @@ version" class of stale writes.
   `edit_elements` (12.4 KB) or `update_settings` (9.2 KB), which is a separate judgement
   call rather than trimming prose.
 
+- **Phase 4 — done.** The DSL is deleted: `syntax.ts`, `document.ts`, `pageCode.ts` and
+  `useCodeMirror.ts` are gone, `Page.code` and `ElementNode.line`/`endLine` are gone from
+  the types, and what survived of `syntax.ts` (`NODE_STATE_KEYS`, `hasNodeState`,
+  `stripNodeState`, `BUILTIN_LIST_SOURCES`) is `lib/nodeState.ts`. `src/lib/migrate.ts`
+  is the v2 migration and `scripts/check-migrate.ts` / `npm run check:migrate` is its
+  gate; the salvage-only parser is quarantined in `src/lib/legacy/dsl.ts`, marked for
+  deletion one release after launch. The server migrates every blob at boot
+  (`migrateSchema`) — Main, drafts, `guano-base:*` and the published baseline — after
+  copying the store to `data/store.pre-v2/`. Corpus byte-identical through the
+  migration with identity preserved; `check:migrate` green and verified to fail (4
+  FAILs) when the collapse is broken; full e2e suite green.
+
+  Two deviations from the plan, both deliberate. (1) The four alias types stay in
+  `ELEMENTS_DATA` as a **render fallback** — the plan said delete them, but
+  `const tag = def?.tag ?? 'div'` would quietly degrade a `heading` to a div for any
+  blob the migration never saw (an old export, a hand-written import). They are out of
+  `TYPE_GROUPS`, so nothing can insert one. (2) What the aliases offered was a styled
+  div, so Container and Grid came back as insert **presets** — `PaletteItem.classes`,
+  and `paletteKey` because several entries now share one type.
+
+  Three things the gate caught that type-checking could not: `check:migrate` conflating
+  two properties (the alias collapse must render identically, but materializing an
+  unexpanded instance *is* an intended render change — the page was rendering nothing),
+  the dock's row key becoming `type:label` and breaking every `[data-dock-item]` query
+  in the UI specs, and `mcp-components.spec.ts` asserting on `page.code` text.
+
 ## Phase 0 — Safety net (½ day)
 - **0.1 Corpus.** `scripts/corpus.mjs` exports every project in `e2e/fixtures/`, the
   bundled catalog (each entry placed on a page), and any local `server/data` store into

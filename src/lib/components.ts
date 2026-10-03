@@ -1,11 +1,9 @@
 import type { ComponentDef, ElementNode } from '@/types/editor'
-import { isLeafElement } from './elements'
-import { REF_SLOT, refOf, withoutRef } from './syntax'
 import { walkNodes } from './tree'
 
 /**
- * Deep-clone a subtree into the master id space: fresh ids, line info dropped,
- * and interaction/animation binding `targetId`s that point INSIDE the subtree
+ * Deep-clone a subtree into the master id space: fresh ids, and
+ * interaction/animation binding `targetId`s that point INSIDE the subtree
  * rewritten onto the new ids — without the rewrite every internal binding
  * (a modal's close button, an accordion trigger) keeps aiming at the PAGE
  * node ids and goes dead the moment the block becomes a component.
@@ -22,8 +20,6 @@ export function cloneForMaster(source: ElementNode): {
     const next = crypto.randomUUID()
     idMap.set(n.id, next)
     n.id = next
-    delete n.line
-    delete n.endLine
     // refs are PAGE-scope addresses; a master is cloned into every instance on
     // every page, so a ref surviving here would be duplicated site-wide
     delete n.ref
@@ -64,7 +60,7 @@ export function stripExtractedInstanceState(source: ElementNode): void {
   })
 }
 
-/** component types are Capitalized in the syntax; built-ins stay lowercase */
+/** component types are Capitalized; built-in elements stay lowercase */
 export function isComponentType(type: string): boolean {
   return /^[A-Z]/.test(type)
 }
@@ -79,9 +75,8 @@ export function isComponentType(type: string): boolean {
 // Button restyle the Button inside every Card.
 //
 // The one rule everything below keeps: a mirror is structurally identical to
-// the master it mirrors. `serializeNode` relies on it (it writes an instance
-// block from the host's tree alone), and so does the positional pairing in
-// shared/instances.js.
+// the master it mirrors — the positional pairing in shared/instances.js relies
+// on it, and so does the push that realigns every instance.
 
 /** a fresh mirror of a master subtree: its structure, none of its state */
 export function createMirror(master: ElementNode): ElementNode {
@@ -232,47 +227,8 @@ export function normalizeComponentName(raw: string, taken: string[]): string {
   return `${name}${n}`
 }
 
-/** serializes a master node back into syntax lines at the given indent —
- * including its code-owned decorations: the [arg] binding and the @link
- * suffix (dropping them would strip bindings/links from every instance on
- * each structure rewrite) */
-export function serializeNode(node: ElementNode, indent: string): string[] {
-  // `ref` is deliberately NOT emitted. This serializes MASTER nodes, and a
-  // master's structure is cloned into every instance on every page — emitting a
-  // ref would duplicate it site-wide, which is exactly what makes refs inside a
-  // component block a diagnostic. cloneForMaster strips it on the way in; this
-  // is the matching guard on the way out.
-  const arg = node.arg ? `[${node.arg}]` : ''
-  // node.link stores '@item' for the current-entry sentinel, verbatim otherwise
-  const link = node.link ? `@${node.link === '@item' ? 'item' : node.link}` : ''
-  // form follows the REGISTRY, not the child count: a childless container
-  // (an empty :textarea, an empty :div) keeps its block spelling. Collapsing
-  // it to the leaf form desynced expansion alignment from the author's own
-  // block-form line, and the instance node — with its htmlId — was orphaned
-  // on the next re-expansion.
-  if (isLeafElement(node.type)) return [`${indent}:${node.type}${arg}:${link}`]
-  return [
-    `${indent}:${node.type}${arg}${link}`,
-    ...node.children.flatMap((child) => serializeNode(child, `${indent}\t`)),
-    `${indent}${node.type}:`,
-  ]
-}
-
-/**
- * Extraction helper: refs on the lines about to be wrapped in ':Name … Name:'.
- *
- * The block ROOT's ref is hoisted onto the wrapper — the instance root is a
- * real page node, so it keeps its address — and every ref BELOW it is dropped,
- * because those lines become the master's structure and get rewritten into
- * every instance. Shared by the editor's createComponent and MCP's
- * makeComponentFrom so the two can't drift.
- */
-export function hoistBlockRef(innerLines: string[]): { ref?: string; lines: string[] } {
-  return { ref: refOf(innerLines[0] ?? ''), lines: innerLines.map(withoutRef) }
-}
-
-/** a node's SHALLOW code identity — the DSL its own line encodes: type, the
- * [arg] binding, the @link. Deliberately NOT recursive: matching is done one
+/** a node's SHALLOW identity: its type, its `[arg]` binding, its link.
+ * Deliberately NOT recursive: matching is done one
  * level at a time (like the page reconciler matching by line), so a container
  * keeps its identity even when its children change, while its children realign
  * among themselves. Classes/content/interactions are excluded — they are the
@@ -409,84 +365,4 @@ export function adoptStructure(
     })
   })
   return result
-}
-
-// an instance token with the slots one may carry: a `#ref` and the display-only
-// markers. Matching the bare name alone left `:Button#cta:` an empty leaf.
-// Built on first use, not at load: syntax.ts and this module import each other,
-// so REF_SLOT may not be initialized yet while this file is being evaluated.
-let instanceTokens: { leaf: RegExp; open: RegExp } | null = null
-function instanceMatchers() {
-  if (!instanceTokens) {
-    const head = `:([A-Z][a-zA-Z0-9-]*)(${REF_SLOT})(?:\\[\\+\\])?(?:\\(\\+?\\)?)?(?:\\{\\+?\\}?)?`
-    instanceTokens = { leaf: new RegExp(`^${head}:$`), open: new RegExp(`^${head}$`) }
-  }
-  return instanceTokens
-}
-
-/**
- * Expands freshly typed component references into their full editable
- * block: a `:Card:` leaf, or an empty `:Card` / `Card:` pair, becomes
- * `:Card` + the master's structure + `Card:`.
- */
-export function expandComponentInstances(
-  code: string,
-  components: ComponentDef[],
-  /** filled with the output line index of each input line — lets a caller
-   * report how much instance expansion shifted the author's line numbers */
-  lineMap?: number[],
-): string {
-  if (!components.length) {
-    if (lineMap) code.split('\n').forEach((_, i) => lineMap.push(i))
-    return code
-  }
-  const { leaf: INSTANCE_LEAF, open: INSTANCE_OPEN } = instanceMatchers()
-  const lines = code.split('\n')
-  const out: string[] = []
-  const mark = () => lineMap?.push(out.length)
-  /** component blocks currently open — a component never expands inside itself */
-  const stack: string[] = []
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!
-    const trimmed = line.trim()
-    const indent = line.match(/^\t*/)![0]
-
-    const close = trimmed.match(/^([A-Z][a-zA-Z0-9-]*):$/)
-    if (close && stack[stack.length - 1] === close[1]) {
-      stack.pop()
-      mark()
-      out.push(line)
-      continue
-    }
-
-    const leaf = trimmed.match(INSTANCE_LEAF)
-    const leafDef = leaf ? components.find((c) => c.name === leaf[1]) : null
-    if (leafDef && !stack.includes(leafDef.name)) {
-      mark()
-      // the ref stays on the wrapper — it is how an agent addresses the instance
-      out.push(`${indent}:${leafDef.name}${leaf![2] ?? ''}`)
-      out.push(...leafDef.root.children.flatMap((c) => serializeNode(c, `${indent}\t`)))
-      out.push(`${indent}${leafDef.name}:`)
-      continue
-    }
-
-    const open = trimmed.match(INSTANCE_OPEN)
-    const openDef = open ? components.find((c) => c.name === open[1]) : null
-    if (openDef && !stack.includes(openDef.name) && lines[i + 1]?.trim() === `${openDef.name}:`) {
-      mark()
-      out.push(line)
-      out.push(...openDef.root.children.flatMap((c) => serializeNode(c, `${indent}\t`)))
-      mark()
-      out.push(lines[i + 1]!)
-      i++
-      continue
-    }
-
-    if (open) stack.push(open[1]!)
-    mark()
-    out.push(line)
-  }
-
-  return out.join('\n')
 }

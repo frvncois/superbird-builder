@@ -153,7 +153,7 @@ test('dragging a row INTO a container re-parents it, and it publishes that way',
   await insertFromDock(page, 'section')
   const sectionId = await idAt(page, (await rows(page).count()) - 1)
   await rows(page).first().click()
-  await insertFromDock(page, 'heading')
+  await insertFromDock(page, 'h2')
   const headingId = await idAt(page, (await rows(page).count()) - 1)
 
   // they are siblings — the heading is NOT inside the section

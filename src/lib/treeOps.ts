@@ -8,17 +8,17 @@ import { canNest } from './instances'
  * Structural editing, over a tree.
  *
  * There are two things with structure in this app, and they used to be shaped
- * very differently: a PAGE, where the indentation DSL in `page.code` was
- * authoritative and every change was a text splice plus an identity-carrying
- * reconcile; and a component MASTER, a plain `ElementNode` tree. Two backends,
- * two sets of bugs, and the page one could only fail silently — fine for a text
- * editor where you see the result, unusable for a Layers tree that has to grey
- * out a drop target before the mouse is released.
+ * very differently: a PAGE, whose authority was an indentation-DSL document
+ * (every change a text splice plus an identity-carrying reparse), and a
+ * component MASTER, a plain `ElementNode` tree. Two backends, two sets of bugs,
+ * and the page one could only fail silently — fine for a text editor where you
+ * see the result, unusable for a Layers tree that has to grey out a drop target
+ * before the mouse is released.
  *
- * The tree is now the source of truth for both, so there is one implementation.
- * It is parameterized by a HOST: the root node everything lives inside — a
- * page's `:body`, or a master's `:Name` wrapper — plus, when that root is a
- * master, the component it belongs to.
+ * The tree is the source of truth for both, so there is one implementation,
+ * parameterized by a HOST: the root node everything lives inside — a page's
+ * body, or a component's own wrapper — plus, when that root is a master, the
+ * component it belongs to.
  *
  * All of it is pure: nodes in, mutations out, no Vue. `useStructure` wires the
  * policy (which host is live, where an edit inside a page instance is
@@ -39,7 +39,7 @@ export const masterHost = (def: ComponentDef): StructureHost => ({ root: def.roo
 
 /**
  * Can this node hold children? Registry-driven, NOT child-count based: a
- * childless `:div` is still a container, while a leaf would silently swallow
+ * childless `div` is still a container, while a leaf would silently swallow
  * anything put inside it (nothing renders a leaf's children).
  *
  * A component instance takes nothing *here*: what sits inside it is another
@@ -150,6 +150,9 @@ export function insertIn(
   targetId: string | null,
   position: DropPosition,
   components: ComponentDef[] = [],
+  /** classes the new element lands with — what makes an insert dock entry a
+   *  PRESET (Container, Grid) rather than an element type of its own */
+  classes?: string,
 ): ElementNode | null {
   // a target inside an instance cannot take it: land after that instance
   const instance = targetId ? enclosingInstance(host, targetId) : null
@@ -171,6 +174,7 @@ export function insertIn(
     return node
   }
   const node = createNode(type)
+  if (classes?.trim()) node.classes = classes.trim()
   // a seeded container (button, link, label) is born holding its words, so an
   // insert lands something visible rather than an empty box
   const seed = seedChildFor(type)

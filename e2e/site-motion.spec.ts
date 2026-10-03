@@ -34,7 +34,6 @@ function fixture(motion: unknown) {
     name,
     path,
     status: 'published',
-    code: '',
     elements: [
       node(`${id}-body`, 'body', {
         children: [

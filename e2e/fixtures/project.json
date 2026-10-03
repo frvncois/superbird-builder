@@ -7,7 +7,6 @@
       "name": "Home",
       "path": "/",
       "status": "published",
-      "code": "@setup\n\tname: Home\n\tslug: /\n\tstatus: published\n\tlocale: en\n:body\n\t:main\n\t\t:Header\n\t\t\t:header\n\t\t\t\t:link@/\n\t\t\t\t\t:span:\n\t\t\t\tlink:\n\t\t\t\t:nav\n\t\t\t\t\t:link@#why\n\t\t\t\t\t\t:span:\n\t\t\t\t\tlink:\n\t\t\t\t\t:link@#how\n\t\t\t\t\t\t:span:\n\t\t\t\t\tlink:\n\t\t\t\t\t:link@#pricing\n\t\t\t\t\t\t:span:\n\t\t\t\t\tlink:\n\t\t\t\t\t:link@#journal\n\t\t\t\t\t\t:span:\n\t\t\t\t\tlink:\n\t\t\t\t\t:link@#faq\n\t\t\t\t\t\t:span:\n\t\t\t\t\tlink:\n\t\t\t\tnav:\n\t\t\t\t:div\n\t\t\t\t\t:link@/en\n\t\t\t\t\t\t:span:\n\t\t\t\t\tlink:\n\t\t\t\t\t:link@/fr\n\t\t\t\t\t\t:span:\n\t\t\t\t\tlink:\n\t\t\t\t\t:link@#pricing\n\t\t\t\t\t\t:span:\n\t\t\t\t\tlink:\n\t\t\t\tdiv:\n\t\t\theader:\n\t\tHeader:\n\t\t:section\n\t\t\t:div\n\t\t\t:div\n\t\t\t:div\n\t\t\t:div\n\t\t\t\t:span:\n\t\t\t\t:h1:\n\t\t\t\t:paragraph:\n\t\t\t\t:div\n\t\t\t\t\t:link\n\t\t\t\t\t\t:span:\n\t\t\t\t\tlink:\n\t\t\t\t\t:link\n\t\t\t\t\t\t:span:\n\t\t\t\t\tlink:\n\t\t\t\tdiv:\n\t\t\t\t:span:\n\t\t\tdiv:\n\t\tsection:\n\t\t:section\n\t\t\t:div\n\t\t\t:div\n\t\t\t\t:span:\n\t\t\t\t:h2:\n\t\t\t\t:paragraph:\n\t\t\tdiv:\n\t\t\t:div\n\t\t\t\t:div\n\t\t\t\t\t:span:\n\t\t\t\t\t:h3:\n\t\t\t\t\t:paragraph:\n\t\t\t\tdiv:\n\t\t\t\t:div\n\t\t\t\t\t:span:\n\t\t\t\t\t:h3:\n\t\t\t\t\t:paragraph:\n\t\t\t\tdiv:\n\t\t\t\t:div\n\t\t\t\t\t:span:\n\t\t\t\t\t:h3:\n\t\t\t\t\t:paragraph:\n\t\t\t\tdiv:\n\t\t\t\t:div\n\t\t\t\t\t:span:\n\t\t\t\t\t:h3:\n\t\t\t\t\t:paragraph:\n\t\t\t\tdiv:\n\t\t\tdiv:\n\t\tsection:\n\t\t:section\n\t\t\t:div\n\t\t\t\t:span:\n\t\t\t\t:h2:\n\t\t\t\t:paragraph:\n\t\t\tdiv:\n\t\t\t:div\n\t\t\t\t:div\n\t\t\t\t\t:div\n\t\t\t\t\t:span:\n\t\t\t\t\t:h3:\n\t\t\t\t\t:paragraph:\n\t\t\t\tdiv:\n\t\t\t\t:div\n\t\t\t\t\t:div\n\t\t\t\t\t:span:\n\t\t\t\t\t:h3:\n\t\t\t\t\t:paragraph:\n\t\t\t\tdiv:\n\t\t\t\t:div\n\t\t\t\t\t:div\n\t\t\t\t\t:span:\n\t\t\t\t\t:h3:\n\t\t\t\t\t:paragraph:\n\t\t\t\tdiv:\n\t\t\tdiv:\n\t\tsection:\n\t\t:section\n\t\t\t:div\n\t\t\t\t:span:\n\t\t\t\t:h2:\n\t\t\t\t:paragraph:\n\t\t\tdiv:\n\t\t\t:div\n\t\t\t\t:div\n\t\t\t\t\t:h3:\n\t\t\t\t\t:div\n\t\t\t\t\t\t:span:\n\t\t\t\t\t\t:span:\n\t\t\t\t\tdiv:\n\t\t\t\t\t:paragraph:\n\t\t\t\t\t:list\n\t\t\t\t\t\t:list-item:\n\t\t\t\t\t\t:list-item:\n\t\t\t\t\t\t:list-item:\n\t\t\t\t\t\t:list-item:\n\t\t\t\t\tlist:\n\t\t\t\t\t:button\n\t\t\t\t\t\t:span:\n\t\t\t\t\tbutton:\n\t\t\t\tdiv:\n\t\t\t\t:div\n\t\t\t\t\t:span:\n\t\t\t\t\t:h3:\n\t\t\t\t\t:div\n\t\t\t\t\t\t:span:\n\t\t\t\t\t\t:span:\n\t\t\t\t\tdiv:\n\t\t\t\t\t:paragraph:\n\t\t\t\t\t:list\n\t\t\t\t\t\t:list-item:\n\t\t\t\t\t\t:list-item:\n\t\t\t\t\t\t:list-item:\n\t\t\t\t\t\t:list-item:\n\t\t\t\t\tlist:\n\t\t\t\t\t:button\n\t\t\t\t\t\t:span:\n\t\t\t\t\tbutton:\n\t\t\t\tdiv:\n\t\t\t\t:div\n\t\t\t\t\t:h3:\n\t\t\t\t\t:div\n\t\t\t\t\t\t:span:\n\t\t\t\t\t\t:span:\n\t\t\t\t\tdiv:\n\t\t\t\t\t:paragraph:\n\t\t\t\t\t:list\n\t\t\t\t\t\t:list-item:\n\t\t\t\t\t\t:list-item:\n\t\t\t\t\t\t:list-item:\n\t\t\t\t\t\t:list-item:\n\t\t\t\t\tlist:\n\t\t\t\t\t:button\n\t\t\t\t\t\t:span:\n\t\t\t\t\tbutton:\n\t\t\t\tdiv:\n\t\t\tdiv:\n\t\tsection:\n\t\t:section\n\t\t\t:div\n\t\t\t\t:span:\n\t\t\t\t:h2:\n\t\t\tdiv:\n\t\t\t:div\n\t\t\t\t:div\n\t\t\t\t\t:paragraph:\n\t\t\t\t\t:div\n\t\t\t\t\t\t:span:\n\t\t\t\t\t\t:div\n\t\t\t\t\t\t\t:span:\n\t\t\t\t\t\t\t:span:\n\t\t\t\t\t\tdiv:\n\t\t\t\t\tdiv:\n\t\t\t\tdiv:\n\t\t\t\t:div\n\t\t\t\t\t:paragraph:\n\t\t\t\t\t:div\n\t\t\t\t\t\t:span:\n\t\t\t\t\t\t:div\n\t\t\t\t\t\t\t:span:\n\t\t\t\t\t\t\t:span:\n\t\t\t\t\t\tdiv:\n\t\t\t\t\tdiv:\n\t\t\t\tdiv:\n\t\t\t\t:div\n\t\t\t\t\t:paragraph:\n\t\t\t\t\t:div\n\t\t\t\t\t\t:span:\n\t\t\t\t\t\t:div\n\t\t\t\t\t\t\t:span:\n\t\t\t\t\t\t\t:span:\n\t\t\t\t\t\tdiv:\n\t\t\t\t\tdiv:\n\t\t\t\tdiv:\n\t\t\tdiv:\n\t\tsection:\n\t\t:section\n\t\t\t:div\n\t\t\t\t:span:\n\t\t\t\t:h2:\n\t\t\tdiv:\n\t\t\t:div\n\t\t\t\t:div\n\t\t\t\t\t:h3:\n\t\t\t\t\t:paragraph:\n\t\t\t\tdiv:\n\t\t\t\t:div\n\t\t\t\t\t:h3:\n\t\t\t\t\t:paragraph:\n\t\t\t\tdiv:\n\t\t\t\t:div\n\t\t\t\t\t:h3:\n\t\t\t\t\t:paragraph:\n\t\t\t\tdiv:\n\t\t\t\t:div\n\t\t\t\t\t:h3:\n\t\t\t\t\t:paragraph:\n\t\t\t\tdiv:\n\t\t\tdiv:\n\t\tsection:\n\t\t:section\n\t\t\t:div\n\t\t\t\t:span:\n\t\t\t\t:h2:\n\t\t\t\t:paragraph:\n\t\t\tdiv:\n\t\t\t:collection-list[post]\n\t\t\t\t:div@item\n\t\t\t\t\t:div\n\t\t\t\t\t\t:image[cover]:\n\t\t\t\t\tdiv:\n\t\t\t\t\t:div\n\t\t\t\t\t\t:span[date]:\n\t\t\t\t\t\t:h3[title]:\n\t\t\t\t\t\t:paragraph[excerpt]:\n\t\t\t\t\tdiv:\n\t\t\t\tdiv:\n\t\t\tcollection-list:\n\t\tsection:\n\t\t:section\n\t\t\t:div\n\t\t\t\t:div\n\t\t\t\t:div\n\t\t\t\t:div\n\t\t\t\t\t:span:\n\t\t\t\t\t:h2:\n\t\t\t\t\t:paragraph:\n\t\t\t\t\t:form\n\t\t\t\t\t\t:label\n\t\t\t\t\t\t\t:span:\n\t\t\t\t\t\tlabel:\n\t\t\t\t\t\t:div\n\t\t\t\t\t\t\t:input:\n\t\t\t\t\t\t\t:button\n\t\t\t\t\t\t\t\t:span:\n\t\t\t\t\t\t\tbutton:\n\t\t\t\t\t\tdiv:\n\t\t\t\t\tform:\n\t\t\t\t\t:span:\n\t\t\t\tdiv:\n\t\t\tdiv:\n\t\tsection:\n\t\t:Footer\n\t\t\t:footer\n\t\t\t\t:div\n\t\t\t\t\t:div\n\t\t\t\t\t\t:span:\n\t\t\t\t\t\t:paragraph:\n\t\t\t\t\tdiv:\n\t\t\t\t\t:nav\n\t\t\t\t\t\t:link@#why\n\t\t\t\t\t\t\t:span:\n\t\t\t\t\t\tlink:\n\t\t\t\t\t\t:link@#how\n\t\t\t\t\t\t\t:span:\n\t\t\t\t\t\tlink:\n\t\t\t\t\t\t:link@#pricing\n\t\t\t\t\t\t\t:span:\n\t\t\t\t\t\tlink:\n\t\t\t\t\t\t:link@#journal\n\t\t\t\t\t\t\t:span:\n\t\t\t\t\t\tlink:\n\t\t\t\t\t\t:link@#faq\n\t\t\t\t\t\t\t:span:\n\t\t\t\t\t\tlink:\n\t\t\t\t\tnav:\n\t\t\t\t\t:div\n\t\t\t\t\t\t:link@mailto:hello@brume.coffee\n\t\t\t\t\t\t\t:span:\n\t\t\t\t\t\tlink:\n\t\t\t\t\t\t:span:\n\t\t\t\t\tdiv:\n\t\t\t\tdiv:\n\t\t\t\t:div\n\t\t\t\t\t:span:\n\t\t\t\t\t:span:\n\t\t\t\tdiv:\n\t\t\tfooter:\n\t\tFooter:\n\tmain:\nbody:",
       "elements": [
         {
           "id": "473f7341-0020-4f19-a740-86c263d380b0",
@@ -38,13 +37,9 @@
                               "id": "c7193e1b-3ffd-41d6-83d7-0a9bc9f663d0",
                               "type": "span",
                               "content": "",
-                              "children": [],
-                              "endLine": 10,
-                              "line": 10
+                              "children": []
                             }
                           ],
-                          "endLine": 11,
-                          "line": 9,
                           "link": "/"
                         },
                         {
@@ -61,13 +56,9 @@
                                   "id": "4175ce3d-5130-4a63-9f8f-95111ac4ee0d",
                                   "type": "span",
                                   "content": "",
-                                  "children": [],
-                                  "endLine": 14,
-                                  "line": 14
+                                  "children": []
                                 }
                               ],
-                              "endLine": 15,
-                              "line": 13,
                               "link": "#why"
                             },
                             {
@@ -79,13 +70,9 @@
                                   "id": "29322514-e6c1-4a2a-a3c1-af30f46c3d50",
                                   "type": "span",
                                   "content": "",
-                                  "children": [],
-                                  "endLine": 17,
-                                  "line": 17
+                                  "children": []
                                 }
                               ],
-                              "endLine": 18,
-                              "line": 16,
                               "link": "#how"
                             },
                             {
@@ -97,13 +84,9 @@
                                   "id": "f555f6a6-49ea-4172-892d-5143504f726a",
                                   "type": "span",
                                   "content": "",
-                                  "children": [],
-                                  "endLine": 20,
-                                  "line": 20
+                                  "children": []
                                 }
                               ],
-                              "endLine": 21,
-                              "line": 19,
                               "link": "#pricing"
                             },
                             {
@@ -115,13 +98,9 @@
                                   "id": "52db5c9c-2d57-4850-a95b-c5567b0ea50d",
                                   "type": "span",
                                   "content": "",
-                                  "children": [],
-                                  "endLine": 23,
-                                  "line": 23
+                                  "children": []
                                 }
                               ],
-                              "endLine": 24,
-                              "line": 22,
                               "link": "#journal"
                             },
                             {
@@ -133,18 +112,12 @@
                                   "id": "283724d0-1575-45ec-8923-7ee5865f4826",
                                   "type": "span",
                                   "content": "",
-                                  "children": [],
-                                  "endLine": 26,
-                                  "line": 26
+                                  "children": []
                                 }
                               ],
-                              "endLine": 27,
-                              "line": 25,
                               "link": "#faq"
                             }
-                          ],
-                          "endLine": 28,
-                          "line": 12
+                          ]
                         },
                         {
                           "id": "8e384f75-c911-458e-b3d3-c653b76f6184",
@@ -160,13 +133,9 @@
                                   "id": "f15d469d-231e-467d-87b1-36d8c9d636a0",
                                   "type": "span",
                                   "content": "",
-                                  "children": [],
-                                  "endLine": 31,
-                                  "line": 31
+                                  "children": []
                                 }
                               ],
-                              "endLine": 32,
-                              "line": 30,
                               "link": "/en"
                             },
                             {
@@ -178,13 +147,9 @@
                                   "id": "3e4a3fb8-cebf-4b3a-91f4-4fdcef2d6d48",
                                   "type": "span",
                                   "content": "",
-                                  "children": [],
-                                  "endLine": 34,
-                                  "line": 34
+                                  "children": []
                                 }
                               ],
-                              "endLine": 35,
-                              "line": 33,
                               "link": "/fr"
                             },
                             {
@@ -196,26 +161,16 @@
                                   "id": "d6a61f8b-4d70-4f2f-8734-969b2cdbe24b",
                                   "type": "span",
                                   "content": "",
-                                  "children": [],
-                                  "endLine": 37,
-                                  "line": 37
+                                  "children": []
                                 }
                               ],
-                              "endLine": 38,
-                              "line": 36,
                               "link": "#pricing"
                             }
-                          ],
-                          "endLine": 39,
-                          "line": 29
+                          ]
                         }
-                      ],
-                      "endLine": 40,
-                      "line": 8
+                      ]
                     }
-                  ],
-                  "endLine": 41,
-                  "line": 7
+                  ]
                 },
                 {
                   "id": "484ad0f1-2dcc-4cb3-bbaa-fac42a1ae2e0",
@@ -247,8 +202,6 @@
                                       "type": "span",
                                       "content": "Roasted in Mile-End every Tuesday",
                                       "children": [],
-                                      "endLine": 47,
-                                      "line": 47,
                                       "classes": "w-fit rounded-full bg-secondary-container px-4 py-1.5 text-xs font-medium tracking-wide text-on-secondary-container",
                                       "locales": {
                                         "fr": {
@@ -261,8 +214,6 @@
                                       "type": "h1",
                                       "content": "Coffee roasted this week, not this quarter.",
                                       "children": [],
-                                      "endLine": 48,
-                                      "line": 48,
                                       "classes": "max-w-3xl text-[40px] font-medium leading-[1.2] tracking-tight text-on-surface md:text-[56px]",
                                       "locales": {
                                         "fr": {
@@ -275,8 +226,6 @@
                                       "type": "paragraph",
                                       "content": "Brume roasts small lots in Mile-End every Tuesday and ships the same afternoon. Your subscription arrives at peak flavour — usually within 48 hours of leaving the drum.",
                                       "children": [],
-                                      "endLine": 49,
-                                      "line": 49,
                                       "classes": "max-w-2xl text-[16px] leading-[1.6] text-on-surface-variant md:text-[20px]",
                                       "locales": {
                                         "fr": {
@@ -299,8 +248,6 @@
                                               "type": "span",
                                               "content": "Start your subscription",
                                               "children": [],
-                                              "endLine": 52,
-                                              "line": 52,
                                               "locales": {
                                                 "fr": {
                                                   "content": "Commencer votre abonnement"
@@ -308,8 +255,6 @@
                                               }
                                             }
                                           ],
-                                          "endLine": 53,
-                                          "line": 51,
                                           "link": "#pricing",
                                           "classes": "rounded-full bg-primary px-8 py-4 text-sm font-medium text-white shadow-sm transition-all duration-200 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none hover:bg-primary/90 hover:shadow-md active:bg-primary/80 active:scale-95 focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:outline-none text-base"
                                         },
@@ -323,8 +268,6 @@
                                               "type": "span",
                                               "content": "See how it works",
                                               "children": [],
-                                              "endLine": 55,
-                                              "line": 55,
                                               "locales": {
                                                 "fr": {
                                                   "content": "Voir comment ça marche"
@@ -332,14 +275,10 @@
                                               }
                                             }
                                           ],
-                                          "endLine": 56,
-                                          "line": 54,
                                           "link": "#how",
                                           "classes": "rounded-full bg-secondary-container px-8 py-4 text-sm font-medium text-on-secondary-container transition-all duration-200 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none hover:bg-secondary-container/70 hover:shadow-sm active:scale-95 focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:outline-none"
                                         }
                                       ],
-                                      "endLine": 57,
-                                      "line": 50,
                                       "classes": "flex flex-wrap items-center justify-center gap-4"
                                     },
                                     {
@@ -347,8 +286,6 @@
                                       "type": "span",
                                       "content": "From $22 a month · Pause or cancel anytime · Free shipping in Canada",
                                       "children": [],
-                                      "endLine": 58,
-                                      "line": 58,
                                       "classes": "text-[14px] text-on-surface-variant",
                                       "locales": {
                                         "fr": {
@@ -357,8 +294,6 @@
                                       }
                                     }
                                   ],
-                                  "endLine": 59,
-                                  "line": 46,
                                   "classes": "relative mx-auto flex max-w-4xl flex-col items-center gap-8 text-center translate-y-6 opacity-0",
                                   "interactions": [
                                     {
@@ -370,23 +305,15 @@
                                   ]
                                 }
                               ],
-                              "endLine": 60,
-                              "line": 45,
                               "classes": "pointer-events-none absolute -bottom-32 left-1/3 h-72 w-[36rem] rounded-full bg-secondary-container/60 blur-3xl"
                             }
                           ],
-                          "endLine": 60,
-                          "line": 44,
                           "classes": "pointer-events-none absolute top-40 -right-24 h-80 w-80 rounded-full bg-tertiary/20 blur-3xl"
                         }
                       ],
-                      "endLine": 60,
-                      "line": 43,
                       "classes": "pointer-events-none absolute -top-24 -left-32 h-96 w-96 rounded-full bg-primary/20 blur-3xl"
                     }
                   ],
-                  "endLine": 60,
-                  "line": 42,
                   "classes": "relative overflow-hidden px-6 pt-20 pb-24 md:pt-28 md:pb-32"
                 },
                 {
@@ -409,8 +336,6 @@
                               "type": "span",
                               "content": "Why Brume",
                               "children": [],
-                              "endLine": 64,
-                              "line": 64,
                               "classes": "w-fit rounded-full bg-secondary-container px-4 py-1.5 text-xs font-medium tracking-wide text-on-secondary-container",
                               "locales": {
                                 "fr": {
@@ -423,8 +348,6 @@
                               "type": "h2",
                               "content": "Freshness you can taste in the first sip.",
                               "children": [],
-                              "endLine": 65,
-                              "line": 65,
                               "classes": "text-[32px] font-medium leading-[1.2] tracking-tight text-on-surface md:text-[48px]",
                               "locales": {
                                 "fr": {
@@ -437,8 +360,6 @@
                               "type": "paragraph",
                               "content": "Most grocery-store coffee is months old before you open the bag. Ours has a roast date, a farm, and a plan for your brewer.",
                               "children": [],
-                              "endLine": 66,
-                              "line": 66,
                               "classes": "text-[16px] leading-[1.6] text-on-surface-variant",
                               "locales": {
                                 "fr": {
@@ -447,8 +368,6 @@
                               }
                             }
                           ],
-                          "endLine": 67,
-                          "line": 63,
                           "classes": "mx-auto flex max-w-2xl flex-col items-center gap-4 text-center translate-y-6 opacity-0",
                           "interactions": [
                             {
@@ -474,8 +393,6 @@
                                   "type": "span",
                                   "content": "☕",
                                   "children": [],
-                                  "endLine": 70,
-                                  "line": 70,
                                   "classes": "flex h-14 w-14 items-center justify-center rounded-full bg-secondary-container text-2xl"
                                 },
                                 {
@@ -483,8 +400,6 @@
                                   "type": "h3",
                                   "content": "Roasted, not stockpiled",
                                   "children": [],
-                                  "endLine": 71,
-                                  "line": 71,
                                   "classes": "text-[24px] font-medium leading-[1.3] text-on-surface",
                                   "locales": {
                                     "fr": {
@@ -497,8 +412,6 @@
                                   "type": "paragraph",
                                   "content": "We roast every Tuesday in four-kilo batches and ship the same day. Nothing sits on a shelf — including your coffee.",
                                   "children": [],
-                                  "endLine": 72,
-                                  "line": 72,
                                   "classes": "text-[16px] leading-[1.6] text-on-surface-variant",
                                   "locales": {
                                     "fr": {
@@ -507,8 +420,6 @@
                                   }
                                 }
                               ],
-                              "endLine": 73,
-                              "line": 69,
                               "classes": "flex flex-col gap-4 rounded-[24px] bg-surface-container p-8 shadow-sm transition-all duration-300 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none",
                               "interactions": [
                                 {
@@ -529,8 +440,6 @@
                                   "type": "span",
                                   "content": "🌱",
                                   "children": [],
-                                  "endLine": 75,
-                                  "line": 75,
                                   "classes": "flex h-14 w-14 items-center justify-center rounded-full bg-secondary-container text-2xl"
                                 },
                                 {
@@ -538,8 +447,6 @@
                                   "type": "h3",
                                   "content": "Traceable to the farm",
                                   "children": [],
-                                  "endLine": 76,
-                                  "line": 76,
                                   "classes": "text-[24px] font-medium leading-[1.3] text-on-surface",
                                   "locales": {
                                     "fr": {
@@ -552,8 +459,6 @@
                                   "type": "paragraph",
                                   "content": "Every bag names the farm, the lot, and what we paid for it. This season: Huila, Colombia and Sidama, Ethiopia.",
                                   "children": [],
-                                  "endLine": 77,
-                                  "line": 77,
                                   "classes": "text-[16px] leading-[1.6] text-on-surface-variant",
                                   "locales": {
                                     "fr": {
@@ -562,8 +467,6 @@
                                   }
                                 }
                               ],
-                              "endLine": 78,
-                              "line": 74,
                               "classes": "flex flex-col gap-4 rounded-[24px] bg-surface-container p-8 shadow-sm transition-all duration-300 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none",
                               "interactions": [
                                 {
@@ -584,8 +487,6 @@
                                   "type": "span",
                                   "content": "⚙️",
                                   "children": [],
-                                  "endLine": 80,
-                                  "line": 80,
                                   "classes": "flex h-14 w-14 items-center justify-center rounded-full bg-secondary-container text-2xl"
                                 },
                                 {
@@ -593,8 +494,6 @@
                                   "type": "h3",
                                   "content": "Matched to your brewer",
                                   "children": [],
-                                  "endLine": 81,
-                                  "line": 81,
                                   "classes": "text-[24px] font-medium leading-[1.3] text-on-surface",
                                   "locales": {
                                     "fr": {
@@ -607,8 +506,6 @@
                                   "type": "paragraph",
                                   "content": "Tell us if you pour, press, or pull espresso. We tune the roast profile and grind to fit — no generic “medium roast” here.",
                                   "children": [],
-                                  "endLine": 82,
-                                  "line": 82,
                                   "classes": "text-[16px] leading-[1.6] text-on-surface-variant",
                                   "locales": {
                                     "fr": {
@@ -617,8 +514,6 @@
                                   }
                                 }
                               ],
-                              "endLine": 83,
-                              "line": 79,
                               "classes": "flex flex-col gap-4 rounded-[24px] bg-surface-container p-8 shadow-sm transition-all duration-300 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none",
                               "interactions": [
                                 {
@@ -639,8 +534,6 @@
                                   "type": "span",
                                   "content": "⏸️",
                                   "children": [],
-                                  "endLine": 85,
-                                  "line": 85,
                                   "classes": "flex h-14 w-14 items-center justify-center rounded-full bg-secondary-container text-2xl"
                                 },
                                 {
@@ -648,8 +541,6 @@
                                   "type": "h3",
                                   "content": "Yours to pause",
                                   "children": [],
-                                  "endLine": 86,
-                                  "line": 86,
                                   "classes": "text-[24px] font-medium leading-[1.3] text-on-surface",
                                   "locales": {
                                     "fr": {
@@ -662,8 +553,6 @@
                                   "type": "paragraph",
                                   "content": "Skip a month, switch beans, or stop entirely in two taps. A subscription should feel like a treat, not a contract.",
                                   "children": [],
-                                  "endLine": 87,
-                                  "line": 87,
                                   "classes": "text-[16px] leading-[1.6] text-on-surface-variant",
                                   "locales": {
                                     "fr": {
@@ -672,8 +561,6 @@
                                   }
                                 }
                               ],
-                              "endLine": 88,
-                              "line": 84,
                               "classes": "flex flex-col gap-4 rounded-[24px] bg-surface-container p-8 shadow-sm transition-all duration-300 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none",
                               "interactions": [
                                 {
@@ -685,18 +572,12 @@
                               ]
                             }
                           ],
-                          "endLine": 89,
-                          "line": 68,
                           "classes": "relative mx-auto mt-12 grid max-w-6xl gap-6 sm:grid-cols-2 lg:grid-cols-4"
                         }
                       ],
-                      "endLine": 90,
-                      "line": 62,
                       "classes": "pointer-events-none absolute top-1/3 -right-32 h-96 w-96 rounded-full bg-primary/10 blur-3xl"
                     }
                   ],
-                  "endLine": 90,
-                  "line": 61,
                   "classes": "relative overflow-hidden px-6 py-20",
                   "htmlId": "why"
                 },
@@ -715,8 +596,6 @@
                           "type": "span",
                           "content": "How it works",
                           "children": [],
-                          "endLine": 93,
-                          "line": 93,
                           "classes": "w-fit rounded-full bg-secondary-container px-4 py-1.5 text-xs font-medium tracking-wide text-on-secondary-container",
                           "locales": {
                             "fr": {
@@ -729,8 +608,6 @@
                           "type": "h2",
                           "content": "Tuesday is roast day. Here’s what happens.",
                           "children": [],
-                          "endLine": 94,
-                          "line": 94,
                           "classes": "text-[32px] font-medium leading-[1.2] tracking-tight text-on-surface md:text-[48px]",
                           "locales": {
                             "fr": {
@@ -743,8 +620,6 @@
                           "type": "paragraph",
                           "content": "From your first order to the bag on your counter, in three steps.",
                           "children": [],
-                          "endLine": 95,
-                          "line": 95,
                           "classes": "text-[16px] leading-[1.6] text-on-surface-variant",
                           "locales": {
                             "fr": {
@@ -753,8 +628,6 @@
                           }
                         }
                       ],
-                      "endLine": 96,
-                      "line": 92,
                       "classes": "mx-auto flex max-w-2xl flex-col items-center gap-4 text-center translate-y-6 opacity-0",
                       "interactions": [
                         {
@@ -785,8 +658,6 @@
                                   "type": "span",
                                   "content": "1",
                                   "children": [],
-                                  "endLine": 100,
-                                  "line": 100,
                                   "classes": "relative flex h-12 w-12 items-center justify-center rounded-full bg-primary text-lg font-medium text-white shadow-sm transition-all duration-200 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none group-hover:scale-110"
                                 },
                                 {
@@ -794,8 +665,6 @@
                                   "type": "h3",
                                   "content": "Tell us how you brew",
                                   "children": [],
-                                  "endLine": 101,
-                                  "line": 101,
                                   "classes": "relative text-[24px] font-medium leading-[1.3] text-on-surface",
                                   "locales": {
                                     "fr": {
@@ -808,8 +677,6 @@
                                   "type": "paragraph",
                                   "content": "Answer three questions — how you brew, how much you drink, and how adventurous you’re feeling. Two minutes, no account needed.",
                                   "children": [],
-                                  "endLine": 102,
-                                  "line": 102,
                                   "classes": "relative text-[16px] leading-[1.6] text-on-surface-variant",
                                   "locales": {
                                     "fr": {
@@ -818,8 +685,6 @@
                                   }
                                 }
                               ],
-                              "endLine": 103,
-                              "line": 99,
                               "classes": "pointer-events-none absolute -top-8 -left-8 h-36 w-36 rounded-full bg-primary/20 blur-3xl opacity-0 transition-all duration-300 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none group-hover:opacity-100"
                             },
                             {
@@ -837,8 +702,6 @@
                                       "type": "span",
                                       "content": "2",
                                       "children": [],
-                                      "endLine": 106,
-                                      "line": 106,
                                       "classes": "relative flex h-12 w-12 items-center justify-center rounded-full bg-primary text-lg font-medium text-white shadow-sm transition-all duration-200 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none group-hover:scale-110"
                                     },
                                     {
@@ -846,8 +709,6 @@
                                       "type": "h3",
                                       "content": "We roast your lot",
                                       "children": [],
-                                      "endLine": 107,
-                                      "line": 107,
                                       "classes": "relative text-[24px] font-medium leading-[1.3] text-on-surface",
                                       "locales": {
                                         "fr": {
@@ -860,8 +721,6 @@
                                       "type": "paragraph",
                                       "content": "Tuesday morning your beans go through the drum in our Mile-End roastery, rest just long enough, and are sealed behind a one-way valve.",
                                       "children": [],
-                                      "endLine": 108,
-                                      "line": 108,
                                       "classes": "relative text-[16px] leading-[1.6] text-on-surface-variant",
                                       "locales": {
                                         "fr": {
@@ -870,8 +729,6 @@
                                       }
                                     }
                                   ],
-                                  "endLine": 109,
-                                  "line": 105,
                                   "classes": "pointer-events-none absolute -top-8 -left-8 h-36 w-36 rounded-full bg-primary/20 blur-3xl opacity-0 transition-all duration-300 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none group-hover:opacity-100"
                                 },
                                 {
@@ -889,8 +746,6 @@
                                           "type": "span",
                                           "content": "3",
                                           "children": [],
-                                          "endLine": 112,
-                                          "line": 112,
                                           "classes": "relative flex h-12 w-12 items-center justify-center rounded-full bg-primary text-lg font-medium text-white shadow-sm transition-all duration-200 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none group-hover:scale-110"
                                         },
                                         {
@@ -898,8 +753,6 @@
                                           "type": "h3",
                                           "content": "It ships that afternoon",
                                           "children": [],
-                                          "endLine": 113,
-                                          "line": 113,
                                           "classes": "relative text-[24px] font-medium leading-[1.3] text-on-surface",
                                           "locales": {
                                             "fr": {
@@ -912,8 +765,6 @@
                                           "type": "paragraph",
                                           "content": "Bags leave the same day by carbon-neutral post. Most of Canada sees them within two days — peak-flavour week included.",
                                           "children": [],
-                                          "endLine": 114,
-                                          "line": 114,
                                           "classes": "relative text-[16px] leading-[1.6] text-on-surface-variant",
                                           "locales": {
                                             "fr": {
@@ -922,33 +773,21 @@
                                           }
                                         }
                                       ],
-                                      "endLine": 115,
-                                      "line": 111,
                                       "classes": "pointer-events-none absolute -top-8 -left-8 h-36 w-36 rounded-full bg-primary/20 blur-3xl opacity-0 transition-all duration-300 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none group-hover:opacity-100"
                                     }
                                   ],
-                                  "endLine": 116,
-                                  "line": 110,
                                   "classes": "group relative flex flex-col gap-4 overflow-hidden rounded-[24px] bg-surface-container p-8 shadow-sm transition-all duration-300 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none hover:shadow-md"
                                 }
                               ],
-                              "endLine": 117,
-                              "line": 104,
                               "classes": "group relative flex flex-col gap-4 overflow-hidden rounded-[24px] bg-surface-container p-8 shadow-sm transition-all duration-300 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none hover:shadow-md"
                             }
                           ],
-                          "endLine": 117,
-                          "line": 98,
                           "classes": "group relative flex flex-col gap-4 overflow-hidden rounded-[24px] bg-surface-container p-8 shadow-sm transition-all duration-300 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none hover:shadow-md"
                         }
                       ],
-                      "endLine": 117,
-                      "line": 97,
                       "classes": "mx-auto mt-12 grid max-w-6xl gap-6 md:grid-cols-3"
                     }
                   ],
-                  "endLine": 117,
-                  "line": 91,
                   "classes": "px-6 py-20",
                   "htmlId": "how"
                 },
@@ -967,8 +806,6 @@
                           "type": "span",
                           "content": "Pricing",
                           "children": [],
-                          "endLine": 120,
-                          "line": 120,
                           "classes": "w-fit rounded-full bg-secondary-container px-4 py-1.5 text-xs font-medium tracking-wide text-on-secondary-container",
                           "locales": {
                             "fr": {
@@ -981,8 +818,6 @@
                           "type": "h2",
                           "content": "Three ways to never run out.",
                           "children": [],
-                          "endLine": 121,
-                          "line": 121,
                           "classes": "text-[32px] font-medium leading-[1.2] tracking-tight text-on-surface md:text-[48px]",
                           "locales": {
                             "fr": {
@@ -995,8 +830,6 @@
                           "type": "paragraph",
                           "content": "Every tier ships fresh on Tuesdays. Pause, swap, or cancel whenever.",
                           "children": [],
-                          "endLine": 122,
-                          "line": 122,
                           "classes": "text-[16px] leading-[1.6] text-on-surface-variant",
                           "locales": {
                             "fr": {
@@ -1005,8 +838,6 @@
                           }
                         }
                       ],
-                      "endLine": 123,
-                      "line": 119,
                       "classes": "mx-auto flex max-w-2xl flex-col items-center gap-4 text-center translate-y-6 opacity-0",
                       "interactions": [
                         {
@@ -1032,8 +863,6 @@
                               "type": "h3",
                               "content": "Le Curieux",
                               "children": [],
-                              "endLine": 126,
-                              "line": 126,
                               "classes": "text-[24px] font-medium text-on-surface"
                             },
                             {
@@ -1046,8 +875,6 @@
                                   "type": "span",
                                   "content": "$22",
                                   "children": [],
-                                  "endLine": 128,
-                                  "line": 128,
                                   "classes": "text-[48px] font-medium tracking-tight text-on-surface"
                                 },
                                 {
@@ -1055,8 +882,6 @@
                                   "type": "span",
                                   "content": "/month",
                                   "children": [],
-                                  "endLine": 129,
-                                  "line": 129,
                                   "classes": "text-[14px] text-on-surface-variant",
                                   "locales": {
                                     "fr": {
@@ -1065,8 +890,6 @@
                                   }
                                 }
                               ],
-                              "endLine": 130,
-                              "line": 127,
                               "classes": "flex items-baseline gap-1"
                             },
                             {
@@ -1074,8 +897,6 @@
                               "type": "paragraph",
                               "content": "One bag a month for the curious cup.",
                               "children": [],
-                              "endLine": 131,
-                              "line": 131,
                               "classes": "text-[16px] leading-[1.6] text-on-surface-variant",
                               "locales": {
                                 "fr": {
@@ -1093,8 +914,6 @@
                                   "type": "list-item",
                                   "content": "✓ One 340 g bag, rotating single origin",
                                   "children": [],
-                                  "endLine": 133,
-                                  "line": 133,
                                   "classes": "text-[16px] leading-[1.5] text-on-surface-variant",
                                   "locales": {
                                     "fr": {
@@ -1107,8 +926,6 @@
                                   "type": "list-item",
                                   "content": "✓ Whole bean or ground to order",
                                   "children": [],
-                                  "endLine": 134,
-                                  "line": 134,
                                   "classes": "text-[16px] leading-[1.5] text-on-surface-variant",
                                   "locales": {
                                     "fr": {
@@ -1121,8 +938,6 @@
                                   "type": "list-item",
                                   "content": "✓ Tasting card with every lot",
                                   "children": [],
-                                  "endLine": 135,
-                                  "line": 135,
                                   "classes": "text-[16px] leading-[1.5] text-on-surface-variant",
                                   "locales": {
                                     "fr": {
@@ -1135,8 +950,6 @@
                                   "type": "list-item",
                                   "content": "✓ Free shipping in Canada",
                                   "children": [],
-                                  "endLine": 136,
-                                  "line": 136,
                                   "classes": "text-[16px] leading-[1.5] text-on-surface-variant",
                                   "locales": {
                                     "fr": {
@@ -1145,8 +958,6 @@
                                   }
                                 }
                               ],
-                              "endLine": 137,
-                              "line": 132,
                               "classes": "flex flex-col gap-3"
                             },
                             {
@@ -1159,8 +970,6 @@
                                   "type": "span",
                                   "content": "Choose Le Curieux",
                                   "children": [],
-                                  "endLine": 139,
-                                  "line": 139,
                                   "locales": {
                                     "fr": {
                                       "content": "Choisir Le Curieux"
@@ -1168,13 +977,9 @@
                                   }
                                 }
                               ],
-                              "endLine": 140,
-                              "line": 138,
                               "classes": "mt-auto w-full text-center rounded-full bg-secondary-container px-8 py-4 text-sm font-medium text-on-secondary-container transition-all duration-200 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none hover:bg-secondary-container/70 hover:shadow-sm active:scale-95 focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:outline-none"
                             }
                           ],
-                          "endLine": 141,
-                          "line": 125,
                           "classes": "flex flex-col gap-6 rounded-[32px] bg-surface-container p-8 shadow-sm transition-all duration-300 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none hover:shadow-md"
                         },
                         {
@@ -1187,8 +992,6 @@
                               "type": "span",
                               "content": "Most popular",
                               "children": [],
-                              "endLine": 143,
-                              "line": 143,
                               "classes": "w-fit rounded-full bg-primary px-4 py-1.5 text-xs font-medium tracking-wide text-white",
                               "locales": {
                                 "fr": {
@@ -1201,8 +1004,6 @@
                               "type": "h3",
                               "content": "L’Habitué",
                               "children": [],
-                              "endLine": 144,
-                              "line": 144,
                               "classes": "text-[24px] font-medium text-on-surface"
                             },
                             {
@@ -1215,8 +1016,6 @@
                                   "type": "span",
                                   "content": "$38",
                                   "children": [],
-                                  "endLine": 146,
-                                  "line": 146,
                                   "classes": "text-[48px] font-medium tracking-tight text-on-surface"
                                 },
                                 {
@@ -1224,8 +1023,6 @@
                                   "type": "span",
                                   "content": "/month",
                                   "children": [],
-                                  "endLine": 147,
-                                  "line": 147,
                                   "classes": "text-[14px] text-on-surface-variant",
                                   "locales": {
                                     "fr": {
@@ -1234,8 +1031,6 @@
                                   }
                                 }
                               ],
-                              "endLine": 148,
-                              "line": 145,
                               "classes": "flex items-baseline gap-1"
                             },
                             {
@@ -1243,8 +1038,6 @@
                               "type": "paragraph",
                               "content": "Two bags, tuned to your routine.",
                               "children": [],
-                              "endLine": 149,
-                              "line": 149,
                               "classes": "text-[16px] leading-[1.6] text-on-surface-variant",
                               "locales": {
                                 "fr": {
@@ -1262,8 +1055,6 @@
                                   "type": "list-item",
                                   "content": "✓ Two 340 g bags — mix origins freely",
                                   "children": [],
-                                  "endLine": 151,
-                                  "line": 151,
                                   "classes": "text-[16px] leading-[1.5] text-on-surface-variant",
                                   "locales": {
                                     "fr": {
@@ -1276,8 +1067,6 @@
                                   "type": "list-item",
                                   "content": "✓ Espresso or filter roast profiles",
                                   "children": [],
-                                  "endLine": 152,
-                                  "line": 152,
                                   "classes": "text-[16px] leading-[1.5] text-on-surface-variant",
                                   "locales": {
                                     "fr": {
@@ -1290,8 +1079,6 @@
                                   "type": "list-item",
                                   "content": "✓ First taste of limited micro-lots",
                                   "children": [],
-                                  "endLine": 153,
-                                  "line": 153,
                                   "classes": "text-[16px] leading-[1.5] text-on-surface-variant",
                                   "locales": {
                                     "fr": {
@@ -1304,8 +1091,6 @@
                                   "type": "list-item",
                                   "content": "✓ Free shipping + surprise samples",
                                   "children": [],
-                                  "endLine": 154,
-                                  "line": 154,
                                   "classes": "text-[16px] leading-[1.5] text-on-surface-variant",
                                   "locales": {
                                     "fr": {
@@ -1314,8 +1099,6 @@
                                   }
                                 }
                               ],
-                              "endLine": 155,
-                              "line": 150,
                               "classes": "flex flex-col gap-3"
                             },
                             {
@@ -1328,8 +1111,6 @@
                                   "type": "span",
                                   "content": "Choose L’Habitué",
                                   "children": [],
-                                  "endLine": 157,
-                                  "line": 157,
                                   "locales": {
                                     "fr": {
                                       "content": "Choisir L’Habitué"
@@ -1337,13 +1118,9 @@
                                   }
                                 }
                               ],
-                              "endLine": 158,
-                              "line": 156,
                               "classes": "mt-auto w-full text-center rounded-full bg-primary px-8 py-4 text-sm font-medium text-white shadow-sm transition-all duration-200 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none hover:bg-primary/90 hover:shadow-md active:bg-primary/80 active:scale-95 focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:outline-none"
                             }
                           ],
-                          "endLine": 159,
-                          "line": 142,
                           "classes": "relative flex flex-col gap-6 rounded-[32px] bg-surface-container p-8 shadow-lg ring-2 ring-primary transition-all duration-300 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none hover:shadow-lg md:-translate-y-4"
                         },
                         {
@@ -1356,8 +1133,6 @@
                               "type": "h3",
                               "content": "La Maisonnée",
                               "children": [],
-                              "endLine": 161,
-                              "line": 161,
                               "classes": "text-[24px] font-medium text-on-surface"
                             },
                             {
@@ -1370,8 +1145,6 @@
                                   "type": "span",
                                   "content": "$54",
                                   "children": [],
-                                  "endLine": 163,
-                                  "line": 163,
                                   "classes": "text-[48px] font-medium tracking-tight text-on-surface"
                                 },
                                 {
@@ -1379,8 +1152,6 @@
                                   "type": "span",
                                   "content": "/month",
                                   "children": [],
-                                  "endLine": 164,
-                                  "line": 164,
                                   "classes": "text-[14px] text-on-surface-variant",
                                   "locales": {
                                     "fr": {
@@ -1389,8 +1160,6 @@
                                   }
                                 }
                               ],
-                              "endLine": 165,
-                              "line": 162,
                               "classes": "flex items-baseline gap-1"
                             },
                             {
@@ -1398,8 +1167,6 @@
                               "type": "paragraph",
                               "content": "Three bags for full households.",
                               "children": [],
-                              "endLine": 166,
-                              "line": 166,
                               "classes": "text-[16px] leading-[1.6] text-on-surface-variant",
                               "locales": {
                                 "fr": {
@@ -1417,8 +1184,6 @@
                                   "type": "list-item",
                                   "content": "✓ Three 340 g bags, or one 1 kg + one 340 g",
                                   "children": [],
-                                  "endLine": 168,
-                                  "line": 168,
                                   "classes": "text-[16px] leading-[1.5] text-on-surface-variant",
                                   "locales": {
                                     "fr": {
@@ -1431,8 +1196,6 @@
                                   "type": "list-item",
                                   "content": "✓ Priority pick of rare lots",
                                   "children": [],
-                                  "endLine": 169,
-                                  "line": 169,
                                   "classes": "text-[16px] leading-[1.5] text-on-surface-variant",
                                   "locales": {
                                     "fr": {
@@ -1445,8 +1208,6 @@
                                   "type": "list-item",
                                   "content": "✓ Quarterly cupping invite in Mile-End",
                                   "children": [],
-                                  "endLine": 170,
-                                  "line": 170,
                                   "classes": "text-[16px] leading-[1.5] text-on-surface-variant",
                                   "locales": {
                                     "fr": {
@@ -1459,8 +1220,6 @@
                                   "type": "list-item",
                                   "content": "✓ Gift a month to a friend, on us",
                                   "children": [],
-                                  "endLine": 171,
-                                  "line": 171,
                                   "classes": "text-[16px] leading-[1.5] text-on-surface-variant",
                                   "locales": {
                                     "fr": {
@@ -1469,8 +1228,6 @@
                                   }
                                 }
                               ],
-                              "endLine": 172,
-                              "line": 167,
                               "classes": "flex flex-col gap-3"
                             },
                             {
@@ -1483,8 +1240,6 @@
                                   "type": "span",
                                   "content": "Choose La Maisonnée",
                                   "children": [],
-                                  "endLine": 174,
-                                  "line": 174,
                                   "locales": {
                                     "fr": {
                                       "content": "Choisir La Maisonnée"
@@ -1492,23 +1247,15 @@
                                   }
                                 }
                               ],
-                              "endLine": 175,
-                              "line": 173,
                               "classes": "mt-auto w-full text-center rounded-full bg-secondary-container px-8 py-4 text-sm font-medium text-on-secondary-container transition-all duration-200 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none hover:bg-secondary-container/70 hover:shadow-sm active:scale-95 focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:outline-none"
                             }
                           ],
-                          "endLine": 176,
-                          "line": 160,
                           "classes": "flex flex-col gap-6 rounded-[32px] bg-surface-container p-8 shadow-sm transition-all duration-300 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none hover:shadow-md"
                         }
                       ],
-                      "endLine": 177,
-                      "line": 124,
                       "classes": "mx-auto mt-16 grid max-w-5xl items-stretch gap-6 md:grid-cols-3"
                     }
                   ],
-                  "endLine": 178,
-                  "line": 118,
                   "classes": "px-6 py-20",
                   "htmlId": "pricing"
                 },
@@ -1527,8 +1274,6 @@
                           "type": "span",
                           "content": "From the mailbag",
                           "children": [],
-                          "endLine": 181,
-                          "line": 181,
                           "classes": "w-fit rounded-full bg-secondary-container px-4 py-1.5 text-xs font-medium tracking-wide text-on-secondary-container",
                           "locales": {
                             "fr": {
@@ -1541,8 +1286,6 @@
                           "type": "h2",
                           "content": "Word travels fast in a small city.",
                           "children": [],
-                          "endLine": 182,
-                          "line": 182,
                           "classes": "text-[32px] font-medium leading-[1.2] tracking-tight text-on-surface md:text-[48px]",
                           "locales": {
                             "fr": {
@@ -1551,8 +1294,6 @@
                           }
                         }
                       ],
-                      "endLine": 183,
-                      "line": 180,
                       "classes": "mx-auto flex max-w-2xl flex-col items-center gap-4 text-center translate-y-6 opacity-0",
                       "interactions": [
                         {
@@ -1578,8 +1319,6 @@
                               "type": "paragraph",
                               "content": "“I didn’t know coffee had a fresh until the first Brume bag. Grocery-store coffee tastes like cardboard now.”",
                               "children": [],
-                              "endLine": 186,
-                              "line": 186,
                               "classes": "text-[20px] leading-[1.5] text-on-secondary-container",
                               "locales": {
                                 "fr": {
@@ -1597,8 +1336,6 @@
                                   "type": "span",
                                   "content": "MG",
                                   "children": [],
-                                  "endLine": 188,
-                                  "line": 188,
                                   "classes": "flex h-11 w-11 items-center justify-center rounded-full bg-primary text-sm font-medium text-white"
                                 },
                                 {
@@ -1611,8 +1348,6 @@
                                       "type": "span",
                                       "content": "Marie-Ève G.",
                                       "children": [],
-                                      "endLine": 190,
-                                      "line": 190,
                                       "classes": "text-[14px] font-medium text-on-secondary-container"
                                     },
                                     {
@@ -1620,23 +1355,15 @@
                                       "type": "span",
                                       "content": "Plateau-Mont-Royal",
                                       "children": [],
-                                      "endLine": 191,
-                                      "line": 191,
                                       "classes": "text-[12px] text-on-surface-variant"
                                     }
                                   ],
-                                  "endLine": 192,
-                                  "line": 189,
                                   "classes": "flex flex-col"
                                 }
                               ],
-                              "endLine": 193,
-                              "line": 187,
                               "classes": "flex items-center gap-3"
                             }
                           ],
-                          "endLine": 194,
-                          "line": 185,
                           "classes": "flex flex-col justify-between gap-8 rounded-[24px] bg-secondary-container p-8 shadow-sm transition-all duration-300 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none hover:shadow-md"
                         },
                         {
@@ -1649,8 +1376,6 @@
                               "type": "paragraph",
                               "content": "“The espresso profile actually pulls differently — richer, slower. My machine has never been happier.”",
                               "children": [],
-                              "endLine": 196,
-                              "line": 196,
                               "classes": "text-[20px] leading-[1.5] text-on-secondary-container",
                               "locales": {
                                 "fr": {
@@ -1668,8 +1393,6 @@
                                   "type": "span",
                                   "content": "ST",
                                   "children": [],
-                                  "endLine": 198,
-                                  "line": 198,
                                   "classes": "flex h-11 w-11 items-center justify-center rounded-full bg-primary text-sm font-medium text-white"
                                 },
                                 {
@@ -1682,8 +1405,6 @@
                                       "type": "span",
                                       "content": "Sam T.",
                                       "children": [],
-                                      "endLine": 200,
-                                      "line": 200,
                                       "classes": "text-[14px] font-medium text-on-secondary-container"
                                     },
                                     {
@@ -1691,23 +1412,15 @@
                                       "type": "span",
                                       "content": "Verdun",
                                       "children": [],
-                                      "endLine": 201,
-                                      "line": 201,
                                       "classes": "text-[12px] text-on-surface-variant"
                                     }
                                   ],
-                                  "endLine": 202,
-                                  "line": 199,
                                   "classes": "flex flex-col"
                                 }
                               ],
-                              "endLine": 203,
-                              "line": 197,
                               "classes": "flex items-center gap-3"
                             }
                           ],
-                          "endLine": 204,
-                          "line": 195,
                           "classes": "flex flex-col justify-between gap-8 rounded-[24px] bg-secondary-container p-8 shadow-sm transition-all duration-300 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none hover:shadow-md"
                         },
                         {
@@ -1720,8 +1433,6 @@
                               "type": "paragraph",
                               "content": "“We split La Maisonnée at the office. Tuesday delivery has become a small holiday.”",
                               "children": [],
-                              "endLine": 206,
-                              "line": 206,
                               "classes": "text-[20px] leading-[1.5] text-on-secondary-container",
                               "locales": {
                                 "fr": {
@@ -1739,8 +1450,6 @@
                                   "type": "span",
                                   "content": "PK",
                                   "children": [],
-                                  "endLine": 208,
-                                  "line": 208,
                                   "classes": "flex h-11 w-11 items-center justify-center rounded-full bg-primary text-sm font-medium text-white"
                                 },
                                 {
@@ -1753,8 +1462,6 @@
                                       "type": "span",
                                       "content": "Priya K.",
                                       "children": [],
-                                      "endLine": 210,
-                                      "line": 210,
                                       "classes": "text-[14px] font-medium text-on-secondary-container"
                                     },
                                     {
@@ -1762,33 +1469,21 @@
                                       "type": "span",
                                       "content": "Vieux-Montréal",
                                       "children": [],
-                                      "endLine": 211,
-                                      "line": 211,
                                       "classes": "text-[12px] text-on-surface-variant"
                                     }
                                   ],
-                                  "endLine": 212,
-                                  "line": 209,
                                   "classes": "flex flex-col"
                                 }
                               ],
-                              "endLine": 213,
-                              "line": 207,
                               "classes": "flex items-center gap-3"
                             }
                           ],
-                          "endLine": 214,
-                          "line": 205,
                           "classes": "flex flex-col justify-between gap-8 rounded-[24px] bg-secondary-container p-8 shadow-sm transition-all duration-300 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none hover:shadow-md"
                         }
                       ],
-                      "endLine": 215,
-                      "line": 184,
                       "classes": "mx-auto mt-12 grid max-w-6xl gap-6 md:grid-cols-3"
                     }
                   ],
-                  "endLine": 216,
-                  "line": 179,
                   "classes": "px-6 py-20"
                 },
                 {
@@ -1806,8 +1501,6 @@
                           "type": "span",
                           "content": "FAQ",
                           "children": [],
-                          "endLine": 219,
-                          "line": 219,
                           "classes": "w-fit rounded-full bg-secondary-container px-4 py-1.5 text-xs font-medium tracking-wide text-on-secondary-container"
                         },
                         {
@@ -1815,8 +1508,6 @@
                           "type": "h2",
                           "content": "Questions, poured over.",
                           "children": [],
-                          "endLine": 220,
-                          "line": 220,
                           "classes": "text-[32px] font-medium leading-[1.2] tracking-tight text-on-surface md:text-[48px]",
                           "locales": {
                             "fr": {
@@ -1825,8 +1516,6 @@
                           }
                         }
                       ],
-                      "endLine": 221,
-                      "line": 218,
                       "classes": "mx-auto flex max-w-2xl flex-col items-center gap-4 text-center translate-y-6 opacity-0",
                       "interactions": [
                         {
@@ -1852,8 +1541,6 @@
                               "type": "h3",
                               "content": "When does my coffee ship?",
                               "children": [],
-                              "endLine": 224,
-                              "line": 224,
                               "classes": "text-[20px] font-medium leading-[1.3] text-on-surface",
                               "locales": {
                                 "fr": {
@@ -1866,8 +1553,6 @@
                               "type": "paragraph",
                               "content": "We roast Tuesday morning and ship Tuesday afternoon. Order by Sunday midnight to make that week’s roast; otherwise you’re first in line for the next one.",
                               "children": [],
-                              "endLine": 225,
-                              "line": 225,
                               "classes": "text-[16px] leading-[1.6] text-on-surface-variant",
                               "locales": {
                                 "fr": {
@@ -1876,8 +1561,6 @@
                               }
                             }
                           ],
-                          "endLine": 226,
-                          "line": 223,
                           "classes": "flex flex-col gap-3 rounded-[24px] bg-surface-container p-6 shadow-sm transition-all duration-200 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none hover:shadow-md"
                         },
                         {
@@ -1890,8 +1573,6 @@
                               "type": "h3",
                               "content": "Whole bean or ground?",
                               "children": [],
-                              "endLine": 228,
-                              "line": 228,
                               "classes": "text-[20px] font-medium leading-[1.3] text-on-surface",
                               "locales": {
                                 "fr": {
@@ -1904,8 +1585,6 @@
                               "type": "paragraph",
                               "content": "Either. If you choose ground, tell us your brewer and we grind to match right before sealing — burrs to bag in under an hour.",
                               "children": [],
-                              "endLine": 229,
-                              "line": 229,
                               "classes": "text-[16px] leading-[1.6] text-on-surface-variant",
                               "locales": {
                                 "fr": {
@@ -1914,8 +1593,6 @@
                               }
                             }
                           ],
-                          "endLine": 230,
-                          "line": 227,
                           "classes": "flex flex-col gap-3 rounded-[24px] bg-surface-container p-6 shadow-sm transition-all duration-200 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none hover:shadow-md"
                         },
                         {
@@ -1928,8 +1605,6 @@
                               "type": "h3",
                               "content": "Can I skip a month?",
                               "children": [],
-                              "endLine": 232,
-                              "line": 232,
                               "classes": "text-[20px] font-medium leading-[1.3] text-on-surface",
                               "locales": {
                                 "fr": {
@@ -1942,8 +1617,6 @@
                               "type": "paragraph",
                               "content": "Yes — from your account, in two taps, any time before Sunday. Skipping never costs you your spot on limited lots.",
                               "children": [],
-                              "endLine": 233,
-                              "line": 233,
                               "classes": "text-[16px] leading-[1.6] text-on-surface-variant",
                               "locales": {
                                 "fr": {
@@ -1952,8 +1625,6 @@
                               }
                             }
                           ],
-                          "endLine": 234,
-                          "line": 231,
                           "classes": "flex flex-col gap-3 rounded-[24px] bg-surface-container p-6 shadow-sm transition-all duration-200 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none hover:shadow-md"
                         },
                         {
@@ -1966,8 +1637,6 @@
                               "type": "h3",
                               "content": "Where do the beans come from?",
                               "children": [],
-                              "endLine": 236,
-                              "line": 236,
                               "classes": "text-[20px] font-medium leading-[1.3] text-on-surface",
                               "locales": {
                                 "fr": {
@@ -1980,8 +1649,6 @@
                               "type": "paragraph",
                               "content": "Small farms we buy from directly, at prices we publish on every bag. This season: Huila, Colombia; Sidama, Ethiopia; and a honey-process lot from Costa Rica.",
                               "children": [],
-                              "endLine": 237,
-                              "line": 237,
                               "classes": "text-[16px] leading-[1.6] text-on-surface-variant",
                               "locales": {
                                 "fr": {
@@ -1990,18 +1657,12 @@
                               }
                             }
                           ],
-                          "endLine": 238,
-                          "line": 235,
                           "classes": "flex flex-col gap-3 rounded-[24px] bg-surface-container p-6 shadow-sm transition-all duration-200 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none hover:shadow-md"
                         }
                       ],
-                      "endLine": 239,
-                      "line": 222,
                       "classes": "mx-auto mt-12 grid max-w-4xl gap-4 md:grid-cols-2"
                     }
                   ],
-                  "endLine": 240,
-                  "line": 217,
                   "classes": "px-6 py-20",
                   "htmlId": "faq"
                 },
@@ -2020,8 +1681,6 @@
                           "type": "span",
                           "content": "The Journal",
                           "children": [],
-                          "endLine": 243,
-                          "line": 243,
                           "classes": "w-fit rounded-full bg-secondary-container px-4 py-1.5 text-xs font-medium tracking-wide text-on-secondary-container",
                           "locales": {
                             "fr": {
@@ -2034,8 +1693,6 @@
                           "type": "h2",
                           "content": "Brewing notes.",
                           "children": [],
-                          "endLine": 244,
-                          "line": 244,
                           "classes": "text-[32px] font-medium leading-[1.2] tracking-tight text-on-surface md:text-[48px]",
                           "locales": {
                             "fr": {
@@ -2048,8 +1705,6 @@
                           "type": "paragraph",
                           "content": "Dispatches from the roastery — origin trips, brew recipes, and the occasional opinion.",
                           "children": [],
-                          "endLine": 245,
-                          "line": 245,
                           "classes": "text-[16px] leading-[1.6] text-on-surface-variant",
                           "locales": {
                             "fr": {
@@ -2058,8 +1713,6 @@
                           }
                         }
                       ],
-                      "endLine": 246,
-                      "line": 242,
                       "classes": "mx-auto flex max-w-2xl flex-col items-center gap-4 text-center translate-y-6 opacity-0",
                       "interactions": [
                         {
@@ -2090,14 +1743,10 @@
                                   "type": "image",
                                   "content": "",
                                   "children": [],
-                                  "endLine": 250,
-                                  "line": 250,
                                   "arg": "cover",
                                   "classes": "aspect-[4/3] w-full object-cover transition-all duration-300 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none group-hover:scale-105"
                                 }
                               ],
-                              "endLine": 251,
-                              "line": 249,
                               "classes": "overflow-hidden"
                             },
                             {
@@ -2110,8 +1759,6 @@
                                   "type": "span",
                                   "content": "",
                                   "children": [],
-                                  "endLine": 253,
-                                  "line": 253,
                                   "arg": "date",
                                   "classes": "w-fit rounded-full bg-secondary-container px-3 py-1 text-[12px] font-medium text-on-secondary-container"
                                 },
@@ -2120,8 +1767,6 @@
                                   "type": "h3",
                                   "content": "",
                                   "children": [],
-                                  "endLine": 254,
-                                  "line": 254,
                                   "arg": "title",
                                   "classes": "text-[24px] font-medium leading-[1.3] text-on-surface"
                                 },
@@ -2130,31 +1775,21 @@
                                   "type": "paragraph",
                                   "content": "",
                                   "children": [],
-                                  "endLine": 255,
-                                  "line": 255,
                                   "arg": "excerpt",
                                   "classes": "text-[16px] leading-[1.6] text-on-surface-variant"
                                 }
                               ],
-                              "endLine": 256,
-                              "line": 252,
                               "classes": "flex flex-col gap-3 p-6"
                             }
                           ],
-                          "endLine": 257,
-                          "line": 248,
                           "link": "@item",
                           "classes": "group flex cursor-pointer flex-col overflow-hidden rounded-[24px] bg-surface-container shadow-sm transition-all duration-300 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none hover:shadow-md focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:outline-none"
                         }
                       ],
-                      "endLine": 258,
-                      "line": 247,
                       "arg": "post",
                       "classes": "mx-auto mt-12 grid max-w-6xl gap-6 md:grid-cols-3"
                     }
                   ],
-                  "endLine": 259,
-                  "line": 241,
                   "classes": "px-6 py-20",
                   "htmlId": "journal"
                 },
@@ -2188,8 +1823,6 @@
                                       "type": "span",
                                       "content": "Next roast: Tuesday",
                                       "children": [],
-                                      "endLine": 265,
-                                      "line": 265,
                                       "classes": "rounded-full border border-white/10 bg-white/10 px-4 py-1.5 text-xs font-medium tracking-wide text-white backdrop-blur-sm",
                                       "locales": {
                                         "fr": {
@@ -2202,8 +1835,6 @@
                                       "type": "h2",
                                       "content": "Your first bag ships next Tuesday.",
                                       "children": [],
-                                      "endLine": 266,
-                                      "line": 266,
                                       "classes": "max-w-2xl text-[32px] font-medium leading-[1.2] tracking-tight text-white md:text-[48px]",
                                       "locales": {
                                         "fr": {
@@ -2216,8 +1847,6 @@
                                       "type": "paragraph",
                                       "content": "Tell us where to send it. Skip, swap, or cancel any time — and the first delivery ships free.",
                                       "children": [],
-                                      "endLine": 267,
-                                      "line": 267,
                                       "classes": "max-w-xl text-[16px] leading-[1.6] text-white/80 md:text-[20px]",
                                       "locales": {
                                         "fr": {
@@ -2240,8 +1869,6 @@
                                               "type": "span",
                                               "content": "Your email",
                                               "children": [],
-                                              "endLine": 270,
-                                              "line": 270,
                                               "locales": {
                                                 "fr": {
                                                   "content": "Votre courriel"
@@ -2249,8 +1876,6 @@
                                               }
                                             }
                                           ],
-                                          "endLine": 271,
-                                          "line": 269,
                                           "classes": "text-[12px] font-medium tracking-wide text-white/80"
                                         },
                                         {
@@ -2263,8 +1888,6 @@
                                               "type": "input",
                                               "content": "",
                                               "children": [],
-                                              "endLine": 273,
-                                              "line": 273,
                                               "classes": "h-14 w-full rounded-t-xl border-b-2 border-white/40 bg-white/10 px-4 text-white backdrop-blur-sm outline-none transition-all duration-200 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none focus:border-white"
                                             },
                                             {
@@ -2277,8 +1900,6 @@
                                                   "type": "span",
                                                   "content": "Get started",
                                                   "children": [],
-                                                  "endLine": 275,
-                                                  "line": 275,
                                                   "locales": {
                                                     "fr": {
                                                       "content": "Commencer"
@@ -2286,18 +1907,12 @@
                                                   }
                                                 }
                                               ],
-                                              "endLine": 276,
-                                              "line": 274,
                                               "classes": "h-14 shrink-0 rounded-full bg-white px-8 text-sm font-medium text-primary shadow-sm transition-all duration-200 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none hover:bg-white/90 active:bg-white/80 active:scale-95 focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-primary focus-visible:outline-none"
                                             }
                                           ],
-                                          "endLine": 277,
-                                          "line": 272,
                                           "classes": "flex w-full flex-col gap-3 sm:flex-row"
                                         }
                                       ],
-                                      "endLine": 278,
-                                      "line": 268,
                                       "classes": "flex w-full max-w-md flex-col items-start gap-2"
                                     },
                                     {
@@ -2305,8 +1920,6 @@
                                       "type": "span",
                                       "content": "No commitment. Rated 4.9 by 1,200+ subscribers.",
                                       "children": [],
-                                      "endLine": 279,
-                                      "line": 279,
                                       "classes": "text-[12px] text-white/60",
                                       "locales": {
                                         "fr": {
@@ -2315,8 +1928,6 @@
                                       }
                                     }
                                   ],
-                                  "endLine": 280,
-                                  "line": 264,
                                   "classes": "relative flex flex-col items-center gap-6 text-center translate-y-6 opacity-0",
                                   "interactions": [
                                     {
@@ -2328,23 +1939,15 @@
                                   ]
                                 }
                               ],
-                              "endLine": 281,
-                              "line": 263,
                               "classes": "pointer-events-none absolute -bottom-28 -left-16 h-96 w-96 rounded-full bg-tertiary/40 blur-3xl"
                             }
                           ],
-                          "endLine": 282,
-                          "line": 262,
                           "classes": "pointer-events-none absolute -top-24 -right-20 h-80 w-80 rounded-full bg-white/10 blur-3xl"
                         }
                       ],
-                      "endLine": 282,
-                      "line": 261,
                       "classes": "relative mx-auto max-w-6xl overflow-hidden rounded-[24px] bg-primary px-6 py-16 shadow-lg md:rounded-[48px] md:px-16 md:py-24"
                     }
                   ],
-                  "endLine": 282,
-                  "line": 260,
                   "classes": "px-6 pt-4 pb-8"
                 },
                 {
@@ -2371,21 +1974,15 @@
                                   "id": "8844b998-04cf-4fd5-aebc-de7c13a95d85",
                                   "type": "span",
                                   "content": "",
-                                  "children": [],
-                                  "endLine": 287,
-                                  "line": 287
+                                  "children": []
                                 },
                                 {
                                   "id": "b87b2d98-7f6d-4baf-8e54-9424890ad7d2",
                                   "type": "paragraph",
                                   "content": "",
-                                  "children": [],
-                                  "endLine": 288,
-                                  "line": 288
+                                  "children": []
                                 }
-                              ],
-                              "endLine": 289,
-                              "line": 286
+                              ]
                             },
                             {
                               "id": "2e7e788e-cabd-40a1-a88e-91178c2c774d",
@@ -2401,13 +1998,9 @@
                                       "id": "5d0f8f15-59eb-4940-a217-5139811a767b",
                                       "type": "span",
                                       "content": "",
-                                      "children": [],
-                                      "endLine": 292,
-                                      "line": 292
+                                      "children": []
                                     }
                                   ],
-                                  "endLine": 293,
-                                  "line": 291,
                                   "link": "#why"
                                 },
                                 {
@@ -2419,13 +2012,9 @@
                                       "id": "3731e6e5-bc64-4f19-94d7-1b59ad12bf00",
                                       "type": "span",
                                       "content": "",
-                                      "children": [],
-                                      "endLine": 295,
-                                      "line": 295
+                                      "children": []
                                     }
                                   ],
-                                  "endLine": 296,
-                                  "line": 294,
                                   "link": "#how"
                                 },
                                 {
@@ -2437,13 +2026,9 @@
                                       "id": "041bb472-dc5a-4dfe-a48a-5f7d89070d3f",
                                       "type": "span",
                                       "content": "",
-                                      "children": [],
-                                      "endLine": 298,
-                                      "line": 298
+                                      "children": []
                                     }
                                   ],
-                                  "endLine": 299,
-                                  "line": 297,
                                   "link": "#pricing"
                                 },
                                 {
@@ -2455,13 +2040,9 @@
                                       "id": "f93e8df1-6b5c-4c8e-9add-ccd9cfb50f61",
                                       "type": "span",
                                       "content": "",
-                                      "children": [],
-                                      "endLine": 301,
-                                      "line": 301
+                                      "children": []
                                     }
                                   ],
-                                  "endLine": 302,
-                                  "line": 300,
                                   "link": "#journal"
                                 },
                                 {
@@ -2473,18 +2054,12 @@
                                       "id": "63eb4238-782f-457e-ac5c-884705a7b608",
                                       "type": "span",
                                       "content": "",
-                                      "children": [],
-                                      "endLine": 304,
-                                      "line": 304
+                                      "children": []
                                     }
                                   ],
-                                  "endLine": 305,
-                                  "line": 303,
                                   "link": "#faq"
                                 }
-                              ],
-                              "endLine": 306,
-                              "line": 290
+                              ]
                             },
                             {
                               "id": "133402a2-ee09-4263-928d-6ff541822dfe",
@@ -2500,30 +2075,20 @@
                                       "id": "e6f0412d-1975-484e-91a9-1491dad784bc",
                                       "type": "span",
                                       "content": "",
-                                      "children": [],
-                                      "endLine": 309,
-                                      "line": 309
+                                      "children": []
                                     }
                                   ],
-                                  "endLine": 310,
-                                  "line": 308,
                                   "link": "mailto:hello@brume.coffee"
                                 },
                                 {
                                   "id": "3fc679f3-a5b9-4581-bad2-59afac8047f8",
                                   "type": "span",
                                   "content": "",
-                                  "children": [],
-                                  "endLine": 311,
-                                  "line": 311
+                                  "children": []
                                 }
-                              ],
-                              "endLine": 312,
-                              "line": 307
+                              ]
                             }
-                          ],
-                          "endLine": 313,
-                          "line": 285
+                          ]
                         },
                         {
                           "id": "c3ef8577-ef15-4949-af8d-07c641cc11c4",
@@ -2534,38 +2099,24 @@
                               "id": "96211c16-efdb-4d30-86fb-e15d9c2edaa8",
                               "type": "span",
                               "content": "",
-                              "children": [],
-                              "endLine": 315,
-                              "line": 315
+                              "children": []
                             },
                             {
                               "id": "9ce1181b-d22c-4135-8f8a-f3ab969eea62",
                               "type": "span",
                               "content": "",
-                              "children": [],
-                              "endLine": 316,
-                              "line": 316
+                              "children": []
                             }
-                          ],
-                          "endLine": 317,
-                          "line": 314
+                          ]
                         }
-                      ],
-                      "endLine": 318,
-                      "line": 284
+                      ]
                     }
-                  ],
-                  "endLine": 319,
-                  "line": 283
+                  ]
                 }
               ],
-              "endLine": 320,
-              "line": 6,
               "classes": "bg-surface text-on-surface antialiased"
             }
-          ],
-          "endLine": 321,
-          "line": 5
+          ]
         }
       ]
     },
@@ -2574,7 +2125,6 @@
       "name": "Post template",
       "path": "/journal",
       "status": "published",
-      "code": "@setup\n\tname: Post template\n\tslug: /journal\n\tstatus: published\n\tlocale: en\n:body[post]\n\t:article\n\t\t:span[date]:\n\t\t:h1[title]:\n\t\t:image[cover]:\n\t\t:paragraph[body]:\n\tarticle:\nbody:",
       "elements": [
         {
           "id": "cc55f0c8-dc03-4464-815d-b2e80bda6cc6",
@@ -2591,8 +2141,6 @@
                   "type": "span",
                   "content": "",
                   "children": [],
-                  "endLine": 7,
-                  "line": 7,
                   "arg": "date",
                   "classes": "w-fit rounded-full bg-secondary-container px-4 py-1.5 text-xs font-medium tracking-wide text-on-secondary-container"
                 },
@@ -2601,8 +2149,6 @@
                   "type": "h1",
                   "content": "",
                   "children": [],
-                  "endLine": 8,
-                  "line": 8,
                   "arg": "title",
                   "classes": "text-[32px] font-medium leading-[1.2] tracking-tight md:text-[48px]"
                 },
@@ -2611,8 +2157,6 @@
                   "type": "image",
                   "content": "",
                   "children": [],
-                  "endLine": 9,
-                  "line": 9,
                   "arg": "cover",
                   "classes": "aspect-video w-full rounded-[24px] object-cover shadow-sm md:rounded-[32px]"
                 },
@@ -2621,19 +2165,13 @@
                   "type": "paragraph",
                   "content": "",
                   "children": [],
-                  "endLine": 10,
-                  "line": 10,
                   "arg": "body",
                   "classes": "text-[20px] leading-[1.6] text-on-surface-variant"
                 }
               ],
-              "endLine": 11,
-              "line": 6,
               "classes": "mx-auto flex max-w-2xl flex-col gap-8 bg-surface px-6 pt-24 pb-24 text-on-surface"
             }
           ],
-          "endLine": 12,
-          "line": 5,
           "arg": "post"
         }
       ],
@@ -3372,5 +2910,6 @@
       "family": "'Roboto', ui-sans-serif, system-ui, sans-serif",
       "googleFontsUrl": "https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap"
     }
-  }
+  },
+  "schemaVersion": 2
 }
