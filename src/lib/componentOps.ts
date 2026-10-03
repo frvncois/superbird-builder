@@ -1,19 +1,16 @@
 import type { ComponentDef, ElementNode, Page, Project, VariantAxis } from '@/types/editor'
-import { applyNodeMarkers, reconcile, refOf } from './syntax'
 import {
   alignHostMirrors,
-  alignInstanceLines,
+  alignMirror,
+  alignStructure,
   cloneForMaster,
-  createMirror,
-  expandComponentInstances,
   isComponentType,
   nestedWrappers,
   normalizeComponentName,
-  serializeNode,
 } from './components'
-import { createNode, isLeafElement, seedChildFor } from './elements'
+import { syncPageCode } from './pageCode'
 import { deepClone, findNode, findParent, walkNodes } from './tree'
-import { buildInstanceMap, canNest, dependencyOrder, nestedComponentNames } from './instances'
+import { buildInstanceMap, dependencyOrder, nestedComponentNames } from './instances'
 import { resolvePicks } from './shared/instances.js'
 import { effectiveClasses } from './variants'
 
@@ -23,20 +20,20 @@ import { effectiveClasses } from './variants'
  *
  * These live here rather than in `useComponents` because every one of them
  * spans ALL pages, while the composable's `masterMap` / `detachComponent` are
- * bound to the active page. The structural ones (`rewriteInstanceBlock`,
- * `pushMasterStructure`, …) are re-exported into the committed MCP runtime
- * bundle, so the agent path runs this code rather than a copy of it: rebuild
- * the bundle (`npm run build:mcp-runtime`) after changing them.
+ * bound to the active page. Editing ONE tree — a master, or a page — is
+ * `lib/treeOps`; this is what the rest of the project then has to be told.
+ * `pushMasterStructure` and the detach verbs are re-exported into the committed
+ * MCP runtime bundle, so the agent path runs this code rather than a copy of
+ * it: rebuild the bundle (`npm run build:mcp-runtime`) after changing them.
  *
  * All of it is pure: a `Project` in, mutations out, no Vue. That is what makes
  * it testable headlessly.
  */
 
-/** matches a token line's opening ':Name', refusing a longer name that merely
- * starts with it (':CardHeader' is not an instance of 'Card') */
-const openToken = (name: string) => new RegExp(`^(\\s*:)${name}(?![a-zA-Z0-9-])`)
-
-const indentOf = (line: string) => line.match(/^\t*/)![0]
+/** the DSL mirror of a page needs the project's locale for its `@setup` block.
+ *  Transitional, with the mirror itself (see lib/pageCode). */
+const mirrorPage = (project: Project, page: Page) =>
+  syncPageCode(page, project.defaultLocale || 'en')
 
 /**
  * The ONE writer of the optional keys, so their JSON key order is the same
@@ -97,7 +94,7 @@ export function componentUsage(project: Project, name: string): ComponentUsage {
 }
 
 /**
- * Renames a component and every `:Name … Name:` token that refers to it.
+ * Renames a component, every instance of it, and every mirror of it.
  *
  * Returns the name actually used (normalized and de-duplicated), or null when
  * the id doesn't resolve.
@@ -112,11 +109,9 @@ export function renameComponent(project: Project, id: string, rawName: string): 
   if (name === def.name) return name
 
   const old = def.name
-  // the def FIRST: an instance is paired to its master BY NAME, in the editor
-  // (masterMap) and in the exporter alike, and the sync watcher's structure
-  // signature reads the root type. Leave either lagging and every instance
-  // reads as divergent — adoptStructure would then reshape the master from a
-  // page block that no longer matches it.
+  // the def FIRST, and its root type with it: an instance is paired to its
+  // master BY NAME, in the editor (masterMap) and in the exporter alike. Leave
+  // either lagging and every instance on every page pairs with nothing.
   def.name = name
   def.root.type = name
   // …and every master holding an instance of it: a mirror is typed by the
@@ -127,30 +122,17 @@ export function renameComponent(project: Project, id: string, rawName: string): 
     })
   }
 
-  const open = openToken(old)
+  // …and every instance on every page. A type assignment and nothing else:
+  // no reparse, so every node id survives, which matters because comment
+  // anchors and interaction targetIds address page nodes by id.
   for (const page of project.pages) {
-    const lines = page.code.split('\n')
     let changed = false
     walkNodes(page.elements, (node) => {
       if (node.type !== old) return
       node.type = name
-      const at = node.line
-      if (at === undefined) return
-      const line = lines[at]
-      if (line !== undefined && open.test(line)) {
-        lines[at] = line.replace(open, `$1${name}`)
-        changed = true
-      }
-      const end = node.endLine
-      if (end !== undefined && end !== at && lines[end]?.trim() === `${old}:`) {
-        lines[end] = `${indentOf(lines[end]!)}${name}:`
-        changed = true
-      }
+      changed = true
     })
-    // patched in place — the line COUNT never changes, so there is no reparse
-    // and no reconcile, and every node id survives. That matters: comment
-    // anchors and interaction targetIds address page nodes by id.
-    if (changed) page.code = lines.join('\n')
+    if (changed) mirrorPage(project, page)
   }
   return name
 }
@@ -293,25 +275,7 @@ function isBareWrapper(root: ElementNode): boolean {
   return !root.classes?.trim() && !root.background && !root.interactions?.length
 }
 
-/** `:Card:` leaf instances can sit unexpanded in stored code (nothing expands
- * them until someone types in that page). Detaching one means materializing
- * the master's structure first, so there are nodes to bake onto. Only THIS
- * component's leaves are touched. */
-function expandLeafInstances(page: Page, def: ComponentDef): void {
-  const lineMap: number[] = []
-  const next = expandComponentInstances(page.code, [def], lineMap)
-  if (next === page.code) return
-  const map = new Map<number, number>()
-  lineMap.forEach((out, input) => map.set(out, input))
-  const before = page.code
-  page.code = next
-  page.elements = reconcile(before, next, page.elements, map)
-}
-
-const withRef = (line: string, ref: string) =>
-  line.replace(/^(\s*:[a-zA-Z][a-zA-Z0-9-]*)/, `$1#${ref}`)
-
-/** Detaches one already-expanded instance block. */
+/** Detaches one instance. */
 function detachOne(
   page: Page,
   def: ComponentDef,
@@ -319,52 +283,35 @@ function detachOne(
   components: ComponentDef[],
 ): boolean {
   const instance = findNode(page.elements, instanceId)
-  if (!instance || instance.type !== def.name || instance.line === undefined) return false
+  if (!instance || instance.type !== def.name) return false
+  const parent = findParent(page.elements, instanceId)
+  if (!parent) return false
+  // an instance that was never materialized (a stored `:Card:` leaf) has no
+  // nodes to bake onto — give it the master's structure first
+  if (!instance.children.length && def.root.children.length) {
+    alignStructure(instance, def.root)
+  }
 
   const { pairs, masterToInstance } = pairWithMaster(instance, def, components)
   bakeMasterState(pairs, masterToInstance)
 
-  const lines = page.code.split('\n')
-  const start = instance.line
-  const end = instance.endLine ?? instance.line
-
   if (!isBareWrapper(def.root)) {
     // a styled/interactive wrapper is a real box on the published page, and it
-    // just took the master's classes — it stays, as a plain div. The line count
-    // is unchanged, so this needs no reconcile.
-    lines[start] = lines[start]!.replace(openToken(def.name), '$1div')
-    if (end > start) lines[end] = `${indentOf(lines[end]!)}div:`
+    // just took the master's classes — it stays, as a plain div
     instance.type = 'div'
-    page.code = lines.join('\n')
     return true
   }
 
-  // bare: drop the two wrapper lines and dedent what they held
-  const inner = end > start ? lines.slice(start + 1, end) : []
-  const dropped = end > start ? 2 : 1
-  const rest = [
-    ...lines.slice(0, start),
-    ...inner.map((l) => l.replace(/^\t/, '')),
-    ...lines.slice(end + 1),
-  ]
-  // the wrapper's addresses move onto what it wrapped, so a ref or an anchor
-  // id aimed at this block still resolves to something
-  if (inner.length) {
-    const ref = refOf(lines[start]!)
-    if (ref && !refOf(rest[start]!)) rest[start] = withRef(rest[start]!, ref)
-    const firstChild = instance.children[0]
-    if (firstChild && instance.htmlId && !firstChild.htmlId) firstChild.htmlId = instance.htmlId
+  // bare: the wrapper renders no element at all, so it goes and its children
+  // take its place. Its addresses move onto the first of them, so a ref or a
+  // comment anchor aimed at this block still resolves to something.
+  const at = parent.children.indexOf(instance)
+  const first = instance.children[0]
+  if (first) {
+    if (instance.ref && !first.ref) first.ref = instance.ref
+    if (instance.htmlId && !first.htmlId) first.htmlId = instance.htmlId
   }
-
-  const map = new Map<number, number>()
-  for (let i = 0; i < rest.length; i++) {
-    if (i < start) map.set(i, i)
-    else if (i < start + inner.length) map.set(i, i + 1)
-    else map.set(i, i + dropped)
-  }
-  const before = page.code
-  page.code = rest.join('\n')
-  page.elements = reconcile(before, page.code, page.elements, map)
+  parent.children.splice(at, 1, ...instance.children)
   return true
 }
 
@@ -375,20 +322,15 @@ function detachOne(
 export function detachComponentInstances(project: Project, def: ComponentDef): number {
   let detached = 0
   for (const page of project.pages) {
-    expandLeafInstances(page, def)
-    const instances: ElementNode[] = []
+    const ids: string[] = []
     walkNodes(page.elements, (n) => {
-      if (n.type === def.name && n.line !== undefined) instances.push(n)
+      if (n.type === def.name) ids.push(n.id)
     })
-    if (!instances.length) continue
-    // bottom-up: unwrapping a block shifts every line after it, so working
-    // upwards keeps the ids we haven't reached yet on the lines we read
-    const ordered = [...instances].sort((a, b) => b.line! - a.line!).map((n) => n.id)
-    for (const id of ordered) if (detachOne(page, def, id, project.components)) detached++
-    // the baked classes and bindings need their '(+)' / '{+}' markers, and the
-    // editor's own truth-sync only ever runs on the page someone has open
-    const marked = applyNodeMarkers(page.code, page.elements)
-    if (marked !== page.code) page.code = marked
+    if (!ids.length) continue
+    // ids, not nodes: unwrapping one instance can re-parent the next (an
+    // instance nested in a bare wrapper), so each is re-found as we reach it
+    for (const id of ids) if (detachOne(page, def, id, project.components)) detached++
+    mirrorPage(project, page)
   }
   return detached
 }
@@ -398,278 +340,34 @@ export function detachInstance(project: Project, page: Page, instanceId: string)
   const node = findNode(page.elements, instanceId)
   const def = node ? project.components.find((c) => c.name === node.type) : null
   if (!def) return false
-  // the instance keeps its id through expansion (reconcile adopts it), though
-  // its line may have moved
-  expandLeafInstances(page, def)
   if (!detachOne(page, def, instanceId, project.components)) return false
-  const marked = applyNodeMarkers(page.code, page.elements)
-  if (marked !== page.code) page.code = marked
+  mirrorPage(project, page)
   return true
 }
 
-// --- master structure --------------------------------------------------
+// --- pushing a master's structure out ----------------------------------
 //
-// A component master is a plain ElementNode tree: no code, no line numbers.
-// So these mutate it directly and then PUSH the new shape out to every
-// instance, which is the reverse of `syncStructure`'s instance-first flow.
-//
-// The push must be synchronous and complete: `syncStructure` watches page code
-// and adopts a divergent instance back into the master, so a half-pushed edit
-// would be reverted by the first instance still carrying the old shape.
-
-export type DropPosition = 'before' | 'after' | 'inside'
-
-/** Can this master node hold children? Registry-driven, NOT child-count based:
- *  a childless `:div` is still a container, while `serializeNode` emits a leaf
- *  in leaf form and would silently drop anything put inside it. */
-export function masterAcceptsChildren(node: ElementNode): boolean {
-  // a nested instance takes nothing: what is inside it is another component's
-  // structure, edited in that component
-  return !isComponentType(node.type) && !isLeafElement(node.type)
-}
-
-/** the same question for a node of THIS master, whose root is component-typed
- *  and is the one place that always takes children */
-const acceptsChildren = (def: ComponentDef, node: ElementNode) =>
-  isRoot(def, node) || masterAcceptsChildren(node)
-
-/**
- * The nested instance a node of this master sits INSIDE, or null. Such a node
- * is part of a mirror: its structure is another component's, so nothing here
- * may move, remove or reshape it.
- */
-export function enclosingNestedInstance(def: ComponentDef, id: string): ElementNode | null {
-  let found: ElementNode | null = null
-  const visit = (nodes: ElementNode[], host: ElementNode | null) => {
-    for (const node of nodes) {
-      if (found) return
-      if (node.id === id) {
-        found = host
-        return
-      }
-      visit(node.children, host ?? (isComponentType(node.type) ? node : null))
-    }
-  }
-  visit(def.root.children, null)
-  return found
-}
-
-/** the wrapper node is the component itself — it is renamed, never restructured */
-function isRoot(def: ComponentDef, node: ElementNode) {
-  return node.id === def.root.id
-}
-
-function masterParentOf(def: ComponentDef, id: string): ElementNode | null {
-  return findParent([def.root], id)
-}
-
-/** where an insert/move lands: the parent list plus the index within it */
-function resolveSlot(
-  def: ComponentDef,
-  targetId: string | null,
-  position: DropPosition,
-): { parent: ElementNode; index: number } | null {
-  if (!targetId) return { parent: def.root, index: def.root.children.length }
-  const target = findNode([def.root], targetId)
-  if (!target) return null
-  // the root only ever takes children; so does any before/after on it, since
-  // it has no siblings
-  if (isRoot(def, target) || position === 'inside') {
-    if (!acceptsChildren(def, target)) {
-      // a leaf can't hold it — fall back to "after the leaf", as the page's
-      // insertElementBlock coerces
-      const parent = masterParentOf(def, target.id)
-      if (!parent) return null
-      return { parent, index: parent.children.indexOf(target) + 1 }
-    }
-    return { parent: target, index: target.children.length }
-  }
-  const parent = masterParentOf(def, target.id)
-  if (!parent) return null
-  const at = parent.children.indexOf(target)
-  return { parent, index: position === 'before' ? at : at + 1 }
-}
-
-/** ids whose subtree contains `id` — a node may never be moved into itself */
-function isWithin(root: ElementNode, ancestorId: string, id: string): boolean {
-  const ancestor = findNode([root], ancestorId)
-  return !!ancestor && ancestor.id !== id && !!findNode(ancestor.children, id)
-}
-
-export function canDropInMaster(
-  def: ComponentDef,
-  ids: string[],
-  targetId: string,
-  position: DropPosition,
-): boolean {
-  const target = findNode([def.root], targetId)
-  if (!target) return false
-  if (position === 'inside' && !acceptsChildren(def, target)) return false
-  if (isRoot(def, target) && position !== 'inside') return false
-  // nothing lands inside a nested instance, and nothing leaves one
-  if (enclosingNestedInstance(def, targetId)) return false
-  for (const id of ids) {
-    if (id === targetId) return false
-    if (enclosingNestedInstance(def, id)) return false
-    if (isRoot(def, findNode([def.root], id) ?? target)) return false
-    if (isWithin(def.root, id, targetId)) return false // into its own subtree
-  }
-  return true
-}
-
-/**
- * Inserts a fresh element — or, given a component's name, an instance of it.
- * `components` is what the name resolves against and what the cycle check
- * reads; a component that would end up holding itself is refused.
- */
-export function insertInMaster(
-  def: ComponentDef,
-  type: string,
-  targetId: string | null,
-  position: DropPosition,
-  components: ComponentDef[] = [],
-): ElementNode | null {
-  // a target inside a nested instance cannot take it: land after that instance
-  const host = targetId ? enclosingNestedInstance(def, targetId) : null
-  if (host) {
-    targetId = host.id
-    position = 'after'
-  }
-  const slot = resolveSlot(def, targetId, position)
-  if (!slot) return null
-  if (isComponentType(type)) {
-    const inner = components.find((c) => c.name === type)
-    const known = components.includes(def) ? components : [...components, def]
-    if (!inner || !canNest(known, def.name, inner.name)) return null
-    const instance = createMirror(inner.root)
-    slot.parent.children.splice(slot.index, 0, instance)
-    return instance
-  }
-  const node = createNode(type)
-  // a seeded container (button, link) is born holding its words, exactly as
-  // the page backend's `elementBlockLines` + `applySeedContent` pair does
-  const seed = seedChildFor(type)
-  if (seed) node.children.push(seed)
-  slot.parent.children.splice(slot.index, 0, node)
-  return node
-}
-
-/** Detaches nodes from the tree and returns them, deepest-first so indices
- *  stay valid while splicing. */
-function detachNodes(def: ComponentDef, ids: string[]): ElementNode[] {
-  const taken: ElementNode[] = []
-  for (const id of ids) {
-    const node = findNode([def.root], id)
-    if (!node || isRoot(def, node) || enclosingNestedInstance(def, id)) continue
-    const parent = masterParentOf(def, id)
-    if (!parent) continue
-    const at = parent.children.indexOf(node)
-    if (at === -1) continue
-    parent.children.splice(at, 1)
-    taken.push(node)
-  }
-  return taken
-}
-
-/** Interaction/animation bindings anywhere in the master that pointed into a
- *  removed subtree would dangle, so drop them. */
-function clearBindingsTo(def: ComponentDef, removed: ElementNode[]) {
-  const gone = new Set<string>()
-  for (const node of removed) walkNodes([node], (n) => gone.add(n.id))
-  if (!gone.size) return
-  walkNodes([def.root], (n) => {
-    if (n.interactions?.length) {
-      n.interactions = n.interactions.filter((b) => !b.targetId || !gone.has(b.targetId))
-      if (!n.interactions.length) delete n.interactions
-    }
-    if (n.animations?.length) {
-      n.animations = n.animations.filter((b) => !b.targetId || !gone.has(b.targetId))
-      if (!n.animations.length) delete n.animations
-    }
-  })
-}
-
-export function removeFromMaster(def: ComponentDef, ids: string[]): boolean {
-  const removed = detachNodes(def, ids)
-  if (!removed.length) return false
-  clearBindingsTo(def, removed)
-  return true
-}
-
-export function moveInMaster(
-  def: ComponentDef,
-  ids: string[],
-  targetId: string,
-  position: DropPosition,
-): boolean {
-  if (!canDropInMaster(def, ids, targetId, position)) return false
-  // resolve the slot BEFORE detaching: pulling the nodes out shifts the
-  // indices the target sits at
-  const slot = resolveSlot(def, targetId, position)
-  if (!slot) return false
-  const anchor = slot.parent.children[slot.index] ?? null
-  const moved = detachNodes(def, ids)
-  if (!moved.length) return false
-  const at = anchor ? slot.parent.children.indexOf(anchor) : slot.parent.children.length
-  slot.parent.children.splice(at === -1 ? slot.parent.children.length : at, 0, ...moved)
-  return true
-}
-
-export function duplicateInMaster(def: ComponentDef, ids: string[]): ElementNode[] {
-  const made: ElementNode[] = []
-  for (const id of ids) {
-    const node = findNode([def.root], id)
-    if (!node || isRoot(def, node) || enclosingNestedInstance(def, id)) continue
-    const parent = masterParentOf(def, id)
-    if (!parent) continue
-    // fresh ids and internal targetIds remapped, exactly as a component copy
-    const { cloned } = cloneForMaster(node)
-    parent.children.splice(parent.children.indexOf(node) + 1, 0, cloned)
-    made.push(cloned)
-  }
-  return made
-}
-
-/** Wraps a contiguous run of siblings in a new `:div`. */
-export function wrapInMaster(def: ComponentDef, ids: string[]): ElementNode | null {
-  const nodes = ids
-    .map((id) => findNode([def.root], id))
-    .filter((n): n is ElementNode => !!n && !isRoot(def, n) && !enclosingNestedInstance(def, n.id))
-  if (!nodes.length) return null
-  const parent = masterParentOf(def, nodes[0]!.id)
-  if (!parent || nodes.some((n) => masterParentOf(def, n.id) !== parent)) return null
-  const at = parent.children.indexOf(nodes[0]!)
-  const wrapper = createNode('div')
-  for (const node of nodes) parent.children.splice(parent.children.indexOf(node), 1)
-  wrapper.children = nodes
-  parent.children.splice(at, 0, wrapper)
-  return wrapper
-}
-
-export function retypeInMaster(def: ComponentDef, id: string, type: string): boolean {
-  const node = findNode([def.root], id)
-  if (!node || isRoot(def, node) || isComponentType(type)) return false
-  // a nested instance is what it is, and so is everything inside it
-  if (isComponentType(node.type) || enclosingNestedInstance(def, id)) return false
-  // changing a container into a leaf would orphan its children
-  if (node.children.length && isLeafElement(type)) return false
-  node.type = type
-  return true
-}
+// A structural change to a master is made on its own tree (lib/treeOps, over
+// `masterHost(def)`) and then PUSHED to every instance of it, on every page.
 
 /**
  * Pushes a master's current structure out to every instance of it, on every
- * page. Returns how many instance blocks were rewritten.
+ * page. Returns how many instance subtrees it had to move.
  *
- * Every CLOSED instance is rewritten unconditionally — deliberately NOT gated
- * on a structure signature the way `syncStructure` is, because that signature
- * is type-only: an arg or link change leaves it identical and would never
- * reach the instances.
+ * Realigning (rather than rebuilding) is what carries per-instance state
+ * across: every node that survives the match IS the same node object, so its
+ * id, text, media, translations, hidden flag, variant picks and htmlId come
+ * with it, and a subtree that was already in step comes out byte-identical. A
+ * push that found everything current therefore reads as no edit at all.
  *
- * "Every instance" includes the ones NESTED in other components: their blocks
- * on the pages are rewritten like any other (at any depth), and the mirrors
+ * "Every instance" includes the ones NESTED in other components: the mirrors
  * those components hold in their own masters are brought back in step first —
- * inner components before the hosts that mirror them.
+ * inner components before the hosts that mirror them — and the blocks on the
+ * pages follow at any depth.
+ *
+ * An instance that was never materialized (a `:Card:` leaf in stored code) is
+ * simply one whose children do not match yet, so it is filled in here with no
+ * special case.
  */
 export function pushMasterStructure(project: Project, def: ComponentDef): number {
   // a library preview is not in the project; instances match by NAME, so
@@ -677,31 +375,17 @@ export function pushMasterStructure(project: Project, def: ComponentDef): number
   // same name
   if (!project.components.some((c) => c.id === def.id)) return 0
   alignMirrors(project.components)
-  let rewritten = 0
+  let moved = 0
   for (const page of project.pages) {
-    // legacy `:Card:` leaves carry no block to rewrite — materialize them
-    // first so they follow the master like everything else
-    expandLeafInstances(page, def)
-    const ids: string[] = []
+    const instances: ElementNode[] = []
     walkNodes(page.elements, (n) => {
-      if (n.type === def.name) ids.push(n.id)
+      if (n.type === def.name) instances.push(n)
     })
-    // bottom-up: rewriting a block shifts the lines of everything after it
-    const ordered = ids
-      .map((id) => findNode(page.elements, id))
-      .filter((n): n is ElementNode => !!n && n.line !== undefined)
-      .sort((a, b) => b.line! - a.line!)
-      .map((n) => n.id)
-    for (const id of ordered) {
-      const node = findNode(page.elements, id)
-      if (node && isClosedBlock(page, node, def.name) && rewriteInstanceBlock(page, node, def)) {
-        rewritten++
-      }
-    }
-    const marked = applyNodeMarkers(page.code, page.elements)
-    if (marked !== page.code) page.code = marked
+    if (!instances.length) continue
+    for (const node of instances) if (alignStructure(node, def.root)) moved++
+    mirrorPage(project, page)
   }
-  return rewritten
+  return moved
 }
 
 /**
@@ -710,52 +394,6 @@ export function pushMasterStructure(project: Project, def: ComponentDef): number
  */
 export function alignMirrors(components: ComponentDef[]): void {
   for (const host of dependencyOrder(components)) alignHostMirrors(host, components)
-}
-
-/**
- * Regenerates one instance's inner code lines from its master.
- *
- * Lifted out of `useComponents` so the master-first operations above can reuse
- * it; it closed over nothing.
- */
-export function rewriteInstanceBlock(page: Page, node: ElementNode, def: ComponentDef): boolean {
-  if (node.line === undefined) return false
-  const lines = page.code.split('\n')
-  const start = node.line
-  const end = node.endLine ?? node.line
-  if (end <= start) return false
-  const indent = indentOf(lines[start]!)
-  const inner = def.root.children.flatMap((c) => serializeNode(c, `${indent}\t`))
-  const oldInnerLength = end - start - 1
-  const rest = [...lines.slice(0, start + 1), ...inner, ...lines.slice(end)]
-  // signature-aware inner map (exact line, then token type) so an inserted
-  // master node doesn't re-seat every following instance node — and its
-  // content overrides — one line off
-  const align = alignInstanceLines(lines.slice(start + 1, end), inner)
-  const map = new Map<number, number>()
-  for (let i = 0; i < rest.length; i++) {
-    if (i <= start) map.set(i, i)
-    else if (i < start + 1 + inner.length) {
-      const oldInner = align.get(i - (start + 1))
-      if (oldInner !== undefined) map.set(i, start + 1 + oldInner)
-    } else {
-      map.set(i, i - inner.length + oldInnerLength)
-    }
-  }
-  const before = page.code
-  page.code = rest.join('\n')
-  page.elements = reconcile(before, page.code, page.elements, map)
-  return true
-}
-
-/** a block only counts once its close line exists — while an edit is mid-flight
- * the parser sees an unclosed block that swallows whatever follows, and syncing
- * from that would corrupt the master */
-export function isClosedBlock(page: Page, node: ElementNode, name: string): boolean {
-  if (node.line === undefined || node.endLine === undefined || node.endLine <= node.line) {
-    return false
-  }
-  return page.code.split('\n')[node.endLine]?.trim() === `${name}:`
 }
 
 /**

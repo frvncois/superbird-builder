@@ -71,10 +71,20 @@ const boardCard = (page: Page, key: string) => page.locator(`[data-board-card="$
 
 /** insert a library entry on the home page from the ⌘E dock. There is no
  *  separate "add" step — using an entry is what copies it into the project */
+/** Escape, then wait for the dock to actually be gone.
+ *
+ * It closes on the next render flush, and the next action can outrun it —
+ * leaving the dock's own 'Components' tab matching the rail button of the same
+ * name, which reads as a strict-mode violation rather than as a race. */
+async function closeDock(page: Page) {
+  await page.keyboard.press('Escape')
+  await expect(page.locator('[data-dock-tab]').first()).toBeHidden()
+}
+
 async function insertFromLibrary(page: Page, key: string) {
   await page.keyboard.press('ControlOrMeta+e')
   await page.locator(`[data-dock-item="catalog:${key}"]`).click()
-  await page.keyboard.press('Escape')
+  await closeDock(page)
 }
 
 test('the three left columns share one slot', async ({ page }) => {
@@ -143,7 +153,7 @@ test('the board shows every component, and editing a library one adds it', async
   await page.getByRole('button', { name: 'App', exact: true }).click()
   await page.keyboard.press('ControlOrMeta+e')
   await page.locator('[data-dock-item^="component:"]', { hasText: 'Card' }).click()
-  await page.keyboard.press('Escape')
+  await closeDock(page)
   await publish(page)
   await page.goto('/')
   await expect(page.getByText('Edited on the board')).toBeVisible()

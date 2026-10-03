@@ -43,23 +43,14 @@ export function createNode(type: string): ElementNode {
 }
 
 /**
- * The node a seeded container is born with, or null. Both structural backends
- * build it — the page one after `reconcile` has minted the child (the content
- * is node state, so the code alone can't carry it), the master one directly.
+ * The node a seeded container is born with, or null — so an insert lands
+ * something visible instead of an empty box. One builder for both structure
+ * hosts, since both insert into a tree.
  */
 export function seedChildFor(type: string): ElementNode | null {
   const seed = ELEMENTS[type]?.seed
   if (!seed) return null
   return { ...createNode(seed.type), content: seed.content }
-}
-
-/** Give a freshly inserted seeded container its child's placeholder text.
- *  Idempotent, and never overwrites text that is already there. */
-export function applySeedContent(node: ElementNode): void {
-  const seed = ELEMENTS[node.type]?.seed
-  if (!seed) return
-  const child = node.children[0]
-  if (child && child.type === seed.type && !child.content) child.content = seed.content
 }
 
 /** types an element can switch between (same structural shape per group) */

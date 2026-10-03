@@ -4,7 +4,7 @@ import { useAuth } from './useAuth'
 import { useMotion } from './useMotion'
 import { useViewMode } from './useViewMode'
 import { createPage } from '@/lib/factories'
-import { buildDocument, extractBodyArg, extractBodyLines, slugify } from '@/lib/document'
+import { slugify } from '@/lib/shared/slug.js'
 import { deepClone, walkNodes } from '@/lib/tree'
 import type { Page } from '@/types/editor'
 
@@ -31,8 +31,8 @@ export function usePage() {
     return page
   }
 
-  /** deep-clones a page — node-level styles/interactions/content live on
-   * the nodes (not the code), so a JSON clone with fresh ids keeps them */
+  /** deep-clones a page — everything an element carries lives on the node, so
+   * a JSON clone with fresh ids keeps all of it */
   function duplicatePage(id: string): Page | null {
     const page = pages.value.find((p) => p.id === id)
     if (!page) return null
@@ -45,11 +45,6 @@ export function usePage() {
     let n = 2
     while (pages.value.some((p) => p.path === path)) path = `${page.path}-copy-${n++}`
     clone.path = path
-    clone.code = buildDocument(
-      { name: clone.name, slug: clone.path, status: clone.status, locale: project.value.defaultLocale },
-      extractBodyLines(clone.code),
-      extractBodyArg(clone.code),
-    )
     clone.createdAt = clone.updatedAt = Date.now()
     clone.createdBy = clone.updatedBy = actor()
     project.value.pages.push(clone)
@@ -65,31 +60,18 @@ export function usePage() {
 
   function renamePage(id: string, name: string) {
     const page = pages.value.find((p) => p.id === id)
-    if (!page) return
-    page.name = name
-    // keep the @setup block in the page code in sync
-    page.code = buildDocument(
-      { name: page.name, slug: page.path, status: page.status, locale: project.value.defaultLocale },
-      extractBodyLines(page.code),
-      extractBodyArg(page.code),
-    )
+    if (page) page.name = name
   }
 
-  /** edit the identity fields that live in the @setup block (name/slug/status).
-   * These are code-owned, so we rebuild the block — the same path renamePage
-   * uses — rather than mutating page.* alone (which the next code edit would
-   * overwrite from the stale @setup). Stamps updatedAt/updatedBy. */
+  /** edit a page's identity fields. They live on the Page, and nowhere else:
+   * the DSL `@setup` block that used to own them is a derived mirror now.
+   * Stamps updatedAt/updatedBy. */
   function updatePageMeta(id: string, patch: { name?: string; slug?: string; status?: string }) {
     const page = pages.value.find((p) => p.id === id)
     if (!page) return
     if (patch.name !== undefined) page.name = patch.name
     if (patch.slug !== undefined) page.path = patch.slug
     if (patch.status !== undefined) page.status = patch.status
-    page.code = buildDocument(
-      { name: page.name, slug: page.path, status: page.status, locale: project.value.defaultLocale },
-      extractBodyLines(page.code),
-      extractBodyArg(page.code),
-    )
     page.updatedAt = Date.now()
     page.updatedBy = actor()
   }

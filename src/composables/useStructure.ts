@@ -1,45 +1,55 @@
 import { computed, ref, type ComputedRef } from 'vue'
-import { useElement, type DropPosition, type ElementBlock } from './useElement'
+import { useElement, type DropPosition } from './useElement'
 import { useComponents } from './useComponents'
 import { useReorderAnimation } from './useReorderAnimation'
 import { useComponentBoard } from './useComponentBoard'
 import { useProject } from './useProject'
-import { elementBlockLines } from '@/lib/syntax'
-import { applySeedContent } from '@/lib/elements'
-import { expandComponentInstances, isComponentType } from '@/lib/components'
+import { isComponentType } from '@/lib/components'
+import { pushMasterStructure } from '@/lib/componentOps'
 import {
-  canDropInMaster,
-  duplicateInMaster,
-  enclosingNestedInstance,
-  insertInMaster,
-  masterAcceptsChildren,
-  moveInMaster,
-  pushMasterStructure,
-  removeFromMaster,
-  retypeInMaster,
-  wrapInMaster,
-} from '@/lib/componentOps'
-import { findNode, findParent } from '@/lib/tree'
-import { canNest } from '@/lib/instances'
+  acceptsChildren,
+  canDropIn,
+  cloneSubtree,
+  duplicateIn,
+  enclosingInstance,
+  insertIn,
+  isHostRoot,
+  masterHost,
+  moveIn,
+  nudgeTarget,
+  pageHost,
+  removeFrom,
+  retypeIn,
+  wrapIn,
+  type StructureHost,
+} from '@/lib/treeOps'
+import { deepClone, findNode, findParent, walkNodes } from '@/lib/tree'
+import { canNest, isInstanceWrapper } from '@/lib/instances'
 import { catalogEntry } from '@/lib/catalog'
 import type { ComponentDef, ElementNode } from '@/types/editor'
 
 /**
  * The one way to change structure, whatever is being edited.
  *
- * Two things are structural in this app and they are shaped very differently:
- * a PAGE tree, where `page.code` is authoritative and every change is a code
- * splice plus a reconcile; and a component MASTER tree, which is a plain
- * ElementNode tree with no code, whose changes must then be pushed out to
- * every instance. Callers — the Layers tree, the canvas, the ⌘E dock, the
- * context menu, the shortcuts, the Data panel — want neither of those
- * vocabularies; they want "move this there" and "can I?".
+ * Two things have structure in this app — a PAGE and a component MASTER — and
+ * both are plain `ElementNode` trees, so `lib/treeOps` is the single
+ * implementation of every verb. What lives here is the POLICY around it:
  *
- * So this exposes one backend at a time and answers the capability questions
- * (`isContainer`, `can`, `canDrop`) that nothing used to answer: the page ops
- * simply fail silently on an illegal move, which is fine for a text editor
- * where you can see the result and unusable for a tree that has to grey out
- * a drop target before you release the mouse.
+ * - which host is live, which follows the components board SESSION being
+ *   mounted rather than the view mode, so there is never a render where the
+ *   two disagree;
+ * - that a structural edit inside a page instance belongs to the MASTER, is
+ *   applied there and pushed back out to every instance — which is what the
+ *   old instance-first sync produced indirectly, by letting one instance
+ *   diverge and then adopting it;
+ * - that structure inside a nested instance is refused on the board, because it
+ *   is edited in the inner component's own card;
+ * - promoting a library preview into the project before a push, which skips
+ *   defs the project does not own.
+ *
+ * It also answers the capability questions (`isContainer`, `can`, `canDrop`)
+ * that callers — the Layers tree, the canvas drag, the ⌘E dock, the context
+ * menu, the shortcuts, the Data panel — need before they offer an action.
  */
 
 /** what an insert puts down */
@@ -83,263 +93,286 @@ export interface StructureBackend {
   paste: (targetId: string) => void
 }
 
-/** the app-internal element clipboard (elements aren't representable in the
- *  OS one). Module-level so it survives every unmount. */
-const clipboard = ref<ElementBlock | null>(null)
+/**
+ * The app-internal element clipboard — detached subtrees carrying their
+ * original ids, so a paste can re-mint them AND retarget the bindings that
+ * pointed inside the copy. Module-level so it survives every unmount, and
+ * shared by both hosts: copying between a page and a component's card is now
+ * just a paste into the other tree.
+ */
+const clipboard = ref<ElementNode[] | null>(null)
 
 export function useStructure() {
   const el = useElement()
   const { project } = useProject()
   const { components, findComponent, masterFor, addFromCatalog } = useComponents()
-  const { canvasReorder } = useReorderAnimation()
+  const { withReorderAnimation } = useReorderAnimation()
   const { activeCard, boardActive, promoteIfPreview } = useComponentBoard()
 
   // --- shared helpers ---
-
-  /** a page node is a container when its block has a distinct close line */
-  const pageIsContainer = (node: ElementNode) =>
-    node.line !== undefined && (node.endLine ?? node.line) > node.line
-
-  /**
-   * The component whose instance a block dropped here would land INSIDE, if
-   * any. It is where the block lands that counts, not what the target is: a
-   * Button dropped AFTER a Button is beside it, not in it.
-   */
-  function landingHost(target: ElementNode, position: DropPosition): string | null {
-    const into = target.type === 'body' || (position === 'inside' && pageIsContainer(target))
-    const holder = into ? target : findParent(el.elements.value, target.id)
-    return (holder && masterFor(holder.id)?.def.name) || null
-  }
 
   /** the component name a library entry has, or will have once it is added */
   const catalogName = (key: string) =>
     components.value.find((c) => c.source === key)?.name ?? catalogEntry(key)?.name ?? null
 
-  /** the code lines a payload expands to, or null when it can't be placed */
-  function blockFor(payload: InsertPayload): string[] | null {
-    if (payload.kind === 'element') return elementBlockLines(payload.type)
-    const name =
-      payload.kind === 'catalog' ? addFromCatalog(payload.key)?.def.name : payload.name
-    if (!name || !findComponent(name)) return null
-    return expandComponentInstances(`:${name}:`, components.value).split('\n')
+  /** the type an insert payload lands, copying a library entry into the project
+   *  if that is what it takes. Null when the payload can't be placed. */
+  function typeFor(payload: InsertPayload): string | null {
+    if (payload.kind === 'element') return payload.type
+    if (payload.kind === 'component') return findComponent(payload.name) ? payload.name : null
+    return addFromCatalog(payload.key)?.def.name ?? null
   }
 
-  // --- the page backend ---
+  /** run a change on a host, then push a master's new shape to its instances */
+  function runOn(host: StructureHost, fn: () => boolean): boolean {
+    if (!fn()) return false
+    if (host.def) {
+      // a library preview has to enter the project BEFORE the push, which skips
+      // defs the project doesn't own
+      promoteIfPreview(host.def)
+      pushMasterStructure(project.value, host.def)
+    }
+    return true
+  }
+
+  // --- the page backend ---------------------------------------------------
+  //
+  // A page node inside a component instance is not the page's to restructure:
+  // its structure is the master's, shared by every instance. So the two
+  // resolvers below translate an operation onto the master's own nodes, and
+  // `runOn` pushes the result back out.
+
+  const pageBody = computed(() => el.bodyElement.value)
+
+  /** the component a page node's structure belongs to, or null when it is the
+   *  page's own. An instance's `:Name` wrapper is the page's: it carries the
+   *  page's ref, htmlId and position. */
+  function ownerOf(id: string): ComponentDef | null {
+    const mapping = masterFor(id)
+    return mapping && !isInstanceWrapper(mapping) ? mapping.def : null
+  }
+
+  /** the host a set of page nodes belongs to, with their ids inside it */
+  function nodesHost(ids: string[]): { host: StructureHost; ids: string[] } | null {
+    const body = pageBody.value
+    if (!body) return null
+    const owners = new Set(ids.map(ownerOf))
+    // a selection that straddles the boundary has no single host: half of it
+    // would restructure a component and half a page
+    if (owners.size > 1) return null
+    const def = ids.length ? [...owners][0] : null
+    if (!def) return { host: pageHost(body), ids }
+    return { host: masterHost(def), ids: ids.map((id) => masterFor(id)!.master.id) }
+  }
+
+  /** the host a drop/insert slot belongs to, with the target's id inside it */
+  function targetHost(
+    id: string,
+    position: DropPosition,
+  ): { host: StructureHost; targetId: string } | null {
+    const body = pageBody.value
+    if (!body) return null
+    const mapping = masterFor(id)
+    if (!mapping) return { host: pageHost(body), targetId: id }
+    if (isInstanceWrapper(mapping)) {
+      // the wrapper is a page node, so before/after is a page move — but
+      // dropping INSIDE it puts what lands into the component
+      return position === 'inside'
+        ? { host: masterHost(mapping.def), targetId: mapping.def.root.id }
+        : { host: pageHost(body), targetId: id }
+    }
+    return { host: masterHost(mapping.def), targetId: mapping.master.id }
+  }
+
+  /** nodes and target must resolve to the SAME host, or the move crosses a
+   *  boundary that has no meaning (a component node onto a page, or back) */
+  function moveHost(ids: string[], targetId: string, position: DropPosition) {
+    const from = nodesHost(ids)
+    const to = targetHost(targetId, position)
+    if (!from || !to || from.host.def !== to.host.def) return null
+    return { host: from.host, ids: from.ids, targetId: to.targetId }
+  }
+
+  /**
+   * The page node standing for a master node — the reverse of `masterFor`.
+   *
+   * After an edit that was redirected to a master, what the operation returns
+   * is a MASTER node; the thing to select is the page node the push just
+   * aligned to it.
+   */
+  function pageNodeFor(master: ElementNode): ElementNode | null {
+    let found: ElementNode | null = null
+    walkNodes(el.elements.value, (n) => {
+      if (!found && masterFor(n.id)?.master === master) found = n
+    })
+    return found
+  }
+
+  /** select what an operation produced, whichever tree it came back from. On
+   *  the board the masters ARE the selection scope, so only a page needs the
+   *  master → page node lookup. */
+  function selectResult(host: StructureHost, node: ElementNode | null) {
+    if (!node) return
+    const resolved = host.def && !boardActive.value ? pageNodeFor(node) : node
+    if (resolved) el.selectElement(resolved.id)
+  }
 
   const page: StructureBackend = {
     kind: 'page',
     roots: computed(() => el.elements.value),
-    isContainer: pageIsContainer,
+
+    isContainer(node) {
+      // an instance wrapper takes children on a PAGE — they go into the
+      // component. (On the board it takes none: that is edited in its own card.)
+      const mapping = masterFor(node.id)
+      if (mapping && isInstanceWrapper(mapping)) return true
+      return acceptsChildren(node)
+    },
 
     can(node, action) {
       if (node.type === 'body') return false
-      if (action === 'retype') return true
+      if (ownerOf(node.id)) {
+        // inside an instance: the edit lands on the master, where the node has
+        // no page to be unique on
+        return action !== 'ref'
+      }
+      // the `:Name` wrapper is a page node, but it renders no element of its
+      // own — there is no tag, binding or link on it to change
+      if (isComponentType(node.type)) {
+        return ['move', 'remove', 'duplicate', 'wrap', 'ref'].includes(action)
+      }
       return true
     },
 
     canDrop(ids, targetId, position) {
-      const target = el.getElement(targetId)
-      if (!target) return false
-      // the body only ever takes children
-      if (target.type === 'body') return position === 'inside'
-      if (position === 'inside' && !pageIsContainer(target)) return false
-      for (const id of ids) {
-        if (id === targetId) return false
-        const node = el.getElement(id)
-        if (!node || node.type === 'body') return false
-        // never into its own subtree
-        if (node.line !== undefined) {
-          const end = node.endLine ?? node.line
-          if (target.line !== undefined && target.line >= node.line && target.line <= end) {
-            return false
-          }
-        }
-      }
-      return true
+      const resolved = moveHost(ids, targetId, position)
+      return !!resolved && canDropIn(resolved.host, resolved.ids, resolved.targetId, position)
     },
 
     insert(payload, targetId, position) {
       const target = targetId ? el.getElement(targetId) : el.selectedElement.value
       if (!target) return null
+      const resolved = targetHost(target.id, position)
+      if (!resolved) return null
       // a component may land inside an instance of another — that is nesting —
-      // but never where it would end up holding itself, at any distance
+      // but never where it would end up holding itself, at any distance.
+      // Checked BEFORE a library entry is copied in: a refused insert must not
+      // leave a component behind.
       if (payload.kind !== 'element') {
-        const host = landingHost(target, position)
+        const holder = resolved.host.def?.name
         const inner = payload.kind === 'component' ? payload.name : catalogName(payload.key)
-        if (host && inner && !canNest(components.value, host, inner)) return null
+        if (holder && inner && !canNest(components.value, holder, inner)) return null
       }
-      const block = blockFor(payload)
-      if (!block) return null
-      const made = el.insertElementBlock(block, target.id, position)
-      // the seed child arrived through the code; its placeholder TEXT is node
-      // state, so it only exists once reconcile has minted the node
-      if (made && payload.kind === 'element') applySeedContent(made)
+      const type = typeFor(payload)
+      if (!type) return null
+      let made: ElementNode | null = null
+      runOn(resolved.host, () => {
+        made = insertIn(resolved.host, type, resolved.targetId, position, components.value)
+        return !!made
+      })
+      selectResult(resolved.host, made)
       return made
     },
 
     move(ids, targetId, position) {
-      if (!this.canDrop(ids, targetId, position)) return
+      const resolved = moveHost(ids, targetId, position)
+      if (!resolved) return
+      const run = () =>
+        runOn(resolved.host, () =>
+          moveIn(resolved.host, resolved.ids, resolved.targetId, position),
+        )
       // one element animates on the canvas; a group has no single ghost
-      if (ids.length === 1) canvasReorder(ids[0]!, targetId, position)
-      else for (const id of [...ids].reverse()) el.reorderElement(id, targetId, position)
+      if (ids.length === 1) withReorderAnimation(ids[0]!, run)
+      else run()
     },
 
     nudge(dir) {
-      if (el.isMultiSelect.value) return el.moveSelectionGroup(dir)
-      return nudgeOne(dir)
+      const resolved = nodesHost(el.selectedElementIds.value)
+      if (!resolved?.ids.length) return false
+      const to = nudgeTarget(resolved.host, resolved.ids, dir)
+      if (!to) return false
+      // the selection needs no restoring: a tree move keeps every node object,
+      // so anchor and focus still resolve to the same siblings
+      return runOn(resolved.host, () =>
+        moveIn(resolved.host, resolved.ids, to.targetId, to.position),
+      )
     },
 
     remove(ids) {
-      const real = ids.filter((id) => el.getElement(id)?.type !== 'body')
-      if (!real.length) return
-      if (real.length === 1) {
-        el.removeElement(real[0]!)
-        return
-      }
-      // removeElements splices min-line..max-endLine wholesale, so it is only
-      // safe for one contiguous run of siblings — anything else goes one at a
-      // time, bottom-up so the earlier lines stay put
-      if (isContiguousRun(real)) {
-        el.removeElements(real)
-        return
-      }
-      const ordered = real
-        .map((id) => el.getElement(id))
-        .filter((n): n is ElementNode => !!n && n.line !== undefined)
-        .sort((a, b) => b.line! - a.line!)
-      for (const node of ordered) el.removeElement(node.id)
+      const resolved = nodesHost(ids)
+      if (!resolved) return
+      let next: ElementNode | null = null
+      runOn(resolved.host, () => {
+        next = removeFrom(resolved.host, resolved.ids)
+        return !!next
+      })
+      selectResult(resolved.host, next)
     },
 
     duplicate(ids) {
-      const real = ids.filter((id) => el.getElement(id)?.type !== 'body')
-      if (!real.length) return
-      const block =
-        real.length > 1 ? el.copyElementsBlock(real) : el.copyElementBlock(real[0]!)
-      if (block) el.pasteElementBlock(real[real.length - 1]!, block)
+      const resolved = nodesHost(ids)
+      if (!resolved) return
+      runOn(resolved.host, () => duplicateIn(resolved.host, resolved.ids).length > 0)
     },
 
     wrap(ids) {
-      if (ids.some((id) => el.getElement(id)?.type === 'body')) return
-      el.wrapSelectionInDiv()
+      const resolved = nodesHost(ids)
+      if (!resolved) return
+      let made: ElementNode | null = null
+      runOn(resolved.host, () => {
+        made = wrapIn(resolved.host, resolved.ids)
+        return !!made
+      })
+      selectResult(resolved.host, made)
     },
 
-    retype: (id, type) => el.changeElementType(id, type),
-    setArg: (id, arg) => el.setElementArg(id, arg),
-    setLink: (id, link) => el.setElementLink(id, link),
+    retype(id, type) {
+      const resolved = nodesHost([id])
+      if (resolved) runOn(resolved.host, () => retypeIn(resolved.host, resolved.ids[0]!, type))
+    },
+
+    setArg(id, arg) {
+      const resolved = nodesHost([id])
+      if (resolved) runOn(resolved.host, () => setNodeArg(resolved.host, resolved.ids[0]!, arg))
+    },
+
+    setLink(id, link) {
+      const resolved = nodesHost([id])
+      if (resolved) runOn(resolved.host, () => setNodeLink(resolved.host, resolved.ids[0]!, link))
+    },
+
     setRef: (id, ref) => el.setElementRef(id, ref),
 
     copy(ids) {
-      const real = ids.filter((id) => el.getElement(id)?.type !== 'body')
-      if (!real.length) return
-      const block =
-        real.length > 1 ? el.copyElementsBlock(real) : el.copyElementBlock(real[0]!)
-      if (block) clipboard.value = block
+      copyInto(el.elements.value, ids)
     },
 
     paste(targetId) {
-      if (clipboard.value) el.pasteElementBlock(targetId, clipboard.value)
+      const resolved = targetHost(targetId, 'after')
+      if (resolved) pasteInto(resolved.host, resolved.targetId)
     },
   }
 
-  /** are these ids one unbroken run of siblings? */
-  function isContiguousRun(ids: string[]): boolean {
-    const nodes = ids.map((id) => el.getElement(id)).filter((n): n is ElementNode => !!n)
-    if (nodes.length !== ids.length) return false
-    return nodes.every((n) => el.selectedElementIds.value.includes(n.id))
-  }
-
-  /**
-   * Moves the selection one visual slot, mirroring a drag: it descends into an
-   * adjacent block, escapes its parent at a boundary, or swaps with a sibling.
-   * Ported from the code editor's gutter keyboard move — it was the only place
-   * an element could be re-parented without the mouse.
-   */
-  function nudgeOne(dir: 'up' | 'down'): boolean {
-    const s = el.selectedElement.value
-    if (!s || s.type === 'body' || s.line === undefined) return false
-    const sEnd = s.endLine ?? s.line
-    // a component instance is opaque: its interior maps to a shared master, so
-    // we swap past it rather than descending in
-    const opaque = (node: ElementNode) => isComponentType(node.type)
-    const go = (targetId: string, position: DropPosition) => {
-      canvasReorder(s.id, targetId, position)
-      return true
-    }
-
-    if (dir === 'up') {
-      const prev = s.line - 1
-      if (prev < 0) return false
-      const p = el.elementAtLine(prev)
-      if (!p || p.id === s.id) return false
-      if (p.endLine === prev && p.line !== undefined && p.line < prev) {
-        // prev is p's close line → preceding sibling block: descend as its
-        // last child (empty block → straight inside; opaque → swap past)
-        if (opaque(p)) return go(p.id, 'before')
-        if (!p.children.length) return go(p.id, 'inside')
-        return go(p.children[p.children.length - 1]!.id, 'after')
-      }
-      // p's open line (S is its first child → escape) or a leaf sibling (swap)
-      return go(p.id, 'before')
-    }
-
-    const next = sEnd + 1
-    const n = el.elementAtLine(next)
-    if (!n || n.id === s.id) return false
-    if (n.line === next && (n.endLine ?? n.line) > next) {
-      // next is n's open line → following sibling block: descend as its first
-      // child (empty block → straight inside; opaque → swap past)
-      if (opaque(n)) return go(n.id, 'after')
-      if (!n.children.length) return go(n.id, 'inside')
-      return go(n.children[0]!.id, 'before')
-    }
-    // n's close line (S is its last child → escape) or a leaf sibling (swap)
-    return go(n.id, 'after')
-  }
-
-  // --- the master backend: the component on the board ---
+  // --- the master backend: the component on the board --------------------
 
   const activeDef = computed<ComponentDef | null>(() => activeCard.value?.def ?? null)
-
-  /**
-   * Runs a structural change on the master, then pushes the new shape to every
-   * instance — in ONE synchronous tick, because `syncStructure` watches page
-   * code and adopts a divergent instance back into the master. A half-pushed
-   * edit would be reverted by the first instance still carrying the old shape.
-   */
-  function onMaster(fn: (def: ComponentDef) => boolean): boolean {
-    const def = activeDef.value
-    if (!def) return false
-    if (!fn(def)) return false
-    // a library preview has to enter the project BEFORE the push, which skips
-    // defs the project doesn't own
-    promoteIfPreview(def)
-    pushMasterStructure(project.value, def)
-    return true
-  }
-
-  /** what a name resolves to while editing `def` — the project's components,
-   *  and `def` itself when it is still a library preview */
-  const nestable = (def: ComponentDef) =>
-    components.value.includes(def) ? components.value : [...components.value, def]
-
-  const masterRoot = () => activeDef.value?.root ?? null
-  const isMasterRoot = (node: ElementNode) => node.id === masterRoot()?.id
+  const host = () => (activeDef.value ? masterHost(activeDef.value) : null)
 
   const master: StructureBackend = {
     kind: 'master',
-    roots: computed(() => (masterRoot() ? [masterRoot()!] : [])),
-    isContainer: masterAcceptsChildren,
+    roots: computed(() => (activeDef.value ? [activeDef.value.root] : [])),
+    isContainer: acceptsChildren,
 
     can(node, action) {
+      const h = host()
+      if (!h) return false
       // the wrapper IS the component: it is renamed, never restructured, and
       // it carries no ref (a master's nodes never reach a page's ref space)
-      if (isMasterRoot(node)) return false
+      if (isHostRoot(h, node)) return false
       if (action === 'ref') return false
-      const def = activeDef.value
-      if (!def) return false
       // inside a nested instance the structure is another component's: it is
       // edited there, in its own card
-      if (enclosingNestedInstance(def, node.id)) return false
+      if (enclosingInstance(h, node.id)) return false
       // the nested instance itself moves, duplicates and goes like any node,
       // but it has no tag, binding or link of its own to change
       if (isComponentType(node.type)) return ['move', 'remove', 'duplicate', 'wrap'].includes(action)
@@ -347,26 +380,25 @@ export function useStructure() {
     },
 
     canDrop(ids, targetId, position) {
-      const def = activeDef.value
-      return !!def && canDropInMaster(def, ids, targetId, position)
+      const h = host()
+      return !!h && canDropIn(h, ids, targetId, position)
     },
 
     insert(payload, targetId, position) {
+      const h = host()
+      if (!h || !h.def) return null
       const target = targetId ?? el.selectedElement.value?.id ?? null
+      if (payload.kind !== 'element') {
+        // checked BEFORE a library entry is copied in: a refused insert must
+        // not leave a component behind
+        const name = payload.kind === 'component' ? payload.name : catalogName(payload.key)
+        if (!name || !canNest(nestable(h.def), h.def.name, name)) return null
+      }
+      const type = typeFor(payload)
+      if (!type) return null
       let made: ElementNode | null = null
-      onMaster((def) => {
-        let type: string | null
-        if (payload.kind === 'element') type = payload.type
-        else {
-          // an instance of another component. Checked BEFORE a library entry is
-          // copied in: a refused insert must not leave a component behind
-          const name = payload.kind === 'component' ? payload.name : catalogName(payload.key)
-          if (!name || !canNest(nestable(def), def.name, name)) return false
-          type =
-            payload.kind === 'catalog' ? (addFromCatalog(payload.key)?.def.name ?? null) : name
-        }
-        if (!type) return false
-        made = insertInMaster(def, type, target, position, nestable(def))
+      runOn(h, () => {
+        made = insertIn(h, type, target, position, nestable(h.def!))
         return !!made
       })
       if (made) el.selectElement((made as ElementNode).id)
@@ -374,77 +406,139 @@ export function useStructure() {
     },
 
     move(ids, targetId, position) {
-      onMaster((def) => moveInMaster(def, ids, targetId, position))
+      const h = host()
+      if (h) runOn(h, () => moveIn(h, ids, targetId, position))
     },
 
     nudge(dir) {
-      const def = activeDef.value
-      const node = el.selectedElement.value
-      if (!def || !node || isMasterRoot(node)) return false
-      const parent = findParent([def.root], node.id)
-      if (!parent) return false
-      const at = parent.children.indexOf(node)
-      const sibling = parent.children[dir === 'up' ? at - 1 : at + 1]
-      if (sibling) {
-        // descend into an adjacent container, else swap past it
-        if (masterAcceptsChildren(sibling) && sibling.children.length) {
-          const inner = dir === 'up' ? sibling.children[sibling.children.length - 1]! : sibling.children[0]!
-          return onMaster((d) => moveInMaster(d, [node.id], inner.id, dir === 'up' ? 'after' : 'before'))
-        }
-        if (masterAcceptsChildren(sibling)) {
-          return onMaster((d) => moveInMaster(d, [node.id], sibling.id, 'inside'))
-        }
-        return onMaster((d) => moveInMaster(d, [node.id], sibling.id, dir === 'up' ? 'before' : 'after'))
-      }
-      // at a boundary: escape the parent
-      if (isMasterRoot(parent)) return false
-      return onMaster((d) => moveInMaster(d, [node.id], parent.id, dir === 'up' ? 'before' : 'after'))
+      const h = host()
+      const ids = el.selectedElementIds.value
+      if (!h || !ids.length) return false
+      const to = nudgeTarget(h, ids, dir)
+      if (!to) return false
+      return runOn(h, () => moveIn(h, ids, to.targetId, to.position))
     },
 
     remove(ids) {
-      onMaster((def) => removeFromMaster(def, ids))
+      const h = host()
+      if (!h) return
+      let next: ElementNode | null = null
+      runOn(h, () => {
+        next = removeFrom(h, ids)
+        return !!next
+      })
+      if (next) el.selectElement((next as ElementNode).id)
     },
 
     duplicate(ids) {
-      onMaster((def) => duplicateInMaster(def, ids).length > 0)
+      const h = host()
+      if (h) runOn(h, () => duplicateIn(h, ids).length > 0)
     },
 
     wrap(ids) {
-      onMaster((def) => !!wrapInMaster(def, ids))
+      const h = host()
+      if (!h) return
+      let made: ElementNode | null = null
+      runOn(h, () => {
+        made = wrapIn(h, ids)
+        return !!made
+      })
+      if (made) el.selectElement((made as ElementNode).id)
     },
 
     retype(id, type) {
-      onMaster((def) => retypeInMaster(def, id, type))
+      const h = host()
+      if (h) runOn(h, () => retypeIn(h, id, type))
     },
 
     setArg(id, arg) {
-      onMaster((def) => {
-        const node = findNode([def.root], id)
-        if (!node) return false
-        if (arg) node.arg = arg
-        else delete node.arg
-        return true
-      })
+      const h = host()
+      if (h) runOn(h, () => setNodeArg(h, id, arg))
     },
 
     setLink(id, link) {
-      onMaster((def) => {
-        const node = findNode([def.root], id)
-        if (!node) return false
-        if (link) node.link = link
-        else delete node.link
-        return true
-      })
+      const h = host()
+      if (h) runOn(h, () => setNodeLink(h, id, link))
     },
 
-    // a master node has no page to be unique on, and serializeNode never emits
-    // a ref into an instance block
+    // a master node has no page to be unique on, and a master's structure is
+    // copied into every instance, so a ref there would be duplicated site-wide
     setRef: () => false,
 
     copy(ids) {
-      void ids // the element clipboard is page code; crossing over is a v2 job
+      const def = activeDef.value
+      if (def) copyInto([def.root], ids)
     },
-    paste() {},
+
+    paste(targetId) {
+      const h = host()
+      if (h) pasteInto(h, targetId)
+    },
+  }
+
+  /** what a component name resolves to while editing `def` — the project's
+   *  components, and `def` itself when it is still a library preview */
+  const nestable = (def: ComponentDef) =>
+    components.value.includes(def) ? components.value : [...components.value, def]
+
+  // --- arg / link: two slots the DSL line used to own -------------------
+
+  function setNodeArg(h: StructureHost, id: string, arg: string | null): boolean {
+    const node = findNode([h.root], id)
+    if (!node) return false
+    if (arg) node.arg = arg
+    else delete node.arg
+    return true
+  }
+
+  function setNodeLink(h: StructureHost, id: string, link: string | null): boolean {
+    const node = findNode([h.root], id)
+    if (!node) return false
+    if (link) node.link = link
+    else delete node.link
+    return true
+  }
+
+  // --- the clipboard -----------------------------------------------------
+
+  /**
+   * Snapshots subtrees for copy. A deep clone and nothing else: every piece of
+   * node state comes with it, so there is no list of keys to keep in step with
+   * the `ElementNode` type — the old dedented-code-plus-captured-props pair had
+   * two, and each one that drifted silently lost a setting. Ids are kept as
+   * they are; `paste` re-mints them, which is also what lets it retarget the
+   * bindings that pointed inside the copy.
+   */
+  function copyInto(roots: ElementNode[], ids: string[]) {
+    const nodes = ids
+      .map((id) => findNode(roots, id))
+      .filter((n): n is ElementNode => !!n && n.type !== 'body')
+    if (nodes.length) clipboard.value = nodes.map((n) => deepClone(n) as ElementNode)
+  }
+
+  /**
+   * Pastes the clipboard inside a container target, else after it. Fresh ids
+   * every time, so pasting twice yields two independent copies.
+   */
+  function pasteInto(h: StructureHost, targetId: string) {
+    const held = clipboard.value
+    if (!held?.length) return
+    const target = findNode([h.root], targetId)
+    if (!target) return
+    const into = isHostRoot(h, target) || acceptsChildren(target)
+    const parent = into ? target : findParent([h.root], targetId)
+    if (!parent) return
+    let at = into ? parent.children.length : parent.children.indexOf(target) + 1
+    let last: ElementNode | null = null
+    runOn(h, () => {
+      for (const node of held) {
+        const { cloned } = cloneSubtree(node)
+        parent.children.splice(at++, 0, cloned)
+        last = cloned
+      }
+      return true
+    })
+    selectResult(h, last)
   }
 
   /** the backend for whatever is being edited right now */

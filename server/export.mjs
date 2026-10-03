@@ -14,6 +14,7 @@ import { ELEMENTS_DATA as ELEMENTS } from '../src/lib/shared/elements.js'
 import { themeBlock, rootFontSizeCss, applyTitleTemplate } from '../src/lib/shared/tokens.js'
 import { PROSE_CSS, CUSTOM_VARIANTS } from '../src/lib/shared/prose.js'
 import { fontFaceBlock } from '../src/lib/shared/fonts.js'
+import { buildStructuredData, structuredDataTag } from '../src/lib/shared/structuredData.js'
 import {
   resolveBinding,
   resolveListScope,
@@ -1062,7 +1063,26 @@ function renderShell(
     head += `<meta property="og:image" content="${escapeHtml(absolute(ogImage))}">`
   const favicon = rewrite(settings.favicon)
   if (favicon && SAFE_SRC.test(favicon)) head += `<link rel="icon" href="${escapeHtml(favicon)}">`
+  const faviconDark = rewrite(settings.faviconDark)
+  if (faviconDark && SAFE_SRC.test(faviconDark))
+    head += `<link rel="icon" href="${escapeHtml(faviconDark)}" media="(prefers-color-scheme: dark)">`
   if (domain && path) head += `<link rel="canonical" href="${escapeHtml(`https://${domain}${path}`)}">`
+  // schema.org JSON-LD: site identity + WebSite + this WebPage. Media paths
+  // pass through the same rewrite + allowlist as og:image.
+  head += structuredDataTag(
+    buildStructuredData({
+      seo,
+      site: domain ? `https://${domain}` : '',
+      path,
+      locale,
+      title,
+      description,
+      absolute: (rel) => {
+        const r = rewrite(rel)
+        return r && SAFE_SRC.test(r) ? absolute(r) : undefined
+      },
+    }),
+  )
   head += `<link rel="stylesheet" href="/assets/style.css">`
   const fontsUrl = settings.fonts?.googleFontsUrl
   if (fontsUrl?.startsWith('https://fonts.googleapis.com/')) {

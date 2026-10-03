@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import {
-  Archive, Check, Code2, Copy, Globe, KeyRound, LogOut, Palette, Plug,
+  Archive, Check, Code2, Copy, Globe, KeyRound, Languages, LogOut, Palette, Plug,
   Plus, Rocket, ScanSearch, Search, Settings2, Trash2, Type, UserRound, Users,
   Waypoints,
 } from 'lucide-vue-next'
@@ -14,7 +14,7 @@ import RowUI from '@/components/ui/RowUI.vue'
 import InputUI from '@/components/ui/InputUI.vue'
 import SelectUI from '@/components/ui/SelectUI.vue'
 import TextareaUI from '@/components/ui/TextareaUI.vue'
-import UploadUI from '@/components/ui/UploadUI.vue'
+import IconTileUI from '@/components/ui/IconTileUI.vue'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import BadgeUI from '@/components/ui/BadgeUI.vue'
 import ColorPickerUI from '@/components/ui/ColorPickerUI.vue'
@@ -27,7 +27,8 @@ import { useBranches } from '@/composables/useBranches'
 import { useAuth } from '@/composables/useAuth'
 import { useModal } from '@/composables/useModal'
 import { useApiTokens } from '@/composables/useApiTokens'
-import type { CustomFont } from '@/types/editor'
+import type { CustomFont, StructuredDataType } from '@/types/editor'
+import { SCHEMA_TYPES, customSchemaError } from '@/lib/shared/structuredData.js'
 import UsersSettings from '@/components/shared/UsersSettings.vue'
 import InteractionsSettings from '@/components/shared/InteractionsSettings.vue'
 import MediaPickerControl from '@/components/editor/content/MediaPickerControl.vue'
@@ -89,6 +90,7 @@ const NAV = computed(() => {
   if (canBuild.value) {
     const site = [
       { id: 'domain', label: 'Domain', icon: Globe },
+      { id: 'locales', label: 'Locales', icon: Languages },
       { id: 'publish', label: 'Publish', icon: Rocket },
     ]
     if (isAdmin.value) site.push({ id: 'code', label: 'Code', icon: Code2 })
@@ -228,13 +230,16 @@ const favicon = computed({
   get: () => settings.value.favicon ?? '',
   set: (v: string) => (settings.value.favicon = v || undefined),
 })
+const faviconDark = computed({
+  get: () => settings.value.faviconDark ?? '',
+  set: (v: string) => (settings.value.faviconDark = v || undefined),
+})
 
 const newLocale = ref('')
 function onAddLocale() {
   if (addLocale(newLocale.value)) newLocale.value = ''
 }
 
-const localeOptions = computed(() => locales.value.map((l) => ({ label: l, value: l })))
 
 // --- seo ---
 
@@ -243,30 +248,55 @@ const ogImage = computed({
   set: (v: string) => (settings.value.seo.ogImage = v || undefined),
 })
 
-const seoPageId = ref(activePage.value.id)
-const seoPage = computed(() => pages.value.find((p) => p.id === seoPageId.value))
-const pageOptions = computed(() => pages.value.map((p) => ({ label: p.name, value: p.id })))
-
-// per-page overrides: empty values delete keys so untouched pages stay
-// byte-identical (same discipline as locale overrides)
-function pageSeoField(key: 'title' | 'description') {
+// structured data (schema.org JSON-LD): written through computeds so an
+// untouched project carries no `schema` key, and clearing a field deletes it
+const schemaOn = computed(() => !!settings.value.seo.schema)
+const schemaTypeOptions = [
+  { label: 'None', value: '' },
+  ...SCHEMA_TYPES.map((t) => ({ label: t === 'LocalBusiness' ? 'Local business' : t, value: t })),
+]
+const seoLogo = computed({
+  get: () => settings.value.seo.logo ?? '',
+  set: (v: string) => (settings.value.seo.logo = v || undefined),
+})
+function schemaField(key: 'custom') {
   return computed({
-    get: () => seoPage.value?.seo?.[key] ?? '',
+    get: () => settings.value.seo.schema?.[key] ?? '',
     set: (v: string) => {
-      const page = seoPage.value
-      if (!page) return
-      if (v) {
-        ;(page.seo ??= {})[key] = v
-      } else if (page.seo) {
-        delete page.seo[key]
-        if (!Object.keys(page.seo).length) delete page.seo
-      }
+      const sd = settings.value.seo.schema
+      if (!sd) return
+      if (v) sd[key] = v
+      else delete sd[key]
     },
   })
 }
-const pageSeoTitle = pageSeoField('title')
-const pageSeoDescription = pageSeoField('description')
-
+// the type select is the switch: "None" removes the whole `schema` key so an
+// untouched project stays byte-identical; picking a type creates it
+const schemaType = computed({
+  get: () => settings.value.seo.schema?.type ?? '',
+  set: (v: StructuredDataType | '') => {
+    if (!v) delete settings.value.seo.schema
+    else if (settings.value.seo.schema) settings.value.seo.schema.type = v
+    else settings.value.seo.schema = { type: v }
+  },
+})
+const schemaCustom = schemaField('custom')
+const schemaCustomError = computed(() => customSchemaError(schemaCustom.value))
+const newSameAs = ref('')
+const sameAs = computed(() => settings.value.seo.schema?.sameAs ?? [])
+function addSameAs() {
+  const url = newSameAs.value.trim()
+  const sd = settings.value.seo.schema
+  if (!sd || !/^https?:\/\//i.test(url) || sameAs.value.includes(url)) return
+  ;(sd.sameAs ??= []).push(url)
+  newSameAs.value = ''
+}
+function removeSameAs(url: string) {
+  const sd = settings.value.seo.schema
+  if (!sd?.sameAs) return
+  sd.sameAs = sd.sameAs.filter((u) => u !== url)
+  if (!sd.sameAs.length) delete sd.sameAs
+}
 // --- design ---
 
 // --- type scale (settings.theme) ---
@@ -697,61 +727,84 @@ async function onImportFile(e: Event) {
                 <InputUI v-model="projectName" placeholder="Untitled project" />
               </RowUI>
               <RowUI label="Favicon">
-                <UploadUI v-model="favicon" accept="image/png,image/svg+xml,image/x-icon" />
+                <div class="flex items-start gap-3">
+                  <IconTileUI
+                    v-model="favicon"
+                    label="Light"
+                    scheme="light"
+                    accept="image/png,image/svg+xml,image/x-icon"
+                  />
+                  <IconTileUI
+                    v-model="faviconDark"
+                    label="Dark"
+                    scheme="dark"
+                    accept="image/png,image/svg+xml,image/x-icon"
+                  />
+                </div>
+                <p class="ml-2 self-start pt-1 text-[10px] text-muted-foreground">
+                  Square PNG, SVG or ICO. The dark one is used by browsers in dark mode when set;
+                  otherwise the light one everywhere.
+                </p>
               </RowUI>
-            </SettingsGroup>
-            <SettingsGroup
-              title="Locales"
-              description="Languages your site is translated into. Changing the default does not move content between locales."
-            >
-              <RowUI label="Default">
-                <SelectUI
-                  :model-value="defaultLocale"
-                  :options="localeOptions"
-                  @update:model-value="(v) => v && setDefaultLocale(v)"
-                />
-              </RowUI>
-              <div class="flex flex-wrap gap-1">
-                <BadgeUI
-                  v-for="l in locales"
-                  :key="l"
-                  :removable="l !== defaultLocale"
-                  @remove="confirmDeleteLocale(l)"
-                >
-                  {{ l }}
-                </BadgeUI>
-              </div>
-              <div class="flex gap-1.5">
-                <InputUI v-model="newLocale" placeholder="e.g. fr" @keydown.enter="onAddLocale" />
-                <ButtonUI variant="outline" size="sm" :icon="Plus" @click="onAddLocale">Add</ButtonUI>
-              </div>
             </SettingsGroup>
           </TabPanelUI>
 
           <TabPanelUI class="gap-9" id="seo">
             <SettingsGroup
-              title="Site defaults"
+              title="Search & social"
               description="Used on every page unless a page overrides them. %s in the title template is replaced by the page name."
             >
+              <RowUI label="Logo" class="!items-start">
+                <IconTileUI v-model="seoLogo" />
+              </RowUI>
               <RowUI label="Site name">
                 <InputUI v-model="settings.seo.siteName" placeholder="My Site" />
               </RowUI>
               <RowUI label="Title">
-                <InputUI v-model="settings.seo.titleTemplate" placeholder="%s — My Site" class="font-mono" />
+                <InputUI v-model="settings.seo.titleTemplate" placeholder="%s — My Site" />
               </RowUI>
-              <TextareaUI v-model="settings.seo.description" placeholder="Site description" :rows="2" />
-              <RowUI label="OG image">
-                <UploadUI v-model="ogImage" />
+              <RowUI label="Description" class="!items-start">
+                <TextareaUI v-model="settings.seo.description" placeholder="Shown in search results" :rows="2" />
               </RowUI>
-            </SettingsGroup>
-            <SettingsGroup title="Per page" description="Override the defaults for a single page.">
-              <RowUI label="Page">
-                <SelectUI v-model="seoPageId" :options="pageOptions" />
+              <!-- structured data (schema.org JSON-LD): "None" turns it off -->
+              <RowUI label="Schema">
+                <SelectUI v-model="schemaType" :options="schemaTypeOptions" />
               </RowUI>
-              <RowUI label="Title">
-                <InputUI v-model="pageSeoTitle" placeholder="Overrides the template" />
+              <RowUI v-if="schemaOn" label="Profiles">
+                <div class="flex min-w-0 flex-1 flex-col gap-1.5">
+                  <div v-if="sameAs.length" class="flex flex-wrap gap-1">
+                    <BadgeUI v-for="u in sameAs" :key="u" removable @remove="removeSameAs(u)">
+                      {{ u.replace(/^https?:\/\/(www\.)?/, '') }}
+                    </BadgeUI>
+                  </div>
+                  <div class="flex gap-1.5">
+                    <InputUI
+                      v-model="newSameAs"
+                      placeholder="https://instagram.com/…"
+                      class="font-mono"
+                      @keydown.enter="addSameAs"
+                    />
+                    <ButtonUI variant="outline" size="xs" class="!h-7 px-2.5" :icon="Plus" @click="addSameAs">Add</ButtonUI>
+                  </div>
+                </div>
               </RowUI>
-              <TextareaUI v-model="pageSeoDescription" placeholder="Page description" :rows="2" />
+              <RowUI label="OG image" class="!items-start">
+                <IconTileUI v-model="ogImage" wide />
+              </RowUI>
+              <RowUI v-if="schemaOn" label="JSON-LD" class="!items-start">
+                <div class="flex min-w-0 flex-1 flex-col gap-1">
+                  <TextareaUI
+                    v-model="schemaCustom"
+                    placeholder='{ "@type": "LocalBusiness", "telephone": "+1 …" }'
+                    :rows="4"
+                    class="font-mono"
+                  />
+                  <p v-if="schemaCustomError" class="text-[10px] text-danger">{{ schemaCustomError }}</p>
+                  <p v-else class="text-[10px] text-muted-foreground">
+                    Optional. One object or an array, added after the generated entries.
+                  </p>
+                </div>
+              </RowUI>
             </SettingsGroup>
           </TabPanelUI>
 
@@ -999,6 +1052,54 @@ async function onImportFile(e: Event) {
                   Add the records above, then check again.
                 </p>
               </div>
+            </SettingsGroup>
+          </TabPanelUI>
+
+          <TabPanelUI v-if="canBuild" class="gap-9" id="locales">
+            <SettingsGroup
+              title="Locales"
+              description="Languages your site is translated into. The default locale holds the base content; the others store translations on top of it."
+            >
+              <div class="flex flex-col divide-y divide-input rounded-xl border border-input">
+                <div v-for="l in locales" :key="l" class="flex h-9 items-center gap-3 px-3">
+                  <span class="w-16 shrink-0 font-mono text-xs">{{ l }}</span>
+                  <span class="min-w-0 flex-1 text-[10px] text-muted-foreground">
+                    <template v-if="l === defaultLocale">Default — base content</template>
+                    <template v-else>Translations fall back to {{ defaultLocale }}</template>
+                  </span>
+                  <ButtonUI
+                    v-if="l !== defaultLocale"
+                    variant="ghost"
+                    size="xs"
+                    class="text-muted-foreground"
+                    @click="setDefaultLocale(l)"
+                  >
+                    Make default
+                  </ButtonUI>
+                  <BadgeUI v-else>default</BadgeUI>
+                  <ButtonUI
+                    variant="ghost"
+                    size="xs"
+                    :icon="Trash2"
+                    :disabled="l === defaultLocale"
+                    tooltip="Delete locale"
+                    class="hover:!text-danger"
+                    @click="confirmDeleteLocale(l)"
+                  />
+                </div>
+              </div>
+              <div class="flex gap-1.5">
+                <InputUI
+                  v-model="newLocale"
+                  placeholder="Locale code, e.g. fr or pt-br"
+                  class="font-mono"
+                  @keydown.enter="onAddLocale"
+                />
+                <ButtonUI variant="outline" size="xs" class="!h-7 px-2.5" :icon="Plus" @click="onAddLocale">Add</ButtonUI>
+              </div>
+              <p class="text-[10px] text-muted-foreground">
+                Changing the default does not move content between locales.
+              </p>
             </SettingsGroup>
           </TabPanelUI>
 

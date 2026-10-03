@@ -90,6 +90,8 @@ export async function extractMedia(project) {
     }
   }
   intern(project.settings?.favicon)
+  intern(project.settings?.faviconDark)
+  intern(project.settings?.seo?.logo)
   intern(project.settings?.seo?.ogImage)
   // registered webfonts: without this the exported @font-face still pointed at
   // /media/<id>, which only THIS server answers — the export is supposed to be

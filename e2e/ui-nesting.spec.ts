@@ -66,13 +66,19 @@ const rows = (page: Page) => page.locator('[data-layer-row]')
 
 /** a page's layers open from its Edit icon in the Pages drawer */
 async function openLayers(page: Page, name = 'Home') {
-  if (!(await page.getByPlaceholder('Search pages, items…').isVisible())) {
-    // the Layers view may already be showing; Back returns to the list
-    const back = page.getByRole('button', { name: 'Back' })
+  const row = page.locator(`[data-page-row="${name}"]`)
+  // Get to the page LIST, whatever the column is showing — closed, another
+  // drawer, or parked in a detail view. Re-probed each time round, because a
+  // rail click settles on the next render flush: reading the DOM straight
+  // after one can see the view that is on its way out and act on it.
+  for (let attempt = 0; attempt < 4 && !(await row.isVisible()); attempt++) {
+    // `exact` matters: the name match is a substring, and the Style panel's
+    // 'Background' section header is a button too
+    const back = page.getByRole('button', { name: 'Back', exact: true })
     if (await back.isVisible()) await back.click()
     else await rail(page, 'Pages').click()
+    await page.waitForTimeout(150)
   }
-  const row = page.locator(`[data-page-row="${name}"]`)
   await row.hover()
   await row.getByRole('button', { name: 'Edit layers' }).click()
   await expect(rows(page).first()).toBeVisible({ timeout: 15_000 })
@@ -81,10 +87,20 @@ async function openLayers(page: Page, name = 'Home') {
 const componentRow = (page: Page, name: string) => page.locator(`[data-component="${name}"]`)
 
 /** insert one element from the ⌘E dock at the current selection */
+/** Escape, then wait for the dock to actually be gone.
+ *
+ * It closes on the next render flush, and the next action can outrun it —
+ * leaving the dock's own 'Components' tab matching the rail button of the same
+ * name, which reads as a strict-mode violation rather than as a race. */
+async function closeDock(page: Page) {
+  await page.keyboard.press('Escape')
+  await expect(page.locator('[data-dock-tab]').first()).toBeHidden()
+}
+
 async function insertFromDock(page: Page, key: string) {
   await page.keyboard.press('ControlOrMeta+e')
   await page.locator(`[data-dock-item="${key}"]`).click()
-  await page.keyboard.press('Escape')
+  await closeDock(page)
 }
 
 
@@ -109,7 +125,7 @@ test('a component is given a Button: each instance says its own, and Button is s
   await rows(page).first().click()
   await page.keyboard.press('ControlOrMeta+e')
   await page.locator('[data-dock-item^="component:"]', { hasText: /^Testimonial$/ }).first().click()
-  await page.keyboard.press('Escape')
+  await closeDock(page)
   const wrappers = (name: string) => rows(page).filter({ hasText: new RegExp(`^\\s*${name}\\s*$`) })
   await expect(wrappers('Testimonial')).toHaveCount(2)
   await expect(wrappers('Button')).toHaveCount(0)
@@ -127,7 +143,7 @@ test('a component is given a Button: each instance says its own, and Button is s
   await page.keyboard.press('ControlOrMeta+e')
   await expect(page.locator('[data-dock-item^="component:"]', { hasText: /^Testimonial$/ })).toHaveCount(0)
   await expect(page.locator('[data-dock-item^="component:"]', { hasText: /^Button$/ })).toHaveCount(0)
-  await page.keyboard.press('Escape')
+  await closeDock(page)
 
   // --- both instances on the page followed
   await rail(page, 'App').click()

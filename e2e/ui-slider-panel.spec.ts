@@ -63,10 +63,20 @@ async function publish(page: Page) {
 }
 
 /** insert one element from the ⌘E dock at the current selection */
+/** Escape, then wait for the dock to actually be gone.
+ *
+ * It closes on the next render flush, and the next action can outrun it —
+ * leaving the dock's own 'Components' tab matching the rail button of the same
+ * name, which reads as a strict-mode violation rather than as a race. */
+async function closeDock(page: Page) {
+  await page.keyboard.press('Escape')
+  await expect(page.locator('[data-dock-tab]').first()).toBeHidden()
+}
+
 async function insertFromDock(page: Page, key: string) {
   await page.keyboard.press('ControlOrMeta+e')
   await page.locator(`[data-dock-item="${key}"]`).click()
-  await page.keyboard.press('Escape')
+  await closeDock(page)
 }
 
 /** append a three-slide manual slider to the end of the page body */

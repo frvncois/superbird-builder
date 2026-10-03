@@ -3,10 +3,9 @@
 // its structure is authored on. Opened from a page's (or a collection
 // template's) Edit icon in the Pages drawer, which swaps its list for this.
 //
-// The DSL only ever carried an element's type, nesting, ref, binding and link —
-// everything else (classes, content, media, interactions, translations) lives
-// on the node and is edited in the panels — so this shows the same structure
-// without a text round-trip.
+// The tree IS the structure now: an element's type, nesting, ref, binding and
+// link are the node's own, and everything else (classes, content, media,
+// interactions, translations) is edited in the panels.
 import { computed, nextTick, ref, watch } from 'vue'
 import { ChevronLeft, Search, TriangleAlert, X } from 'lucide-vue-next'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
@@ -15,7 +14,7 @@ import { usePage } from '@/composables/usePage'
 import { useCollections } from '@/composables/useCollections'
 import { useComponents } from '@/composables/useComponents'
 import { useStructure } from '@/composables/useStructure'
-import { validateDocument } from '@/lib/syntax'
+import { validateTree } from '@/lib/validateTree'
 import LayerRow from './LayerRow.vue'
 import { useLayerSurface } from './useLayerSurface'
 import { layerLabel } from './layerLabel'
@@ -27,7 +26,7 @@ const emit = defineEmits<{ back: [] }>()
 const { activePage } = usePage()
 const { collections } = useCollections()
 const { components, masterFor } = useComponents()
-const { selectElement, elementAtLine } = useElement()
+const { selectElement } = useElement()
 const { backend } = useStructure()
 
 const roots = computed(() => backend.value.roots.value)
@@ -88,24 +87,21 @@ const { onKeydown } = useLayerSurface({
 
 const issues = computed(() => {
   const page = activePage.value
-  if (!isPage.value || !page) return []
-  return validateDocument(
-    page.code,
-    components.value.map((c) => c.name),
-    collections.value.map((c) => c.name),
-    collections.value.flatMap((c) =>
+  const body = isPage.value ? page?.elements.find((n) => n.type === 'body') : null
+  if (!body) return []
+  return validateTree(body, {
+    componentNames: components.value.map((c) => c.name),
+    collectionNames: collections.value.map((c) => c.name),
+    listFieldNames: collections.value.flatMap((c) =>
       c.fields
         .filter((f) => f.type === 'multi-reference' || f.type === 'multi-image')
         .map((f) => f.name),
     ),
-    collections.value.filter((c) => c.detailRoutes === false).map((c) => c.name),
-  )
+    dataOnlyCollections: collections.value
+      .filter((c) => c.detailRoutes === false)
+      .map((c) => c.name),
+  })
 })
-
-function goToIssue(line: number) {
-  const node = elementAtLine(line)
-  if (node) selectElement(node.id)
-}
 </script>
 
 <template>
@@ -179,10 +175,10 @@ function goToIssue(line: number) {
       <div class="max-h-28 overflow-y-auto pb-1.5">
         <button
           v-for="issue in issues"
-          :key="`${issue.line}:${issue.message}`"
+          :key="`${issue.nodeId}:${issue.message}`"
           type="button"
           class="flex w-full items-start gap-1 px-2.5 py-1 text-left text-[10px] text-muted-foreground outline-none hover:bg-accent/20 hover:text-foreground"
-          @click="goToIssue(issue.line)"
+          @click="selectElement(issue.nodeId)"
         >
           {{ issue.message }}
         </button>

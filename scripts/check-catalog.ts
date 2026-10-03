@@ -34,8 +34,7 @@ import { buildInstanceMap } from '../src/lib/instances'
 import { effectiveClasses } from '../src/lib/variants'
 import { isValidClass, setStyleTokens } from '../src/lib/styles'
 import { setColorTokens } from '../src/lib/colors'
-import { serializeNode } from '../src/lib/components'
-import { validateDocument } from '../src/lib/syntax'
+import { validateTree } from '../src/lib/validateTree'
 import { isKnownElement } from '../src/lib/elements'
 import { walkNodes } from '../src/lib/tree'
 import { createProject } from '../src/lib/factories'
@@ -271,31 +270,15 @@ for (const entry of CATALOG) {
   )
   assert.notEqual(again.def.root.id, def.root.id, `${where}: ids must be minted per add`)
 
-  // --- and the DSL it produces has to parse and validate ---
-  const block = [
-    `:${entry.name}`,
-    ...def.root.children.flatMap((c) => serializeNode(c, '\t\t')),
-    `${entry.name}:`,
-  ]
-  const doc = [
-    '@setup',
-    '\tname: Check',
-    '\tslug: /check',
-    '\tstatus: published',
-    'setup@',
-    ':body',
-    `\t${block[0]}`,
-    ...block.slice(1, -1),
-    `\t${block[block.length - 1]}`,
-    'body:',
-  ].join('\n')
-  const diags = validateDocument(
-    doc,
-    project.components.map((c) => c.name),
-    [],
-    [],
-    [],
-  )
+  // --- and the tree it produces has to validate ---
+  // the entry's root stands in for the `:Name` instance an insert would land;
+  // a library entry names no collection, so the data context is empty
+  const diags = validateTree(def.root, {
+    componentNames: project.components.map((c) => c.name),
+    collectionNames: [],
+    listFieldNames: [],
+    dataOnlyCollections: [],
+  })
   if (diags.length) fail(`${where}: ${diags.map((d) => d.message).join('; ')}`)
 }
 

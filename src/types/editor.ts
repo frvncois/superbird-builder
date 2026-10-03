@@ -436,9 +436,22 @@ export interface DesignToken {
 
 export type PublishMethod = 'server' | 'zip' | 'github'
 
+export type StructuredDataType = 'Organization' | 'Person' | 'LocalBusiness'
+
+/** the authored half of the site's structured data; the graph itself is built at export */
+export interface StructuredDataSettings {
+  type: StructuredDataType
+  /** social profile URLs (sameAs) */
+  sameAs?: string[]
+  /** raw JSON-LD (one object or an array) appended to the generated graph */
+  custom?: string
+}
+
 export interface ProjectSettings {
   /** data URL; extracted to a file at publish */
   favicon?: string
+  /** the dark-mode variant, served with media="(prefers-color-scheme: dark)" */
+  faviconDark?: string
   /** how the header Publish button ships the site. github config here is
    * NON-secret — the token lives server-side only (server/data/publish.json) */
   publishing: { method: PublishMethod; github: { repo: string; branch: string } }
@@ -448,6 +461,10 @@ export interface ProjectSettings {
     titleTemplate: string
     description: string
     ogImage?: string
+    /** the site logo (data URL / media path) — the identity's `logo` (or a Person's `image`) in structured data */
+    logo?: string
+    /** schema.org JSON-LD emitted on every route (shared/structuredData.js) */
+    schema?: StructuredDataSettings
   }
   /** bare domain (example.com) — canonical/og URLs in exports when set */
   domain: string

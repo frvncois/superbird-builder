@@ -57,8 +57,9 @@ export function useInsertDrag() {
     const edge = Math.min(Math.max(rect.height * 0.25, 3), 24)
     if (y < rect.top + edge) return { id: node.id, position: 'before' }
     if (y > rect.bottom - edge) return { id: node.id, position: 'after' }
-    // blocks (they have a close line) take children through their middle
-    const container = node.line !== undefined && (node.endLine ?? node.line) > node.line
+    // a container takes children through its middle (registry-driven: a
+    // childless :div is still one)
+    const container = backend.value.isContainer(node)
     if (container && rect.height >= edge * 3) return { id: node.id, position: 'inside' }
     return { id: node.id, position: y <= rect.top + rect.height / 2 ? 'before' : 'after' }
   }

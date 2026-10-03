@@ -1,7 +1,5 @@
 import { computed, ref, watch } from 'vue'
 import { useProject } from './useProject'
-import { parseSetup, replaceSetup } from '@/lib/document'
-import { reconcile } from '@/lib/syntax'
 import { walkNodes } from '@/lib/tree'
 import { purgeLocaleSeo } from '@/lib/shared/locales.js'
 import type { CollectionEntry, ElementNode } from '@/types/editor'
@@ -82,18 +80,12 @@ export function useLocale() {
   }
 
   /**
-   * Changes which locale the base content belongs to. Rewrites every
-   * page's `locale:` setup line (same mechanism as the storage
-   * migration). Content does NOT move between locales.
+   * Changes which locale the base content belongs to. Content does NOT move
+   * between locales — this says what language the base text is already in.
    */
   function setDefaultLocale(code: string) {
     if (!locales.value.includes(code) || code === defaultLocale.value) return
     project.value.defaultLocale = code
-    for (const page of project.value.pages) {
-      const old = page.code
-      page.code = replaceSetup(old, { ...parseSetup(old), locale: code })
-      page.elements = reconcile(old, page.code, page.elements)
-    }
   }
 
   // --- canvas reads (fallback-aware) ---

@@ -2,9 +2,11 @@ import { computed, ref } from 'vue'
 import { useProject } from './useProject'
 import { usePage } from './usePage'
 import { useAuth } from './useAuth'
-import { buildDocument, extractBodyLines, slugify } from '@/lib/document'
+import { slugify } from '@/lib/shared/slug.js'
+import { createBody } from '@/lib/factories'
+import { createNode } from '@/lib/elements'
+import { pageToCode } from '@/lib/pageCode'
 import { entrySlug, entryRoutePath } from '@/lib/shared/slug.js'
-import { parseSyntax } from '@/lib/syntax'
 import { deepClone, walkNodes } from '@/lib/tree'
 import type { Collection, CollectionEntry, CollectionField, Page } from '@/types/editor'
 
@@ -44,27 +46,29 @@ export function useCollections() {
     if (!name || collectionByName(name)) return null
 
     const label = name.charAt(0).toUpperCase() + name.slice(1)
-    const code = buildDocument(
-      { name: label, slug: `/${name}`, status: 'published', locale: project.value.defaultLocale },
-      ['\t:section', '\t\t:h1[title]:', '\tsection:'],
-      name,
-    )
+    // the template scaffold: a section holding the entry's title, so the page
+    // renders something the moment the collection exists
+    const title = createNode('h1')
+    title.arg = 'title'
+    const section = createNode('section')
+    section.children.push(title)
+    const body = createBody(name)
+    body.children.push(section)
     const now = Date.now()
     const page: Page = {
       id: crypto.randomUUID(),
-      // matches the scaffold's @setup `name:` — the first code edit re-derives
-      // page.name from @setup, so a differing initial name silently flipped
       name: label,
       path: `/${name}`,
       status: 'published',
-      code,
-      elements: parseSyntax(code),
+      code: '',
+      elements: [body],
       collectionId: '',
       createdAt: now,
       updatedAt: now,
       createdBy: actor(),
       updatedBy: actor(),
     }
+    page.code = pageToCode(page, project.value.defaultLocale)
     const collection: Collection = {
       id: crypto.randomUUID(),
       name,
@@ -166,11 +170,6 @@ export function useCollections() {
     })
     page.name = `${label} template`
     page.path = `/${name}`
-    page.code = buildDocument(
-      { name: page.name, slug: page.path, status: page.status, locale: project.value.defaultLocale },
-      extractBodyLines(page.code),
-      name,
-    )
     page.createdAt = page.updatedAt = Date.now()
     page.createdBy = page.updatedBy = actor()
 

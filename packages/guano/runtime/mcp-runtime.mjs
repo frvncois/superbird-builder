@@ -390,19 +390,32 @@ function createMirror(master) {
 	if (master.link) node.link = master.link;
 	return node;
 }
+/** `arg` and `link` are CODE-OWNED: inside an instance they belong to the
+*  master, so they are copied down rather than kept. */
+function adoptCodeOwned(node, master, box) {
+	if ((node.arg ?? void 0) !== (master.arg ?? void 0)) {
+		if (master.arg) node.arg = master.arg;
+		else delete node.arg;
+		box.moved = true;
+	}
+	if ((node.link ?? void 0) !== (master.link ?? void 0)) {
+		if (master.link) node.link = master.link;
+		else delete node.link;
+		box.moved = true;
+	}
+}
 /**
-* Reshape a mirror to its master's current structure, KEEPING what the host
-* said about each node that survives. Matched like `adoptStructure` matches —
-* by code signature, aligned, then by type for what that left over — so
-* inserting an icon in Button does not slide every Card's button text onto
-* the wrong node.
+* Reshape one level of children to the master's, KEEPING the node object for
+* each child that survives — which is what carries everything the structure
+* does not: the id, the per-instance text, media, translations, hidden flag and
+* variant picks, and (on a page) the htmlId and comment anchors.
+*
+* Matched like `adoptStructure` matches — by code signature, LCS-aligned, then
+* by type for whatever that left over — so inserting an icon in Button does not
+* slide every Card's button text onto the wrong node.
 */
-function alignMirror(mirror, master) {
-	if (master.arg) mirror.arg = master.arg;
-	else delete mirror.arg;
-	if (master.link) mirror.link = master.link;
-	else delete mirror.link;
-	const old = mirror.children;
+function alignLevel(node, master, box) {
+	const old = node.children;
 	const matches = lcsAlign(old.map(nodeSignature), master.children.map(nodeSignature));
 	const used = new Set(matches.values());
 	const freeOld = old.map((_, i) => i).filter((i) => !used.has(i));
@@ -413,18 +426,49 @@ function alignMirror(mirror, master) {
 	}
 	const next = master.children.map((child, i) => {
 		const at = matches.get(i);
-		const node = at !== void 0 ? old[at] : createMirror(child);
-		alignMirror(node, child);
-		return node;
+		const kept = at !== void 0 ? old[at] : createMirror(child);
+		if (at === void 0) box.moved = true;
+		adoptCodeOwned(kept, child, box);
+		alignLevel(kept, child, box);
+		return kept;
 	});
-	if (next.length !== old.length || next.some((node, i) => node !== old[i])) mirror.children = next;
+	if (next.length !== old.length || next.some((child, i) => child !== old[i])) {
+		node.children = next;
+		box.moved = true;
+	}
+}
+/**
+* Bring an INSTANCE's subtree in step with the master it stands for, keeping
+* every per-instance value on the nodes that survive. The node's OWN line is
+* left alone — on a page that is a real page node, with its own ref, htmlId and
+* classes; what is below it is the component's.
+*
+* Returns whether anything moved, so a caller can tell a real change from a
+* push that found everything already current.
+*/
+function alignStructure(instance, master) {
+	const box = { moved: false };
+	alignLevel(instance, master, box);
+	return box.moved;
+}
+/**
+* The same, for a MIRROR a master holds: there the wrapper node is part of the
+* host's own tree, so its code-owned slots follow the inner master too (a
+* mirror that lacked them would not be structurally identical to it, which is
+* the invariant the positional pairing relies on).
+*/
+function alignMirror(mirror, master) {
+	const box = { moved: false };
+	adoptCodeOwned(mirror, master, box);
+	alignLevel(mirror, master, box);
+	return box.moved;
 }
 /**
 * Bring every mirror a host holds back in step with the component it mirrors.
 * Returns whether anything changed.
 */
 function alignHostMirrors(host, components) {
-	const before = JSON.stringify(host.root.children);
+	let moved = false;
 	const visit = (nodes) => {
 		for (const node of nodes) {
 			if (!isComponentType(node.type)) {
@@ -432,11 +476,11 @@ function alignHostMirrors(host, components) {
 				continue;
 			}
 			const inner = components.find((c) => c.name === node.type);
-			if (inner && inner !== host) alignMirror(node, inner.root);
+			if (inner && inner !== host && alignMirror(node, inner.root)) moved = true;
 		}
 	};
 	visit(host.root.children);
-	return JSON.stringify(host.root.children) !== before;
+	return moved;
 }
 /** every nested-instance wrapper a master holds directly (not the ones inside
 *  a mirror, which belong to the component being mirrored) */
@@ -519,34 +563,6 @@ function lcsAlign(a, b) {
 	} else if (dp[i + 1][j] >= dp[i][j + 1]) i++;
 	else j++;
 	return map;
-}
-/** a line's token type: `:h1[x]:(+)` → ':h1', a closer `section:` → 'section:' */
-function lineTypeSig(line) {
-	const t = line.trim();
-	const open = t.match(/^:([A-Za-z][A-Za-z0-9-]*)/);
-	if (open) return `:${open[1]}`;
-	const close = t.match(/^([A-Za-z][A-Za-z0-9-]*):$/);
-	return close ? `${close[1]}:` : t;
-}
-/**
-* Align an instance block's OLD inner lines to the freshly serialized NEW ones
-* (map: newIndex → oldIndex, both relative to the block). Exact-text LCS
-* first, then a weak pass matching leftover lines by token TYPE in order —
-* so a master edit that inserts a node or tweaks a link/arg keeps every other
-* instance node (and its per-instance content overrides) on the line it came
-* from, instead of the pure positional map re-seating everything after the
-* insertion one node off.
-*/
-function alignInstanceLines(oldLines, newLines) {
-	const matches = lcsAlign(oldLines.map((l) => l.trim()), newLines.map((l) => l.trim()));
-	const used = new Set(matches.values());
-	const freeOld = oldLines.map((_, i) => i).filter((i) => !used.has(i));
-	const freeNew = newLines.map((_, i) => i).filter((i) => !matches.has(i));
-	if (freeOld.length && freeNew.length) {
-		const weak = lcsAlign(freeOld.map((i) => lineTypeSig(oldLines[i])), freeNew.map((i) => lineTypeSig(newLines[i])));
-		for (const [nj, oj] of weak) matches.set(freeNew[nj], freeOld[oj]);
-	}
-	return matches;
 }
 /**
 * Re-derive a component master's children from an edited instance's subtree,
@@ -1345,7 +1361,7 @@ function tokenFor(type) {
 * Dedented source lines for a brand-new element of the given type. A seeded
 * container (a button, a link) is born holding its child, so an insert lands
 * something visible rather than an empty box — the child's TEXT is node state
-* and is applied by the caller (`applySeedContent`), not carried by the code.
+* and is applied by the caller, not carried by the code.
 */
 function elementBlockLines(type) {
 	const token = tokenFor(type);
@@ -1357,6 +1373,77 @@ function elementBlockLines(type) {
 		`${type}:`
 	];
 	return [token, `${type}:`];
+}
+//#endregion
+//#region src/lib/pageCode.ts
+/**
+* TRANSITIONAL: regenerate `page.code` from the page's tree.
+*
+* The tree is the source of truth for structure now, and nothing in `src/`
+* reads `page.code` any more. The agent API still does — it reads and writes
+* the indentation DSL, addresses edits by line number, and hashes the code for
+* its `version` contract — so the code is kept as a derived MIRROR of the tree
+* until the MCP moves to HTML (TREE-SOURCE-PLAN.md, Phase 3). This whole module
+* goes with that move; so does the DSL itself.
+*
+* It also re-assigns every node's `line`/`endLine`, because that is what the
+* agent API addresses by. Assigning the same number back is a no-op for Vue's
+* reactivity, so a regeneration that changes nothing dirties nothing.
+*/
+/** the fixed `@setup` block: the body's open line always sits at index 5 */
+var SETUP_LINES = 5;
+/**
+* Serializes one node and its subtree, recording where each one landed.
+*
+* Unlike `serializeNode` (which writes a MASTER's structure into instance
+* blocks) this emits the `#ref` slot: a ref is a page-scope address, so it
+* belongs in a page's code and nowhere else.
+*/
+function emit(node, indent, lines) {
+	node.line = lines.length;
+	const ref = node.ref ? `#${node.ref}` : "";
+	const arg = node.arg ? `[${node.arg}]` : "";
+	const link = node.link ? `@${node.link === "@item" ? "item" : node.link}` : "";
+	if (isLeafElement(node.type)) {
+		lines.push(`${indent}:${node.type}${ref}${arg}:${link}`);
+		node.endLine = node.line;
+		return;
+	}
+	lines.push(`${indent}:${node.type}${ref}${arg}${link}`);
+	for (const child of node.children) emit(child, `${indent}\t`, lines);
+	lines.push(`${indent}${node.type}:`);
+	node.endLine = lines.length - 1;
+}
+/** the canonical document for a page's current tree, lines assigned as it goes */
+function pageToCode(page, defaultLocale) {
+	const body = page.elements.find((n) => n.type === "body");
+	const lines = [
+		"@setup",
+		`\tname: ${page.name}`,
+		`\tslug: ${page.path}`,
+		`\tstatus: ${page.status}`,
+		`\tlocale: ${defaultLocale}`
+	];
+	if (!body) return [
+		...lines,
+		":body",
+		"	",
+		"body:"
+	].join("\n");
+	body.line = SETUP_LINES;
+	lines.push(`:body${body.arg ? `[${body.arg}]` : ""}`);
+	for (const child of body.children) emit(child, "	", lines);
+	if (!body.children.length) lines.push("	");
+	lines.push("body:");
+	body.endLine = lines.length - 1;
+	return applyNodeMarkers(lines.join("\n"), page.elements);
+}
+/** Brings `page.code` back in step with the tree. Returns whether it moved. */
+function syncPageCode(page, defaultLocale) {
+	const next = pageToCode(page, defaultLocale);
+	if (next === page.code) return false;
+	page.code = next;
+	return true;
 }
 //#endregion
 //#region src/lib/shared/instances.js
@@ -4082,18 +4169,18 @@ function effectiveClasses(node, def, picks) {
 *
 * These live here rather than in `useComponents` because every one of them
 * spans ALL pages, while the composable's `masterMap` / `detachComponent` are
-* bound to the active page. The structural ones (`rewriteInstanceBlock`,
-* `pushMasterStructure`, …) are re-exported into the committed MCP runtime
-* bundle, so the agent path runs this code rather than a copy of it: rebuild
-* the bundle (`npm run build:mcp-runtime`) after changing them.
+* bound to the active page. Editing ONE tree — a master, or a page — is
+* `lib/treeOps`; this is what the rest of the project then has to be told.
+* `pushMasterStructure` and the detach verbs are re-exported into the committed
+* MCP runtime bundle, so the agent path runs this code rather than a copy of
+* it: rebuild the bundle (`npm run build:mcp-runtime`) after changing them.
 *
 * All of it is pure: a `Project` in, mutations out, no Vue. That is what makes
 * it testable headlessly.
 */
-/** matches a token line's opening ':Name', refusing a longer name that merely
-* starts with it (':CardHeader' is not an instance of 'Card') */
-var openToken = (name) => new RegExp(`^(\\s*:)${name}(?![a-zA-Z0-9-])`);
-var indentOf = (line) => line.match(/^\t*/)[0];
+/** the DSL mirror of a page needs the project's locale for its `@setup` block.
+*  Transitional, with the mirror itself (see lib/pageCode). */
+var mirrorPage = (project, page) => syncPageCode(page, project.defaultLocale || "en");
 /**
 * The ONE writer of the optional keys, so their JSON key order is the same
 * everywhere. `computeMerge` compares whole-object `JSON.stringify`, which is
@@ -4142,7 +4229,7 @@ function componentUsage(project, name) {
 	};
 }
 /**
-* Renames a component and every `:Name … Name:` token that refers to it.
+* Renames a component, every instance of it, and every mirror of it.
 *
 * Returns the name actually used (normalized and de-duplicated), or null when
 * the id doesn't resolve.
@@ -4158,27 +4245,14 @@ function renameComponent(project, id, rawName) {
 	for (const host of project.components) walkNodes(host.root.children, (node) => {
 		if (node.type === old) node.type = name;
 	});
-	const open = openToken(old);
 	for (const page of project.pages) {
-		const lines = page.code.split("\n");
 		let changed = false;
 		walkNodes(page.elements, (node) => {
 			if (node.type !== old) return;
 			node.type = name;
-			const at = node.line;
-			if (at === void 0) return;
-			const line = lines[at];
-			if (line !== void 0 && open.test(line)) {
-				lines[at] = line.replace(open, `$1${name}`);
-				changed = true;
-			}
-			const end = node.endLine;
-			if (end !== void 0 && end !== at && lines[end]?.trim() === `${old}:`) {
-				lines[end] = `${indentOf(lines[end])}${name}:`;
-				changed = true;
-			}
+			changed = true;
 		});
-		if (changed) page.code = lines.join("\n");
+		if (changed) mirrorPage(project, page);
 	}
 	return name;
 }
@@ -4299,57 +4373,26 @@ function bakeMasterState(pairs, masterToInstance) {
 function isBareWrapper(root) {
 	return !root.classes?.trim() && !root.background && !root.interactions?.length;
 }
-/** `:Card:` leaf instances can sit unexpanded in stored code (nothing expands
-* them until someone types in that page). Detaching one means materializing
-* the master's structure first, so there are nodes to bake onto. Only THIS
-* component's leaves are touched. */
-function expandLeafInstances(page, def) {
-	const lineMap = [];
-	const next = expandComponentInstances(page.code, [def], lineMap);
-	if (next === page.code) return;
-	const map = /* @__PURE__ */ new Map();
-	lineMap.forEach((out, input) => map.set(out, input));
-	const before = page.code;
-	page.code = next;
-	page.elements = reconcile(before, next, page.elements, map);
-}
-var withRef = (line, ref) => line.replace(/^(\s*:[a-zA-Z][a-zA-Z0-9-]*)/, `$1#${ref}`);
-/** Detaches one already-expanded instance block. */
+/** Detaches one instance. */
 function detachOne(page, def, instanceId, components) {
 	const instance = findNode(page.elements, instanceId);
-	if (!instance || instance.type !== def.name || instance.line === void 0) return false;
+	if (!instance || instance.type !== def.name) return false;
+	const parent = findParent(page.elements, instanceId);
+	if (!parent) return false;
+	if (!instance.children.length && def.root.children.length) alignStructure(instance, def.root);
 	const { pairs, masterToInstance } = pairWithMaster(instance, def, components);
 	bakeMasterState(pairs, masterToInstance);
-	const lines = page.code.split("\n");
-	const start = instance.line;
-	const end = instance.endLine ?? instance.line;
 	if (!isBareWrapper(def.root)) {
-		lines[start] = lines[start].replace(openToken(def.name), "$1div");
-		if (end > start) lines[end] = `${indentOf(lines[end])}div:`;
 		instance.type = "div";
-		page.code = lines.join("\n");
 		return true;
 	}
-	const inner = end > start ? lines.slice(start + 1, end) : [];
-	const dropped = end > start ? 2 : 1;
-	const rest = [
-		...lines.slice(0, start),
-		...inner.map((l) => l.replace(/^\t/, "")),
-		...lines.slice(end + 1)
-	];
-	if (inner.length) {
-		const ref = refOf(lines[start]);
-		if (ref && !refOf(rest[start])) rest[start] = withRef(rest[start], ref);
-		const firstChild = instance.children[0];
-		if (firstChild && instance.htmlId && !firstChild.htmlId) firstChild.htmlId = instance.htmlId;
+	const at = parent.children.indexOf(instance);
+	const first = instance.children[0];
+	if (first) {
+		if (instance.ref && !first.ref) first.ref = instance.ref;
+		if (instance.htmlId && !first.htmlId) first.htmlId = instance.htmlId;
 	}
-	const map = /* @__PURE__ */ new Map();
-	for (let i = 0; i < rest.length; i++) if (i < start) map.set(i, i);
-	else if (i < start + inner.length) map.set(i, i + 1);
-	else map.set(i, i + dropped);
-	const before = page.code;
-	page.code = rest.join("\n");
-	page.elements = reconcile(before, page.code, page.elements, map);
+	parent.children.splice(at, 1, ...instance.children);
 	return true;
 }
 /**
@@ -4359,16 +4402,13 @@ function detachOne(page, def, instanceId, components) {
 function detachComponentInstances(project, def) {
 	let detached = 0;
 	for (const page of project.pages) {
-		expandLeafInstances(page, def);
-		const instances = [];
+		const ids = [];
 		walkNodes(page.elements, (n) => {
-			if (n.type === def.name && n.line !== void 0) instances.push(n);
+			if (n.type === def.name) ids.push(n.id);
 		});
-		if (!instances.length) continue;
-		const ordered = [...instances].sort((a, b) => b.line - a.line).map((n) => n.id);
-		for (const id of ordered) if (detachOne(page, def, id, project.components)) detached++;
-		const marked = applyNodeMarkers(page.code, page.elements);
-		if (marked !== page.code) page.code = marked;
+		if (!ids.length) continue;
+		for (const id of ids) if (detachOne(page, def, id, project.components)) detached++;
+		mirrorPage(project, page);
 	}
 	return detached;
 }
@@ -4377,45 +4417,43 @@ function detachInstance(project, page, instanceId) {
 	const node = findNode(page.elements, instanceId);
 	const def = node ? project.components.find((c) => c.name === node.type) : null;
 	if (!def) return false;
-	expandLeafInstances(page, def);
 	if (!detachOne(page, def, instanceId, project.components)) return false;
-	const marked = applyNodeMarkers(page.code, page.elements);
-	if (marked !== page.code) page.code = marked;
+	mirrorPage(project, page);
 	return true;
 }
 /**
 * Pushes a master's current structure out to every instance of it, on every
-* page. Returns how many instance blocks were rewritten.
+* page. Returns how many instance subtrees it had to move.
 *
-* Every CLOSED instance is rewritten unconditionally — deliberately NOT gated
-* on a structure signature the way `syncStructure` is, because that signature
-* is type-only: an arg or link change leaves it identical and would never
-* reach the instances.
+* Realigning (rather than rebuilding) is what carries per-instance state
+* across: every node that survives the match IS the same node object, so its
+* id, text, media, translations, hidden flag, variant picks and htmlId come
+* with it, and a subtree that was already in step comes out byte-identical. A
+* push that found everything current therefore reads as no edit at all.
 *
-* "Every instance" includes the ones NESTED in other components: their blocks
-* on the pages are rewritten like any other (at any depth), and the mirrors
+* "Every instance" includes the ones NESTED in other components: the mirrors
 * those components hold in their own masters are brought back in step first —
-* inner components before the hosts that mirror them.
+* inner components before the hosts that mirror them — and the blocks on the
+* pages follow at any depth.
+*
+* An instance that was never materialized (a `:Card:` leaf in stored code) is
+* simply one whose children do not match yet, so it is filled in here with no
+* special case.
 */
 function pushMasterStructure(project, def) {
 	if (!project.components.some((c) => c.id === def.id)) return 0;
 	alignMirrors(project.components);
-	let rewritten = 0;
+	let moved = 0;
 	for (const page of project.pages) {
-		expandLeafInstances(page, def);
-		const ids = [];
+		const instances = [];
 		walkNodes(page.elements, (n) => {
-			if (n.type === def.name) ids.push(n.id);
+			if (n.type === def.name) instances.push(n);
 		});
-		const ordered = ids.map((id) => findNode(page.elements, id)).filter((n) => !!n && n.line !== void 0).sort((a, b) => b.line - a.line).map((n) => n.id);
-		for (const id of ordered) {
-			const node = findNode(page.elements, id);
-			if (node && isClosedBlock(page, node, def.name) && rewriteInstanceBlock(page, node, def)) rewritten++;
-		}
-		const marked = applyNodeMarkers(page.code, page.elements);
-		if (marked !== page.code) page.code = marked;
+		if (!instances.length) continue;
+		for (const node of instances) if (alignStructure(node, def.root)) moved++;
+		mirrorPage(project, page);
 	}
-	return rewritten;
+	return moved;
 }
 /**
 * Bring every mirror in step with the component it mirrors, inner components
@@ -4423,45 +4461,6 @@ function pushMasterStructure(project, def) {
 */
 function alignMirrors(components) {
 	for (const host of dependencyOrder$1(components)) alignHostMirrors(host, components);
-}
-/**
-* Regenerates one instance's inner code lines from its master.
-*
-* Lifted out of `useComponents` so the master-first operations above can reuse
-* it; it closed over nothing.
-*/
-function rewriteInstanceBlock(page, node, def) {
-	if (node.line === void 0) return false;
-	const lines = page.code.split("\n");
-	const start = node.line;
-	const end = node.endLine ?? node.line;
-	if (end <= start) return false;
-	const indent = indentOf(lines[start]);
-	const inner = def.root.children.flatMap((c) => serializeNode(c, `${indent}\t`));
-	const oldInnerLength = end - start - 1;
-	const rest = [
-		...lines.slice(0, start + 1),
-		...inner,
-		...lines.slice(end)
-	];
-	const align = alignInstanceLines(lines.slice(start + 1, end), inner);
-	const map = /* @__PURE__ */ new Map();
-	for (let i = 0; i < rest.length; i++) if (i <= start) map.set(i, i);
-	else if (i < start + 1 + inner.length) {
-		const oldInner = align.get(i - (start + 1));
-		if (oldInner !== void 0) map.set(i, start + 1 + oldInner);
-	} else map.set(i, i - inner.length + oldInnerLength);
-	const before = page.code;
-	page.code = rest.join("\n");
-	page.elements = reconcile(before, page.code, page.elements, map);
-	return true;
-}
-/** a block only counts once its close line exists — while an edit is mid-flight
-* the parser sees an unclosed block that swallows whatever follows, and syncing
-* from that would corrupt the master */
-function isClosedBlock(page, node, name) {
-	if (node.line === void 0 || node.endLine === void 0 || node.endLine <= node.line) return false;
-	return page.code.split("\n")[node.endLine]?.trim() === `${name}:`;
 }
 /**
 * Deletes a component, detaching every instance first so no page loses its
@@ -4696,6 +4695,25 @@ function sanitizeRich(html) {
 	}
 	for (let i = open.length - 1; i >= 0; i--) out.push(`</${open[i]}>`);
 	return out.join("");
+}
+//#endregion
+//#region src/lib/shared/structuredData.js
+/** validates the `custom` JSON-LD text; null when it is fine, else the reason */
+function customSchemaError(text) {
+	const raw = String(text ?? "").trim();
+	if (!raw) return null;
+	let parsed;
+	try {
+		parsed = JSON.parse(raw);
+	} catch (e) {
+		return "Not valid JSON" + (e instanceof Error ? `: ${e.message}` : "");
+	}
+	const items = Array.isArray(parsed) ? parsed : [parsed];
+	for (const item of items) {
+		if (!item || typeof item !== "object" || Array.isArray(item)) return "Each entry must be a JSON object";
+		if (typeof item["@type"] !== "string") return "Each entry needs a string \"@type\"";
+	}
+	return null;
 }
 var canonical = (names) => new Map(names.map((n) => [n.toLowerCase(), n]));
 var ELEMENTS$1 = canonical([
@@ -6182,24 +6200,26 @@ function defaultBreakpoints() {
 		}
 	];
 }
+/** a page's root: the `:body` wrap every document is built around */
+function createBody(arg) {
+	const body = createNode("body");
+	if (arg) body.arg = arg;
+	return body;
+}
 function createPage(name, path, locale = "en") {
-	const code = buildDocument({
-		name,
-		slug: path,
-		status: "published",
-		locale
-	}, []);
 	const now = Date.now();
-	return {
+	const page = {
 		id: crypto.randomUUID(),
 		name,
 		path,
 		status: "published",
-		code,
-		elements: parseSyntax(code),
+		code: "",
+		elements: [createBody()],
 		createdAt: now,
 		updatedAt: now
 	};
+	page.code = pageToCode(page, locale);
+	return page;
 }
 function createProject(name) {
 	return {
@@ -8290,4 +8310,4 @@ function materializeCatalogEntry(entry, project, component = (key) => project.co
 	});
 }
 //#endregion
-export { APPEAR_MODES, BUILTIN_LIST_SOURCES, CATALOG, CATALOG_TOKENS, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MOTION_PROPS, NODE_STATE_KEYS, REF_SLOT, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, SCROLL_LERP_MAX, SCROLL_LERP_MIN, SLIDER_DEFAULTS, STYLE_SECTIONS, TOKEN_NAME_RE, TRANSITION_DEFAULTS, TRANSITION_PRESET_IDS, VARIANT_NAME_RE, addVariantAxis, addVariantOption, adoptStructure, alignInstanceLines, alignMirrors, applyClass, buildDocument, buildInstanceMap, buildScopeRoots, canNest, catalogDependencies, catalogEntry, cloneForMaster, compileAnimation, componentReaches, componentUsage, countLocaleSeo, createNode, createPage, createProject, dataMarkerOf, deepClone, defaultBreakpoints, defaultSettings, deleteComponent, dependencyOrder, detachInstance, duplicateComponent, effectiveClasses, elementBlockLines, enforceDocument, expandComponentInstances, extractBodyArg, extractBodyDecor, extractBodyLines, findNode, findParent, fontError, fontFormatForUrl, hasAncestorOfType, hasNodeState, hasOpenArgBracket, hoistBlockRef, inheritedInstanceValue, interactionGroupKey, interactionMarkerOf, interactionStateKey, isAllowedAttribute, isBodyOpenLine, isClosedBlock, isComponentType, isEmittableToken, isEntryScopeRoot, isInstanceWrapper, isKnownElement, isLeafElement, isLocalizableAttribute, isNodeHidden, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isValidClass, isValidToken, lexLine, lucideNameOf, lucideSvg, matchClass, materializeCatalogEntry, mergeAttributeLayers, mergeClassLayers, nestedComponentNames, normalizeComponentName, normalizeSyntax, parseSetup, parseSyntax, pickedKeys, purgeLocaleSeo, pushMasterStructure, reconcile, refOf, removeVariantAxis, removeVariantOption, renameComponent, renameVariantAxis, renameVariantOption, replaceSetup, resolveInstanceValue, resolvePicks, resolveSliderConfig, rewriteInstanceBlock, sameLayerProperty, sameProperty, sanitizeAttributes, sanitizeInlineSvg, sanitizeRich, serializeNode, setComponentCategory, setComponentMeta, setInstancePick, setNodeHidden, setSetupLocale, setStyleTokens, setVariantAxes, setVariantClasses, setVariantDefault, slugify, stripExtractedInstanceState, stripNodeState, styleMarkerOf, tokenError, typeOptionsFor, validateAnimation, validateBinding, validateDocument, validateMotionSettings, validateSliderConfig, variantKey, walkNodes, withDataMarker, withInteractionMarker, withStyleMarker, withoutRef };
+export { APPEAR_MODES, BUILTIN_LIST_SOURCES, CATALOG, CATALOG_TOKENS, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MOTION_PROPS, NODE_STATE_KEYS, REF_SLOT, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, SCROLL_LERP_MAX, SCROLL_LERP_MIN, SLIDER_DEFAULTS, STYLE_SECTIONS, TOKEN_NAME_RE, TRANSITION_DEFAULTS, TRANSITION_PRESET_IDS, VARIANT_NAME_RE, addVariantAxis, addVariantOption, adoptStructure, alignMirrors, applyClass, buildDocument, buildInstanceMap, buildScopeRoots, canNest, catalogDependencies, catalogEntry, cloneForMaster, compileAnimation, componentReaches, componentUsage, countLocaleSeo, createNode, createPage, createProject, customSchemaError, dataMarkerOf, deepClone, defaultBreakpoints, defaultSettings, deleteComponent, dependencyOrder, detachInstance, duplicateComponent, effectiveClasses, elementBlockLines, enforceDocument, expandComponentInstances, extractBodyArg, extractBodyDecor, extractBodyLines, findNode, findParent, fontError, fontFormatForUrl, hasAncestorOfType, hasNodeState, hasOpenArgBracket, hoistBlockRef, inheritedInstanceValue, interactionGroupKey, interactionMarkerOf, interactionStateKey, isAllowedAttribute, isBodyOpenLine, isComponentType, isEmittableToken, isEntryScopeRoot, isInstanceWrapper, isKnownElement, isLeafElement, isLocalizableAttribute, isNodeHidden, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isValidClass, isValidToken, lexLine, lucideNameOf, lucideSvg, matchClass, materializeCatalogEntry, mergeAttributeLayers, mergeClassLayers, nestedComponentNames, normalizeComponentName, normalizeSyntax, parseSetup, parseSyntax, pickedKeys, purgeLocaleSeo, pushMasterStructure, reconcile, refOf, removeVariantAxis, removeVariantOption, renameComponent, renameVariantAxis, renameVariantOption, replaceSetup, resolveInstanceValue, resolvePicks, resolveSliderConfig, sameLayerProperty, sameProperty, sanitizeAttributes, sanitizeInlineSvg, sanitizeRich, serializeNode, setComponentCategory, setComponentMeta, setInstancePick, setNodeHidden, setSetupLocale, setStyleTokens, setVariantAxes, setVariantClasses, setVariantDefault, slugify, stripExtractedInstanceState, stripNodeState, styleMarkerOf, tokenError, typeOptionsFor, validateAnimation, validateBinding, validateDocument, validateMotionSettings, validateSliderConfig, variantKey, walkNodes, withDataMarker, withInteractionMarker, withStyleMarker, withoutRef };

@@ -98,20 +98,33 @@ export function createMirror(master: ElementNode): ElementNode {
   return node
 }
 
-/**
- * Reshape a mirror to its master's current structure, KEEPING what the host
- * said about each node that survives. Matched like `adoptStructure` matches —
- * by code signature, aligned, then by type for what that left over — so
- * inserting an icon in Button does not slide every Card's button text onto
- * the wrong node.
- */
-export function alignMirror(mirror: ElementNode, master: ElementNode): void {
-  if (master.arg) mirror.arg = master.arg
-  else delete mirror.arg
-  if (master.link) mirror.link = master.link
-  else delete mirror.link
+/** `arg` and `link` are CODE-OWNED: inside an instance they belong to the
+ *  master, so they are copied down rather than kept. */
+function adoptCodeOwned(node: ElementNode, master: ElementNode, box: { moved: boolean }): void {
+  if ((node.arg ?? undefined) !== (master.arg ?? undefined)) {
+    if (master.arg) node.arg = master.arg
+    else delete node.arg
+    box.moved = true
+  }
+  if ((node.link ?? undefined) !== (master.link ?? undefined)) {
+    if (master.link) node.link = master.link
+    else delete node.link
+    box.moved = true
+  }
+}
 
-  const old = mirror.children
+/**
+ * Reshape one level of children to the master's, KEEPING the node object for
+ * each child that survives — which is what carries everything the structure
+ * does not: the id, the per-instance text, media, translations, hidden flag and
+ * variant picks, and (on a page) the htmlId and comment anchors.
+ *
+ * Matched like `adoptStructure` matches — by code signature, LCS-aligned, then
+ * by type for whatever that left over — so inserting an icon in Button does not
+ * slide every Card's button text onto the wrong node.
+ */
+function alignLevel(node: ElementNode, master: ElementNode, box: { moved: boolean }): void {
+  const old = node.children
   const matches = lcsAlign(old.map(nodeSignature), master.children.map(nodeSignature))
   const used = new Set(matches.values())
   const freeOld = old.map((_, i) => i).filter((i) => !used.has(i))
@@ -126,13 +139,46 @@ export function alignMirror(mirror: ElementNode, master: ElementNode): void {
 
   const next = master.children.map((child, i) => {
     const at = matches.get(i)
-    const node = at !== undefined ? old[at]! : createMirror(child)
-    alignMirror(node, child)
-    return node
+    const kept = at !== undefined ? old[at]! : createMirror(child)
+    if (at === undefined) box.moved = true
+    adoptCodeOwned(kept, child, box)
+    alignLevel(kept, child, box)
+    return kept
   })
-  // untouched when nothing moved: a mirror that was already in step must come
+  // untouched when nothing moved: a subtree that was already in step must come
   // out byte-identical, or every push would read as an edit to the host
-  if (next.length !== old.length || next.some((node, i) => node !== old[i])) mirror.children = next
+  if (next.length !== old.length || next.some((child, i) => child !== old[i])) {
+    node.children = next
+    box.moved = true
+  }
+}
+
+/**
+ * Bring an INSTANCE's subtree in step with the master it stands for, keeping
+ * every per-instance value on the nodes that survive. The node's OWN line is
+ * left alone — on a page that is a real page node, with its own ref, htmlId and
+ * classes; what is below it is the component's.
+ *
+ * Returns whether anything moved, so a caller can tell a real change from a
+ * push that found everything already current.
+ */
+export function alignStructure(instance: ElementNode, master: ElementNode): boolean {
+  const box = { moved: false }
+  alignLevel(instance, master, box)
+  return box.moved
+}
+
+/**
+ * The same, for a MIRROR a master holds: there the wrapper node is part of the
+ * host's own tree, so its code-owned slots follow the inner master too (a
+ * mirror that lacked them would not be structurally identical to it, which is
+ * the invariant the positional pairing relies on).
+ */
+export function alignMirror(mirror: ElementNode, master: ElementNode): boolean {
+  const box = { moved: false }
+  adoptCodeOwned(mirror, master, box)
+  alignLevel(mirror, master, box)
+  return box.moved
 }
 
 /**
@@ -140,7 +186,7 @@ export function alignMirror(mirror: ElementNode, master: ElementNode): void {
  * Returns whether anything changed.
  */
 export function alignHostMirrors(host: ComponentDef, components: ComponentDef[]): boolean {
-  const before = JSON.stringify(host.root.children)
+  let moved = false
   const visit = (nodes: ElementNode[]) => {
     for (const node of nodes) {
       if (!isComponentType(node.type)) {
@@ -150,11 +196,11 @@ export function alignHostMirrors(host: ComponentDef, components: ComponentDef[])
       const inner = components.find((c) => c.name === node.type)
       // the inner master already holds ITS mirrors in step (callers go inner
       // first), so aligning to it brings the deeper levels along
-      if (inner && inner !== host) alignMirror(node, inner.root)
+      if (inner && inner !== host && alignMirror(node, inner.root)) moved = true
     }
   }
   visit(host.root.children)
-  return JSON.stringify(host.root.children) !== before
+  return moved
 }
 
 /** every nested-instance wrapper a master holds directly (not the ones inside
@@ -266,39 +312,6 @@ function lcsAlign(a: string[], b: string[]): Map<number, number> {
     }
   }
   return map
-}
-
-/** a line's token type: `:h1[x]:(+)` → ':h1', a closer `section:` → 'section:' */
-function lineTypeSig(line: string): string {
-  const t = line.trim()
-  const open = t.match(/^:([A-Za-z][A-Za-z0-9-]*)/)
-  if (open) return `:${open[1]}`
-  const close = t.match(/^([A-Za-z][A-Za-z0-9-]*):$/)
-  return close ? `${close[1]}:` : t
-}
-
-/**
- * Align an instance block's OLD inner lines to the freshly serialized NEW ones
- * (map: newIndex → oldIndex, both relative to the block). Exact-text LCS
- * first, then a weak pass matching leftover lines by token TYPE in order —
- * so a master edit that inserts a node or tweaks a link/arg keeps every other
- * instance node (and its per-instance content overrides) on the line it came
- * from, instead of the pure positional map re-seating everything after the
- * insertion one node off.
- */
-export function alignInstanceLines(oldLines: string[], newLines: string[]): Map<number, number> {
-  const matches = lcsAlign(oldLines.map((l) => l.trim()), newLines.map((l) => l.trim()))
-  const used = new Set(matches.values())
-  const freeOld = oldLines.map((_, i) => i).filter((i) => !used.has(i))
-  const freeNew = newLines.map((_, i) => i).filter((i) => !matches.has(i))
-  if (freeOld.length && freeNew.length) {
-    const weak = lcsAlign(
-      freeOld.map((i) => lineTypeSig(oldLines[i]!)),
-      freeNew.map((i) => lineTypeSig(newLines[i]!)),
-    )
-    for (const [nj, oj] of weak) matches.set(freeNew[nj]!, freeOld[oj]!)
-  }
-  return matches
 }
 
 /** a master node that lost its place in an adoption — its id/classes/

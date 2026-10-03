@@ -115,6 +115,7 @@ export function createToolSet({ api, runtime, elicit, hasElicitation = () => nul
     isRich,
     sanitizeRich,
     SAFE_SRC,
+    customSchemaError,
     sanitizeAttributes,
     isAllowedAttribute,
     isLocalizableAttribute,
@@ -134,7 +135,6 @@ export function createToolSet({ api, runtime, elicit, hasElicitation = () => nul
     adoptStructure,
     cloneForMaster,
     stripExtractedInstanceState,
-    alignInstanceLines,
     purgeLocaleSeo,
     countLocaleSeo,
     fontError,
@@ -160,7 +160,6 @@ export function createToolSet({ api, runtime, elicit, hasElicitation = () => nul
     lucideSvg,
     lucideNameOf,
     buildInstanceMap: sharedInstanceMap,
-    rewriteInstanceBlock,
     pushMasterStructure,
     alignMirrors,
     canNest,
@@ -1270,9 +1269,6 @@ function resolveBindTarget(project, page, ownerNode, inComponent, rawTarget, raw
 // adoptStructure is the shared signature-LCS identity carry from the editor
 // runtime (bundled from @/lib/components) — no local reimplementation, so the
 // MCP and the editor reshape masters identically.
-
-// …and `rewriteInstanceBlock` is the editor's own too (lib/componentOps, through
-// the runtime bundle): a second copy here had to be kept in step by hand.
 
 /** write/prune a per-locale content/src override — empty values delete the
  * key, empty buckets are pruned, so touch-then-clear leaves the node
@@ -5078,6 +5074,7 @@ const tools = [
         ...(s.theme ? { theme: s.theme } : {}),
         fonts: s.fonts ?? { family: '' },
         favicon: s.favicon ?? '',
+        faviconDark: s.faviconDark ?? '',
         customCodeHead: s.customCode?.head ?? '',
         // site-wide motion; absent when the project has never set any of it
         ...(s.motion ? { motion: s.motion } : {}),
@@ -5252,6 +5249,22 @@ const tools = [
               type: 'string',
               description: 'a /media/… path from upload_media or an https URL; "" clears',
             },
+            logo: {
+              type: 'string',
+              description: 'the site logo, a /media/… path or https URL — the identity logo in structured data; "" clears',
+            },
+            schema: {
+              type: ['object', 'null'],
+              description:
+                'schema.org JSON-LD on every route (get_guide {section: "project-settings"}); null removes it',
+              properties: {
+                type: { type: 'string', enum: ['Organization', 'Person', 'LocalBusiness'] },
+                sameAs: { type: 'array', items: { type: 'string' }, description: 'social profile URLs' },
+                custom: { type: 'string', description: 'raw JSON-LD (object or array) appended to the graph' },
+              },
+              required: ['type'],
+              additionalProperties: false,
+            },
             locales: {
               type: 'object',
               description:
@@ -5308,6 +5321,10 @@ const tools = [
         favicon: {
           type: 'string',
           description: 'a /media/… path from upload_media or an https URL; "" clears',
+        },
+        faviconDark: {
+          type: 'string',
+          description: 'the dark-mode favicon (prefers-color-scheme: dark); same forms; "" clears',
         },
         customCodeHead: {
           type: 'string',
@@ -5632,8 +5649,17 @@ const tools = [
             message: 'seo.ogImage must be a /media/… path or an https:// URL (upload one with upload_media)',
           }
         }
+        if (rest.logo && !SAFE_SRC.test(rest.logo)) {
+          return { saved: false, reason: 'invalid-logo', message: 'seo.logo must be a /media/… path or an https:// URL' }
+        }
+        if (rest.schema) {
+          const customError = customSchemaError(rest.schema.custom)
+          if (customError) return { saved: false, reason: 'invalid-schema-custom', message: `seo.schema.custom: ${customError}` }
+        }
         s.seo = { ...(s.seo ?? {}), ...rest }
         if (s.seo.ogImage === '') delete s.seo.ogImage
+        if (s.seo.logo === '') delete s.seo.logo
+        if (s.seo.schema === null) delete s.seo.schema
         if (incomingLocales !== undefined) {
           // per-locale SEO merges per CODE (not wholesale) so fixing one
           // language never drops another, and `null` DELETES a code — the only
@@ -5717,6 +5743,14 @@ const tools = [
         if (icon) s.favicon = icon
         else delete s.favicon
       }
+      if (args.faviconDark !== undefined) {
+        const icon = String(args.faviconDark).trim()
+        if (icon && !SAFE_SRC.test(icon)) {
+          return { saved: false, reason: 'invalid-favicon', message: 'faviconDark must be a /media/… path or an https:// URL' }
+        }
+        if (icon) s.faviconDark = icon
+        else delete s.faviconDark
+      }
       if (args.customCodeHead !== undefined) {
         s.customCode = { ...(s.customCode ?? {}), head: args.customCodeHead }
       }
@@ -5743,6 +5777,7 @@ const tools = [
         seo: s.seo,
         fonts: s.fonts,
         favicon: s.favicon ?? '',
+        faviconDark: s.faviconDark ?? '',
         domain: s.domain ?? '',
         customCodeHead: s.customCode?.head ?? '',
         ...(s.theme ? { theme: s.theme } : {}),

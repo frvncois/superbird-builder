@@ -56,15 +56,12 @@ export {
   adoptStructure,
   cloneForMaster,
   stripExtractedInstanceState,
-  alignInstanceLines,
 } from './components'
 export type { AdoptResult, OrphanedNode } from './components'
 
 // whole-project component operations. Pure and DOM-free, so the agent path
 // runs the editor's own code instead of a copy that has to be kept in step.
 export {
-  rewriteInstanceBlock,
-  isClosedBlock,
   pushMasterStructure,
   alignMirrors,
   // the verbs the Components drawer offers a human — rename, duplicate,
@@ -125,6 +122,8 @@ export { STYLE_SECTIONS } from './styleCatalog'
 // the static exporter use, and gates media src on the same scheme allowlist
 export { isRich, sanitizeRich } from './shared/richtext.js'
 export { SAFE_HREF, SAFE_SRC } from './shared/urls.js'
+// --- structured data (seo.schema) validator, shared with the exporter
+export { customSchemaError } from './shared/structuredData.js'
 
 // inline SVG for the `:icon:` element — the sanitizer every renderer trusts.
 // The icon TABLE is deliberately not re-exported: it is the whole Lucide set,

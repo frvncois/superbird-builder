@@ -1,22 +1,23 @@
 import { nextTick } from 'vue'
-import { useElement, type DropPosition } from './useElement'
 import { reducedMotion, rectOf, slideGhost, styleGhostBase } from '@/lib/flip'
 
 /**
- * Wraps reorderElement so the moved canvas element visibly slides from its old
- * position to its new one — otherwise a reorder just re-renders in place and,
- * among many similar elements, it's unclear what moved.
+ * Wraps a structural move so the moved canvas element visibly slides from its
+ * old position to its new one — otherwise a reorder just re-renders in place
+ * and, among many similar elements, it's unclear what moved.
+ *
+ * It takes the move as a callback rather than performing one itself: the move
+ * belongs to `useStructure` (which also decides whether it lands on the page or
+ * on a component master), and importing that here would be a cycle.
  */
 export function useReorderAnimation() {
-  const { reorderElement } = useElement()
-
   const nodeEl = (id: string): HTMLElement | null =>
     document.querySelector(`[data-node-id="${CSS.escape(id)}"]`)
 
-  function canvasReorder(dragId: string, targetId: string, position: DropPosition) {
+  function withReorderAnimation(dragId: string, move: () => void) {
     const el = nodeEl(dragId)
     if (!el || reducedMotion()) {
-      reorderElement(dragId, targetId, position)
+      move()
       return
     }
 
@@ -36,7 +37,7 @@ export function useReorderAnimation() {
       transform: `scale(${scale})`,
     })
 
-    reorderElement(dragId, targetId, position)
+    move()
 
     nextTick(() => {
       const now = nodeEl(dragId)
@@ -54,5 +55,5 @@ export function useReorderAnimation() {
     })
   }
 
-  return { canvasReorder }
+  return { withReorderAnimation }
 }

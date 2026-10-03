@@ -1054,7 +1054,7 @@ function tokenFor(type: string): string {
  * Dedented source lines for a brand-new element of the given type. A seeded
  * container (a button, a link) is born holding its child, so an insert lands
  * something visible rather than an empty box — the child's TEXT is node state
- * and is applied by the caller (`applySeedContent`), not carried by the code.
+ * and is applied by the caller, not carried by the code.
  */
 export function elementBlockLines(type: string): string[] {
   const token = tokenFor(type)

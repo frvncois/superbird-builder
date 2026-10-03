@@ -1483,6 +1483,13 @@ editor always shows the element so you can still select and style it.
   contain `{field}` tokens — e.g. `set_page_seo {pageId, title: "{title} — Tonearm",
   description: "{dek}"}` — which resolve per entry (locale-aware) at export, so every entry
   route gets its own metadata; an empty/missing field falls back to the literal token.
+  `seo.schema` turns on **structured data**: a schema.org JSON-LD block on every route
+  with the site identity (`type` Organization / Person / LocalBusiness, named after
+  `siteName`, with `seo.logo` and the `sameAs` social URLs), a `WebSite` node and the
+  route's `WebPage`;
+  `custom` is raw JSON-LD (object or array) appended verbatim for anything richer
+  (opening hours, products). URLs only export absolute with a `domain`, and crawlers
+  ignore relative ones — set the domain first. `schema: null` removes it.
 - **`domain`** — the production hostname ("example.com", no scheme/path). With it set,
   canonical URLs and og:image export absolute; without it og:image is RELATIVE and
   Open Graph scrapers ignore it (publish warns about that combination). `""` clears.

@@ -1,6 +1,6 @@
-import type { Breakpoint, Page, Project } from '@/types/editor'
-import { buildDocument } from './document'
-import { parseSyntax } from './syntax'
+import type { Breakpoint, ElementNode, Page, Project } from '@/types/editor'
+import { createNode } from './elements'
+import { pageToCode } from './pageCode'
 import { defaultSettings } from './settings'
 
 export function defaultBreakpoints(): Breakpoint[] {
@@ -11,19 +11,29 @@ export function defaultBreakpoints(): Breakpoint[] {
   ]
 }
 
+/** a page's root: the `:body` wrap every document is built around */
+export function createBody(arg?: string): ElementNode {
+  const body = createNode('body')
+  if (arg) body.arg = arg
+  return body
+}
+
 export function createPage(name: string, path: string, locale = 'en'): Page {
-  const code = buildDocument({ name, slug: path, status: 'published', locale }, [])
   const now = Date.now()
-  return {
+  const page: Page = {
     id: crypto.randomUUID(),
     name,
     path,
     status: 'published',
-    code,
-    elements: parseSyntax(code),
+    // the DSL mirror the agent API still reads; derived from the tree, and
+    // deleted with the DSL itself (see lib/pageCode)
+    code: '',
+    elements: [createBody()],
     createdAt: now,
     updatedAt: now,
   }
+  page.code = pageToCode(page, locale)
+  return page
 }
 
 // A project always has at least its home page

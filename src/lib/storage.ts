@@ -1,6 +1,6 @@
 import type { Interaction, InteractionBinding, Project } from '@/types/editor'
-import { parseSetup, replaceSetup, slugify } from './document'
-import { applyNodeMarkers, reconcile } from './syntax'
+import { slugify } from './shared/slug.js'
+import { syncPageCode } from './pageCode'
 import { defaultSettings } from './settings'
 import { walkNodes } from './tree'
 import { storeGet } from './store'
@@ -104,41 +104,25 @@ export function migrateStoredProject(parsed: Project): Project | null {
     parsed.defaultLocale ||= 'en'
     parsed.locales ??= [parsed.defaultLocale]
     if (!parsed.locales.includes(parsed.defaultLocale)) parsed.locales.unshift(parsed.defaultLocale)
-    // one-time scaffold migration: pre-locale saves lack the `locale:`
-    // setup line; adding it shifts every body node's absolute line, so
-    // reconcile carries node identity across the rebuild
+    // '@entry' was the early spelling of the current-entry link sentinel
     for (const page of parsed.pages) {
-      if (/^\s*locale:/m.test(page.code.split(/^:body/m)[0]!)) continue
-      const old = page.code
-      page.code = replaceSetup(old, { ...parseSetup(old), locale: parsed.defaultLocale })
-      page.elements = reconcile(old, page.code, page.elements)
-    }
-    // links became code-owned (the '@target' token suffix). Backfill any
-    // node.link that predates the syntax into its code line so the value
-    // survives the code-driven reparse. Idempotent; also renames the early
-    // '@entry' sentinel to '@item'.
-    for (const page of parsed.pages) {
-      const lines = page.code.split('\n')
-      let changed = false
       walkNodes(page.elements, (node) => {
-        if (!node.link || node.line === undefined) return
         if (node.link === '@entry') node.link = '@item'
-        const line = lines[node.line]
-        if (line === undefined || /@\S+$/.test(line)) return
-        const target = node.link === '@item' ? 'item' : node.link
-        lines[node.line] = `${line}@${target}`
-        changed = true
       })
-      if (changed) page.code = lines.join('\n')
     }
-    // The display-only markers used to be kept in step by a watcher that only
-    // ran while the code editor was mounted, so any styling done with that
-    // column closed left them stale. The watcher is app-level now — normalize
-    // once HERE, before history starts, or merely opening an old project would
-    // write, autosave, add an undo step and stamp it as edited.
-    for (const page of parsed.pages) {
-      page.code = applyNodeMarkers(page.code, page.elements)
-    }
+    // `page.code` is a derived mirror of the tree now (lib/pageCode), kept for
+    // the agent API alone. Normalize it ONCE here, before history starts, or
+    // merely opening an older project would write, autosave, add an undo step
+    // and stamp it as edited.
+    //
+    // The TREE is what wins, deliberately. Stored code can disagree with it in
+    // three ways — markers left stale by the years the truth-sync only ran
+    // while the code column was mounted, blocks whose closer is missing (the
+    // parser nested their siblings, and that nesting is what rendered), and a
+    // `node.link` the line never carried — and in every one of them the tree is
+    // what every renderer reads and therefore what the user has been looking
+    // at. Re-deriving from the text would silently change the published site.
+    for (const page of parsed.pages) syncPageCode(page, parsed.defaultLocale)
     return parsed
   } catch {
     return null

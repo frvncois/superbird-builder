@@ -14,8 +14,10 @@ import type { Project } from '@/types/editor'
 
 let started = false
 
+// `code` is deliberately absent: it is a derived mirror of `elements` now, so
+// including it would only ever double-count a structural edit
 function pageSig(p: Project['pages'][number]): string {
-  return JSON.stringify({ c: p.code, s: p.seo, x: p.customCode, e: p.elements })
+  return JSON.stringify({ n: p.name, p: p.path, t: p.status, s: p.seo, x: p.customCode, e: p.elements })
 }
 function entrySig(e: Project['collections'][number]['entries'][number]): string {
   return JSON.stringify({ n: e.name, g: e.slug, v: e.values, l: e.locales, t: e.status, o: e.seo })

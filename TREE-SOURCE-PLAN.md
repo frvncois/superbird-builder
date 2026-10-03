@@ -161,6 +161,20 @@ version" class of stale writes.
 
 ---
 
+## Status
+
+- **Phase 0 — done** (`scripts/corpus.mjs`, `npm run check:corpus`). Inputs: the e2e
+  fixture, one page per bundled library entry (42), and the local `server/data` store
+  (8 pages / 31 components / 7 collections). Verified it fails on a changed byte and on
+  a re-minted node id.
+- **Phase 1 — done.** Nothing in `src/` reads `page.code`; it is regenerated from the
+  tree by `lib/pageCode.ts`. Corpus byte-identical, identity preserved. Full e2e suite
+  green (168), which it was NOT before: nine specs were already red on `main` from two
+  pieces of rot in `4247496` — a `placeholder` deleted from `ClassInput` while its
+  styling stayed, and three render-flush races in the test helpers (`insertFromDock`,
+  `openLayers`, plus a `getByRole(name: 'Back')` that also matched 'Background').
+  Those are fixed, so the UI gate for the rest of the migration is real.
+
 ## Phase 0 — Safety net (½ day)
 - **0.1 Corpus.** `scripts/corpus.mjs` exports every project in `e2e/fixtures/`, the
   bundled catalog (each entry placed on a page), and any local `server/data` store into
@@ -355,9 +369,13 @@ regenerated from the tree, so the MCP keeps working unchanged until Phase 3.
   - `migrateStoredProject` (`storage.ts:60`) runs the same function client-side as a
     defensive no-op. `/api/project-import` migrates imported packages.
 - **4.2 What the migration does:**
-  1. Re-derive the tree from `code` one last time with the *current* `reconcile`
-     (stored trees should already match; any mismatch is logged per page, and the
-     reconciled tree wins because it's what the user saw).
+  1. **Do NOT re-derive the tree from `code`.** This was the original plan; Phase 1
+     disproved it. Over the corpus, `reconcile(code, code, elements)` changes the tree
+     on one fixture page: a node carries `link: "#pricing"` that its line never had, so
+     re-deriving DROPS a link the exporter currently honours. The stored tree is what
+     every renderer reads, so it is what the user saw and what the site shows. Log the
+     pages whose regenerated code differs from the stored code (markers, missing
+     closers, links) and move on.
   2. Materialize unexpanded `:Card:` leaf instances (the old `expandLeafInstances`
      concern).
   3. Collapse the pure aliases (container, grid, heading, dropdown).

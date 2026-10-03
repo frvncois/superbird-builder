@@ -1,21 +1,16 @@
-import { computed, effectScope, watch } from 'vue'
+import { computed } from 'vue'
 import { useProject } from './useProject'
 import { usePage } from './usePage'
 import { useElement } from './useElement'
-import { reconcile } from '@/lib/syntax'
 import {
   normalizeComponentName,
   isComponentType,
-  hoistBlockRef,
-  adoptStructure,
   cloneForMaster,
   stripExtractedInstanceState,
 } from '@/lib/components'
 import {
   componentUsage,
-  alignMirrors,
-  isClosedBlock,
-  rewriteInstanceBlock,
+  pushMasterStructure,
   deleteComponent as deleteComponentFromProject,
   detachInstance,
   duplicateComponent as duplicateComponentInProject,
@@ -24,20 +19,11 @@ import {
 } from '@/lib/componentOps'
 import { catalogEntry, materializeCatalogEntry } from '@/lib/catalog'
 import { useSettings } from './useSettings'
-import { findNode, walkNodes } from '@/lib/tree'
-import {
-  buildInstanceMap,
-  dependencyOrder,
-  isNodeHidden,
-  setNodeHidden,
-  type InstanceMapping,
-} from '@/lib/instances'
+import { findNode, findParent, walkNodes } from '@/lib/tree'
+import { buildInstanceMap, isNodeHidden, setNodeHidden, type InstanceMapping } from '@/lib/instances'
 import { useAuth } from './useAuth'
 import { useComponentBoard } from './useComponentBoard'
-import type { ComponentDef, ElementNode, Page } from '@/types/editor'
-
-let syncStarted = false
-let syncing = false
+import type { ComponentDef, ElementNode } from '@/types/editor'
 
 /** what a page node inside a component instance stands for — see lib/instances */
 export type MasterMapping = InstanceMapping
@@ -122,86 +108,6 @@ function setHidden(node: ElementNode, hidden: boolean): void {
 export function useComponents() {
   const { selectElement } = useElement()
 
-  // --- structural sync: edits inside one instance reshape the master
-  // and every other instance follows ---
-
-  // a nested instance is OPAQUE in its host's signature: what is inside it is
-  // another component's structure, and a change there must not make every
-  // host look divergent (it would be adopted straight back over the change)
-  function structureSig(node: ElementNode, top = true): string {
-    if (!top && isComponentType(node.type)) return node.type
-    return node.children.length
-      ? `${node.type}(${node.children.map((child) => structureSig(child, false)).join()})`
-      : node.type
-  }
-
-  // adoptStructure (signature-LCS identity carry) is shared with the MCP
-  // server — imported from @/lib/components so both surfaces reshape masters
-  // identically.
-
-  /**
-   * After any code change: a properly closed instance whose structure
-   * diverged from its master was just edited — adopt its shape into the
-   * master, then rewrite every other closed instance (all pages) to match.
-   */
-  function syncStructure() {
-    // inner components first: a host adopts a nested block's structure along
-    // with its own, so that block has to be current by the time it does
-    for (const def of dependencyOrder(components.value)) {
-      const instances: { page: Page; node: ElementNode }[] = []
-      for (const page of project.value.pages) {
-        walkNodes(page.elements, (n) => {
-          if (n.type === def.name) instances.push({ page, node: n })
-        })
-      }
-      if (!instances.length) continue
-
-      const closed = instances.filter((i) => isClosedBlock(i.page, i.node, def.name))
-      const masterSig = structureSig(def.root)
-      const divergent = closed.filter((i) => structureSig(i.node) !== masterSig)
-      if (!divergent.length) continue
-
-      // never adopt an empty block over a populated master — that's a
-      // transient state, not a deliberate "delete everything"
-      const source = divergent.find(
-        (i) => i.node.children.length > 0 || def.root.children.length === 0,
-      )
-      if (source) {
-        adoptStructure(def.root, source.node, def.name)
-        // a nested instance that arrived this way came in as plain nodes; what
-        // the master holds has to be a mirror of its component, and every
-        // OTHER host's mirror of this one has to follow its new shape
-        alignMirrors(components.value)
-      }
-
-      const nextSig = structureSig(def.root)
-      for (const { page, node } of closed) {
-        if (structureSig(node) !== nextSig) rewriteInstanceBlock(page, node, def)
-      }
-    }
-  }
-
-  // one detached watcher for the whole app: any page-code mutation
-  // (typing, reorder, paste, delete) triggers a structure sync
-  if (!syncStarted) {
-    syncStarted = true
-    const scope = effectScope(true)
-    scope.run(() => {
-      watch(
-        () => project.value.pages.map((p) => p.code).join('\x00'),
-        () => {
-          if (syncing) return
-          syncing = true
-          try {
-            syncStructure()
-          } finally {
-            syncing = false
-          }
-        },
-      )
-    })
-  }
-
   /** find a master node by id across every component (for target labels) */
   function findMasterNode(id: string): ElementNode | null {
     for (const def of components.value) {
@@ -212,15 +118,19 @@ export function useComponents() {
   }
 
   /**
-   * Turns an element into a shared component: its subtree is cloned as
-   * the master, and its code block is wrapped in :Name … Name: — the
-   * structure stays fully editable in the code.
+   * Turns an element into a shared component.
+   *
+   * Its subtree is CLONED as the master; the page keeps the original nodes, now
+   * wrapped in a `:Name` instance — so every id survives, which matters because
+   * comment anchors and interaction targetIds address page nodes by id.
    */
   function createComponent(rawName: string, sourceId: string): ComponentDef | null {
     const page = activePage.value
     const source = findNode(page.elements, sourceId)
-    if (!source || source.line === undefined || source.type === 'body') return null
+    if (!source || source.type === 'body') return null
     if (isComponentType(source.type) || masterFor(source.id)) return null
+    const parent = findParent(page.elements, sourceId)
+    if (!parent) return null
 
     const name = normalizeComponentName(rawName, components.value.map((c) => c.name))
     // master ids are their own id space; internal binding targetIds are
@@ -230,44 +140,26 @@ export function useComponents() {
     // the instance inherits instead of shadowing (a shadow re-translates shared
     // chrome per page and can re-seat onto the wrong node on restructure)
     stripExtractedInstanceState(source)
-    // the root is a component-typed container: it maps to the :Name
-    // wrapper itself, so the wrapper can carry shared styles too
+    // the root is a component-typed container: it maps to the `:Name` wrapper
+    // itself, so the wrapper can carry shared styles too
     const root: ElementNode = { id: crypto.randomUUID(), type: name, content: '', children: [cloned] }
     const def: ComponentDef = { id: crypto.randomUUID(), name, root }
+
+    // the wrapper takes the extracted block's place, and its ref with it: the
+    // instance root is a real page node, so it keeps that address. Refs further
+    // in are dropped — they are inside a component now, where a ref would be
+    // duplicated across every instance on every page.
+    const wrapper: ElementNode = { id: crypto.randomUUID(), type: name, content: '', children: [source] }
+    if (source.ref) wrapper.ref = source.ref
+    walkNodes([source], (n) => delete n.ref)
+    parent.children.splice(parent.children.indexOf(source), 1, wrapper)
+
     project.value.components.push(def)
-
-    // wrap the block: open line, inner lines one level deeper, close line
-    const lines = page.code.split('\n')
-    const start = source.line
-    const end = source.endLine ?? source.line
-    const indent = lines[start]!.match(/^\t*/)![0]
-    // a ref on the extracted block's root moves onto the instance wrapper;
-    // refs further in are dropped (they'd be cloned into every instance)
-    const hoisted = hoistBlockRef(lines.slice(start, end + 1))
-    const rest = [
-      ...lines.slice(0, start),
-      `${indent}:${name}${hoisted.ref ? `#${hoisted.ref}` : ''}`,
-      ...hoisted.lines.map((l) => `\t${l}`),
-      `${indent}${name}:`,
-      ...lines.slice(end + 1),
-    ]
-    // exact line map: inner lines shift down one, the wrap lines are new
-    const map = new Map<number, number>()
-    for (let i = 0; i < rest.length; i++) {
-      if (i < start) map.set(i, i)
-      else if (i >= start + 1 && i <= end + 1) map.set(i, i - 1)
-      else if (i > end + 2) map.set(i, i - 2)
-    }
-    const before = page.code
-    page.code = rest.join('\n')
-    page.elements = reconcile(before, page.code, page.elements, map)
-
-    // select the new instance block
-    let instance: ElementNode | null = null
-    walkNodes(page.elements, (n) => {
-      if (n.line === start && n.type === name && !instance) instance = n
-    })
-    if (instance) selectElement((instance as ElementNode).id)
+    // a nested instance inside the extracted block came across as plain nodes;
+    // what the master holds has to be a MIRROR of its component, and the page
+    // copy has to match that mirror — both are the push's job
+    pushMasterStructure(project.value, def)
+    selectElement(wrapper.id)
     return def
   }
 
