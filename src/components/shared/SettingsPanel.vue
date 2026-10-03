@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import {
-  Archive, Check, Code2, Copy, Globe, KeyRound, Languages, LogOut, Palette, Plug,
-  Plus, Rocket, ScanSearch, Search, Settings2, Trash2, Type, UserRound, Users,
-  Waypoints,
+  Archive, Check, Code2, Copy, KeyRound, Languages, LogOut, Palette, Plug,
+  Plus, Rocket, ScanSearch, Search, Settings2, Trash2, Type, UserRound, Users, X,
 } from 'lucide-vue-next'
 import ModalHost from '@/components/modal/ModalHost.vue'
 import TabsUI from '@/components/tabs/TabsUI.vue'
@@ -16,9 +15,13 @@ import SelectUI from '@/components/ui/SelectUI.vue'
 import TextareaUI from '@/components/ui/TextareaUI.vue'
 import IconTileUI from '@/components/ui/IconTileUI.vue'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
+import MenuUI from '@/components/ui/MenuUI.vue'
 import BadgeUI from '@/components/ui/BadgeUI.vue'
 import ColorPickerUI from '@/components/ui/ColorPickerUI.vue'
+import ToggleUI from '@/components/ui/ToggleUI.vue'
+import SliderUI from '@/components/ui/SliderUI.vue'
 import { useProject } from '@/composables/useProject'
+import { SCROLL_LERP_DEFAULT, SCROLL_LERP_MIN, SCROLL_LERP_MAX } from '@/lib/motion'
 import { useSettings } from '@/composables/useSettings'
 import { useLocale } from '@/composables/useLocale'
 import { usePage } from '@/composables/usePage'
@@ -30,7 +33,6 @@ import { useApiTokens } from '@/composables/useApiTokens'
 import type { CustomFont, StructuredDataType } from '@/types/editor'
 import { SCHEMA_TYPES, customSchemaError } from '@/lib/shared/structuredData.js'
 import UsersSettings from '@/components/shared/UsersSettings.vue'
-import InteractionsSettings from '@/components/shared/InteractionsSettings.vue'
 import MediaPickerControl from '@/components/editor/content/MediaPickerControl.vue'
 import {
   FONT_STACKS,
@@ -48,7 +50,7 @@ import { downloadBlob } from '@/lib/download'
 
 const { project, renameProject } = useProject()
 const {
-  settings, addToken, removeToken,
+  settings, addToken, removeToken, smoothScroll,
   customFonts, addFont, removeFont,
   legacyHeadFonts, importLegacyHeadFonts, clearLegacyHeadFonts,
 } = useSettings()
@@ -62,7 +64,7 @@ async function confirmDeleteLocale(loc: string) {
   if (ok) deleteLocale(loc)
 }
 const { pages, activePage } = usePage()
-const { publishedInfo, markPublished } = usePublish()
+const { publishedInfo } = usePublish()
 const { onMain } = useBranches()
 const { email: authEmail, name: authName, isAdmin, canBuild, logout, updateAccount } = useAuth()
 const { confirm } = useModal()
@@ -83,13 +85,9 @@ const NAV = computed(() => {
     { id: 'fonts', label: 'Fonts', icon: Type },
     { id: 'design', label: 'Design', icon: Palette },
   ]
-  // site-wide motion is structure, not content: the server drops a
-  // contributor's settings writes, so don't offer them a dead control
-  if (canBuild.value) project.push({ id: 'interactions', label: 'Interactions', icon: Waypoints })
   const groups = [{ label: 'Project', items: project }]
   if (canBuild.value) {
     const site = [
-      { id: 'domain', label: 'Domain', icon: Globe },
       { id: 'locales', label: 'Locales', icon: Languages },
       { id: 'publish', label: 'Publish', icon: Rocket },
     ]
@@ -177,6 +175,13 @@ const apiTokenError = ref<string | null>(null)
 const freshApiToken = ref<string | null>(null)
 const freshApiName = ref('')
 const apiTokenCopied = ref(false)
+const addingToken = ref(false)
+function closeAddToken() {
+  addingToken.value = false
+  freshApiToken.value = null
+  apiTokenName.value = ''
+  apiTokenError.value = null
+}
 
 onMounted(() => {
   if (canBuild.value) loadTokens().catch(() => {})
@@ -233,6 +238,23 @@ const favicon = computed({
 const faviconDark = computed({
   get: () => settings.value.faviconDark ?? '',
   set: (v: string) => (settings.value.faviconDark = v || undefined),
+})
+
+// smooth scrolling (settings.motion.scroll): the slider reads as intensity —
+// higher is snappier; lerp is the per-frame catch-up fraction underneath
+const scrollLerp = computed({
+  get: () => smoothScroll.value.lerp ?? SCROLL_LERP_DEFAULT,
+  set: (v: number) => (smoothScroll.value.lerp = v),
+})
+
+// site-wide body code: an empty value drops the key so a project that never
+// used it stays byte-identical
+const siteBodyCode = computed({
+  get: () => settings.value.customCode.body ?? '',
+  set: (v: string) => {
+    if (v) settings.value.customCode.body = v
+    else delete settings.value.customCode.body
+  },
 })
 
 const newLocale = ref('')
@@ -367,21 +389,6 @@ const googleFontsUrl = computed({
 
 const { assetForSrc } = useMedia()
 
-const fontWeightOptions = [
-  { label: 'Regular (400)', value: '' },
-  { label: 'Thin (100)', value: '100' },
-  { label: 'Light (300)', value: '300' },
-  { label: 'Medium (500)', value: '500' },
-  { label: 'Semibold (600)', value: '600' },
-  { label: 'Bold (700)', value: '700' },
-  { label: 'Black (900)', value: '900' },
-  { label: 'Variable (100–900)', value: '100 900' },
-]
-const fontStyleOptions = [
-  { label: 'Normal', value: '' },
-  { label: 'Italic', value: 'italic' },
-]
-
 /** picking a file also records its format() hint, taken from the library
  *  asset's mime — assets are stored extensionless, so the URL alone can't
  *  tell us, and the exporter must not need the media index to emit the CSS */
@@ -395,13 +402,20 @@ function setFontSrc(font: CustomFont, src: string) {
   }
 }
 
-const fontIssue = (font: CustomFont) => fontError(font, customFonts.value)
+// the shared validator also reports a row that is merely unfinished (no name
+// yet, no file yet) — the empty controls say that already, so only real
+// problems are shown
+const INCOMPLETE_FONT = new Set(['Family name required', 'Pick a font file'])
+const fontIssue = (font: CustomFont) => {
+  const err = fontError(font, customFonts.value)
+  return err && !INCOMPLETE_FONT.has(err) ? err : null
+}
 
 /** families that actually resolve — offered as the base/mono/serif value so
  *  the user picks a registered font instead of retyping its name */
 const customFamilyOptions = computed(() =>
   customFonts.value
-    .filter((f) => !fontIssue(f))
+    .filter((f) => !fontError(f, customFonts.value))
     .map((f) => f.family.trim())
     .filter((name, i, all) => name && all.indexOf(name) === i)
     .map((name) => ({ label: name, value: name })),
@@ -437,20 +451,6 @@ function normalizeDomain() {
     .trim()
     .replace(/^https?:\/\//, '')
     .replace(/\/+$/, '')
-}
-
-const republishing = ref(false)
-const republishError = ref<string | null>(null)
-async function republish() {
-  republishing.value = true
-  republishError.value = null
-  try {
-    await markPublished(settings.value.publishing.method)
-  } catch (e) {
-    republishError.value = e instanceof Error ? e.message : 'Publish failed'
-  } finally {
-    republishing.value = false
-  }
 }
 
 // --- publish method ---
@@ -560,38 +560,6 @@ const mailingConfigured = computed(
 )
 const stripeConfigured = computed(() => secretsSet.value.stripe.secretKeySet)
 
-// --- domain check ---
-
-type DnsResult = { domain: string; a: string[]; aaaa: string[]; cname: string[]; timedOut?: boolean }
-const dnsBusy = ref(false)
-const dnsResult = ref<DnsResult | null>(null)
-const dnsError = ref<string | null>(null)
-
-async function checkDomain() {
-  normalizeDomain()
-  const domain = settings.value.domain.trim()
-  if (!domain) {
-    dnsError.value = 'Enter a domain first'
-    return
-  }
-  dnsBusy.value = true
-  dnsError.value = null
-  dnsResult.value = null
-  try {
-    const res = await fetch(`/api/domain-check?domain=${encodeURIComponent(domain)}`)
-    if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? 'Check failed')
-    dnsResult.value = await res.json()
-  } catch (e) {
-    dnsError.value = e instanceof Error ? e.message : 'Check failed'
-  } finally {
-    dnsBusy.value = false
-  }
-}
-
-const dnsResolves = computed(
-  () => !!dnsResult.value && !!(dnsResult.value.a.length || dnsResult.value.aaaa.length || dnsResult.value.cname.length),
-)
-
 // --- export / import ---
 
 const exporting = ref(false)
@@ -607,15 +575,6 @@ async function exportPackage() {
     exportError.value = e instanceof Error ? e.message : 'Export failed'
   } finally {
     exporting.value = false
-  }
-}
-
-async function exportSiteZip() {
-  exportError.value = null
-  try {
-    await markPublished('zip')
-  } catch (e) {
-    exportError.value = e instanceof Error ? e.message : 'Export failed'
   }
 }
 
@@ -747,18 +706,41 @@ async function onImportFile(e: Event) {
                 </p>
               </RowUI>
             </SettingsGroup>
+            <SettingsGroup
+              v-if="canBuild"
+              title="Smooth scrolling"
+              description="The page glides toward where you scrolled instead of jumping there. Applies to Play and the published site; off on touch devices and for reduced-motion visitors."
+            >
+              <template #action>
+                <ToggleUI v-model="smoothScroll.enabled" />
+              </template>
+              <RowUI v-if="smoothScroll.enabled" label="Intensity">
+                <SliderUI v-model="scrollLerp" :min="SCROLL_LERP_MIN" :max="SCROLL_LERP_MAX" :step="0.01" />
+                <span class="w-12 shrink-0 text-right font-mono text-xs text-muted-foreground">
+                  {{ scrollLerp.toFixed(2) }}
+                </span>
+              </RowUI>
+            </SettingsGroup>
           </TabPanelUI>
 
           <TabPanelUI class="gap-9" id="seo">
             <SettingsGroup
               title="Search & social"
-              description="Used on every page unless a page overrides them. %s in the title template is replaced by the page name."
+              description="Used on every page unless a page overrides them. The domain makes canonical, social-image and structured-data URLs absolute; %s in the title template is the page name."
             >
               <RowUI label="Logo" class="!items-start">
                 <IconTileUI v-model="seoLogo" />
               </RowUI>
               <RowUI label="Site name">
                 <InputUI v-model="settings.seo.siteName" placeholder="My Site" />
+              </RowUI>
+              <RowUI v-if="canBuild" label="Domain">
+                <InputUI
+                  v-model="settings.domain"
+                  placeholder="example.com"
+                  class="font-mono"
+                  @blur="normalizeDomain"
+                />
               </RowUI>
               <RowUI label="Title">
                 <InputUI v-model="settings.seo.titleTemplate" placeholder="%s — My Site" />
@@ -808,10 +790,6 @@ async function onImportFile(e: Event) {
             </SettingsGroup>
           </TabPanelUI>
 
-          <TabPanelUI v-if="canBuild" class="gap-9" id="interactions">
-            <InteractionsSettings />
-          </TabPanelUI>
-
           <TabPanelUI class="gap-9" id="design">
             <SettingsGroup
               title="Design tokens"
@@ -820,7 +798,7 @@ async function onImportFile(e: Event) {
               <div v-for="token in settings.tokens" :key="token.id" class="flex flex-col gap-0.5">
                 <div class="flex items-center gap-1.5">
                   <InputUI v-model="token.name" placeholder="brand" class="font-mono" />
-                  <ColorPickerUI v-model="token.value" />
+                  <ColorPickerUI v-model="token.value" output="hex" />
                   <ButtonUI variant="ghost" size="xs" :icon="Trash2" @click="removeToken(token.id)" />
                 </div>
                 <p v-if="tokenError(token.id, token.name)" class="text-[10px] text-danger">
@@ -903,32 +881,22 @@ async function onImportFile(e: Event) {
 
             <SettingsGroup
               title="Custom fonts"
-              description="Upload a font file to the media library, then point a family name at it. It renders everywhere — canvas, preview and export."
+              description="A font file from the media library and the family name it registers. It renders everywhere — canvas, preview and export."
             >
               <div v-for="font in customFonts" :key="font.id" class="flex flex-col gap-1.5">
-                <div class="flex items-center gap-1.5">
-                  <InputUI v-model="font.family" placeholder="OffSans" class="font-mono" />
-                  <ButtonUI variant="ghost" size="xs" :icon="Trash2" @click="removeFont(font.id)" />
-                </div>
-                <MediaPickerControl
-                  :model-value="font.src"
-                  kind="font"
-                  @update:model-value="(v) => setFontSrc(font, v)"
-                />
-                <div class="flex items-center gap-1.5">
-                  <SelectUI
-                    :model-value="font.weight ?? ''"
-                    :options="fontWeightOptions"
-                    @update:model-value="(v) => (font.weight = v || undefined)"
+                <div class="flex items-start gap-1.5">
+                  <MediaPickerControl
+                    :model-value="font.src"
+                    kind="font"
+                    compact
+                    class="min-w-0 flex-1"
+                    @update:model-value="(v) => setFontSrc(font, v)"
                   />
-                  <SelectUI
-                    :model-value="font.style ?? ''"
-                    :options="fontStyleOptions"
-                    @update:model-value="(v) => (font.style = (v as 'italic') || undefined)"
-                  />
+                  <InputUI v-model="font.family" placeholder="Family name" size="lg" class="!w-40 shrink-0" />
+                  <ButtonUI variant="ghost" size="xs" :icon="Trash2" class="!h-12" @click="removeFont(font.id)" />
                 </div>
                 <p v-if="fontIssue(font)" class="text-[10px] text-danger">{{ fontIssue(font) }}</p>
-                <p v-else class="text-[10px] text-muted-foreground">
+                <p v-else-if="font.family.trim() && font.src" class="text-[10px] text-muted-foreground">
                   Use it with <span class="font-mono">font-[{{ font.family.trim().replace(/ /g, '_') }}]</span>
                   or set it as the base font below.
                 </p>
@@ -939,24 +907,8 @@ async function onImportFile(e: Event) {
             </SettingsGroup>
 
             <SettingsGroup
-              title="Typography"
-              description="Which family the site uses by default, and what font-mono / font-serif resolve to."
-            >
-              <RowUI label="Base">
-                <SelectUI v-model="settings.fonts.family" :options="familyOptions" />
-              </RowUI>
-              <InputUI v-model="settings.fonts.family" placeholder="font-family value" class="font-mono" />
-              <RowUI label="Serif">
-                <SelectUI v-model="serifFamily" :options="familyOptions" />
-              </RowUI>
-              <RowUI label="Mono">
-                <SelectUI v-model="monoFamily" :options="familyOptions" />
-              </RowUI>
-            </SettingsGroup>
-
-            <SettingsGroup
               title="Google Fonts"
-              description="A hosted stylesheet, loaded on every page. Use the family name it defines as the base font above."
+              description="A hosted stylesheet, loaded on every page. Use the family name it defines as the base font below."
             >
               <RowUI label="URL">
                 <InputUI
@@ -966,92 +918,20 @@ async function onImportFile(e: Event) {
                 />
               </RowUI>
             </SettingsGroup>
-          </TabPanelUI>
 
-          <TabPanelUI v-if="canBuild" class="gap-9" id="domain">
             <SettingsGroup
-              title="Domain"
-              description="Your bare domain, without https:// — used for canonical links and absolute social-image URLs in the exported site."
+              title="Typography"
+              description="Which family the site uses by default, and what font-mono / font-serif resolve to."
             >
-              <RowUI label="Domain">
-                <InputUI
-                  v-model="settings.domain"
-                  placeholder="example.com"
-                  class="font-mono"
-                  @blur="normalizeDomain"
-                />
+              <RowUI label="Base">
+                <SelectUI v-model="settings.fonts.family" :options="familyOptions" />
               </RowUI>
-              <p class="text-[10px] text-muted-foreground">
-                Setting this does not move your site — it only fills in the URLs inside the export.
-                Point the domain at wherever you host the published site.
-              </p>
-            </SettingsGroup>
-
-            <SettingsGroup
-              title="Connect your domain"
-              description="Add these records at your DNS provider, then check that they've propagated."
-            >
-              <div class="flex flex-col divide-y divide-input rounded-xl border border-input">
-                <div class="flex items-center gap-3 px-3 py-2">
-                  <span class="w-12 shrink-0 font-mono text-[10px] text-muted-foreground">A</span>
-                  <span class="w-16 shrink-0 font-mono text-[10px]">@</span>
-                  <span class="min-w-0 flex-1 text-[10px] text-muted-foreground">
-                    The IP address of the host serving your site
-                  </span>
-                </div>
-                <div class="flex items-center gap-3 px-3 py-2">
-                  <span class="w-12 shrink-0 font-mono text-[10px] text-muted-foreground">CNAME</span>
-                  <span class="w-16 shrink-0 font-mono text-[10px]">www</span>
-                  <span class="min-w-0 flex-1 text-[10px] text-muted-foreground">
-                    {{ settings.domain || 'example.com' }} — so www redirects to the apex domain
-                  </span>
-                </div>
-              </div>
-              <p class="text-[10px] text-muted-foreground">
-                DNS changes can take minutes to hours to spread. Static hosts (GitHub Pages,
-                Netlify, Vercel) publish their own records — use theirs when you deploy there.
-              </p>
-
-              <ButtonUI
-                variant="outline"
-                size="sm"
-                :icon="Globe"
-                class="w-full"
-                :disabled="dnsBusy"
-                @click="checkDomain"
-              >
-                {{ dnsBusy ? 'Checking…' : 'Check DNS' }}
-              </ButtonUI>
-              <p v-if="dnsError" class="text-[10px] text-danger">{{ dnsError }}</p>
-
-              <div
-                v-if="dnsResult"
-                class="flex flex-col gap-1.5 rounded-xl border p-3"
-                :class="dnsResolves ? 'border-success/40 bg-success/5' : 'border-input'"
-              >
-                <p class="flex items-center gap-1.5 text-[11px] font-medium">
-                  <Check v-if="dnsResolves" class="size-3.5 text-success" />
-                  <span class="font-mono">{{ dnsResult.domain }}</span>
-                  <span v-if="!dnsResolves" class="text-muted-foreground">
-                    {{ dnsResult.timedOut ? 'lookup timed out' : "isn't resolving yet" }}
-                  </span>
-                </p>
-                <div v-if="dnsResult.a.length" class="flex gap-2 text-[10px]">
-                  <span class="w-12 shrink-0 text-muted-foreground">A</span>
-                  <span class="font-mono break-all">{{ dnsResult.a.join(', ') }}</span>
-                </div>
-                <div v-if="dnsResult.aaaa.length" class="flex gap-2 text-[10px]">
-                  <span class="w-12 shrink-0 text-muted-foreground">AAAA</span>
-                  <span class="font-mono break-all">{{ dnsResult.aaaa.join(', ') }}</span>
-                </div>
-                <div v-if="dnsResult.cname.length" class="flex gap-2 text-[10px]">
-                  <span class="w-12 shrink-0 text-muted-foreground">CNAME</span>
-                  <span class="font-mono break-all">{{ dnsResult.cname.join(', ') }}</span>
-                </div>
-                <p v-if="!dnsResolves && !dnsResult.timedOut" class="text-[10px] text-muted-foreground">
-                  Add the records above, then check again.
-                </p>
-              </div>
+              <RowUI label="Serif">
+                <SelectUI v-model="serifFamily" :options="familyOptions" />
+              </RowUI>
+              <RowUI label="Mono">
+                <SelectUI v-model="monoFamily" :options="familyOptions" />
+              </RowUI>
             </SettingsGroup>
           </TabPanelUI>
 
@@ -1111,75 +991,12 @@ async function onImportFile(e: Event) {
               <RowUI label="Method">
                 <SelectUI v-model="settings.publishing.method" :options="publishMethodOptions" />
               </RowUI>
-              <p v-if="settings.publishing.method === 'github'" class="text-[10px] text-muted-foreground">
-                Configure the repository and token under Connect → Integrations.
-              </p>
             </SettingsGroup>
 
             <SettingsGroup
-              title="Status"
-              description="Rebuild and redeploy the static site from Main."
-            >
-              <p v-if="!onMain" class="text-[10px] text-pending">
-                You're on a draft — publishing ships Main; draft changes are not included.
-              </p>
-              <template v-if="publishedInfo">
-                <p class="text-xs">Last published {{ timeAgo(publishedInfo.publishedAt) }}</p>
-                <p class="text-[10px] text-muted-foreground">
-                  {{ publishedInfo.routes }} routes · {{ formatBytes(publishedInfo.bytes) }}
-                  <template v-if="publishedInfo.commit">
-                    · {{ publishedInfo.commit.slice(0, 7) }}
-                  </template>
-                </p>
-              </template>
-              <p v-else class="text-xs text-muted-foreground">Never published yet.</p>
-              <ButtonUI
-                variant="outline"
-                size="sm"
-                :icon="Rocket"
-                class="w-full"
-                :disabled="republishing"
-                @click="republish"
-              >
-                {{ republishing ? 'Publishing…' : 'Republish' }}
-              </ButtonUI>
-              <p v-if="republishError" class="text-[10px] text-danger">{{ republishError }}</p>
-            </SettingsGroup>
-
-            <SettingsGroup
-              title="Download"
-              description="Grab the built static site as a zip — deployable to any static host."
-            >
-              <ButtonUI variant="outline" size="sm" class="w-full" @click="exportSiteZip">
-                Download static site (.zip)
-              </ButtonUI>
-              <p v-if="exportError" class="text-[10px] text-danger">{{ exportError }}</p>
-            </SettingsGroup>
-          </TabPanelUI>
-
-          <TabPanelUI v-if="isAdmin" class="gap-9" id="code">
-            <SettingsGroup
-              title="Custom head code"
-              description="Raw HTML injected into <head> of exported pages. Runs with full access to your published site."
-            >
-              <TextareaUI
-                v-model="settings.customCode.head"
-                :rows="10"
-                class="font-mono"
-                placeholder="Scripts, meta tags, styles…"
-              />
-            </SettingsGroup>
-          </TabPanelUI>
-
-          <TabPanelUI v-if="canBuild" class="gap-9" id="integrations">
-            <p class="text-[10px] text-muted-foreground">
-              Keys are stored on the server, never in the project file or an export, and are never
-              shown again once saved.
-            </p>
-
-            <SettingsGroup
+              v-if="settings.publishing.method === 'github'"
               title="GitHub"
-              description="Publish the exported site to a repository branch."
+              description="The repository branch the exported site is pushed to."
             >
               <template #action>
                 <span class="shrink-0 text-[10px]" :class="ghConfigured ? 'text-success' : 'text-muted-foreground'">
@@ -1200,17 +1017,64 @@ async function onImportFile(e: Event) {
                     :placeholder="savedPlaceholder(ghTokenSet, 'ghp_…')"
                     class="font-mono"
                   />
-                  <ButtonUI variant="outline" size="sm" :disabled="ghSaving || !ghToken" @click="saveGhToken">
+                  <ButtonUI variant="outline" size="xs" class="!h-7 px-2.5" :disabled="ghSaving || !ghToken" @click="saveGhToken">
                     {{ ghSaving ? 'Saving…' : 'Save' }}
                   </ButtonUI>
                 </div>
               </RowUI>
               <p class="text-[10px] text-muted-foreground">
                 The branch is fully replaced on every publish — a root README or CNAME would be
-                deleted. Select GitHub as your method under Site → Publish.
+                deleted. The token is kept on the server, never in the project file or an export.
               </p>
               <p v-if="ghError" class="text-[10px] text-danger">{{ ghError }}</p>
             </SettingsGroup>
+
+            <SettingsGroup title="Status" description="The last build of the static site from Main.">
+              <p v-if="!onMain" class="text-[10px] text-pending">
+                You're on a draft — publishing ships Main; draft changes are not included.
+              </p>
+              <template v-if="publishedInfo">
+                <p class="text-xs">Last published {{ timeAgo(publishedInfo.publishedAt) }}</p>
+                <p class="text-[10px] text-muted-foreground">
+                  {{ publishedInfo.routes }} routes · {{ formatBytes(publishedInfo.bytes) }}
+                  <template v-if="publishedInfo.commit">
+                    · {{ publishedInfo.commit.slice(0, 7) }}
+                  </template>
+                </p>
+              </template>
+              <p v-else class="text-xs text-muted-foreground">Never published yet.</p>
+            </SettingsGroup>
+          </TabPanelUI>
+
+          <TabPanelUI v-if="isAdmin" class="gap-9" id="code">
+            <SettingsGroup
+              title="Custom code"
+              description="Raw HTML added to every exported page — export only, the editor and Play never run it. It has full access to your published site."
+            >
+              <RowUI label="Head" class="!items-start">
+                <TextareaUI
+                  v-model="settings.customCode.head"
+                  :rows="8"
+                  class="font-mono"
+                  placeholder="Inside <head> — analytics, meta tags, styles…"
+                />
+              </RowUI>
+              <RowUI label="Body" class="!items-start">
+                <TextareaUI
+                  v-model="siteBodyCode"
+                  :rows="8"
+                  class="font-mono"
+                  placeholder="Before </body> — widgets, noscript tags…"
+                />
+              </RowUI>
+            </SettingsGroup>
+          </TabPanelUI>
+
+          <TabPanelUI v-if="canBuild" class="gap-9" id="integrations">
+            <p class="text-[10px] text-muted-foreground">
+              Keys are stored on the server, never in the project file or an export, and are never
+              shown again once saved.
+            </p>
 
             <SettingsGroup
               v-if="isAdmin"
@@ -1324,69 +1188,82 @@ async function onImportFile(e: Event) {
               title="MCP access"
               description="Bearer credentials for the Guano MCP server and scripts. Each carries your role — treat it like a password."
             >
-              <!-- show-once: the freshly created raw token -->
-              <div
-                v-if="freshApiToken"
-                class="flex flex-col gap-2 rounded-xl border border-accent/40 bg-accent/10 p-3"
-              >
-                <p class="flex items-center gap-1.5 text-[11px] font-medium">
-                  <Check class="size-3.5 text-success" /> Token “{{ freshApiName }}” created
-                </p>
-                <code
-                  class="block rounded-lg bg-background px-2 py-1.5 font-mono text-[10px] break-all select-all"
+              <template #action>
+                <ButtonUI
+                  size="xs"
+                  :icon="addingToken ? X : Plus"
+                  @click="addingToken ? closeAddToken() : (addingToken = true)"
                 >
-                  {{ freshApiToken }}
-                </code>
-                <div class="flex items-center justify-between gap-2">
-                  <span class="text-[10px] text-muted-foreground">Copy it now — it won't be shown again.</span>
-                  <ButtonUI size="xs" :icon="apiTokenCopied ? Check : Copy" @click="copyToken">
-                    {{ apiTokenCopied ? 'Copied' : 'Copy' }}
+                  {{ addingToken ? 'Close' : 'Add token' }}
+                </ButtonUI>
+              </template>
+
+              <!-- inline create form (before the list), like Users' add form -->
+              <div v-if="addingToken" class="flex flex-col gap-2 rounded-xl border border-input p-3">
+                <!-- step 1: name it -->
+                <template v-if="!freshApiToken">
+                  <RowUI label="Name">
+                    <InputUI v-model="apiTokenName" placeholder="e.g. mcp-laptop" @keydown.enter="onCreateToken" />
+                  </RowUI>
+                  <p v-if="apiTokenError" class="text-[10px] text-danger">{{ apiTokenError }}</p>
+                  <div class="flex justify-end gap-1.5">
+                    <ButtonUI variant="outline" size="xs" @click="closeAddToken">Cancel</ButtonUI>
+                    <ButtonUI size="xs" :disabled="apiTokenBusy" @click="onCreateToken">
+                      {{ apiTokenBusy ? 'Creating…' : 'Create token' }}
+                    </ButtonUI>
+                  </div>
+                </template>
+
+                <!-- step 2: show-once raw token -->
+                <template v-else>
+                  <p class="flex items-center gap-1.5 text-xs">
+                    <Check class="size-3.5 shrink-0 text-success" />
+                    <span class="font-medium">{{ freshApiName }}</span>
+                    <span class="text-muted-foreground">· created</span>
+                  </p>
+                  <code class="block rounded-lg bg-input px-2 py-1.5 font-mono text-[10px] break-all select-all">
+                    {{ freshApiToken }}
+                  </code>
+                  <ButtonUI :icon="apiTokenCopied ? Check : Copy" size="sm" class="w-full justify-center" @click="copyToken">
+                    {{ apiTokenCopied ? 'Copied to clipboard' : 'Copy token' }}
                   </ButtonUI>
-                </div>
-                <ButtonUI variant="ghost" size="xs" class="self-end" @click="freshApiToken = null">
-                  Done
-                </ButtonUI>
+                  <p class="text-[10px] text-muted-foreground">Copy it now — it won't be shown again.</p>
+                  <div class="flex justify-end gap-1.5">
+                    <ButtonUI variant="outline" size="xs" @click="freshApiToken = null">Add another</ButtonUI>
+                    <ButtonUI size="xs" @click="closeAddToken">Done</ButtonUI>
+                  </div>
+                </template>
               </div>
+              <p v-else-if="apiTokenError" class="text-[10px] text-danger">{{ apiTokenError }}</p>
 
-              <!-- create row -->
-              <div v-else class="flex items-end gap-1.5">
-                <div class="flex-1">
-                  <InputUI
-                    v-model="apiTokenName"
-                    placeholder="Token name (e.g. mcp-laptop)"
-                    @keydown.enter="onCreateToken"
-                  />
-                </div>
-                <ButtonUI variant="outline" size="sm" :disabled="apiTokenBusy" @click="onCreateToken">
-                  {{ apiTokenBusy ? 'Creating…' : 'Create' }}
-                </ButtonUI>
-              </div>
-
-              <p v-if="apiTokenError" class="text-[10px] text-danger">{{ apiTokenError }}</p>
-
-              <!-- existing tokens -->
-              <ul v-if="tokens.length" class="flex flex-col divide-y divide-input">
-                <li
+              <!-- existing tokens, laid out like the members list -->
+              <div v-if="tokens.length" class="flex flex-col rounded-xl border border-input">
+                <div
                   v-for="t in tokens"
                   :key="t.id"
-                  class="flex items-center justify-between gap-2 py-1.5"
+                  class="flex items-center gap-2 border-b border-input px-3 py-2 last:border-b-0"
                 >
-                  <div class="min-w-0">
+                  <span class="size-1.5 shrink-0 rounded-full" :class="t.lastUsedAt ? 'bg-success' : 'bg-muted-foreground/40'" />
+                  <div class="min-w-0 flex-1">
                     <p class="truncate text-xs font-medium">{{ t.name }}</p>
-                    <p class="text-[10px] text-muted-foreground">
+                    <p class="truncate text-[10px] text-muted-foreground">
                       Created {{ timeAgo(t.createdAt) }} ·
                       {{ t.lastUsedAt ? `last used ${timeAgo(t.lastUsedAt)}` : 'never used' }}
                     </p>
                   </div>
-                  <ButtonUI
-                    variant="icon"
-                    size="sm"
-                    :icon="Trash2"
-                    tooltip="Revoke token"
-                    @click="onRevokeToken(t.id, t.name)"
-                  />
-                </li>
-              </ul>
+                  <MenuUI>
+                    <template #default="{ close }">
+                      <button
+                        type="button"
+                        class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-danger outline-none hover:bg-accent/30"
+                        @click="(onRevokeToken(t.id, t.name), close())"
+                      >
+                        <Trash2 class="size-3.5" /> Revoke
+                      </button>
+                    </template>
+                  </MenuUI>
+                </div>
+              </div>
               <p v-else class="text-[10px] text-muted-foreground">No tokens yet.</p>
             </SettingsGroup>
           </TabPanelUI>

@@ -52,3 +52,42 @@ export function colorHex(value: string): string {
   const hex = match && TAILWIND_COLORS[match[1]!]?.[TAILWIND_SHADES.indexOf(match[2]!)]
   return hex ?? '#888888'
 }
+
+const HEX_ANY_RE = /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i
+
+/**
+ * Any CSS colour the browser understands → '#rrggbb' (or '#rrggbbaa' when
+ * translucent), via a canvas fill-style round trip; null when it isn't one.
+ * Pure hex passes straight through, so this works without a DOM too.
+ */
+export function cssColorToHex(value: string): string | null {
+  const v = value.trim()
+  if (HEX_ANY_RE.test(v)) return v.toLowerCase()
+  if (typeof document === 'undefined') return null
+  if (typeof CSS !== 'undefined' && !CSS.supports('color', v)) return null
+  const ctx = document.createElement('canvas').getContext('2d')
+  if (!ctx) return null
+  ctx.fillStyle = '#000'
+  ctx.fillStyle = v
+  const out = String(ctx.fillStyle)
+  if (out.startsWith('#')) return out
+  // translucent colours read back as rgba(r, g, b, a)
+  const m = out.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)$/)
+  if (!m) return null
+  const part = (n: number) => Math.round(n).toString(16).padStart(2, '0')
+  const alpha = m[4] === undefined ? 1 : Number(m[4])
+  return '#' + part(+m[1]!) + part(+m[2]!) + part(+m[3]!) + (alpha < 1 ? part(alpha * 255) : '')
+}
+
+/**
+ * What a typed colour means as a picker value: a palette shade or design
+ * token keeps its name ('slate-500', 'brand'), everything else the browser
+ * accepts becomes hex. null = not a colour.
+ */
+export function parseColorInput(text: string): string | null {
+  const v = text.trim().toLowerCase()
+  if (!v) return null
+  if (v === 'white' || v === 'black' || v === 'transparent') return v
+  if (isPaletteColor(v)) return v
+  return cssColorToHex(v)
+}

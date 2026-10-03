@@ -15,7 +15,13 @@ import type { MediaKind } from '@/types/media'
  * first, then applies the asset. The model is the `/media/<id>` URL.
  * `kinds` widens the picker (e.g. background media accepts image + video).
  */
-const props = defineProps<{ kind: MediaKind; kinds?: MediaKind[] }>()
+const props = defineProps<{
+  kind: MediaKind
+  kinds?: MediaKind[]
+  /** the file block alone, no Choose/Upload row — the block opens the
+   * library, which can upload, so the buttons only add height */
+  compact?: boolean
+}>()
 const model = defineModel<string>({ default: '' })
 
 const { assetForSrc, thumbUrl, mediaUrl, upload } = useMedia()
@@ -82,7 +88,7 @@ async function onFile(e: Event) {
       </span>
     </button>
 
-    <div class="flex gap-1.5">
+    <div v-if="!compact" class="flex gap-1.5">
       <ButtonUI variant="outline" size="sm" :icon="LibraryBig" class="flex-1" @click="choose">
         Choose
       </ButtonUI>

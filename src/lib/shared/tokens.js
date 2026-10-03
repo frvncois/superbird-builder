@@ -4,7 +4,7 @@
 // Plain-JS ESM; the typed signatures live in src/lib/settings.ts.
 
 export const TOKEN_NAME_RE = /^[a-z][a-z0-9-]*$/
-export const HEX_RE = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i
+export const HEX_RE = /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i
 
 // Tailwind palette names + keywords a token may not shadow.
 // NOTE: the palette portion must stay in sync with TAILWIND_COLORS keys in

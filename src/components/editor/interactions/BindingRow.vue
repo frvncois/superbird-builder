@@ -141,8 +141,8 @@ const APPEAR_MODE_LABELS: Record<string, string> = {
   replay: 'Every time',
   reverse: 'Reverse on exit',
 }
-// 'inherit' is the stored `undefined` — the site default set in
-// Settings → Interactions, named here so the row says what it resolves to
+// 'inherit' is the stored `undefined` — the site default (settings.motion.appearMode,
+// set over MCP), named here so the row says what it resolves to
 const APPEAR_MODES = computed(() => [
   {
     label: `Site default (${APPEAR_MODE_LABELS[settings.value.motion?.appearMode ?? 'once']})`,

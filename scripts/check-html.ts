@@ -1,0 +1,318 @@
+// Validates the agent-facing HTML layer (src/lib/html/).
+//
+// Run with:  npm run check:html
+//
+// Two halves, both of which earn their keep:
+//
+// 1. THE ROUND-TRIP PROPERTIES, over every project in the corpus
+//    (.corpus/inputs — see scripts/corpus.mjs). For each page and each
+//    component master:
+//      - `parse(serialize(x))` applied back to `x` is a NO-OP: the same JSON,
+//        nothing created, nothing removed;
+//      - serializing twice is a fixed point;
+//      - with every `data-id` stripped, adoption is still total — the fallback
+//        (ref, then a tree LCS) carries identity on its own.
+//    This is what stands between an agent's write and silent data loss: the
+//    HTML does not carry interactions, animations, translations, slider config
+//    or `listQuery`, so a node the write fails to ADOPT loses all of it.
+//
+// 2. THE BEHAVIOUR AND THE REFUSALS, on small built-to-order projects: what
+//    the parser accepts, what it refuses and where, how identity is carried,
+//    and the component-instance rules. A refusal that stops being a refusal is
+//    how "the tool reported success for a write that renders nowhere" comes
+//    back, which is the bug class this whole format exists to remove.
+//
+// There is no unit-test runner in this repo; this is the gate.
+
+import { readFileSync, readdirSync, existsSync } from 'node:fs'
+import { pageToHtml, masterToHtml } from '../src/lib/html/serialize'
+import { parseHtml } from '../src/lib/html/parse'
+import { applyHtml, contextFromProject } from '../src/lib/html/apply'
+import { setStyleTokens } from '../src/lib/styles'
+import { setColorTokens } from '../src/lib/colors'
+import { walkNodes } from '../src/lib/tree'
+import { createProject } from '../src/lib/factories'
+import { catalogEntry, materializeCatalogEntry } from '../src/lib/catalog'
+import type { ElementNode, Project } from '../src/types/editor'
+
+let fails = 0
+const fail = (msg: string) => { console.error(`FAIL  ${msg}`); fails++ }
+
+const load = (name: string) =>
+  JSON.parse(readFileSync(`.corpus/inputs/${name}.json`, 'utf8')) as Project
+
+// the one normalization a write performs: `classes: ""` means no classes, and
+// the editor's own class writer deletes the key too. Compared away, not
+// papered over — a real project carries one such node.
+const norm = (json: string) => json.replace(/,"classes":""/g, '')
+
+function firstDiff(a: string, b: string) {
+  let i = 0
+  while (i < a.length && a[i] === b[i]) i++
+  return `@${i}\n    - ${a.slice(Math.max(0, i - 90), i + 150)}\n    + ${b.slice(Math.max(0, i - 90), i + 150)}`
+}
+
+console.log('--- round-trip properties, over the corpus ---')
+if (!existsSync('.corpus/inputs')) {
+  console.log('(no corpus — run `node scripts/corpus.mjs build` to include it)')
+}
+for (const file of existsSync('.corpus/inputs') ? readdirSync('.corpus/inputs') : []) {
+  const name = file.replace(/\.json$/, '')
+  const project = load(name)
+  // the class vocabulary the project's tokens imply, as useSettings feeds it
+  const tokens = project.settings?.tokens ?? []
+  setStyleTokens(tokens.map((t) => t.name))
+  setColorTokens(Object.fromEntries(tokens.map((t) => [t.name, t.value ?? '#000'])))
+  const ctx = contextFromProject(project)
+
+  let pages = 0, noop = 0, fixed = 0, idless = 0, masters = 0, masterNoop = 0
+  const refusals: string[] = []
+  const errors: string[] = []
+
+  for (const page of project.pages) {
+    pages++
+    const body = page.elements.find((n) => n.type === 'body')!
+    const before = norm(JSON.stringify(page.elements))
+    const html = pageToHtml(page, project)
+
+    // (2) serializing twice is a fixed point
+    const again = pageToHtml(page, project)
+    if (html === again) fixed++
+    else fail(`${name}/${page.name}: serialize is not stable ${firstDiff(html, again)}`)
+
+    // (1) parse → apply is a no-op
+    const parsed = parseHtml(html, ctx.componentNames)
+    for (const e of parsed.errors) errors.push(`${page.name} ${e.line}:${e.col} ${e.message}`)
+    const res = applyHtml(body, parsed.roots, { project, validate: ctx })
+    for (const r of res.refused) refusals.push(`REFUSED ${page.name} ${r.path}: ${r.message}`)
+    for (const r of res.warnings) refusals.push(`warn    ${page.name} ${r.path}: ${r.message}`)
+    const after = norm(JSON.stringify(page.elements))
+    if (before === after && res.created === 0 && res.removed === 0) noop++
+    else if (before !== after) {
+      fail(`${name}/${page.name}: round-trip changed the tree ${firstDiff(before, after)}`)
+    } else {
+      fail(`${name}/${page.name}: created ${res.created} removed ${res.removed}`)
+    }
+
+    // (3) with every data-id stripped, adoption is still total
+    const stripped = pageToHtml(page, project, { ids: false })
+    const reparsed = parseHtml(stripped, ctx.componentNames)
+    const treeBefore = norm(JSON.stringify(page.elements))
+    const res2 = applyHtml(body, reparsed.roots, { project, validate: ctx })
+    if (res2.created === 0 && res2.removed === 0 && norm(JSON.stringify(page.elements)) === treeBefore) {
+      idless++
+    } else {
+      fail(
+        `${name}/${page.name}: without data-id, created ${res2.created} removed ${res2.removed}` +
+          (norm(JSON.stringify(page.elements)) === treeBefore ? '' : ` ${firstDiff(treeBefore, norm(JSON.stringify(page.elements)))}`),
+      )
+    }
+  }
+
+  for (const def of project.components ?? []) {
+    masters++
+    const before = norm(JSON.stringify(def.root))
+    const html = masterToHtml(def, project)
+    const parsed = parseHtml(html, ctx.componentNames)
+    for (const e of parsed.errors) errors.push(`${def.name} ${e.line}:${e.col} ${e.message}`)
+    const res = applyHtml(def.root, parsed.roots, { project, def, validate: ctx })
+    for (const r of res.refused) refusals.push(`REFUSED ${def.name} ${r.path}: ${r.message}`)
+    for (const r of res.warnings) refusals.push(`warn    ${def.name} ${r.path}: ${r.message}`)
+    if (norm(JSON.stringify(def.root)) === before && !res.created && !res.removed) masterNoop++
+    else fail(`${name}/${def.name}: master round-trip changed ${firstDiff(before, norm(JSON.stringify(def.root)))} (created ${res.created} removed ${res.removed})`)
+  }
+
+  console.log(
+    `${name}: pages ${noop}/${pages} no-op, ${fixed}/${pages} stable, ${idless}/${pages} id-less; ` +
+      `masters ${masterNoop}/${masters}`,
+  )
+  if (errors.length) { console.log(`  parse errors (${errors.length}):`); errors.slice(0, 8).forEach((e) => console.log(`    ${e}`)) }
+  if (refusals.length) { console.log(`  refusals (${refusals.length}):`); [...new Set(refusals)].slice(0, 10).forEach((r) => console.log(`    ${r}`)) }
+}
+
+
+// ===================== 2. behaviour and refusals =====================
+
+console.log('--- behaviour and refusals ---')
+
+const ok = (cond: unknown, msg: string) => {
+  if (!cond) {
+    console.error(`FAIL  ${msg}`)
+    fails++
+  }
+}
+
+const fresh = () => createProject('T') as unknown as Project
+const bodyOf = (p: Project) => p.pages[0]!.elements.find((n) => n.type === 'body')!
+const write = (p: Project, html: string, def: any = null) => {
+  const ctx = contextFromProject(p)
+  const parsed = parseHtml(html, ctx.componentNames)
+  const root = def ? def.root : bodyOf(p)
+  const res = applyHtml(root, parsed.roots, { project: p, def, validate: ctx })
+  return { ...res, errors: parsed.errors, notes: parsed.notes }
+}
+const ids = (n: ElementNode) => { const out: string[] = []; walkNodes([n], (x) => out.push(x.id)); return out }
+
+// ---------- parser refusals ----------
+{
+  const p = fresh()
+  const cases: [string, RegExp, string][] = [
+    ['<script>alert(1)</script>', /never allowed/, '<script> refused'],
+    ['<div onclick="x()" />', /event handlers/, 'on* handler refused'],
+    ['<blink />', /unknown element/, 'unknown tag refused'],
+    ['<div><span /></p>', /does not close/, 'mismatched close refused'],
+    ['<div><span />', /never closed/, 'unclosed tag refused'],
+    ['<div class="a" class="b" />', /written twice/, 'duplicate attribute refused'],
+    ['<div class=a />', /must be quoted/, 'unquoted value refused'],
+    ['<section>hello</section>', /container/, 'loose text in a container refused'],
+    ['<style>x{}</style>', /never allowed/, '<style> refused'],
+  ]
+  for (const [html, re, label] of cases) {
+    const parsed = parseHtml(html, [])
+    const hit = parsed.errors.find((e) => re.test(e.message))
+    ok(hit && hit.line >= 1 && hit.col >= 1, `${label} (${hit ? `${hit.line}:${hit.col}` : parsed.errors.map((e) => e.message).join('|') || 'no error'})`)
+  }
+  // caps
+  ok(parseHtml('x'.repeat(2_000_001), []).errors[0]?.message.includes('the limit is'), 'input cap refused')
+  let deep = ''
+  for (let i = 0; i < 70; i++) deep += '<div>'
+  ok(parseHtml(deep, []).errors.some((e) => /deeper than/.test(e.message)), 'depth cap refused')
+  void p
+}
+
+// ---------- parser leniency ----------
+{
+  ok(parseHtml('<img src="/media/x.png">', []).errors.length === 0, 'a void tag may omit the slash')
+  const promoted = parseHtml('<div>Hello &amp; welcome</div>', [])
+  ok(promoted.errors.length === 0 && promoted.roots[0]!.type === 'text', 'a <div> of plain text becomes a text block')
+  const lower = parseHtml('<card />', ['Card'])
+  ok(lower.roots[0]!.type === 'Card' && lower.notes.length === 1, 'a lowercase component resolves, with a note')
+  ok(parseHtml('<!-- note --><div />', []).errors.length === 0, 'comments are dropped')
+  const named = parseHtml('<Input><input /></Input>', ['Input'])
+  ok(named.errors.length === 0 && named.roots[0]!.children.length === 1,
+     'a component named Input is not the void <input>')
+}
+
+// ---------- adoption ----------
+{
+  // by id: the same document, reordered
+  const p = fresh()
+  write(p, '<section data-ref="a"><h2>One</h2></section><section data-ref="b"><h2>Two</h2></section>')
+  const body = bodyOf(p)
+  const before = ids(body)
+  const html = pageToHtml(p.pages[0]!, p)
+  const lines = html.split('\n')
+  // swap the two sections, keeping their data-ids
+  const reordered = [lines[0]!, ...lines.slice(4, 7), ...lines.slice(1, 4), lines[7]!].join('\n')
+  const res = write(p, reordered)
+  ok(res.created === 0 && res.removed === 0, `reordering by data-id adopts everything (created ${res.created})`)
+  ok(ids(body).sort().join() === before.sort().join(), 'and keeps every id')
+  ok(body.children[0]!.ref === 'b', 'in the new order')
+}
+{
+  // by ref, with the ids stripped
+  const p = fresh()
+  write(p, '<section data-ref="a"><h2>One</h2></section>')
+  const body = bodyOf(p)
+  const kept = body.children[0]!.id
+  const res = write(p, '<section data-ref="a"><h2>One</h2><p>added</p></section>')
+  ok(res.created === 1 && res.removed === 0, `a ref adopts its node (created ${res.created})`)
+  ok(body.children[0]!.id === kept, 'and the id survives')
+}
+{
+  // by LCS: no ids, no refs, an element inserted in the middle
+  const p = fresh()
+  write(p, '<h2>A</h2><h3>B</h3><h4>C</h4>')
+  const body = bodyOf(p)
+  const before = body.children.map((n) => n.id)
+  const res = write(p, '<h2>A</h2><p>new</p><h3>B</h3><h4>C</h4>')
+  ok(res.created === 1 && res.removed === 0, `an insertion adopts the rest by LCS (created ${res.created}, removed ${res.removed})`)
+  const after = body.children.map((n) => n.id)
+  ok(after[0] === before[0] && after[2] === before[1] && after[3] === before[2],
+     'and every survivor keeps its id')
+}
+{
+  // a removal drops the bindings that pointed into it
+  const p = fresh()
+  write(p, '<section data-ref="keep" /><div data-ref="gone" />')
+  const body = bodyOf(p)
+  const gone = body.children[1]!
+  body.children[0]!.interactions = [
+    { id: 'b1', interactionId: 'i1', trigger: 'click', targetId: gone.id },
+  ]
+  const res = write(p, '<section data-ref="keep" />')
+  ok(res.removed === 1, 'the dropped element is reported as removed')
+  ok(!body.children[0]!.interactions, 'and the binding that pointed at it is gone')
+}
+
+// ---------- components ----------
+{
+  const p = fresh()
+  const made = materializeCatalogEntry(catalogEntry('card')!, p, (key) => {
+    const held = catalogEntry(key)
+    if (!held) return null
+    const inner = materializeCatalogEntry(held, p)
+    p.components.push(inner.def)
+    p.settings.tokens.push(...inner.tokens.filter((t) => !p.settings.tokens.some((x) => x.name === t.name)))
+    return inner.def
+  })
+  p.components.push(made.def)
+  p.settings.tokens.push(...made.tokens.filter((t) => !p.settings.tokens.some((x) => x.name === t.name)))
+  setStyleTokens(p.settings.tokens.map((t) => t.name))
+
+  // one write lands three filled Cards
+  write(p, '<Card data-ref="one" /><Card data-ref="two" /><Card data-ref="three" />')
+  const body = bodyOf(p)
+  ok(body.children.length === 3, `three instances from one write (${body.children.length})`)
+  ok(body.children[0]!.children.length > 0, 'and each is materialized from the master')
+
+  const html = pageToHtml(p.pages[0]!, p)
+  ok(!/\bclass=/.test(html.split('<Card')[1] ?? ''), "an instance's interior shows no classes")
+
+  // filling the parts
+  const filled = html.replace(/<h3([^>]*)\/>/, '<h3$1>Filled heading</h3>')
+  const res = write(p, filled)
+  let found = 0
+  walkNodes(body.children, (n) => { if (n.content === 'Filled heading') found++ })
+  ok(res.refused.length === 0 && found === 1, `a part's text lands (refused ${res.refused.length}, found ${found})`)
+
+  // a class inside an instance is refused, by name
+  const styled = html.replace(/<h3/, '<h3 class="text-xl"')
+  const res2 = write(p, styled)
+  ok(res2.refused.some((r) => /renders nowhere/.test(r.message) && r.path.includes('Card')),
+     `a class inside an instance is refused (${res2.refused[0]?.message.slice(0, 60) ?? 'none'})`)
+
+  // an extra element inside an instance is refused, naming the count
+  const extra = html.replace('</Card>', '  <p />\n</Card>')
+  const res3 = write(p, extra)
+  ok(res3.refused.some((r) => /part/.test(r.message) || /were written/.test(r.message)),
+     `extra structure inside an instance is refused (${res3.refused[0]?.message.slice(0, 70) ?? 'none'})`)
+
+  // the master round-trips through its own format
+  const def = p.components.find((c) => c.name === 'Card')!
+  const mHtml = masterToHtml(def, p)
+  ok(/class=/.test(mHtml), 'a component read DOES show its classes')
+  const before = JSON.stringify(def.root)
+  const mRes = write(p, mHtml, def)
+  ok(JSON.stringify(def.root) === before && !mRes.created && !mRes.removed,
+     'and a master round-trip is a no-op')
+
+  // a component may not hold itself
+  const cycle = write(p, `${mHtml.split('\n')[0]!}\n  <Card />\n</Card>`, def)
+  ok(cycle.refused.some((r) => /can't hold itself/.test(r.message)), 'a component cannot hold itself')
+}
+
+// ---------- validation reaches the result ----------
+{
+  const p = fresh()
+  const res = write(p, '<section data-ref="x" /><div data-ref="x" />')
+  ok(res.diagnostics.some((d) => /already used/.test(d.message)), 'a duplicate ref is a diagnostic')
+  const res2 = write(p, '<Nope />')
+  ok(res2.diagnostics.some((d) => /Unknown component/.test(d.message)), 'an unknown component is a diagnostic')
+  const res3 = write(p, '<collection-list source="nope"><h2 /></collection-list>')
+  ok(res3.diagnostics.some((d) => /Unknown collection/.test(d.message)), 'an unknown collection is a diagnostic')
+}
+
+
+console.log(fails ? `\n${fails} FAILURES` : `\nHTML layer OK`)
+process.exit(fails ? 1 : 0)

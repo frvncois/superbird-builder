@@ -5076,6 +5076,7 @@ const tools = [
         favicon: s.favicon ?? '',
         faviconDark: s.faviconDark ?? '',
         customCodeHead: s.customCode?.head ?? '',
+        customCodeBody: s.customCode?.body ?? '',
         // site-wide motion; absent when the project has never set any of it
         ...(s.motion ? { motion: s.motion } : {}),
         ...(s.theme ? { theme: s.theme } : {}),
@@ -5331,6 +5332,10 @@ const tools = [
           description:
             'raw HTML injected into every exported <head>. EXPORT-ONLY — the editor and ' +
             'preview never render it, so never register fonts here (use fonts.custom).',
+        },
+        customCodeBody: {
+          type: 'string',
+          description: 'raw HTML injected before every exported </body>; export-only like customCodeHead',
         },
         addLocales: {
           type: 'array',
@@ -5754,6 +5759,9 @@ const tools = [
       if (args.customCodeHead !== undefined) {
         s.customCode = { ...(s.customCode ?? {}), head: args.customCodeHead }
       }
+      if (args.customCodeBody !== undefined) {
+        s.customCode = { ...(s.customCode ?? {}), head: s.customCode?.head ?? '', body: args.customCodeBody }
+      }
 
       await saveTargetProject(project)
       return {
@@ -5780,6 +5788,7 @@ const tools = [
         faviconDark: s.faviconDark ?? '',
         domain: s.domain ?? '',
         customCodeHead: s.customCode?.head ?? '',
+        customCodeBody: s.customCode?.body ?? '',
         ...(s.theme ? { theme: s.theme } : {}),
         defaultLocale,
         locales: project.locales ?? [defaultLocale],

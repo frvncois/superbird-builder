@@ -75,6 +75,39 @@ export {
   deleteComponent,
 } from './componentOps'
 
+// --- the agent-facing HTML layer (src/lib/html/) — the read, the strict
+// reader, and the write that carries node identity. Nothing in the editor
+// imports it, so the parser never enters the browser bundle.
+export {
+  pageToHtml,
+  masterToHtml,
+  parseHtml,
+  applyHtml,
+  contextFromProject,
+  tagForType,
+  typeForTag,
+  sameType,
+  shortIds,
+  nodesByShortId,
+  ELIDED_DATA_URL,
+  MAX_INPUT,
+  MAX_DEPTH,
+} from './html'
+export type {
+  HtmlMode,
+  SerializeOptions,
+  ParsedNode,
+  ParseError,
+  ParseResult,
+  ApplyResult,
+  ApplyOptions,
+  Refusal,
+} from './html'
+
+// --- structure validation, over the tree (src/lib/validateTree.ts)
+export { validateTree } from './validateTree'
+export type { TreeDiagnostic, ValidateContext } from './validateTree'
+
 // --- canonical page document scaffold (src/lib/document.ts)
 export {
   buildDocument,

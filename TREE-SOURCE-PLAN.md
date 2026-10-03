@@ -175,6 +175,19 @@ version" class of stale writes.
   `openLayers`, plus a `getByRole(name: 'Back')` that also matched 'Background').
   Those are fixed, so the UI gate for the rest of the migration is real.
 
+- **Phase 2 — done.** `src/lib/html/` (tags, serialize, parse, apply, ids) plus
+  `npm run check:html`. The three round-trip properties hold over the whole corpus —
+  52 pages and 75 component masters, nothing created, nothing removed, identity total
+  even with every `data-id` stripped — and 37 behaviour/refusal cases pass. The MCP
+  still speaks the DSL; Phase 3 wires this in. Five bugs the corpus caught, each of
+  which would have shipped silently: a component named `Input` read as the void
+  `<input>` (the lenient-void check lowercased the tag), a master's own children read
+  as "inside an instance" so a component read showed no classes at all, `checkbox` and
+  `radio` round-tripping as plain `<input>` (the registry's implied attributes were
+  never emitted), two variant picks re-ordered into a merge conflict, and an unknown
+  class being DROPPED rather than kept. The property test is a committed gate rather
+  than a throwaway, and an e2e spec on top of the tools lands in Phase 3.
+
 ## Phase 0 — Safety net (½ day)
 - **0.1 Corpus.** `scripts/corpus.mjs` exports every project in `e2e/fixtures/`, the
   bundled catalog (each entry placed on a page), and any local `server/data` store into
@@ -287,7 +300,9 @@ regenerated from the tree, so the MCP keeps working unchanged until Phase 3.
 - **2.3 `apply.ts`:** the adoption algorithm above. Every write runs through
   `validateTree` and the existing validators: classes (`isValidClass`), `SAFE_SRC`,
   `sanitizeAttributes`, the ref rules and `canNest`.
-- **2.4 Round-trip property test** (`.tmp-test.ts`, promoted to an e2e spec in Phase 3).
+- **2.4 Round-trip property test** — landed as `scripts/check-html.ts` / `npm run check:html`
+  rather than a throwaway: a hand-rolled parser with no suite is the thing that rots,
+  and there is no unit runner. The e2e spec in Phase 3 covers the TOOL surface on top.
   For every corpus page, three properties must hold:
   - `parse(serialize(page))` applied to the page is a **no-op**: identical JSON, nothing
     created or removed.

@@ -1263,8 +1263,10 @@ function renderPage(route, project, media) {
     // carry it (renderNotFound passes nothing, and navigates natively)
     motionHead: transition?.enter ? transitionHead(transition.enter) : '',
   })
-  // per-page body script runs last, before </body> (DOM + runtime ready)
-  return `${shell}${bodyBgLayer}${body}${tail}${scriptTag(page.customCode?.body)}</body></html>`
+  // owner-authored raw body HTML (site-wide, e.g. a tag manager's noscript),
+  // then the per-page body script, last before </body> (DOM + runtime ready)
+  const siteBody = project.settings?.customCode?.body ?? ''
+  return `${shell}${bodyBgLayer}${body}${tail}${siteBody}${scriptTag(page.customCode?.body)}</body></html>`
 }
 
 function renderNotFound(project, rewrite) {

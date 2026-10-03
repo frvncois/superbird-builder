@@ -206,6 +206,17 @@ function detachNodes(host: StructureHost, ids: string[]): ElementNode[] {
 export function clearBindingsTo(host: StructureHost, removed: ElementNode[]): void {
   const gone = new Set<string>()
   for (const node of removed) walkNodes([node], (n) => gone.add(n.id))
+  clearBindingsToIds(host, gone)
+}
+
+/**
+ * The same, by id.
+ *
+ * An HTML write can move a node OUT of a subtree it is removing, so "every id
+ * under the removed roots" is the wrong set there — what went is exactly the
+ * ids the document had and no longer has.
+ */
+export function clearBindingsToIds(host: StructureHost, gone: Set<string>): void {
   if (!gone.size) return
   walkNodes([host.root], (n) => {
     if (n.interactions?.length) {

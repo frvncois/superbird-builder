@@ -1505,7 +1505,8 @@ editor always shows the element so you can still select and style it.
 - **`customCodeHead`** — raw HTML injected into every exported `<head>`. It is
   **export-only**: the editor and the preview never render it. Keep it minimal, and do
   not use it to inject scripts, styling hacks, content — or **fonts** (see below). If
-  something seems to need it, report that as a limitation instead.
+  something seems to need it, report that as a limitation instead. `customCodeBody` is
+  the same thing before every `</body>` (a tag manager's noscript, a chat widget).
 
 ### Custom webfonts
 

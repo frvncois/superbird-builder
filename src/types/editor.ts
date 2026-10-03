@@ -527,7 +527,8 @@ export interface ProjectSettings {
     scroll?: { enabled: boolean; lerp?: number }
   }
   /** raw HTML injected into exported <head> */
-  customCode: { head: string }
+  /** raw HTML: `head` goes into every exported <head>, `body` before every </body> */
+  customCode: { head: string; body?: string }
   fonts: {
     family: string
     monoFamily?: string

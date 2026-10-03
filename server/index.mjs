@@ -31,11 +31,6 @@ import { pushSiteToGitHub } from './github.mjs'
 import { createZip, readZip } from './zip.mjs'
 import { mergeContributorProject, redactSecretsForContributor } from './contributor-merge.mjs'
 import { protectedFieldDelta, readAgentPolicy, writeAgentPolicy } from './agent-policy.mjs'
-import {
-  resolve4 as dnsResolve4,
-  resolve6 as dnsResolve6,
-  resolveCname as dnsResolveCname,
-} from 'node:dns/promises'
 import { DATA_DIR, fail, readDirFiles, send, timingSafeEqualStr, writeAtomic } from './util.mjs'
 import {
   ROLES,
@@ -1188,41 +1183,6 @@ async function handleIntegrationsConfig(req, res) {
   return fail(res, 404, 'not found')
 }
 
-// ---------- 🔒 GET /api/domain-check (what a domain resolves to) ----------
-
-// Bare hostname only: labels of letters/digits/hyphens, at least one dot, no
-// scheme, port, path or userinfo. This is the guard — the value goes straight
-// into a resolver, and GET requests skip the same-origin check.
-const HOSTNAME_RE = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/
-
-async function handleDomainCheck(req, res, params) {
-  const user = sessionUser(req)
-  if (!user) return fail(res, 401, 'unauthorized')
-  if (user.role === 'contributor') return fail(res, 403, 'forbidden')
-  if (req.method !== 'GET') return fail(res, 404, 'not found')
-
-  const domain = (params.get('domain') ?? '').trim().toLowerCase()
-  if (!HOSTNAME_RE.test(domain)) return fail(res, 400, 'enter a bare domain, e.g. example.com')
-
-  // purely informational: this server does no per-domain routing, so a lookup
-  // failure is an answer ("not resolving yet"), never an error
-  const lookup = async (fn) => {
-    try {
-      return await fn(domain)
-    } catch {
-      return []
-    }
-  }
-  const timeout = new Promise((resolve) => setTimeout(() => resolve(null), 4000))
-  const records = await Promise.race([
-    Promise.all([lookup(dnsResolve4), lookup(dnsResolve6), lookup(dnsResolveCname)]),
-    timeout,
-  ])
-  if (!records) return send(res, 200, JSON.stringify({ domain, timedOut: true, a: [], aaaa: [], cname: [] }))
-  const [a, aaaa, cname] = records
-  return send(res, 200, JSON.stringify({ domain, a, aaaa, cname }))
-}
-
 // ---------- 🔒 project export / import (full backup package) ----------
 
 // package layout inside the zip: manifest.json, store/<key>.json,
@@ -1486,7 +1446,6 @@ const server = createServer(async (req, res) => {
     if (path === '/api/publish-config') return await handlePublishConfig(req, res)
     if (path === '/api/agent-policy') return await handleAgentPolicy(req, res)
     if (path === '/api/integrations-config') return await handleIntegrationsConfig(req, res)
-    if (path === '/api/domain-check') return await handleDomainCheck(req, res, url.searchParams)
     if (path === '/api/project-export' && req.method === 'GET') {
       return await handleProjectExport(req, res)
     }

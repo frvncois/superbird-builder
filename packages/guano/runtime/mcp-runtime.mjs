@@ -416,12 +416,12 @@ function adoptCodeOwned(node, master, box) {
 */
 function alignLevel(node, master, box) {
 	const old = node.children;
-	const matches = lcsAlign(old.map(nodeSignature), master.children.map(nodeSignature));
+	const matches = lcsAlign$1(old.map(nodeSignature), master.children.map(nodeSignature));
 	const used = new Set(matches.values());
 	const freeOld = old.map((_, i) => i).filter((i) => !used.has(i));
 	const freeNew = master.children.map((_, i) => i).filter((i) => !matches.has(i));
 	if (freeOld.length && freeNew.length) {
-		const weak = lcsAlign(freeOld.map((i) => old[i].type), freeNew.map((i) => master.children[i].type));
+		const weak = lcsAlign$1(freeOld.map((i) => old[i].type), freeNew.map((i) => master.children[i].type));
 		for (const [nj, oj] of weak) matches.set(freeNew[nj], freeOld[oj]);
 	}
 	const next = master.children.map((child, i) => {
@@ -548,7 +548,7 @@ function nodeSignature(node) {
 * b-index to the a-index it matches. Same primitive the page reconciler uses,
 * so component adoption and page edits carry identity the same way — a removed
 * sibling no longer shifts the survivors onto the wrong master nodes. */
-function lcsAlign(a, b) {
+function lcsAlign$1(a, b) {
 	const n = a.length;
 	const m = b.length;
 	const dp = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
@@ -584,12 +584,12 @@ function adoptStructure(master, edited, selfName, result = {
 }) {
 	const masterChildren = master.children;
 	const editedChildren = edited.children.filter((child) => child.type !== selfName);
-	const matches = lcsAlign(masterChildren.map(nodeSignature), editedChildren.map(nodeSignature));
+	const matches = lcsAlign$1(masterChildren.map(nodeSignature), editedChildren.map(nodeSignature));
 	const weakSignature = (n) => `${n.type}|${n.arg ?? ""}`;
 	const freeMaster = masterChildren.map((_, i) => i).filter((i) => ![...matches.values()].includes(i));
 	const freeEdited = editedChildren.map((_, i) => i).filter((i) => !matches.has(i));
 	if (freeMaster.length && freeEdited.length) {
-		const weak = lcsAlign(freeMaster.map((i) => weakSignature(masterChildren[i])), freeEdited.map((i) => weakSignature(editedChildren[i])));
+		const weak = lcsAlign$1(freeMaster.map((i) => weakSignature(masterChildren[i])), freeEdited.map((i) => weakSignature(editedChildren[i])));
 		for (const [ej, mj] of weak) matches.set(freeEdited[ej], freeMaster[mj]);
 	}
 	const usedMaster = new Set(matches.values());
@@ -1399,7 +1399,7 @@ var SETUP_LINES = 5;
 * blocks) this emits the `#ref` slot: a ref is a page-scope address, so it
 * belongs in a page's code and nowhere else.
 */
-function emit(node, indent, lines) {
+function emit$1(node, indent, lines) {
 	node.line = lines.length;
 	const ref = node.ref ? `#${node.ref}` : "";
 	const arg = node.arg ? `[${node.arg}]` : "";
@@ -1410,7 +1410,7 @@ function emit(node, indent, lines) {
 		return;
 	}
 	lines.push(`${indent}:${node.type}${ref}${arg}${link}`);
-	for (const child of node.children) emit(child, `${indent}\t`, lines);
+	for (const child of node.children) emit$1(child, `${indent}\t`, lines);
 	lines.push(`${indent}${node.type}:`);
 	node.endLine = lines.length - 1;
 }
@@ -1432,7 +1432,7 @@ function pageToCode(page, defaultLocale) {
 	].join("\n");
 	body.line = SETUP_LINES;
 	lines.push(`:body${body.arg ? `[${body.arg}]` : ""}`);
-	for (const child of body.children) emit(child, "	", lines);
+	for (const child of body.children) emit$1(child, "	", lines);
 	if (!body.children.length) lines.push("	");
 	lines.push("body:");
 	body.endLine = lines.length - 1;
@@ -1641,8 +1641,12 @@ function setNodeHidden(node, mapping, hidden) {
 //#endregion
 //#region src/lib/instances.ts
 var buildInstanceMap$1 = buildInstanceMap;
+/** is this mapped node the `:Name` wrapper of its instance? */
+var isInstanceWrapper$1 = isInstanceWrapper;
 /** the components a component's master holds directly, by name */
 var nestedComponentNames$1 = nestedComponentNames;
+/** may an instance of `inner` sit inside `host`'s master? Never in a cycle. */
+var canNest$1 = canNest;
 /** each component after everything it holds */
 var dependencyOrder$1 = dependencyOrder;
 //#endregion
@@ -4523,6 +4527,1322 @@ function clearForOverlay(node, mirror) {
 	return node;
 }
 //#endregion
+//#region src/lib/shared/urls.js
+/** hrefs: same-site paths/fragments plus the safe external schemes */
+var SAFE_HREF = /^(\/|#|https?:|mailto:|tel:)/i;
+/** media src/background: the href allowlist plus inline image/video data
+* URLs. Blocks javascript:/data:text-html etc. — harmless today (no
+* iframe/script element exists) but a hard gate before any such element
+* is ever added. */
+var SAFE_SRC = /^(\/|#|https?:|mailto:|tel:|data:image\/|data:video\/)/i;
+//#endregion
+//#region src/lib/shared/richtext.js
+var ALLOWED = {
+	b: {},
+	strong: {},
+	i: {},
+	em: {},
+	u: {},
+	mark: {},
+	code: {},
+	sup: {},
+	sub: {},
+	br: { void: true },
+	hr: { void: true },
+	p: {},
+	h2: {},
+	h3: {},
+	h4: {},
+	blockquote: {},
+	ul: {},
+	ol: {},
+	li: {},
+	a: { href: true }
+};
+var escapeText$2 = (s) => s.replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+var escapeAttr$1 = (s) => s.replaceAll("&", "&amp;").replaceAll("\"", "&quot;").replaceAll("<", "&lt;");
+/** true when a string uses any of the allowed rich tags */
+function isRich(value) {
+	return typeof value === "string" && /<\/?(b|strong|i|em|u|mark|code|sup|sub|a|ul|ol|li|br|hr|p|h2|h3|h4|blockquote)[\s>/]/i.test(value);
+}
+/** sanitize a rich-text fragment to the allowed subset (idempotent) */
+function sanitizeRich(html) {
+	if (typeof html !== "string" || !html) return "";
+	const out = [];
+	const open = [];
+	for (const token of html.match(/<[^>]*>|[^<]+|</g) ?? []) {
+		if (token[0] !== "<" || token.length === 1) {
+			out.push(escapeText$2(token));
+			continue;
+		}
+		const match = token.match(/^<(\/?)([a-zA-Z0-9]+)([^>]*)>$/);
+		if (!match) {
+			out.push(escapeText$2(token));
+			continue;
+		}
+		const closing = match[1] === "/";
+		const tag = match[2].toLowerCase();
+		const spec = ALLOWED[tag];
+		if (!spec) continue;
+		if (spec.void) {
+			if (!closing) out.push(`<${tag}>`);
+			continue;
+		}
+		if (closing) {
+			const at = open.lastIndexOf(tag);
+			if (at === -1) continue;
+			for (let i = open.length - 1; i >= at; i--) out.push(`</${open[i]}>`);
+			open.length = at;
+			continue;
+		}
+		if (tag === "a") {
+			const href = match[3].match(/href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i);
+			const raw = (href?.[1] ?? href?.[2] ?? href?.[3] ?? "").trim();
+			const safe = SAFE_HREF.test(raw) ? raw : "";
+			out.push(safe ? `<a href="${escapeAttr$1(safe)}" rel="noopener">` : "<a>");
+		} else out.push(`<${tag}>`);
+		open.push(tag);
+	}
+	for (let i = open.length - 1; i >= 0; i--) out.push(`</${open[i]}>`);
+	return out.join("");
+}
+//#endregion
+//#region src/lib/html/ids.ts
+/**
+* Short `data-id`s.
+*
+* A node id is a uuid. Printing 36 characters on every element of a 9,000-node
+* page costs an agent more context than the markup does, and the id only has
+* to be unique within the ONE document the agent is looking at. So the read
+* emits an 8-hex prefix, lengthened only where two ids collide, and the write
+* resolves a prefix back.
+*
+* It is the strongest adoption signal there is: an agent that echoes back the
+* ids it read keeps every node's identity — its interactions, its
+* translations, its comment anchors — whatever else it rewrites.
+*/
+var BASE = 8;
+/** node id → the shortest unique prefix, per tree */
+function shortIds(roots) {
+	const ids = [];
+	walkNodes(roots, (n) => ids.push(n.id));
+	const out = /* @__PURE__ */ new Map();
+	const taken = /* @__PURE__ */ new Set();
+	for (const id of ids) {
+		const flat = id.replace(/-/g, "");
+		let length = Math.min(BASE, flat.length);
+		let short = flat.slice(0, length);
+		while (taken.has(short) && length < flat.length) short = flat.slice(0, ++length);
+		if (taken.has(short)) continue;
+		taken.add(short);
+		out.set(id, short);
+	}
+	return out;
+}
+/** the inverse: a short id (or a full uuid) → the node it addresses */
+function nodesByShortId(roots) {
+	const out = /* @__PURE__ */ new Map();
+	const shorts = shortIds(roots);
+	walkNodes(roots, (n) => {
+		const short = shorts.get(n.id);
+		if (short) out.set(short, n);
+		out.set(n.id, n);
+		out.set(n.id.replace(/-/g, ""), n);
+	});
+	return out;
+}
+//#endregion
+//#region src/lib/html/tags.ts
+/**
+* The element registry ↔ the agent-facing HTML subset.
+*
+* Agents read and write pages as HTML because it is a format every model
+* already knows; the registry is what the app actually renders. This module is
+* the one place the two are reconciled, in both directions.
+*
+* Tag names are CASE-SENSITIVE here. That is what lets `<Card>` mean a
+* component instance, and it is why the parser is hand-rolled rather than
+* parse5 or any other HTML5 parser: they all lowercase tag names.
+*/
+/** registry types whose HTML tag is not their own name */
+var TAG_OF = {
+	body: "body",
+	paragraph: "p",
+	link: "a",
+	list: "ul",
+	"list-item": "li",
+	image: "img",
+	icon: "svg",
+	text: "div",
+	checkbox: "input",
+	radio: "input",
+	"collection-list": "collection-list",
+	"collection-item": "collection-item",
+	"list-empty": "list-empty",
+	slider: "slider"
+};
+/**
+* Pure aliases: a type whose tag AND shape are another type's.
+*
+* They serialize as the target's tag, so reading one back has to resolve to
+* the target — and `sameType` has to treat the pair as equal, or every write
+* would re-mint the node for a difference that renders nowhere. The Phase 4
+* migration collapses them in the stored data; until then this keeps the
+* round-trip exact.
+*/
+var ALIAS_OF = {
+	container: "div",
+	grid: "div",
+	heading: "h2",
+	dropdown: "select"
+};
+/** the HTML tag a node of this type is written as */
+function tagForType(type) {
+	if (isComponentType(type)) return type;
+	const canonical = ALIAS_OF[type] ?? type;
+	return TAG_OF[canonical] ?? canonical;
+}
+/** the registry type a tag reads back as — the reverse of `tagForType`, with
+*  each ambiguous tag resolved to its canonical type */
+var TYPE_OF_TAG = (() => {
+	const out = {};
+	for (const type of Object.keys(ELEMENTS)) {
+		if (ALIAS_OF[type]) continue;
+		const tag = tagForType(type);
+		if (out[tag] === void 0) out[tag] = type;
+	}
+	out.div = "div";
+	out.input = "input";
+	out.select = "select";
+	return out;
+})();
+/** do these two types mean the same element? (an alias and its target do) */
+function sameType(a, b) {
+	if (a === b) return true;
+	return (ALIAS_OF[a] ?? a) === (ALIAS_OF[b] ?? b);
+}
+/**
+* Which element a tag means.
+*
+* `attrs` disambiguates the two tags that carry more than one type: `<input>`
+* splits on its `type` (checkbox/radio are the registry's own types so an
+* author never has to remember the attribute), and `<div data-type="text">` is
+* the text block.
+*
+* `components` lets a lowercase `<card>` resolve to `Card` when exactly one
+* component matches — models lowercase tag names out of habit, and refusing
+* the whole write over it would be the format's most common papercut.
+*/
+function typeForTag(tag, attrs, components) {
+	if (isComponentType(tag)) return { type: tag };
+	if (tag === "input") {
+		const kind = attrs.type;
+		if (kind === "checkbox" || kind === "radio") return { type: kind };
+		return { type: "input" };
+	}
+	if (tag === "div" && attrs["data-type"] === "text") return { type: "text" };
+	const known = TYPE_OF_TAG[tag];
+	if (known) return { type: known };
+	const matches = components.filter((name) => name.toLowerCase() === tag.toLowerCase());
+	if (matches.length === 1) return {
+		type: matches[0],
+		note: `<${tag}> read as the component <${matches[0]}> — component tags are capitalized`
+	};
+	return null;
+}
+/**
+* Void tags that may be written without the self-closing slash.
+*
+* Matched CASE-SENSITIVELY, and never against a component: a component called
+* `Input` or `Link` is not `<input>`, and lowercasing the tag first made
+* `<Input>` a void element, so its closing tag read as a mismatch and its
+* children landed on whatever contained it.
+*/
+var VOID_TAGS = /* @__PURE__ */ new Set([
+	"img",
+	"input",
+	"br",
+	"hr",
+	"meta",
+	"link",
+	"source"
+]);
+var isLenientVoidTag = (tag) => !isComponentType(tag) && VOID_TAGS.has(tag);
+/** tags that are never content, whatever they claim to be */
+var FORBIDDEN_TAGS = /* @__PURE__ */ new Set([
+	"script",
+	"style",
+	"iframe",
+	"object",
+	"embed",
+	"base"
+]);
+/** does this element carry text rather than children? Registry-driven. */
+var isLeafType = (type) => !isComponentType(type) && isLeafElement(type);
+/** is this a type the app can render at all? */
+var isRenderableType = (type) => isComponentType(type) || isKnownElement(type);
+/**
+* `source` carries the collection an element iterates or embeds; `data-field`
+* carries an ordinary element's field binding. Both land on `node.arg` — two
+* names because they read as two different things, and an agent that confuses
+* them is told so rather than silently binding the wrong way.
+*/
+var SOURCE_TYPES = /* @__PURE__ */ new Set([
+	"collection-list",
+	"collection-item",
+	"slider",
+	"body"
+]);
+/**
+* The attributes an element type IMPLIES — `checkbox` is `<input type="checkbox">`.
+*
+* They are part of the element's identity, not state: the registry carries
+* them, every renderer emits them, and the reader uses them to pick the type
+* back out of the tag. So the writer emits them and the reader consumes them,
+* rather than storing them as custom attributes (which would make the type and
+* the attribute two places to disagree).
+*/
+var impliedAttrs = (type) => !isComponentType(type) && ELEMENTS[type]?.attrs || {};
+//#endregion
+//#region src/lib/html/serialize.ts
+var INDENT = "  ";
+var escapeText$1 = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+var escapeAttr = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+/** a `data:` URL is megabytes of base64 nobody can read or edit — the read
+*  shows that it is one, and a write preserves whatever the node already had */
+var ELIDED_DATA_URL = "data:…(elided)";
+var showSrc = (src) => src.startsWith("data:") ? ELIDED_DATA_URL : src;
+/** the attributes one node writes, in canonical order */
+function attrsFor(node, ctx, inInstance) {
+	const mapping = ctx.map.get(node.id);
+	const shared = inInstance || !!mapping && isInstanceWrapper$1(mapping);
+	const out = [];
+	const short = ctx.shorts.get(node.id);
+	if (ctx.ids && short) out.push(["data-id", short]);
+	if (node.ref) out.push(["data-ref", node.ref]);
+	if (!shared && ctx.mode === "full" && node.classes?.trim()) out.push(["class", node.classes.trim()]);
+	const rest = [];
+	for (const [name, value] of Object.entries(impliedAttrs(node.type))) rest.push([name, value]);
+	if (node.htmlId) rest.push(["id", node.htmlId]);
+	if (node.arg) rest.push([SOURCE_TYPES.has(node.type) ? "source" : "data-field", node.arg]);
+	if (node.link) rest.push(["href", node.link]);
+	if (node.src) rest.push(["src", showSrc(node.src)]);
+	if (node.type === "icon") rest.push(["data-icon", iconName(node)]);
+	if (node.type === "text") rest.push(["data-type", "text"]);
+	if (node.hidden !== void 0) rest.push(["data-hidden", String(node.hidden)]);
+	const implied = impliedAttrs(node.type);
+	for (const [name, value] of Object.entries(node.attributes ?? {})) if (!shared && implied[name] === void 0) rest.push([name, value]);
+	for (const [attr, field] of Object.entries(node.fieldAttrs ?? {})) rest.push([`data-bind-${attr}`, field]);
+	for (const [axis, option] of Object.entries(node.variants ?? {})) rest.push([`data-variant-${axis}`, option]);
+	if (ctx.mode === "full") {
+		const effects = ctx.effectNames(node);
+		if (effects.interactions.length) rest.push(["data-interactions", effects.interactions.join(", ")]);
+		if (effects.animations.length) rest.push(["data-animations", effects.animations.join(", ")]);
+	}
+	rest.sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
+	return [...out, ...rest].map(([name, value]) => value === true ? ` ${name}` : ` ${name}="${escapeAttr(String(value))}"`);
+}
+/** which bundled icon a node's svg is, or `custom` for hand-written markup */
+var iconName = (node) => node.svg?.match(/data-icon="([a-z0-9:_-]+)"/)?.[1] ?? (node.svg ? "custom" : "");
+function emit(node, depth, ctx, inInstance, out) {
+	const pad = INDENT.repeat(depth);
+	const tag = tagForType(node.type);
+	const attrs = attrsFor(node, ctx, inInstance).join("");
+	const isInstance = isComponentType(node.type) && node.id !== ctx.masterRootId;
+	if (isLeafType(node.type)) {
+		const text = ctx.mode === "full" ? node.content ?? "" : "";
+		if (!text) {
+			out.push(`${pad}<${tag}${attrs} />`);
+			return;
+		}
+		out.push(`${pad}<${tag}${attrs}>${isRich(text) ? text : escapeText$1(text)}</${tag}>`);
+		return;
+	}
+	if (!node.children.length) {
+		out.push(`${pad}<${tag}${attrs} />`);
+		return;
+	}
+	out.push(`${pad}<${tag}${attrs}>`);
+	for (const child of node.children) emit(child, depth + 1, ctx, inInstance || isInstance, out);
+	out.push(`${pad}</${tag}>`);
+}
+function contextFor(project, roots, mapRoots, opts) {
+	const components = project.components ?? [];
+	const byId = /* @__PURE__ */ new Map();
+	for (const effect of project.interactions ?? []) byId.set(effect.id, effect.name);
+	for (const anim of project.animations ?? []) byId.set(anim.id, anim.name);
+	const map = buildInstanceMap$1(mapRoots, components);
+	return {
+		mode: opts.mode ?? "full",
+		ids: opts.ids !== false,
+		shorts: shortIds(roots),
+		map,
+		components,
+		effectNames: (node) => {
+			const mapping = map.get(node.id);
+			const owner = mapping && !isInstanceWrapper$1(mapping) ? mapping.master : node;
+			return {
+				interactions: (owner.interactions ?? []).map((b) => byId.get(b.interactionId) ?? "?"),
+				animations: (owner.animations ?? []).map((b) => byId.get(b.animationId) ?? "?")
+			};
+		}
+	};
+}
+/** one page's body as HTML */
+function pageToHtml(page, project, opts = {}) {
+	const body = page.elements.find((n) => n.type === "body");
+	if (!body) return "<body />";
+	const ctx = contextFor(project, page.elements, page.elements, opts);
+	const root = opts.subtree ? resolveSubtree(page.elements, opts.subtree, ctx) : body;
+	if (!root) return "";
+	const out = [];
+	const mapping = ctx.map.get(root.id);
+	emit(root, 0, ctx, !!mapping && !isInstanceWrapper$1(mapping), out);
+	return out.join("\n");
+}
+/** a component master as HTML — its root element IS the component */
+function masterToHtml(def, project, opts = {}) {
+	const ctx = {
+		...contextFor(project, [def.root], def.root.children, opts),
+		masterRootId: def.root.id
+	};
+	const out = [];
+	emit(def.root, 0, ctx, false, out);
+	return out.join("\n");
+}
+function resolveSubtree(roots, key, ctx) {
+	for (const [id, short] of ctx.shorts) if (short === key) return findNode(roots, id);
+	const byId = findNode(roots, key);
+	if (byId) return byId;
+	let byRef = null;
+	const visit = (nodes) => {
+		for (const node of nodes) {
+			if (byRef) return;
+			if (node.ref === key) byRef = node;
+			else visit(node.children);
+		}
+	};
+	visit(roots);
+	return byRef;
+}
+//#endregion
+//#region src/lib/html/parse.ts
+var MAX_INPUT = 2e6;
+var MAX_DEPTH = 64;
+var MAX_ERRORS = 20;
+var TAG_NAME = /^[A-Za-z][A-Za-z0-9-]*/;
+var ATTR_NAME = /^[A-Za-z_:][A-Za-z0-9_:.-]*/;
+function parseHtml(input, components = []) {
+	const errors = [];
+	const notes = [];
+	const roots = [];
+	if (input.length > 2e6) return {
+		roots,
+		errors: [{
+			message: `input is ${input.length} bytes; the limit is ${MAX_INPUT}. Write one subtree at a time (edit_structure) rather than the whole page.`,
+			line: 1,
+			col: 1
+		}],
+		notes
+	};
+	const lineStarts = [0];
+	for (let k = 0; k < input.length; k++) if (input[k] === "\n") lineStarts.push(k + 1);
+	const at = (offset) => {
+		let lo = 0;
+		let hi = lineStarts.length - 1;
+		while (lo < hi) {
+			const mid = lo + hi + 1 >> 1;
+			if (lineStarts[mid] <= offset) lo = mid;
+			else hi = mid - 1;
+		}
+		return {
+			line: lo + 1,
+			col: offset - lineStarts[lo] + 1
+		};
+	};
+	const fail = (offset, message) => {
+		if (errors.length >= MAX_ERRORS) return;
+		errors.push({
+			message,
+			...at(offset)
+		});
+	};
+	const stack = [];
+	const push = (node) => {
+		const parent = stack[stack.length - 1];
+		if (parent) parent.children.push(node);
+		else roots.push(node);
+	};
+	let i = 0;
+	while (i < input.length && errors.length < MAX_ERRORS) {
+		const lt = input.indexOf("<", i);
+		if (lt === -1) {
+			reportStrayText(input.slice(i), i);
+			break;
+		}
+		if (lt > i) reportStrayText(input.slice(i, lt), i);
+		i = lt;
+		if (input.startsWith("<!--", i)) {
+			const end = input.indexOf("-->", i + 4);
+			if (end === -1) return bail(i, "unterminated comment");
+			i = end + 3;
+			continue;
+		}
+		if (input.startsWith("<!", i)) {
+			const end = input.indexOf(">", i);
+			if (end === -1) return bail(i, "unterminated declaration");
+			i = end + 1;
+			continue;
+		}
+		if (input[i + 1] === "/") {
+			const match = TAG_NAME.exec(input.slice(i + 2));
+			const end = input.indexOf(">", i);
+			if (!match || end === -1) return bail(i, "malformed closing tag");
+			const tag = match[0];
+			const open = stack[stack.length - 1];
+			if (!open) {
+				fail(i, `</${tag}> closes nothing`);
+				i = end + 1;
+				continue;
+			}
+			if (open.tag !== tag) return bail(i, `</${tag}> does not close <${open.tag}>, opened on line ${open.line}`);
+			stack.pop();
+			i = end + 1;
+			continue;
+		}
+		const start = i;
+		const nameMatch = TAG_NAME.exec(input.slice(i + 1));
+		if (!nameMatch) return bail(i, "'<' does not start a tag — write a literal one as &lt;");
+		const tag = nameMatch[0];
+		i += 1 + tag.length;
+		const head = readAttrs(tag, start);
+		if (!head) return {
+			roots,
+			errors,
+			notes
+		};
+		const { attrs, selfClosed } = head;
+		i = head.after;
+		if (FORBIDDEN_TAGS.has(tag.toLowerCase())) {
+			fail(start, `<${tag}> is never allowed; script and style belong in the project's custom code`);
+			continue;
+		}
+		const resolved = typeForTag(tag, attrs, components);
+		if (!resolved || !isRenderableType(resolved.type)) {
+			fail(start, `unknown element <${tag}>`);
+			continue;
+		}
+		if (resolved.note && !notes.includes(resolved.note)) notes.push(resolved.note);
+		const node = {
+			type: resolved.type,
+			tag,
+			attrs,
+			children: [],
+			...at(start)
+		};
+		if (stack.length >= 64) return bail(start, `nesting deeper than 64 elements`);
+		push(node);
+		if (selfClosed || isLenientVoidTag(tag)) continue;
+		if (node.type === "div") {
+			const nextTag = input.indexOf("<", i);
+			if ((nextTag === -1 ? input.slice(i) : input.slice(i, nextTag)).trim() && input.startsWith(`</${tag}`, nextTag)) node.type = "text";
+		}
+		if (isLeafType(node.type)) {
+			const end = input.indexOf(`</${tag}`, i);
+			if (end === -1) return bail(start, `<${tag}> is never closed`);
+			node.text = input.slice(i, end);
+			const gt = input.indexOf(">", end);
+			i = gt === -1 ? input.length : gt + 1;
+			continue;
+		}
+		stack.push(node);
+	}
+	for (const open of stack) {
+		if (errors.length >= MAX_ERRORS) break;
+		errors.push({
+			message: `<${open.tag}> is never closed`,
+			line: open.line,
+			col: open.col
+		});
+	}
+	return {
+		roots,
+		errors,
+		notes
+	};
+	/** a structural error leaves the rest of the input meaningless: stop, so the
+	*  report is the one real problem rather than its echoes */
+	function bail(offset, message) {
+		fail(offset, message);
+		return {
+			roots,
+			errors,
+			notes
+		};
+	}
+	/** text outside an element: whitespace is layout, anything else would render
+	*  nowhere */
+	function reportStrayText(text, offset) {
+		if (!text.trim()) return;
+		const parent = stack[stack.length - 1];
+		const quoted = text.trim().slice(0, 40);
+		fail(offset, parent ? `"${quoted}" sits directly inside <${parent.tag}>, which is a container. Put text in a text element: <p>, <span>, <h2>, or <div data-type="text">.` : `"${quoted}" is outside any element`);
+	}
+	function readAttrs(tag, tagStart) {
+		const attrs = {};
+		let k = i;
+		for (;;) {
+			while (k < input.length && /\s/.test(input[k])) k++;
+			if (k >= input.length) {
+				fail(tagStart, `<${tag}> is not closed with '>'`);
+				return null;
+			}
+			if (input[k] === ">") return {
+				attrs,
+				selfClosed: false,
+				after: k + 1
+			};
+			if (input[k] === "/" && input[k + 1] === ">") return {
+				attrs,
+				selfClosed: true,
+				after: k + 2
+			};
+			const nameMatch = ATTR_NAME.exec(input.slice(k));
+			if (!nameMatch) {
+				fail(k, `<${tag}>: '${input[k]}' does not start an attribute name`);
+				return null;
+			}
+			const name = nameMatch[0].toLowerCase();
+			const nameAt = k;
+			k += nameMatch[0].length;
+			if (name.startsWith("on")) {
+				fail(nameAt, `<${tag}>: '${name}' event handlers are never allowed`);
+				return null;
+			}
+			if (name in attrs) {
+				fail(nameAt, `<${tag}>: '${name}' is written twice`);
+				return null;
+			}
+			while (k < input.length && /\s/.test(input[k])) k++;
+			if (input[k] !== "=") {
+				attrs[name] = "";
+				continue;
+			}
+			k++;
+			while (k < input.length && /\s/.test(input[k])) k++;
+			const quote = input[k];
+			if (quote !== "\"" && quote !== "'") {
+				fail(k, `<${tag}>: the value of '${name}' must be quoted`);
+				return null;
+			}
+			const end = input.indexOf(quote, k + 1);
+			if (end === -1) {
+				fail(k, `<${tag}>: the value of '${name}' is not closed`);
+				return null;
+			}
+			attrs[name] = decodeEntities(input.slice(k + 1, end));
+			k = end + 1;
+		}
+	}
+}
+/** the five XML entities plus numeric ones — what a model writes, and all this
+*  format promises to understand */
+function decodeEntities(text) {
+	return text.replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16))).replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10))).replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, "\"").replace(/&apos;/g, "'").replace(/&amp;/g, "&");
+}
+//#endregion
+//#region src/lib/shared/attributes.js
+/** attribute names allowed verbatim */
+var ATTR_ALLOW = /* @__PURE__ */ new Set([
+	"target",
+	"rel",
+	"download",
+	"title",
+	"role",
+	"type",
+	"name",
+	"value",
+	"placeholder",
+	"alt",
+	"loading",
+	"tabindex",
+	"lang",
+	"dir",
+	"hidden",
+	"disabled",
+	"open",
+	"for",
+	"required",
+	"readonly",
+	"checked",
+	"selected",
+	"multiple",
+	"autofocus",
+	"autocomplete",
+	"min",
+	"max",
+	"step",
+	"rows",
+	"cols",
+	"maxlength",
+	"minlength",
+	"pattern",
+	"inputmode",
+	"accept",
+	"translate"
+]);
+/** allowed name prefixes (data-*, aria-*) */
+var ATTR_PREFIXES = ["data-", "aria-"];
+/** a syntactically valid attribute name (lowercase, no colons/uppercase) */
+var NAME_RE = /^[a-z][a-z0-9-]*$/;
+/** is `name` an allowed custom attribute? */
+function isAllowedAttribute(name) {
+	const n = String(name).toLowerCase().trim();
+	if (!NAME_RE.test(n)) return false;
+	if (ATTR_ALLOW.has(n)) return true;
+	return ATTR_PREFIXES.some((p) => n.startsWith(p) && n.length > p.length);
+}
+/**
+* Keep only allowed attributes, lowercased names with string values. Returns a
+* fresh object (never mutates the input).
+*
+* EMPTY VALUES ARE KEPT. They used to be dropped, which made `alt=""` (the
+* correct markup for a decorative image) and every boolean attribute
+* (`download`, `hidden`, `required`) unexpressible — and because callers infer
+* the rejection reason by diffing key names, the loss was reported as
+* "attribute not allowed", pointing at the wrong thing entirely.
+*
+* `true` coerces to the empty string (so an agent can pass a real boolean) and
+* `false` drops the attribute (absence IS false for booleans).
+*/
+function sanitizeAttributes(record) {
+	/** @type {Record<string, string>} */
+	const out = {};
+	if (!record || typeof record !== "object" || Array.isArray(record)) return out;
+	for (const [rawName, rawValue] of Object.entries(record)) {
+		const name = String(rawName).toLowerCase().trim();
+		if (!isAllowedAttribute(name)) continue;
+		if (rawValue === false) continue;
+		out[name] = rawValue == null || rawValue === true ? "" : String(rawValue);
+	}
+	return out;
+}
+/**
+* Attributes whose value is TEXT A VISITOR READS, and so can be translated.
+* `type`, `role` and `name` are structural and never localized; these four are
+* copy, and on a multilingual site they used to render in the default language
+* on every locale route with no way to change it.
+*/
+var LOCALIZABLE_ATTRS = [
+	"placeholder",
+	"aria-label",
+	"alt",
+	"title"
+];
+/** true when `name` carries text worth translating */
+function isLocalizableAttribute(name) {
+	return LOCALIZABLE_ATTRS.includes(String(name).toLowerCase().trim());
+}
+/**
+* The attributes an element renders: the component master's, with this
+* placement's own overrides on top, then the active locale's text overrides.
+*
+* Shared by both Vue renderers and the exporter so the canvas, Preview and the
+* published page agree. `localeAttrs` is already narrowed to the locale being
+* rendered (absent on the default locale).
+*/
+function mergeAttributeLayers(shared, instance, localeAttrs) {
+	const out = { ...shared ?? {} };
+	for (const [name, value] of Object.entries(instance ?? {})) out[name] = value;
+	for (const [name, value] of Object.entries(localeAttrs ?? {})) if (isLocalizableAttribute(name) && String(value) !== "") out[name] = value;
+	return out;
+}
+//#endregion
+//#region src/lib/validateTree.ts
+function validateTree(root, ctx) {
+	const diags = [];
+	/** every ref seen so far → the node that claimed it */
+	const refAt = /* @__PURE__ */ new Map();
+	const visit = (node, parent, scopes, instances) => {
+		if (node.ref) {
+			if (refAt.has(node.ref)) diags.push({
+				nodeId: node.id,
+				message: `'#${node.ref}' is already used by another element — refs must be unique on a page`
+			});
+			else refAt.set(node.ref, node);
+			const host = instances[instances.length - 1];
+			if (host) diags.push({
+				nodeId: node.id,
+				message: `'#${node.ref}' is inside the '${host}' component — refs are page-scope, and a component's structure is copied into every instance. Put the ref on the '${host}' element instead.`
+			});
+		}
+		if (node.type === "list-empty") {
+			if (!(!!parent && (parent.type === "collection-list" || parent.type === "slider" && !!parent.arg))) diags.push({
+				nodeId: node.id,
+				message: "'list-empty' is a list's empty state — it only renders as a DIRECT child of a 'collection-list' or a bound 'slider'. Elsewhere it never renders at all."
+			});
+		}
+		if (node.link === "@item") {
+			const scope = [...scopes].reverse().find((s) => s.arg && ctx.collectionNames.includes(s.arg));
+			if (scope && ctx.dataOnlyCollections.includes(scope.arg)) diags.push({
+				nodeId: node.id,
+				message: `'@item' links to an entry's own page, but the collection '${scope.arg}' has no detail routes (detailRoutes: false). Remove the link, or give the collection a template page.`
+			});
+		}
+		let childScopes = scopes;
+		let childInstances = instances;
+		if (isComponentType(node.type)) {
+			if (!ctx.componentNames.includes(node.type)) diags.push({
+				nodeId: node.id,
+				message: `Unknown component '${node.type}'`
+			});
+			else {
+				if (instances.includes(node.type)) diags.push({
+					nodeId: node.id,
+					message: `'${node.type}' can't contain itself`
+				});
+				childInstances = [...instances, node.type];
+			}
+		} else if (node.type === "collection-list" || node.type === "collection-item") {
+			const arg = node.arg;
+			if (!(!!arg && (ctx.collectionNames.includes(arg) || node.type === "collection-list" && BUILTIN_LIST_SOURCES.includes(arg) || node.type === "collection-list" && ctx.listFieldNames.includes(arg)))) diags.push({
+				nodeId: node.id,
+				message: `Unknown collection '${node.type}${arg ? `[${arg}]` : ""}'`
+			});
+			childScopes = [...scopes, {
+				type: node.type,
+				arg
+			}];
+		} else if (node.type === "slider") {
+			const arg = node.arg;
+			if (arg && !ctx.collectionNames.includes(arg) && !BUILTIN_LIST_SOURCES.includes(arg) && !ctx.listFieldNames.includes(arg)) diags.push({
+				nodeId: node.id,
+				message: `Unknown collection 'slider[${arg}]'`
+			});
+			if (arg) childScopes = [...scopes, {
+				type: node.type,
+				arg
+			}];
+		} else if (node.type === "body" && node.arg) childScopes = [...scopes, {
+			type: node.type,
+			arg: node.arg
+		}];
+		for (const child of node.children) visit(child, node, childScopes, childInstances);
+	};
+	visit(root, null, [], []);
+	return diags;
+}
+//#endregion
+//#region src/lib/treeOps.ts
+var pageHost = (body) => ({
+	root: body,
+	def: null
+});
+var masterHost = (def) => ({
+	root: def.root,
+	def
+});
+/**
+* The same, by id.
+*
+* An HTML write can move a node OUT of a subtree it is removing, so "every id
+* under the removed roots" is the wrong set there — what went is exactly the
+* ids the document had and no longer has.
+*/
+function clearBindingsToIds(host, gone) {
+	if (!gone.size) return;
+	walkNodes([host.root], (n) => {
+		if (n.interactions?.length) {
+			n.interactions = n.interactions.filter((b) => !b.targetId || !gone.has(b.targetId));
+			if (!n.interactions.length) delete n.interactions;
+		}
+		if (n.animations?.length) {
+			n.animations = n.animations.filter((b) => !b.targetId || !gone.has(b.targetId));
+			if (!n.animations.length) delete n.animations;
+		}
+	});
+}
+//#endregion
+//#region src/lib/html/apply.ts
+/** a node's shallow identity for the LCS: what its own tag encodes */
+var signature = (node) => `${node.type}|${node.arg ?? ""}|${node.link ?? ""}`;
+var parsedSignature = (node) => `${node.type}|${argOf(node) ?? ""}|${node.attrs.href ?? ""}`;
+function argOf(node) {
+	return (SOURCE_TYPES.has(node.type) ? node.attrs.source : node.attrs["data-field"]) || void 0;
+}
+/**
+* Longest-common-subsequence alignment of two signature lists → a map from
+* b-index to the a-index it matches. The same primitive the component adoption
+* and the instance realign use, so identity is carried the same way
+* everywhere: a removed sibling no longer shifts the survivors onto each
+* other's nodes.
+*/
+function lcsAlign(a, b) {
+	const n = a.length;
+	const m = b.length;
+	const dp = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+	for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+	const map = /* @__PURE__ */ new Map();
+	let i = 0;
+	let j = 0;
+	while (i < n && j < m) if (a[i] === b[j]) {
+		map.set(j, i);
+		i++;
+		j++;
+	} else if (dp[i + 1][j] >= dp[i][j + 1]) i++;
+	else j++;
+	return map;
+}
+/**
+* Apply a parsed document to an existing root.
+*
+* `parsed` is either the root element itself (a `<body>`, or a component's own
+* tag) or just its children — the root element is optional on input, because
+* an agent writing a page body naturally writes the elements and nothing
+* around them. Written out, the root's own attributes are applied too; left
+* out, they are left alone.
+*/
+function applyHtml(root, parsed, opts) {
+	const result = {
+		kept: 0,
+		created: 0,
+		removed: 0,
+		refused: [],
+		warnings: [],
+		diagnostics: []
+	};
+	const project = opts.project;
+	const components = project.components ?? [];
+	const host = opts.def ? masterHost(opts.def) : pageHost(root);
+	let topAttrs = null;
+	let children = parsed;
+	if (parsed.length === 1 && sameType(parsed[0].type, root.type)) {
+		topAttrs = parsed[0].attrs;
+		children = parsed[0].children;
+	}
+	const before = /* @__PURE__ */ new Set();
+	walkNodes([root], (n) => before.add(n.id));
+	const mapped = buildInstanceMap$1([root], opts.def ? [opts.def, ...components.filter((c) => c !== opts.def)] : components);
+	const refuse = (path, message) => result.refused.push({
+		path,
+		message
+	});
+	const warn = (path, message) => result.warnings.push({
+		path,
+		message
+	});
+	/** a readable address for a refusal: the element, with its ref when it has one */
+	const name = (node) => node.ref ? `${node.type}#${node.ref}` : node.type;
+	const under = (parent, node) => `${parent} > ${name(node)}`;
+	const byKey = nodesByShortId([root]);
+	const byRef = /* @__PURE__ */ new Map();
+	walkNodes([root], (n) => {
+		if (n.ref) byRef.set(n.ref, n);
+	});
+	const claim = /* @__PURE__ */ new Map();
+	const claimed = /* @__PURE__ */ new Set();
+	const eachParsed = (nodes, visit) => {
+		for (const node of nodes) {
+			visit(node);
+			eachParsed(node.children, visit);
+		}
+	};
+	for (const pass of ["data-id", "data-ref"]) eachParsed(children, (node) => {
+		if (claim.has(node)) return;
+		const key = node.attrs[pass];
+		if (!key) return;
+		const found = pass === "data-id" ? byKey.get(key) : byRef.get(key);
+		if (!found || claimed.has(found) || !sameType(found.type, node.type)) return;
+		claim.set(node, found);
+		claimed.add(found);
+	});
+	if (topAttrs) applyState(root, {
+		...bare(root.type),
+		attrs: topAttrs
+	}, root.type);
+	alignLevel(root, children, name(root));
+	const after = /* @__PURE__ */ new Set();
+	walkNodes([root], (n) => after.add(n.id));
+	const gone = /* @__PURE__ */ new Set();
+	for (const id of before) if (!after.has(id)) gone.add(id);
+	result.removed = gone.size;
+	clearBindingsToIds(host, gone);
+	result.diagnostics = validateTree(root, opts.validate ?? contextFromProject(project));
+	return result;
+	function bare(type) {
+		return {
+			type,
+			tag: type,
+			attrs: {},
+			children: [],
+			line: 0,
+			col: 0
+		};
+	}
+	/**
+	* Pair this level's parsed children with the existing ones, then recurse.
+	*
+	* The claims are already in; what is left is aligned by an LCS on the
+	* shallow signature (type, binding, link), then by type alone for whatever
+	* that left over. Anything still unpaired is new.
+	*/
+	function alignLevel(parent, parsedChildren, path) {
+		const freeOld = parent.children.map((node, i) => ({
+			node,
+			i
+		})).filter(({ node }) => !claimed.has(node));
+		const freeNew = parsedChildren.map((node, i) => ({
+			node,
+			i
+		})).filter(({ node }) => !claim.has(node));
+		for (const signatures of [() => [freeOld.map(({ node }) => signature(node)), freeNew.map(({ node }) => parsedSignature(node))], () => [freeOld.map(({ node }) => node.type), freeNew.map(({ node }) => node.type)]]) {
+			const [a, b] = signatures();
+			for (const [nj, oj] of lcsAlign(a, b)) {
+				const target = freeNew[nj];
+				const source = freeOld[oj];
+				if (!target || !source) continue;
+				if (claim.has(target.node) || claimed.has(source.node)) continue;
+				if (!sameType(source.node.type, target.node.type)) continue;
+				claim.set(target.node, source.node);
+				claimed.add(source.node);
+			}
+		}
+		const next = [];
+		for (const child of parsedChildren) {
+			const adopted = claim.get(child);
+			const node = adopted ?? createNode(child.type);
+			if (adopted) result.kept++;
+			else {
+				result.created++;
+				claim.set(child, node);
+				claimed.add(node);
+			}
+			const childPath = under(path, node);
+			applyState(node, child, child.type, childPath);
+			if (isComponentType(node.type)) fillInstance(node, child, childPath);
+			else if (!isLeafType(node.type)) alignLevel(node, child.children, childPath);
+			next.push(node);
+		}
+		parent.children = next;
+	}
+	/**
+	* A component instance.
+	*
+	* Self-closed (`<Card />`) means "this instance, as the component defines
+	* it": the subtree is realigned to the master, which fills a fresh instance
+	* and leaves an existing one's per-instance content exactly as it was.
+	*
+	* Written out (`<Card>…</Card>`) fills its PARTS: the structure has to match
+	* the master, and only content, media and `alt` are taken. That is what
+	* makes a page of eight filled-in Cards ONE write. Classes or a different
+	* element inside are refused by name, because every renderer reads a mapped
+	* node's classes from the master — one written here would render nowhere
+	* while the write reported success.
+	*/
+	function fillInstance(node, parsed, path) {
+		const def = components.find((c) => c.name === node.type);
+		if (!def) return;
+		if (opts.def && !canNest$1(components, opts.def.name, def.name)) {
+			refuse(path, `<${def.name}> can't go inside <${opts.def.name}>: a component can't hold itself`);
+			return;
+		}
+		alignStructure(node, def.root);
+		if (!parsed.children.length) return;
+		const fill = (instance, master, written, at) => {
+			if (written.length !== master.length) {
+				refuse(at, `<${def.name}> has ${master.length} part${master.length === 1 ? "" : "s"} here and ${written.length} ${written.length === 1 ? "was" : "were"} written. Write <${def.name} /> to leave its parts alone, or change the component itself with update_component.`);
+				return;
+			}
+			written.forEach((child, i) => {
+				const target = instance[i];
+				const below = master[i];
+				if (!target || !below) return;
+				const childPath = under(at, target);
+				if (!sameType(target.type, child.type)) {
+					refuse(childPath, `part ${i + 1} of <${def.name}> is a <${target.type}>, not a <${child.tag}>`);
+					return;
+				}
+				fillPart(target, child, def.name, childPath);
+				fill(target.children, below.children, child.children, childPath);
+			});
+		};
+		fill(node.children, def.root.children, parsed.children, path);
+	}
+	/**
+	* One part of an instance.
+	*
+	* What an instance owns is its CONTENT, its media, its per-placement `alt`,
+	* its hidden flag, its field-bound attributes and its `htmlId` — a per-page
+	* anchor. Everything else on a mapped node (its classes, its binding, its
+	* link, its shared attributes) is the master's: every renderer reads those
+	* from there, so one written here would render nowhere. Writing back what
+	* the read showed is therefore a no-op, and CHANGING it is refused with the
+	* tool that can actually do it.
+	*/
+	function fillPart(node, parsed, component, path) {
+		const shared = (attr, current) => {
+			if ((parsed.attrs[attr] ?? "") === (current ?? "")) return;
+			refuse(path, `'${attr}' inside <${component}> is the component's, not this instance's — change it with update_component`);
+		};
+		const implied = impliedAttrs(node.type);
+		for (const [attr, value] of Object.entries(parsed.attrs)) switch (true) {
+			case attr === "data-id":
+			case attr === "data-type":
+			case attr === "data-interactions":
+			case attr === "data-animations": break;
+			case implied[attr] !== void 0: break;
+			case attr === "id":
+				assign(node, "htmlId", value);
+				break;
+			case attr === "src":
+				setSrc(node, value, path);
+				break;
+			case attr === "alt": {
+				const attrs = { ...node.instanceAttributes ?? {} };
+				if (value) attrs.alt = value;
+				else delete attrs.alt;
+				assignObject(node, "instanceAttributes", attrs);
+				break;
+			}
+			case attr === "data-hidden":
+				setHidden(node, value);
+				break;
+			case attr === "data-icon":
+				if (value && value !== iconNameOf(node)) refuse(path, `an icon's markup is not in the HTML — set it with edit_elements {icon: "${value}"}`);
+				break;
+			case attr.startsWith("data-bind-"):
+				setFieldAttr(node, attr.slice(10), value, path);
+				break;
+			case attr === "data-ref":
+				refuse(path, `a ref inside a component instance would be duplicated on every instance — put it on the <${component}> element instead`);
+				break;
+			case attr === "class":
+				refuse(path, `a class inside <${component}> renders nowhere: a mapped node wears the component's. Style the component instead.`);
+				break;
+			case attr === "href":
+				shared("href", node.link);
+				break;
+			case attr === "source":
+			case attr === "data-field":
+				shared(attr, node.arg);
+				break;
+			default: shared(attr, node.attributes?.[attr]);
+		}
+		const has = (attr) => parsed.attrs[attr] !== void 0;
+		if (!has("id") && node.htmlId !== void 0) delete node.htmlId;
+		if (!has("src") && node.src !== void 0) delete node.src;
+		if (!has("data-hidden") && node.hidden !== void 0) delete node.hidden;
+		if (!has("alt") && node.instanceAttributes?.alt !== void 0) {
+			const attrs = { ...node.instanceAttributes };
+			delete attrs.alt;
+			assignObject(node, "instanceAttributes", attrs);
+		}
+		const fields = {};
+		for (const [attr, field] of Object.entries(node.fieldAttrs ?? {})) if (has(`data-bind-${attr}`)) fields[attr] = field;
+		assignObject(node, "fieldAttrs", fields);
+		if (parsed.text !== void 0 && isLeafType(node.type)) setContent(node, parsed, path);
+	}
+	function applyState(node, parsed, type, path = name(node)) {
+		const isInstance = isComponentType(type);
+		if (!sameType(node.type, type)) node.type = type;
+		const implied = impliedAttrs(type);
+		for (const [attr, value] of Object.entries(parsed.attrs)) switch (true) {
+			case attr === "data-id":
+			case attr === "data-type":
+			case attr === "data-interactions":
+			case attr === "data-animations": break;
+			case implied[attr] !== void 0: break;
+			case attr === "data-ref":
+				setRef(node, value, path);
+				break;
+			case attr === "class":
+				if (isInstance) refuse(path, `a class on <${parsed.tag}> renders nowhere: an instance wrapper emits no element of its own, and its look is the component's. Style the component instead.`);
+				else setClasses(node, value, path);
+				break;
+			case attr === "id":
+				assign(node, "htmlId", value);
+				break;
+			case attr === "source":
+				if (!SOURCE_TYPES.has(type)) refuse(path, `<${parsed.tag}> takes no 'source'; a field binding is 'data-field'`);
+				else assign(node, "arg", value);
+				break;
+			case attr === "data-field":
+				if (SOURCE_TYPES.has(type)) refuse(path, `<${parsed.tag}> binds a whole collection with 'source', not 'data-field'`);
+				else if (isInstance) refuse(path, `<${parsed.tag}> emits no element, so it has nothing to bind`);
+				else assign(node, "arg", value);
+				break;
+			case attr === "href":
+				if (isInstance) refuse(path, `<${parsed.tag}> emits no element, so it has no link`);
+				else assign(node, "link", value);
+				break;
+			case attr === "src":
+				setSrc(node, value, path);
+				break;
+			case attr === "data-hidden":
+				setHidden(node, value);
+				break;
+			case attr === "data-icon":
+				if (value && value !== iconNameOf(node)) refuse(path, `an icon's markup is not in the HTML — set it with edit_elements {icon: "${value}"}`);
+				break;
+			case attr.startsWith("data-bind-"):
+				setFieldAttr(node, attr.slice(10), value, path);
+				break;
+			case attr.startsWith("data-variant-"):
+				if (!isInstance) refuse(path, `only a component instance wears a variant; <${parsed.tag}> does not`);
+				else setVariant(node, attr.slice(13), value);
+				break;
+			default: if (isInstance) refuse(path, `'${attr}' on <${parsed.tag}> belongs to the component — change it with update_component, or use edit_elements {instanceAttributes} for this placement`);
+			else if (!isAllowedAttribute(attr)) refuse(path, `'${attr}' is not an allowed attribute`);
+			else setAttr(node, attr, value);
+		}
+		pruneAbsent(node, parsed, isInstance);
+		if (!isInstance && isLeafType(type) && parsed.text !== void 0) setContent(node, parsed, path);
+	}
+	function pruneAbsent(node, parsed, isInstance) {
+		const has = (attr) => parsed.attrs[attr] !== void 0;
+		if (!has("data-ref") && node.ref !== void 0) delete node.ref;
+		if (!has("id") && node.htmlId !== void 0) delete node.htmlId;
+		if (!has("data-hidden") && node.hidden !== void 0) delete node.hidden;
+		if (!has(SOURCE_TYPES.has(node.type) ? "source" : "data-field") && node.arg !== void 0) delete node.arg;
+		if (isInstance) {
+			const written = /* @__PURE__ */ new Map();
+			for (const [attr, value] of Object.entries(parsed.attrs)) if (attr.startsWith("data-variant-")) written.set(attr.slice(13), value);
+			const picks = {};
+			for (const axis of Object.keys(node.variants ?? {})) {
+				const value = written.get(axis);
+				if (value) picks[axis] = value;
+				written.delete(axis);
+			}
+			for (const [axis, value] of written) if (value) picks[axis] = value;
+			assignObject(node, "variants", picks);
+			return;
+		}
+		if (node.variants !== void 0) delete node.variants;
+		if (!has("href") && node.link !== void 0) delete node.link;
+		if (!has("class") && node.classes !== void 0) delete node.classes;
+		if (!has("src") && node.src !== void 0) delete node.src;
+		const implied = impliedAttrs(node.type);
+		const attrs = {};
+		for (const [attr, value] of Object.entries(node.attributes ?? {})) if (has(attr) || implied[attr] !== void 0) attrs[attr] = value;
+		assignObject(node, "attributes", attrs);
+		const fields = {};
+		for (const [attr, field] of Object.entries(node.fieldAttrs ?? {})) if (has(`data-bind-${attr}`)) fields[attr] = field;
+		assignObject(node, "fieldAttrs", fields);
+	}
+	function setRef(node, value, path) {
+		const ref = value.trim();
+		if (!ref) {
+			delete node.ref;
+			return;
+		}
+		if (!/^[a-zA-Z][a-zA-Z0-9-]*$/.test(ref)) {
+			refuse(path, `'${ref}' is not a valid ref — letters, digits and '-', starting with a letter`);
+			return;
+		}
+		if (node.type === "body") {
+			refuse(path, "<body> carries no ref: it is the page root and is already addressable");
+			return;
+		}
+		const mapping = mapped.get(node.id);
+		if (mapping && !isInstanceWrapper$1(mapping)) {
+			refuse(path, `a ref inside a component instance would be duplicated on every instance — put it on the <${mapping.def.name}> element instead`);
+			return;
+		}
+		assign(node, "ref", ref);
+		byRef.set(ref, node);
+	}
+	/**
+	* The `class` attribute is the WHOLE list, so a token the style catalog does
+	* not model is KEPT and reported — every renderer and the exporter use
+	* `node.classes` verbatim, so dropping one would change the published page.
+	* What it costs is that the Style panel cannot show it as a control, which
+	* is what the warning says.
+	*/
+	function setClasses(node, value, path) {
+		const tokens = value.split(/\s+/).filter(Boolean);
+		for (const token of tokens) if (!isValidClass(token)) warn(path, `'${token}' is kept, but the Style panel has no control for it`);
+		assign(node, "classes", tokens.join(" "));
+	}
+	function setSrc(node, value, path) {
+		if (value === "data:…(elided)") return;
+		if (value && !SAFE_SRC.test(value)) {
+			refuse(path, `'${value}' is not a usable media URL — upload one with upload_media`);
+			return;
+		}
+		assign(node, "src", value);
+	}
+	function setAttr(node, attr, value) {
+		assignObject(node, "attributes", sanitizeAttributes({
+			...node.attributes ?? {},
+			[attr]: value
+		}));
+	}
+	function setFieldAttr(node, attr, field, path) {
+		if (isComponentType(node.type)) {
+			refuse(path, "an instance wrapper emits no element, so an attribute has nowhere to land");
+			return;
+		}
+		if (!isAllowedAttribute(attr)) {
+			refuse(path, `'${attr}' is not an allowed attribute, so it can't be bound to a field`);
+			return;
+		}
+		const next = { ...node.fieldAttrs ?? {} };
+		if (field) next[attr] = field;
+		else delete next[attr];
+		assignObject(node, "fieldAttrs", next);
+	}
+	function setVariant(node, axis, option) {
+		const next = { ...node.variants ?? {} };
+		if (option) next[axis] = option;
+		else delete next[axis];
+		assignObject(node, "variants", next);
+	}
+	function setContent(node, parsed, path) {
+		const raw = parsed.text ?? "";
+		const text = isRich(raw) ? sanitizeRich(raw) : decodeEntities(raw);
+		if (!isLeafElement(node.type) && text.trim()) {
+			refuse(path, `<${parsed.tag}> is a container — its words go in a child element`);
+			return;
+		}
+		assign(node, "content", text);
+	}
+	/** `data-hidden` is the editor's hide, not the HTML `hidden` attribute: a
+	*  bare one means true, and an explicit `false` is how an instance SHOWS a
+	*  part its component hides */
+	function setHidden(node, value) {
+		const next = value !== "false";
+		if (node.hidden !== next) node.hidden = next;
+	}
+	/** write only a real change, and let an empty value DELETE the key — which
+	*  is what makes a round-trip of an unchanged document byte-identical */
+	function assign(node, key, value) {
+		const next = key === "content" ? value : value.trim();
+		if (!next && key !== "content") {
+			if (node[key] !== void 0) delete node[key];
+			return;
+		}
+		if (node[key] !== next) node[key] = next;
+	}
+	function assignObject(node, key, value) {
+		if (!Object.keys(value).length) {
+			if (node[key] !== void 0) delete node[key];
+			return;
+		}
+		if (JSON.stringify(node[key]) !== JSON.stringify(value)) node[key] = value;
+	}
+}
+var iconNameOf = (node) => node.svg?.match(/data-icon="([a-z0-9:_-]+)"/)?.[1] ?? (node.svg ? "custom" : "");
+/** the validation context a project implies */
+function contextFromProject(project) {
+	const collections = project.collections ?? [];
+	return {
+		componentNames: (project.components ?? []).map((c) => c.name),
+		collectionNames: collections.map((c) => c.name),
+		listFieldNames: collections.flatMap((c) => c.fields.filter((f) => f.type === "multi-reference" || f.type === "multi-image").map((f) => f.name)),
+		dataOnlyCollections: collections.filter((c) => c.detailRoutes === false).map((c) => c.name)
+	};
+}
+//#endregion
 //#region src/lib/shared/slug.js
 /**
 * normalizes a string into a url slug segment
@@ -4615,86 +5935,6 @@ function enforceDocument(value) {
 		code: buildDocument(meta, normalizeSyntax(extractBodyLines(value).join("\n")).split("\n").map((l) => l.trim() && !l.startsWith("	") ? "	" + l : l), extractBodyArg(value), extractBodyDecor(value)),
 		meta
 	};
-}
-//#endregion
-//#region src/lib/shared/urls.js
-/** hrefs: same-site paths/fragments plus the safe external schemes */
-var SAFE_HREF = /^(\/|#|https?:|mailto:|tel:)/i;
-/** media src/background: the href allowlist plus inline image/video data
-* URLs. Blocks javascript:/data:text-html etc. — harmless today (no
-* iframe/script element exists) but a hard gate before any such element
-* is ever added. */
-var SAFE_SRC = /^(\/|#|https?:|mailto:|tel:|data:image\/|data:video\/)/i;
-//#endregion
-//#region src/lib/shared/richtext.js
-var ALLOWED = {
-	b: {},
-	strong: {},
-	i: {},
-	em: {},
-	u: {},
-	mark: {},
-	code: {},
-	sup: {},
-	sub: {},
-	br: { void: true },
-	hr: { void: true },
-	p: {},
-	h2: {},
-	h3: {},
-	h4: {},
-	blockquote: {},
-	ul: {},
-	ol: {},
-	li: {},
-	a: { href: true }
-};
-var escapeText$1 = (s) => s.replaceAll("<", "&lt;").replaceAll(">", "&gt;");
-var escapeAttr = (s) => s.replaceAll("&", "&amp;").replaceAll("\"", "&quot;").replaceAll("<", "&lt;");
-/** true when a string uses any of the allowed rich tags */
-function isRich(value) {
-	return typeof value === "string" && /<\/?(b|strong|i|em|u|mark|code|sup|sub|a|ul|ol|li|br|hr|p|h2|h3|h4|blockquote)[\s>/]/i.test(value);
-}
-/** sanitize a rich-text fragment to the allowed subset (idempotent) */
-function sanitizeRich(html) {
-	if (typeof html !== "string" || !html) return "";
-	const out = [];
-	const open = [];
-	for (const token of html.match(/<[^>]*>|[^<]+|</g) ?? []) {
-		if (token[0] !== "<" || token.length === 1) {
-			out.push(escapeText$1(token));
-			continue;
-		}
-		const match = token.match(/^<(\/?)([a-zA-Z0-9]+)([^>]*)>$/);
-		if (!match) {
-			out.push(escapeText$1(token));
-			continue;
-		}
-		const closing = match[1] === "/";
-		const tag = match[2].toLowerCase();
-		const spec = ALLOWED[tag];
-		if (!spec) continue;
-		if (spec.void) {
-			if (!closing) out.push(`<${tag}>`);
-			continue;
-		}
-		if (closing) {
-			const at = open.lastIndexOf(tag);
-			if (at === -1) continue;
-			for (let i = open.length - 1; i >= at; i--) out.push(`</${open[i]}>`);
-			open.length = at;
-			continue;
-		}
-		if (tag === "a") {
-			const href = match[3].match(/href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i);
-			const raw = (href?.[1] ?? href?.[2] ?? href?.[3] ?? "").trim();
-			const safe = SAFE_HREF.test(raw) ? raw : "";
-			out.push(safe ? `<a href="${escapeAttr(safe)}" rel="noopener">` : "<a>");
-		} else out.push(`<${tag}>`);
-		open.push(tag);
-	}
-	for (let i = open.length - 1; i >= 0; i--) out.push(`</${open[i]}>`);
-	return out.join("");
 }
 //#endregion
 //#region src/lib/shared/structuredData.js
@@ -5141,113 +6381,6 @@ function setVariantClasses(def, node, key, classes) {
 	else delete node.variantClasses;
 }
 //#endregion
-//#region src/lib/shared/attributes.js
-/** attribute names allowed verbatim */
-var ATTR_ALLOW = /* @__PURE__ */ new Set([
-	"target",
-	"rel",
-	"download",
-	"title",
-	"role",
-	"type",
-	"name",
-	"value",
-	"placeholder",
-	"alt",
-	"loading",
-	"tabindex",
-	"lang",
-	"dir",
-	"hidden",
-	"disabled",
-	"open",
-	"for",
-	"required",
-	"readonly",
-	"checked",
-	"selected",
-	"multiple",
-	"autofocus",
-	"autocomplete",
-	"min",
-	"max",
-	"step",
-	"rows",
-	"cols",
-	"maxlength",
-	"minlength",
-	"pattern",
-	"inputmode",
-	"accept",
-	"translate"
-]);
-/** allowed name prefixes (data-*, aria-*) */
-var ATTR_PREFIXES = ["data-", "aria-"];
-/** a syntactically valid attribute name (lowercase, no colons/uppercase) */
-var NAME_RE = /^[a-z][a-z0-9-]*$/;
-/** is `name` an allowed custom attribute? */
-function isAllowedAttribute(name) {
-	const n = String(name).toLowerCase().trim();
-	if (!NAME_RE.test(n)) return false;
-	if (ATTR_ALLOW.has(n)) return true;
-	return ATTR_PREFIXES.some((p) => n.startsWith(p) && n.length > p.length);
-}
-/**
-* Keep only allowed attributes, lowercased names with string values. Returns a
-* fresh object (never mutates the input).
-*
-* EMPTY VALUES ARE KEPT. They used to be dropped, which made `alt=""` (the
-* correct markup for a decorative image) and every boolean attribute
-* (`download`, `hidden`, `required`) unexpressible — and because callers infer
-* the rejection reason by diffing key names, the loss was reported as
-* "attribute not allowed", pointing at the wrong thing entirely.
-*
-* `true` coerces to the empty string (so an agent can pass a real boolean) and
-* `false` drops the attribute (absence IS false for booleans).
-*/
-function sanitizeAttributes(record) {
-	/** @type {Record<string, string>} */
-	const out = {};
-	if (!record || typeof record !== "object" || Array.isArray(record)) return out;
-	for (const [rawName, rawValue] of Object.entries(record)) {
-		const name = String(rawName).toLowerCase().trim();
-		if (!isAllowedAttribute(name)) continue;
-		if (rawValue === false) continue;
-		out[name] = rawValue == null || rawValue === true ? "" : String(rawValue);
-	}
-	return out;
-}
-/**
-* Attributes whose value is TEXT A VISITOR READS, and so can be translated.
-* `type`, `role` and `name` are structural and never localized; these four are
-* copy, and on a multilingual site they used to render in the default language
-* on every locale route with no way to change it.
-*/
-var LOCALIZABLE_ATTRS = [
-	"placeholder",
-	"aria-label",
-	"alt",
-	"title"
-];
-/** true when `name` carries text worth translating */
-function isLocalizableAttribute(name) {
-	return LOCALIZABLE_ATTRS.includes(String(name).toLowerCase().trim());
-}
-/**
-* The attributes an element renders: the component master's, with this
-* placement's own overrides on top, then the active locale's text overrides.
-*
-* Shared by both Vue renderers and the exporter so the canvas, Preview and the
-* published page agree. `localeAttrs` is already narrowed to the locale being
-* rendered (absent on the default locale).
-*/
-function mergeAttributeLayers(shared, instance, localeAttrs) {
-	const out = { ...shared ?? {} };
-	for (const [name, value] of Object.entries(instance ?? {})) out[name] = value;
-	for (const [name, value] of Object.entries(localeAttrs ?? {})) if (isLocalizableAttribute(name) && String(value) !== "") out[name] = value;
-	return out;
-}
-//#endregion
 //#region src/lib/shared/entryScope.js
 /**
 * Which nodes a route renders under an ENTRY SCOPE, and which scope.
@@ -5313,7 +6446,7 @@ function countLocaleSeo(project, code) {
 //#endregion
 //#region src/lib/shared/tokens.js
 var TOKEN_NAME_RE = /^[a-z][a-z0-9-]*$/;
-var HEX_RE = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
+var HEX_RE = /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
 var RESERVED_TOKEN_NAMES = /* @__PURE__ */ new Set([
 	"slate",
 	"gray",
@@ -8310,4 +9443,4 @@ function materializeCatalogEntry(entry, project, component = (key) => project.co
 	});
 }
 //#endregion
-export { APPEAR_MODES, BUILTIN_LIST_SOURCES, CATALOG, CATALOG_TOKENS, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MOTION_PROPS, NODE_STATE_KEYS, REF_SLOT, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, SCROLL_LERP_MAX, SCROLL_LERP_MIN, SLIDER_DEFAULTS, STYLE_SECTIONS, TOKEN_NAME_RE, TRANSITION_DEFAULTS, TRANSITION_PRESET_IDS, VARIANT_NAME_RE, addVariantAxis, addVariantOption, adoptStructure, alignMirrors, applyClass, buildDocument, buildInstanceMap, buildScopeRoots, canNest, catalogDependencies, catalogEntry, cloneForMaster, compileAnimation, componentReaches, componentUsage, countLocaleSeo, createNode, createPage, createProject, customSchemaError, dataMarkerOf, deepClone, defaultBreakpoints, defaultSettings, deleteComponent, dependencyOrder, detachInstance, duplicateComponent, effectiveClasses, elementBlockLines, enforceDocument, expandComponentInstances, extractBodyArg, extractBodyDecor, extractBodyLines, findNode, findParent, fontError, fontFormatForUrl, hasAncestorOfType, hasNodeState, hasOpenArgBracket, hoistBlockRef, inheritedInstanceValue, interactionGroupKey, interactionMarkerOf, interactionStateKey, isAllowedAttribute, isBodyOpenLine, isComponentType, isEmittableToken, isEntryScopeRoot, isInstanceWrapper, isKnownElement, isLeafElement, isLocalizableAttribute, isNodeHidden, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isValidClass, isValidToken, lexLine, lucideNameOf, lucideSvg, matchClass, materializeCatalogEntry, mergeAttributeLayers, mergeClassLayers, nestedComponentNames, normalizeComponentName, normalizeSyntax, parseSetup, parseSyntax, pickedKeys, purgeLocaleSeo, pushMasterStructure, reconcile, refOf, removeVariantAxis, removeVariantOption, renameComponent, renameVariantAxis, renameVariantOption, replaceSetup, resolveInstanceValue, resolvePicks, resolveSliderConfig, sameLayerProperty, sameProperty, sanitizeAttributes, sanitizeInlineSvg, sanitizeRich, serializeNode, setComponentCategory, setComponentMeta, setInstancePick, setNodeHidden, setSetupLocale, setStyleTokens, setVariantAxes, setVariantClasses, setVariantDefault, slugify, stripExtractedInstanceState, stripNodeState, styleMarkerOf, tokenError, typeOptionsFor, validateAnimation, validateBinding, validateDocument, validateMotionSettings, validateSliderConfig, variantKey, walkNodes, withDataMarker, withInteractionMarker, withStyleMarker, withoutRef };
+export { APPEAR_MODES, BUILTIN_LIST_SOURCES, CATALOG, CATALOG_TOKENS, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, ELIDED_DATA_URL, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MAX_DEPTH, MAX_INPUT, MOTION_PROPS, NODE_STATE_KEYS, REF_SLOT, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, SCROLL_LERP_MAX, SCROLL_LERP_MIN, SLIDER_DEFAULTS, STYLE_SECTIONS, TOKEN_NAME_RE, TRANSITION_DEFAULTS, TRANSITION_PRESET_IDS, VARIANT_NAME_RE, addVariantAxis, addVariantOption, adoptStructure, alignMirrors, applyClass, applyHtml, buildDocument, buildInstanceMap, buildScopeRoots, canNest, catalogDependencies, catalogEntry, cloneForMaster, compileAnimation, componentReaches, componentUsage, contextFromProject, countLocaleSeo, createNode, createPage, createProject, customSchemaError, dataMarkerOf, deepClone, defaultBreakpoints, defaultSettings, deleteComponent, dependencyOrder, detachInstance, duplicateComponent, effectiveClasses, elementBlockLines, enforceDocument, expandComponentInstances, extractBodyArg, extractBodyDecor, extractBodyLines, findNode, findParent, fontError, fontFormatForUrl, hasAncestorOfType, hasNodeState, hasOpenArgBracket, hoistBlockRef, inheritedInstanceValue, interactionGroupKey, interactionMarkerOf, interactionStateKey, isAllowedAttribute, isBodyOpenLine, isComponentType, isEmittableToken, isEntryScopeRoot, isInstanceWrapper, isKnownElement, isLeafElement, isLocalizableAttribute, isNodeHidden, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isValidClass, isValidToken, lexLine, lucideNameOf, lucideSvg, masterToHtml, matchClass, materializeCatalogEntry, mergeAttributeLayers, mergeClassLayers, nestedComponentNames, nodesByShortId, normalizeComponentName, normalizeSyntax, pageToHtml, parseHtml, parseSetup, parseSyntax, pickedKeys, purgeLocaleSeo, pushMasterStructure, reconcile, refOf, removeVariantAxis, removeVariantOption, renameComponent, renameVariantAxis, renameVariantOption, replaceSetup, resolveInstanceValue, resolvePicks, resolveSliderConfig, sameLayerProperty, sameProperty, sameType, sanitizeAttributes, sanitizeInlineSvg, sanitizeRich, serializeNode, setComponentCategory, setComponentMeta, setInstancePick, setNodeHidden, setSetupLocale, setStyleTokens, setVariantAxes, setVariantClasses, setVariantDefault, shortIds, slugify, stripExtractedInstanceState, stripNodeState, styleMarkerOf, tagForType, tokenError, typeForTag, typeOptionsFor, validateAnimation, validateBinding, validateDocument, validateMotionSettings, validateSliderConfig, validateTree, variantKey, walkNodes, withDataMarker, withInteractionMarker, withStyleMarker, withoutRef };
