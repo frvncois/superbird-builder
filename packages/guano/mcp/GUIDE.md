@@ -1303,9 +1303,10 @@ Binding options (all optional, all on the binding):
 | `once` | `session` · `local` — remember a dismissal (published site only) |
 | `scrollAt` | `scrolled` trigger only: px threshold (default 50) |
 
-Triggers: `hover` · `click` · `appear` · `scrolled` · `change`. `hover`, `scrolled`
-and `change` are **symmetric** (they drive both directions themselves and reject an
-`action`); `click` is discrete; `appear` fires once on scroll into view.
+Triggers: `hover` · `click` · `appear` · `scrolled` · `change` · `load`. `hover`,
+`scrolled`, `change` and `load` are **symmetric** (they drive both directions
+themselves and reject an `action`); `click` is discrete; `appear` fires once on scroll
+into view, and `load` is on from the first frame and never off.
 
 **Hamburger menu** — one toggle, closes when you click away or press Escape:
 
@@ -1368,6 +1369,12 @@ create_interactions {items: [
   <div data-ref="panel" class="absolute inset-y-0 right-0 h-full w-80 translate-x-full"></div>
 </div>
 ```
+
+**Two effects, one thing.** A human can NAME a class change and a timeline as a single
+effect, after which the editor shows one row and one library entry instead of two. That
+is presentational and there is nothing for you to do: keep creating and binding the two
+halves as above, give them the same name so the pairing is obvious, and bind both on
+every trigger with the same target. Nothing you read back changes.
 
 `translate-x-0 translate-y-0` cancels the off-position on either axis, so ONE effect
 slides a panel in from any edge — park it with `translate-x-full`, `-translate-x-full`,
@@ -1591,6 +1598,8 @@ steps: [
 | `scrub` | progress follows scroll position | `scrub: {start, end, smooth?}` — viewport fractions the element's top travels between (default `{start: 1, end: 0.25}`); `smooth` (seconds, 0–3) makes the play LAG scroll with an exponential catch-up — per-tween scroll smoothing |
 | `hover` | pointer enters (rewinds on leave) | — |
 | `click` | plays it, or rewinds one already running | `action`: `toggle` (default) · `on` always plays · `off` always rewinds |
+| `scrolled` | the page is scrolled past a threshold (rewinds above it) | `scrollAt`: px, default 50 |
+| `change` | a control is checked / non-empty (rewinds when it is not) | — |
 
 `targetId` works exactly as for interactions: OMIT it to move the element itself, or
 pass another element's id to make this element the trigger and that one the subject.
@@ -1656,6 +1665,14 @@ give it `easing: "linear"` so progress tracks scroll evenly.
   position instead of locking 1:1 — the buttery lag of smooth-scroll libraries,
   per tween, with the page's native scrollbar untouched (no hijacking). The canvas
   preview tracks scroll 1:1; smoothing shows on the published site.
+
+**The two engines take the same triggers**, with one exception: only a timeline can
+`scrub`, because a scrub is continuous progress and a class is on or off. So `load` is
+available to a class change (a state the page simply starts in, no timeline needed),
+and `scrolled` and `change` are available to a timeline (a header that shrinks by
+tweening, a field that slides in when a radio is picked). Pick the engine by what the
+effect has to do — classes for discrete state and anything touching `display`, a
+timeline for movement — not by the trigger.
 
 **Site-wide motion** lives in `update_settings {motion}`, not on a binding — three
 switches that apply to every page (published site + editor Preview; never the Build

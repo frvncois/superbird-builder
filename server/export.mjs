@@ -716,6 +716,9 @@ function attrsFor(node, ctx, bg, { wrapLink = true, extraClass = '' } = {}) {
         if (b.appearAt) meta.o.at = b.appearAt
         if (b.scrub) meta.o.s = b.scrub
       }
+      // the scroll threshold rides beside the options rather than inside them:
+      // `o` is read for appear/scrub, and a flat key keeps the hot path simple
+      if (b.trigger === 'scrolled' && b.scrollAt !== undefined) meta.at2 = b.scrollAt
       list.push(meta)
     }
     if (list.length) attrs.push(`data-anim="${escapeHtml(JSON.stringify(list))}"`)

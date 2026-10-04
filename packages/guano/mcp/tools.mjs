@@ -448,7 +448,7 @@ export function createToolSet({ api, runtime, elicit, hasElicitation = () => nul
       type: 'string',
       enum: INTERACTION_TRIGGERS,
       description:
-        'hover/scrolled/change are symmetric (they drive both directions and reject an ' +
+        'hover/scrolled/change/load are symmetric (they drive both directions and reject an ' +
         '`action`); click is discrete; appear fires once on scroll into view',
     },
     action: {
@@ -6153,7 +6153,7 @@ const tools = [
                     animationId: { type: 'string' },
                     trigger: {
                       type: 'string',
-                      enum: ['load', 'appear', 'scrub', 'hover', 'click'],
+                      enum: ['load', 'appear', 'scrub', 'hover', 'click', 'scrolled', 'change'],
                     },
                     targetId: { type: 'string', description: 'element id to move; omit for the element itself' },
                     targetRef: {
@@ -6164,8 +6164,8 @@ const tools = [
                       type: 'string',
                       enum: ['toggle', 'on', 'off'],
                       description:
-                        'click only: toggle (default), or always-play/always-rewind. A click play ' +
-                        'is shared per (animation, target), so several buttons drive one timeline.',
+                        'click only: toggle (default), or always-play/always-rewind. A play is ' +
+                        'shared per (animation, target), so several buttons drive one timeline.',
                     },
                     appearMode: {
                       type: 'string',

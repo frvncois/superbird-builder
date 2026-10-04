@@ -169,7 +169,7 @@ useDrawerEscape(panel, {
       ref="surface"
       data-insert-surface
       tabindex="0"
-      class="flex-1 space-y-0.5 overflow-y-auto pb-10 outline-none"
+      class="custom-scrollbar flex-1 space-y-0.5 overflow-y-auto pb-10 outline-none"
       @keydown="onKeydown"
     >
       <template v-for="(section, i) in sections" :key="section.title">

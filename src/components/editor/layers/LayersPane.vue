@@ -157,7 +157,7 @@ const issues = computed(() => {
       </template>
     </div>
 
-    <div class="min-h-0 flex-1 overflow-y-auto px-1 pb-8">
+    <div class="custom-scrollbar min-h-0 flex-1 overflow-y-auto px-1 pb-8">
       <LayerRow v-for="node in roots" :key="node.id" :node="node" :depth="0" />
       <p v-if="noMatches" class="px-2 py-6 text-center text-xs text-muted-foreground">
         No layer matches.
@@ -172,7 +172,7 @@ const issues = computed(() => {
         <TriangleAlert class="size-3" />
         {{ issues.length }} {{ issues.length === 1 ? 'issue' : 'issues' }}
       </div>
-      <div class="max-h-28 overflow-y-auto pb-1.5">
+      <div class="custom-scrollbar max-h-28 overflow-y-auto pb-1.5">
         <button
           v-for="issue in issues"
           :key="`${issue.nodeId}:${issue.message}`"

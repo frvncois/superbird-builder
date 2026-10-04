@@ -18,11 +18,16 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
 </script>
 
 <template>
-  <component
-    :is="entry.component"
-    v-for="entry in stack"
-    :key="entry.id"
-    v-bind="entry.props"
-    @close="closeTop($event)"
-  />
+  <!-- each entry's root is its ModalHost overlay; the enter/leave classes land
+       there and ModalHost's own (unscoped) rules fade the backdrop and grow
+       the panel. A leaving modal stays mounted until its transition ends. -->
+  <TransitionGroup name="modal">
+    <component
+      :is="entry.component"
+      v-for="entry in stack"
+      :key="entry.id"
+      v-bind="entry.props"
+      @close="closeTop($event)"
+    />
+  </TransitionGroup>
 </template>

@@ -2,7 +2,7 @@ import { computed, ref, watch } from 'vue'
 import { activeBranchId, currentSnapshot, projectStorageKey, usePersistence } from './usePersistence'
 import { MAIN_ID } from './useBranches'
 import { readStoredProject } from '@/lib/storage'
-import { hydrateStore, onUnauthorized, storeGet, storeSet } from '@/lib/store'
+import { hydrateStore, onUnauthorized, storeGet, storeRemove, storeSet } from '@/lib/store'
 import { downloadBlob } from '@/lib/download'
 import type { PublishMethod } from '@/types/editor'
 
@@ -120,5 +120,19 @@ export function usePublish() {
     storeSet(PUBLISHED_INFO_KEY, JSON.stringify(publishedInfo.value))
   }
 
-  return { hasUnpublishedChanges, markPublished, publishedInfo }
+  /** takes the live site down and forgets the baseline, so the next publish
+   * reads as a first one */
+  async function unpublish() {
+    const res = await fetch('/api/published', { method: 'DELETE' })
+    if (!res.ok) {
+      const detail = await res.json().catch(() => null)
+      throw new Error(detail?.error ?? `unpublish failed (${res.status})`)
+    }
+    publishedSnapshot.value = null
+    publishedInfo.value = null
+    storeRemove(PUBLISHED_BASELINE_KEY)
+    storeRemove(PUBLISHED_INFO_KEY)
+  }
+
+  return { hasUnpublishedChanges, markPublished, unpublish, publishedInfo }
 }

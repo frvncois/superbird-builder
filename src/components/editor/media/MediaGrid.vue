@@ -4,7 +4,8 @@ import {
   Check, Download, FileText, Film, FolderInput, Folder as FolderIcon, Music, Pencil, Trash2, Type,
 } from 'lucide-vue-next'
 import type { Component } from 'vue'
-import InputUI from '@/components/ui/InputUI.vue'
+import RenameModal from '@/components/modal/RenameModal.vue'
+import { useModal } from '@/composables/useModal'
 import MenuUI from '@/components/ui/MenuUI.vue'
 import type { MediaAsset, MediaFolder, MediaKind } from '@/types/media'
 import { useMedia } from '@/composables/useMedia'
@@ -17,7 +18,7 @@ const props = defineProps<{
   /** appended to preview URLs so replace-in-place busts the browser cache */
   version: number
   view: 'grid' | 'list'
-  /** set to a folder id to immediately open it for inline rename (fresh folder) */
+  /** set to a folder id to immediately offer renaming it (fresh folder) */
   startRenameId?: string | null
   /** asset count per folder id, for the folder chip's "n items" */
   folderCounts: Record<string, number>
@@ -50,9 +51,6 @@ const draggingId = ref<string | null>(null)
 const dropTargetId = ref<string | null>(null)
 // folders and assets rename through the same inline input, tracked apart so a
 // commit knows which emit to fire
-const renamingFolderId = ref<string | null>(null)
-const renamingAssetId = ref<string | null>(null)
-const renameText = ref('')
 
 const KIND_ICONS: Partial<Record<MediaKind, Component>> = {
   video: Film,
@@ -109,29 +107,14 @@ function onFolderDrop(e: DragEvent, folder: MediaFolder) {
   if (files.length) emit('uploadTo', folder.id, files)
 }
 
-function startRename(folder: MediaFolder) {
-  renamingAssetId.value = null
-  renamingFolderId.value = folder.id
-  renameText.value = folder.name
+const { openModal } = useModal()
+async function startRename(folder: MediaFolder) {
+  const name = await openModal<string>(RenameModal, { title: 'Rename folder', value: folder.name, placeholder: 'Folder name' })
+  if (name) emit('rename', folder.id, name)
 }
-function startRenameAsset(asset: MediaAsset) {
-  renamingFolderId.value = null
-  renamingAssetId.value = asset.id
-  renameText.value = asset.name
-}
-function commitRename() {
-  const folderId = renamingFolderId.value
-  const assetId = renamingAssetId.value
-  renamingFolderId.value = null
-  renamingAssetId.value = null
-  const name = renameText.value.trim()
-  if (!name) return
-  if (folderId) emit('rename', folderId, name)
-  else if (assetId) emit('renameAsset', assetId, name)
-}
-function cancelRename() {
-  renamingFolderId.value = null
-  renamingAssetId.value = null
+async function startRenameAsset(asset: MediaAsset) {
+  const name = await openModal<string>(RenameModal, { title: 'Rename file', value: asset.name, placeholder: 'File name' })
+  if (name) emit('renameAsset', asset.id, name)
 }
 watch(
   () => props.startRenameId,
@@ -145,47 +128,29 @@ watch(
 <template>
   <!-- ===== GRID ===== -->
   <div v-if="view === 'grid'" class="flex min-h-full flex-col gap-4" @click.self="emit('bgclick')">
-    <!-- folders: compact chips, distinct from the file tiles below -->
-    <div v-if="folders.length" class="flex flex-wrap gap-2" @click.self="emit('bgclick')">
+    <!-- folders and items share one grid: a folder is a tile like a file,
+         with the folder glyph where the thumbnail would be. Tiles are fluid
+         and fill the row; the details rail is always mounted (see the modal)
+         so the width they share never changes under a selection -->
+    <div class="grid grid-cols-[repeat(auto-fill,minmax(9.5rem,1fr))] gap-3" @click.self="emit('bgclick')">
       <div
         v-for="folder in folders"
         :key="folder.id"
         data-card
-        class="group flex h-9 items-center gap-2 rounded-xl border border-input pr-1 pl-2.5 transition-colors hover:bg-accent/20"
+        class="group relative flex flex-col gap-1.5 rounded-xl p-1.5 transition-colors hover:bg-accent/20"
         :class="[
           draggingId === folder.id && 'opacity-40',
-          dropTargetId === folder.id && 'ring-2 ring-accent',
+          dropTargetId === folder.id && 'bg-accent/30 ring-1 ring-accent',
         ]"
         @dragover="onFolderDragOver($event, folder)"
         @dragleave="dropTargetId = null"
         @drop.prevent="onFolderDrop($event, folder)"
       >
-        <FolderIcon class="size-3.5 shrink-0 text-muted-foreground" />
-        <InputUI
-          v-if="renamingFolderId === folder.id"
-          v-model="renameText"
-          autofocus
-          class="w-32"
-          @keydown.enter="commitRename"
-          @keydown.esc.stop.prevent="cancelRename"
-          @blur="commitRename"
-        />
-        <template v-else>
-          <button
-            type="button"
-            draggable="true"
-            class="flex min-w-0 items-center gap-2 text-left outline-none"
-            @click="emit('open', folder)"
-            @dragstart="onFolderDragStart($event, folder)"
-            @dragend="onDragEnd"
-          >
-            <span class="truncate text-xs">{{ folder.name }}</span>
-            <span class="shrink-0 text-[10px] text-muted-foreground">{{ folderCount(folder.id) }}</span>
-          </button>
+        <div class="absolute top-3 right-3 z-10">
           <MenuUI
             width="w-40"
             class="opacity-0 group-hover:opacity-100 data-[open]:opacity-100"
-            :trigger-class="KEBAB_TRIGGER"
+            :trigger-class="KEBAB_ON_TILE"
           >
             <template #default="{ close }">
               <button type="button" :class="MENU_ITEM" @click="(startRename(folder), close())">
@@ -197,12 +162,27 @@ watch(
               </button>
             </template>
           </MenuUI>
-        </template>
+        </div>
+        <div
+          role="button"
+          tabindex="0"
+          draggable="true"
+          class="flex aspect-square w-full cursor-pointer items-center justify-center overflow-hidden rounded-lg bg-muted/60 outline-none"
+          @click="emit('open', folder)"
+          @keydown.enter="emit('open', folder)"
+          @dragstart="onFolderDragStart($event, folder)"
+          @dragend="onDragEnd"
+        >
+          <FolderIcon class="size-8 text-muted-foreground" />
+        </div>
+        <div class="flex flex-col px-0.5">
+          <span class="truncate text-xs text-foreground">{{ folder.name }}</span>
+          <span class="text-[10px] text-muted-foreground">
+            {{ folderCount(folder.id) }} item{{ folderCount(folder.id) === 1 ? '' : 's' }}
+          </span>
+        </div>
       </div>
-    </div>
 
-    <!-- items -->
-    <div class="grid grid-cols-[repeat(auto-fill,minmax(9.5rem,1fr))] gap-3" @click.self="emit('bgclick')">
       <div
         v-for="asset in assets"
         :key="asset.id"
@@ -239,7 +219,7 @@ watch(
             <p class="px-2 py-1 text-[9px] font-medium tracking-wide text-muted-foreground uppercase">
               Move to
             </p>
-            <div class="flex max-h-48 flex-col overflow-y-auto">
+            <div class="custom-scrollbar flex max-h-48 flex-col overflow-y-auto">
               <button type="button" :class="MENU_ITEM" @click="(emit('moveAsset', asset.id, null), close())">
                 <FolderInput class="size-3.5" /> Library (root)
               </button>
@@ -288,15 +268,7 @@ watch(
           <component :is="KIND_ICONS[asset.kind] ?? FileText" v-else class="size-8 text-muted-foreground" />
         </div>
         <div class="flex flex-col px-0.5">
-          <InputUI
-            v-if="renamingAssetId === asset.id"
-            v-model="renameText"
-            autofocus
-            @keydown.enter="commitRename"
-            @keydown.esc.stop.prevent="cancelRename"
-            @blur="commitRename"
-          />
-          <span v-else class="truncate text-xs text-foreground">{{ asset.name }}</span>
+          <span class="truncate text-xs text-foreground">{{ asset.name }}</span>
           <span class="text-[10px] text-muted-foreground">{{ formatBytes(asset.size) }}</span>
         </div>
       </div>
@@ -313,17 +285,7 @@ watch(
     >
       <span class="w-4 shrink-0" />
       <FolderIcon class="size-4 shrink-0 text-muted-foreground" />
-      <InputUI
-        v-if="renamingFolderId === folder.id"
-        v-model="renameText"
-        autofocus
-        class="flex-1"
-        @keydown.enter="commitRename"
-        @keydown.esc.stop.prevent="cancelRename"
-        @blur="commitRename"
-      />
       <button
-        v-else
         type="button"
         draggable="true"
         class="min-w-0 flex-1 truncate text-left text-xs font-medium outline-none"
@@ -341,7 +303,6 @@ watch(
       </span>
       <span class="w-16 shrink-0" />
       <MenuUI
-        v-if="renamingFolderId !== folder.id"
         width="w-40"
         class="shrink-0 opacity-0 group-hover:opacity-100 data-[open]:opacity-100"
         :trigger-class="KEBAB_TRIGGER"
@@ -356,7 +317,6 @@ watch(
           </button>
         </template>
       </MenuUI>
-      <span v-else class="size-6 shrink-0" />
     </div>
 
     <div
@@ -386,17 +346,7 @@ watch(
           <img v-if="previewSrc(asset)" :src="previewSrc(asset)!" :alt="asset.name" class="size-full object-cover" />
           <component :is="KIND_ICONS[asset.kind] ?? FileText" v-else class="size-4 text-muted-foreground" />
         </span>
-        <InputUI
-          v-if="renamingAssetId === asset.id"
-          v-model="renameText"
-          autofocus
-          class="min-w-0 flex-1"
-          @click.stop
-          @keydown.enter="commitRename"
-          @keydown.esc.stop.prevent="cancelRename"
-          @blur="commitRename"
-        />
-        <span v-else class="min-w-0 flex-1 truncate text-xs">{{ asset.name }}</span>
+        <span class="min-w-0 flex-1 truncate text-xs">{{ asset.name }}</span>
       </button>
       <span class="w-16 shrink-0 text-[10px] text-muted-foreground capitalize">{{ asset.kind }}</span>
       <span class="w-16 shrink-0 text-right text-[10px] text-muted-foreground">{{ formatBytes(asset.size) }}</span>
@@ -416,7 +366,7 @@ watch(
           <p class="px-2 py-1 text-[9px] font-medium tracking-wide text-muted-foreground uppercase">
             Move to
           </p>
-          <div class="flex max-h-48 flex-col overflow-y-auto">
+          <div class="custom-scrollbar flex max-h-48 flex-col overflow-y-auto">
             <button type="button" :class="MENU_ITEM" @click="(emit('moveAsset', asset.id, null), close())">
               <FolderInput class="size-3.5" /> Library (root)
             </button>

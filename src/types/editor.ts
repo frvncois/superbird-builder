@@ -15,8 +15,15 @@ export interface Interaction {
 export type InteractionAction = 'toggle' | 'on' | 'off'
 
 /** hover / scrolled / change are symmetric (they drive both directions and
- * ignore `action`); click is discrete and honours `action`; appear fires once */
-export type InteractionTrigger = 'hover' | 'click' | 'appear' | 'scrolled' | 'change'
+ * ignore `action`); click is discrete and honours `action`; appear fires once
+ * on scroll into view, and load does the same without waiting for the viewport */
+export type InteractionTrigger =
+  | 'hover'
+  | 'click'
+  | 'appear'
+  | 'scrolled'
+  | 'change'
+  | 'load'
 
 export interface InteractionBinding {
   id: string
@@ -103,6 +110,31 @@ export interface AnimationStep {
   yoyo?: boolean
 }
 
+/**
+ * ONE effect as the author sees it: a name, and up to one half of each engine.
+ *
+ * The two engines cannot be merged — a class change switches `display`, which no
+ * tween can touch, and a tween writes inline styles, which no class can express
+ * — but an author wanting "slide the sheet in" should not have to know that, nor
+ * name two things and bind both on every trigger. So an Effect NAMES the pair,
+ * and the halves stay where they are: `project.interactions` and
+ * `project.animations`, bound exactly as before.
+ *
+ * Nothing downstream learns about it. The exporter, both published runtimes, the
+ * merge and the MCP tools all still see two ordinary bindings, which is also why
+ * an agent that writes the two halves separately gets the folded row for free:
+ * a pair is RECOGNISED (same node, same trigger, same target, the two halves of
+ * one Effect), never stored as a third kind of binding.
+ */
+export interface Effect {
+  id: string
+  name: string
+  /** the class-change half, an id into project.interactions */
+  interactionId?: string
+  /** the timeline half, an id into project.animations */
+  animationId?: string
+}
+
 /** a reusable timeline in the project library — the "what happens",
  * shared across elements exactly like Interaction */
 export interface Animation {
@@ -116,7 +148,9 @@ export interface AnimationBinding {
   id: string
   /** the saved Animation (project.animations) this plays */
   animationId: string
-  trigger: 'load' | 'appear' | 'scrub' | 'hover' | 'click'
+  /** `scrolled` and `change` are symmetric like their class counterparts: the
+   * timeline plays forward while the condition holds and rewinds when it stops */
+  trigger: 'load' | 'appear' | 'scrub' | 'hover' | 'click' | 'scrolled' | 'change'
   /** node the animation moves; null = the trigger element itself */
   targetId: string | null
   /** click only: force the play forward ('on') or backward ('off') instead of
@@ -126,6 +160,9 @@ export interface AnimationBinding {
    * InteractionBinding.action does for a class change.
    * `undefined` = 'toggle'. */
   action?: 'on' | 'off'
+  /** 'scrolled' only: px of page scroll past which the timeline is played
+   * forward, and below which it rewinds (default 50) */
+  scrollAt?: number
   /** appear only. Omitted = inherit settings.motion.appearMode (default 'once'). */
   appearMode?: 'once' | 'replay' | 'reverse'
   /** appear only: the viewport fraction the element's top must cross before
@@ -621,6 +658,10 @@ export interface Project {
   interactions: Interaction[]
   /** shared animation library — played by elements by id */
   animations: Animation[]
+  /** names a class change and a timeline as ONE effect (see Effect). Optional
+   * and absent until something needs it, so an untouched project stays
+   * byte-identical for the merge signature. */
+  effects?: Effect[]
   /** shared across all pages — they map to global CSS media queries */
   breakpoints: Breakpoint[]
   comments: Comment[]

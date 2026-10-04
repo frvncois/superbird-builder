@@ -5,18 +5,13 @@
 import GroupPopover from '@/components/popover/GroupPopover.vue'
 import StyleEditor from '@/components/editor/style/StyleEditor.vue'
 import InteractionsEditor from '@/components/editor/interactions/InteractionsEditor.vue'
-import InteractionDetail from '@/components/editor/interactions/InteractionDetail.vue'
-import AnimationDetail from '@/components/editor/interactions/AnimationDetail.vue'
-import EffectChooser from '@/components/editor/interactions/EffectChooser.vue'
 import BranchesEditor from '@/components/editor/drafts/BranchesEditor.vue'
 import DataEditor from '@/components/editor/content/DataEditor.vue'
 import { usePanel } from '@/composables/usePanel'
 import { useElement } from '@/composables/useElement'
-import { useEffectDetail } from '@/composables/useEffectDetail'
 
 const { activePanelId } = usePanel()
 const { selectedElement, isMultiSelect } = useElement()
-const { detail, chooser } = useEffectDetail()
 </script>
 
 <template>
@@ -34,26 +29,10 @@ const { detail, chooser } = useEffectDetail()
     </GroupPopover>
   </template>
 
-  <template v-else-if="activePanelId === 'interactions'">
-    <!-- creating or editing an effect takes over the whole panel: it is a
-         project-level thing, and showing it among per-element cards made it
-         read as per-element -->
-    <template v-if="detail">
-      <InteractionDetail
-        v-if="detail.kind === 'interaction'"
-        :key="detail.id"
-        :id="detail.id"
-        :created="detail.created"
-      />
-      <AnimationDetail v-else :key="detail.id" :id="detail.id" :created="detail.created" />
-    </template>
-    <!-- the Add chooser holds the libraries and presets: project-level, so it
-         renders with no selection too; only Apply needs one -->
-    <EffectChooser v-else-if="chooser" />
-    <template v-else>
-      <InteractionsEditor />
-    </template>
-  </template>
+  <!-- the panel only ever shows what THIS element does. What an effect itself
+       does is project-level and shared, so it is edited in the bottom drawer
+       (EffectsDrawer) rather than taking this panel over. -->
+  <InteractionsEditor v-else-if="activePanelId === 'interactions'" />
 
   <BranchesEditor v-else-if="activePanelId === 'branches'" />
 

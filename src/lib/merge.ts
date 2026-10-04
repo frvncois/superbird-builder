@@ -3,6 +3,7 @@ import type {
   Breakpoint,
   Collection,
   ComponentDef,
+  Effect,
   Interaction,
   Page,
   Project,
@@ -163,12 +164,23 @@ export function computeMerge(base: Project, mine: Project, theirs: Project): Mer
     'animation:',
     (a) => `Animation ${a.name}`,
   )
+  // the names pairing a class change with a timeline (see useEffects). An
+  // id-keyed list like the two libraries it points at, so it follows the same
+  // rule — spreading `mine` alone would silently drop the other side's.
+  const effects = mergeItemList(
+    base.effects ?? [],
+    mine.effects ?? [],
+    theirs.effects ?? [],
+    'effect:',
+    (e) => `Effect ${e.name}`,
+  )
   const conflicts: MergeConflict[] = [
     ...pages.conflicts,
     ...components.conflicts,
     ...collections.conflicts,
     ...interactions.conflicts,
     ...animations.conflicts,
+    ...effects.conflicts,
   ]
 
   let mergedBreakpoints = mine.breakpoints
@@ -228,6 +240,9 @@ export function computeMerge(base: Project, mine: Project, theirs: Project): Mer
     collections: collections.merged,
     interactions: interactions.merged,
     animations: animations.merged,
+    // omitted when neither side has any, so an untouched project stays
+    // byte-identical for the next merge's signatures
+    ...(effects.merged.length ? { effects: effects.merged } : {}),
     breakpoints: mergedBreakpoints,
     comments: mine.comments,
     locales: mergedLocales.locales,
@@ -293,6 +308,15 @@ export function applyResolutions(
       )
       continue
     }
+    if (conflict.key.startsWith('effect:')) {
+      merged.effects ??= []
+      applyToList(
+        merged.effects,
+        conflict.key.slice('effect:'.length),
+        conflict.theirs as Effect | null,
+      )
+      continue
+    }
     applyToList(merged.pages, conflict.key.slice('page:'.length), conflict.theirs as Page | null)
   }
   return merged
@@ -306,6 +330,7 @@ export interface ChangeSummary {
   collections: number
   interactions: number
   animations: number
+  effects: number
   breakpoints: boolean
   locales: boolean
   settings: boolean
@@ -332,6 +357,9 @@ export function summarizeChanges(base: Project, current: Project): ChangeSummary
     collections: countListChanges(base.collections, current.collections),
     interactions: countListChanges(base.interactions ?? [], current.interactions ?? []),
     animations: countListChanges(base.animations ?? [], current.animations ?? []),
+    // a draft whose only change is naming a pair would otherwise read as having
+    // none, and never offer to merge
+    effects: countListChanges(base.effects ?? [], current.effects ?? []),
     breakpoints: sig(current.breakpoints) !== sig(base.breakpoints),
     locales: sig(pack(current)) !== sig(pack(base)),
     settings: sig(current.settings) !== sig(base.settings),
@@ -340,7 +368,7 @@ export function summarizeChanges(base: Project, current: Project): ChangeSummary
 
 export function hasChanges(s: ChangeSummary): boolean {
   return (
-    s.pages + s.components + s.collections + s.interactions + s.animations > 0 ||
+    s.pages + s.components + s.collections + s.interactions + s.animations + s.effects > 0 ||
     s.breakpoints ||
     s.locales ||
     s.settings
@@ -356,6 +384,7 @@ export function changeSummaryLabel(s: ChangeSummary): string {
     count(s.collections, 'collection'),
     count(s.interactions, 'interaction'),
     count(s.animations, 'animation'),
+    count(s.effects, 'effect'),
     s.breakpoints ? 'breakpoints' : null,
     s.locales ? 'locales' : null,
     s.settings ? 'settings' : null,

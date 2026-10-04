@@ -30,11 +30,27 @@ const openDismissals = new Map<string, Set<string>>()
  * targets), for outside-click hit-testing. Populated by the renderers. */
 const dismissEls = new Map<string, Set<HTMLElement>>()
 
-/** binding waiting for a canvas click to choose its target element.
- * Holds the binding object itself (not an id) so it resolves even when
- * the binding lives on a component master, which isn't in the page tree.
- * Shared by interaction AND animation bindings — both carry a targetId. */
-const pickingFor = ref<InteractionBinding | AnimationBinding | null>(null)
+/** binding(s) waiting for a canvas click to choose a target element.
+ * Holds the binding objects themselves (not ids) so they resolve even when the
+ * binding lives on a component master, which isn't in the page tree. Shared by
+ * interaction AND animation bindings — both carry a targetId — and an ARRAY
+ * when one row drives both halves of a mixed effect, which must land on the
+ * same element or the class change and the timeline would part company. */
+type Pickable = InteractionBinding | AnimationBinding
+const pickingFor = ref<Pickable | Pickable[] | null>(null)
+
+/** the binding objects a pending pick would write to */
+function pendingPicks(): Pickable[] {
+  const pending = pickingFor.value
+  if (!pending) return []
+  return Array.isArray(pending) ? pending : [pending]
+}
+
+/** drop a pending pick that names this binding — it would otherwise land its
+ *  targetId on a binding that no longer exists */
+export function cancelPickFor(bindingId: string) {
+  if (pendingPicks().some((b) => b.id === bindingId)) pickingFor.value = null
+}
 
 // These derive from the active page and are read once per rendered node
 // (classesFor). They live at MODULE scope — one shared computed each —
@@ -108,6 +124,62 @@ const effectOptions = computed(() => {
       for (const mode of binding.closeOn ?? []) entry.closeOn.add(mode)
       if (binding.group && !entry.group) entry.group = binding.group
       index.set(targetId, entry)
+    }
+  }
+  walkNodes(activePage.value.elements, collect)
+  for (const component of project.value.components ?? []) walkNodes([component.root], collect)
+  return index
+})
+
+/** a binding paired with the node that declares it */
+export type Driver = { binding: InteractionBinding; ownerId: string }
+/** the same, for the tween engine */
+export type AnimDriver = { binding: AnimationBinding; ownerId: string }
+
+/**
+ * Is this effect a STATE worth naming — one a discrete gesture drives, or one
+ * some OTHER element drives?
+ *
+ * Answers for BOTH engines — a class change and a timeline are both keyed per
+ * (effect, target) on a click, so both can be driven by several triggers.
+ *
+ * A symmetric effect on itself (a hover lift, a scrolled-past header) has no
+ * state to manage: nothing opens it, nothing dismisses it, and no second
+ * trigger would ever join it. The panel's States block and the action picker's
+ * list of states to join MUST agree on this, or the picker would offer to
+ * "Open" something the panel never calls a state — and a page of forty hover
+ * cards would bury the one modal that matters.
+ */
+export function isDrivenState(
+  targetId: string,
+  drivers: { binding: { trigger: string }; ownerId: string }[],
+): boolean {
+  return drivers.some((d) => d.binding.trigger === 'click' || d.ownerId !== targetId)
+}
+
+/**
+ * Target node id → every interaction binding whose effect LANDS on it, paired
+ * with the node that declares it. The "Driven by" half of the panel's States
+ * block: which elements can put this one into a state, and therefore where the
+ * one canonical `closeOn` / `group` / `once` is written.
+ *
+ * Built over the active page AND every component master, exactly like
+ * `effectOptions` — a binding on a master is not in the page tree but does
+ * render. It is computed LAZILY and read only by the panel (one element at a
+ * time), never per rendered element: the renderers use `targetIndex` and
+ * `masterInteractionsTargeting`, which are indexed for that.
+ *
+ * Never cached on the target node: an agent's write runs `clearBindingsTo`, so
+ * a trigger can disappear between reads.
+ */
+const driversIndex = computed(() => {
+  const index = new Map<string, Driver[]>()
+  const collect = (owner: ElementNode) => {
+    for (const binding of owner.interactions ?? []) {
+      const targetId = binding.targetId ?? owner.id
+      const list = index.get(targetId) ?? []
+      list.push({ binding, ownerId: owner.id })
+      index.set(targetId, list)
     }
   }
   walkNodes(activePage.value.elements, collect)
@@ -370,9 +442,14 @@ export function useInteraction() {
     for (const key of stale) closeDismissable(key)
   }
 
+  /** every binding whose effect lands on this node (see driversIndex) */
+  function driversFor(nodeId: string): Driver[] {
+    return driversIndex.value.get(nodeId) ?? []
+  }
+
   /** assign the picked canvas element as the pending binding's target */
   function pickTarget(nodeId: string) {
-    if (pickingFor.value) pickingFor.value.targetId = nodeId
+    for (const binding of pendingPicks()) binding.targetId = nodeId
     pickingFor.value = null
   }
 
@@ -449,7 +526,7 @@ export function useInteraction() {
     if (!node.interactions) return
     const binding = node.interactions.find((b) => b.id === bindingId)
     if (binding) clearStateFor(binding.interactionId, binding.targetId ?? node.id)
-    if (pickingFor.value?.id === bindingId) pickingFor.value = null
+    cancelPickFor(bindingId)
     node.interactions = node.interactions.filter((b) => b.id !== bindingId)
   }
 
@@ -467,6 +544,9 @@ export function useInteraction() {
     registerInteractionEl,
     unregisterInteractionEl,
     clearStateFor,
+    pendingPicks,
+    driversIndex,
+    driversFor,
     pickTarget,
     library,
     animationFor,

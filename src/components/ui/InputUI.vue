@@ -40,7 +40,9 @@ defineExpose({ focus: () => el.value?.focus() })
 </script>
 
 <template>
-  <div v-if="isPassword" class="relative w-full">
+  <!-- flex, not block: an inline input in a block wrapper gains descender
+       space below it, which pulled the eye button off the input's centre -->
+  <div v-if="isPassword" class="relative flex w-full">
     <input
       ref="el"
       v-model="model"

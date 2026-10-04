@@ -7,6 +7,9 @@ import {
   EASINGS as EASINGS_DATA,
   EASING_KEYS,
   animationBindingKey,
+  animationPlayKey as animationPlayKeyRaw,
+  animationStateKey as animationStateKeyRaw,
+  ANIMATION_ACTIONS as ANIMATION_ACTIONS_DATA,
   compileAnimation as compileAnimationRaw,
   sampleAnimation as sampleAnimationRaw,
   sampleValues as sampleValuesRaw,
@@ -101,6 +104,21 @@ export type ValidationResult = { ok: true } | { ok: false; error: string }
 export const MOTION_PROPS = MOTION_PROPS_DATA as Record<AnimProp, MotionPropDef>
 export const EASINGS: Record<string, (t: number) => number> = EASINGS_DATA
 export const EASING_NAMES: string[] = EASING_KEYS
+
+export const animationStateKey = animationStateKeyRaw as (
+  animationId: string,
+  targetId: string,
+  scope?: string,
+) => string
+/** the play key for a binding — click plays are shared per (animation, target) */
+export const animationPlayKey = animationPlayKeyRaw as (
+  binding: AnimationBinding,
+  targetId: string,
+  scope?: string,
+) => string
+/** the stored values; the UI's verbs for them live in lib/effectTriggers.ts,
+ *  shared with the class engine so one gesture reads one way */
+export const ANIMATION_ACTIONS: string[] = ANIMATION_ACTIONS_DATA
 
 export const compileAnimation = compileAnimationRaw as (a: Animation) => CompiledAnimation
 export const sampleAnimation = sampleAnimationRaw as (

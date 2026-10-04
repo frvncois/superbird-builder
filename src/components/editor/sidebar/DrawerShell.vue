@@ -32,7 +32,7 @@ defineExpose({ el })
   <div ref="el" class="flex h-full flex-col bg-background">
     <div class="relative min-h-0 flex-1 overflow-hidden">
       <Transition name="drawer-push">
-        <div v-if="detail" class="pane pane-settings overflow-y-auto">
+        <div v-if="detail" class="pane pane-settings custom-scrollbar overflow-y-auto">
           <slot name="detail" />
         </div>
 

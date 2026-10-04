@@ -14,7 +14,7 @@ import {
   type MotionValues,
   type StaggerSplit,
 } from '@/lib/motion'
-import { animationBindingKey } from '@/lib/motion'
+import { animationPlayKey } from '@/lib/motion'
 import type { Animation, AnimationBinding } from '@/types/editor'
 
 // Editor-side playback: which animations are running, at what time, on which
@@ -164,7 +164,7 @@ export function useMotion() {
     targetId: string,
     opts: { scope?: string; reverse?: boolean; restart?: boolean } = {},
   ) {
-    const key = animationBindingKey(binding.id, opts.scope)
+    const key = animationPlayKey(binding, targetId, opts.scope)
     const { compiled, split } = compiledFor(animation)
     const existing = plays.value.get(key)
 
@@ -200,9 +200,11 @@ export function useMotion() {
     ensureLoop()
   }
 
-  /** hover-out / click-off: run the timeline backwards from where it is */
-  function reverse(binding: AnimationBinding, scope?: string) {
-    const key = animationBindingKey(binding.id, scope)
+  /** hover-out / click-off: run the timeline backwards from where it is.
+   *  `targetId` is the resolved target, because a click play is keyed by
+   *  (animation, target) so a close button can rewind what an open button ran. */
+  function reverse(binding: AnimationBinding, targetId: string, scope?: string) {
+    const key = animationPlayKey(binding, targetId, scope)
     const existing = plays.value.get(key)
     if (!existing) return
     // an infinite loop that ran for a minute must not rewind for a minute
@@ -213,24 +215,38 @@ export function useMotion() {
     ensureLoop()
   }
 
-  function stop(binding: AnimationBinding, scope?: string) {
-    plays.value.delete(animationBindingKey(binding.id, scope))
+  /** `targetId` is the RESOLVED target. A click caller must pass it, because a
+   *  click play is keyed by (animation, target); every other trigger ignores it,
+   *  which is why the page-transition pseudo-bindings (no `trigger` at all) can
+   *  call this with none. */
+  function stop(binding: AnimationBinding, targetId = binding.targetId ?? '', scope?: string) {
+    plays.value.delete(animationPlayKey(binding, targetId, scope))
     plays.value = new Map(plays.value)
     tick.value++
   }
 
-  const isPlaying = (binding: AnimationBinding, scope?: string) =>
-    plays.value.has(animationBindingKey(binding.id, scope))
+  const isPlaying = (binding: AnimationBinding, targetId: string, scope?: string) =>
+    plays.value.has(animationPlayKey(binding, targetId, scope))
 
-  /** click toggles direction: play if idle/reversing, reverse if playing forward */
-  function toggle(
+  /**
+   * What a click does to its play. `action` aims it: 'on' always runs it
+   * forward, 'off' always rewinds, and the default toggles — the same three
+   * verbs a class interaction's `action` offers, and the reason an open button
+   * and a close button can drive one timeline (they share a play key).
+   *
+   * The published runtime answers a click identically (src/motion/runtime.ts),
+   * so the canvas and the live site cannot drift.
+   */
+  function clickAction(
     binding: AnimationBinding,
     animation: Animation,
     targetId: string,
     scope?: string,
   ) {
-    const existing = plays.value.get(animationBindingKey(binding.id, scope))
-    if (existing && existing.direction === 1) reverse(binding, scope)
+    const existing = plays.value.get(animationPlayKey(binding, targetId, scope))
+    if (binding.action === 'on') play(binding, animation, targetId, { scope })
+    else if (binding.action === 'off') reverse(binding, targetId, scope)
+    else if (existing && existing.direction === 1) reverse(binding, targetId, scope)
     else play(binding, animation, targetId, { scope })
   }
 
@@ -242,7 +258,7 @@ export function useMotion() {
     progress: number,
     scope?: string,
   ) {
-    const key = animationBindingKey(binding.id, scope)
+    const key = animationPlayKey(binding, targetId, scope)
     const { compiled, split } = compiledFor(animation)
     plays.value.set(key, {
       targetId,
@@ -328,7 +344,7 @@ export function useMotion() {
 
   /** ▶ in the panel: play an animation on an element without a binding */
   function preview(animation: Animation, targetId: string, scope?: string) {
-    const key = animationBindingKey(`preview:${animation.id}`, scope)
+    const key = scope ? `preview:${animation.id}@${scope}` : `preview:${animation.id}`
     const { compiled, split } = compiledFor(animation)
     plays.value.set(key, {
       targetId,
@@ -364,7 +380,7 @@ export function useMotion() {
     reverse,
     stop,
     stopAll,
-    toggle,
+    clickAction,
     scrubTo,
     scrubProgressFor,
     styleForNode,

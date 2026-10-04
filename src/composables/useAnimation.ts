@@ -1,7 +1,7 @@
 import { computed } from 'vue'
 import { usePage } from './usePage'
 import { useProject } from './useProject'
-import { useInteraction } from './useInteraction'
+import { cancelPickFor, useInteraction } from './useInteraction'
 import { walkNodes } from '@/lib/tree'
 import { masterAnimationsTargeting, type OwnedBinding } from './useMasterBindings'
 import { validateAnimation } from '@/lib/motion'
@@ -47,6 +47,31 @@ const animTargetIndex = computed(() => {
     list.push({ binding, ownerId: owner.id })
     index.set(key, list)
   }
+  return index
+})
+
+/**
+ * Target node id → every animation binding whose timeline MOVES it, paired with
+ * the node that declares it. The tween half of the panel's States block: a
+ * click play is shared per (animation, target), so an open button and a close
+ * button both show up here as drivers of one state.
+ *
+ * Built over the active page AND every component master, exactly like
+ * useInteraction's driversIndex, and read only by the panel — never per
+ * rendered element, which uses animTargetIndex / masterAnimationsTargeting.
+ */
+const animDriversIndex = computed(() => {
+  const index = new Map<string, OwnedBinding<AnimationBinding>[]>()
+  const collect = (owner: ElementNode) => {
+    for (const binding of owner.animations ?? []) {
+      const targetId = binding.targetId ?? owner.id
+      const list = index.get(targetId) ?? []
+      list.push({ binding, ownerId: owner.id })
+      index.set(targetId, list)
+    }
+  }
+  walkNodes(activePage.value.elements, collect)
+  for (const component of project.value.components ?? []) walkNodes([component.root], collect)
   return index
 })
 
@@ -162,7 +187,7 @@ export function useAnimation() {
   function removeBinding(node: ElementNode, bindingId: string) {
     // a pick in flight for this binding would land its targetId on a binding
     // that no longer exists (useInteraction.removeBinding does the same)
-    if (pickingFor.value?.id === bindingId) pickingFor.value = null
+    cancelPickFor(bindingId)
     const kept = (node.animations ?? []).filter((b) => b.id !== bindingId)
     if (kept.length) node.animations = kept
     else delete node.animations
@@ -187,10 +212,17 @@ export function useAnimation() {
     return result.ok ? null : result.error
   }
 
+  /** every binding whose timeline lands on this node (see animDriversIndex) */
+  function animDriversFor(nodeId: string): OwnedBinding<AnimationBinding>[] {
+    return animDriversIndex.value.get(nodeId) ?? []
+  }
+
   return {
     library,
     animationFor,
     animTargetIndex,
+    animDriversIndex,
+    animDriversFor,
     createAnimation,
     createFromPreset,
     updateAnimation,

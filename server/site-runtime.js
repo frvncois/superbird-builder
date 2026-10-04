@@ -304,6 +304,10 @@
     } else if (i.t === 'appear') {
       appearMetas.push(i)
       appear.observe(el)
+    } else if (i.t === 'load') {
+      // on as soon as the page renders, and never off — appear without the
+      // wait, for a state the page simply starts in
+      set(i.s, true)
     } else if (i.t === 'scrolled') {
       scrolledMetas.push(i)
     } else if (i.t === 'change') {

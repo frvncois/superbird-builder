@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { Check, Download, Link2, RefreshCw, Trash2 } from 'lucide-vue-next'
+import { Check, Copy, Download, RefreshCw, Trash2 } from 'lucide-vue-next'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import InputUI from '@/components/ui/InputUI.vue'
 import TextareaUI from '@/components/ui/TextareaUI.vue'
@@ -181,12 +181,24 @@ function copyUrl() {
 
 <template>
   <div class="flex h-full min-h-0 flex-col">
-    <div class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
+    <div class="custom-scrollbar flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4" style="scrollbar-gutter: stable">
     <!-- preview: checkerboard so transparent images read as transparent -->
     <div
-      class="flex h-56 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-muted/60"
+      class="group relative flex h-56 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-muted/60"
       :class="asset.kind === 'image' && 'checkerboard'"
     >
+      <!-- replace in place: same id/URL, new bytes — on the preview, where
+           the thing being replaced is -->
+      <ButtonUI
+        variant="outline"
+        size="xs"
+        :icon="RefreshCw"
+        :disabled="busy"
+        class="absolute top-2 right-2 z-10 bg-background/90 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+        @click="replaceInput?.click()"
+      >
+        {{ busy ? 'Replacing…' : 'Replace' }}
+      </ButtonUI>
       <img
         v-if="asset.kind === 'image'"
         :src="previewSrc!"
@@ -222,9 +234,24 @@ function copyUrl() {
         <span class="text-xs text-muted-foreground">Dimensions</span>
         <span class="text-xs">{{ asset.width }} × {{ asset.height }}</span>
       </div>
-      <div class="flex justify-between px-3 py-2">
+      <div class="flex justify-between border-b border-input px-3 py-2">
         <span class="text-xs text-muted-foreground">Uploaded</span>
         <span class="text-xs">{{ uploadedOn }}</span>
+      </div>
+      <div class="flex items-center gap-2 px-3 py-2">
+        <span class="shrink-0 text-xs text-muted-foreground">URL</span>
+        <span class="min-w-0 flex-1 truncate text-right font-mono text-[10px]">
+          {{ mediaUrl(asset) }}
+        </span>
+        <ButtonUI
+          variant="icon"
+          size="xs"
+          :icon="copied ? Check : Copy"
+          :tooltip="copied ? 'Copied' : 'Copy URL'"
+          class="w-5 shrink-0 text-muted-foreground"
+          :class="copied && '!text-success'"
+          @click="copyUrl"
+        />
       </div>
     </div>
 
@@ -254,16 +281,6 @@ function copyUrl() {
     <!-- actions stay pinned: the preview must never push them out of reach -->
     <div class="flex shrink-0 flex-col gap-1.5 border-t border-input p-4">
       <div class="grid grid-cols-2 gap-1.5">
-        <ButtonUI
-          variant="outline"
-          size="sm"
-          :icon="RefreshCw"
-          :disabled="busy"
-          class="justify-start"
-          @click="replaceInput?.click()"
-        >
-          Replace
-        </ButtonUI>
         <a :href="`${mediaUrl(asset)}?download=1`" :download="asset.filename" class="contents">
           <ButtonUI variant="outline" size="sm" :icon="Download" class="w-full justify-start">
             Download
@@ -272,25 +289,13 @@ function copyUrl() {
         <ButtonUI
           variant="outline"
           size="sm"
-          :icon="copied ? Check : Link2"
-          class="justify-start"
-          @click="copyUrl"
-        >
-          {{ copied ? 'Copied' : 'Copy URL' }}
-        </ButtonUI>
-        <ButtonUI
-          variant="outline"
-          size="sm"
           :icon="Trash2"
-          class="justify-start text-danger"
+          class="justify-start !border-danger/40 text-danger hover:!bg-danger/10"
           @click="emit('delete')"
         >
           Delete
         </ButtonUI>
       </div>
-      <p class="px-0.5 text-[10px] text-muted-foreground">
-        Replacing swaps the file in place — every usage keeps working.
-      </p>
       <input
         ref="replaceInput"
         type="file"

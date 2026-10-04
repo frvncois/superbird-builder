@@ -36,9 +36,18 @@ import {
 import { createLerpScroller, wheelDeltaPx, insideNestedScroller } from '@/lib/shared/scroll.js'
 
 interface BindingMeta {
-  /** binding key (unique per instance/repeat) */
+  /** binding key (unique per instance/repeat) — what `data-atgt` lists and
+   *  what the breakpoint gate reads */
   k: string
-  t: 'load' | 'appear' | 'scrub' | 'hover' | 'click'
+  /** CLICK only: the play key, one per (animation, target), so an open button
+   *  and a close button drive ONE timeline. Absent on every other trigger,
+   *  which has no state to share. */
+  s?: string
+  /** click only: 'on' always runs it forward, 'off' always rewinds it */
+  ac?: 'on' | 'off'
+  t: 'load' | 'appear' | 'scrub' | 'hover' | 'click' | 'scrolled' | 'change'
+  /** 'scrolled' only: the px threshold (default 50) */
+  at2?: number
   /** animation id */
   a: string
   /** options: appearMode / appearAt / scrub range (+ optional smoothing) */
@@ -228,6 +237,9 @@ if (Object.keys(lib).length || siteFx) {
   }
 
   const playKey = (key: string, index: number) => `${key}:${index}`
+  /** the key a binding's play is held under — shared per (animation, target)
+   *  for a click, per binding for everything else */
+  const stateOf = (meta: BindingMeta) => meta.s || meta.k
 
   /** `settle: true` jumps straight to the end state without animating —
    * what `still` does, but for one binding. Used when rAF will not run. */
@@ -239,7 +251,7 @@ if (Object.keys(lib).length || siteFx) {
     const jump = still || settle
     const els = targets.get(meta.k) || []
     els.forEach((el, index) => {
-      const key = playKey(meta.k, index)
+      const key = playKey(stateOf(meta), index)
       const existing = plays.get(key)
       const total = playTotal(el, c, split)
       const play: Play = {
@@ -269,7 +281,7 @@ if (Object.keys(lib).length || siteFx) {
   function reverseBinding(meta: BindingMeta) {
     const els = targets.get(meta.k) || []
     els.forEach((_el, index) => {
-      const play = plays.get(playKey(meta.k, index))
+      const play = plays.get(playKey(stateOf(meta), index))
       if (!play) return
       // an infinite loop that ran for minutes must not rewind for minutes
       play.time = foldReverseTime(play.compiled, play.time)
@@ -433,6 +445,9 @@ if (Object.keys(lib).length || siteFx) {
     }
   }
 
+  /** 'scrolled' bindings, driven by one shared listener below */
+  const scrolled: BindingMeta[] = []
+
   document.querySelectorAll<HTMLElement>('[data-anim]').forEach((el) => {
     const list = JSON.parse(el.getAttribute('data-anim') || '[]') as BindingMeta[]
     for (const meta of list) {
@@ -448,18 +463,60 @@ if (Object.keys(lib).length || siteFx) {
         observerFor((meta.o && meta.o.at) || 0).observe(el)
       } else if (meta.t === 'scrub') {
         scrubs.push({ meta, el })
+      } else if (meta.t === 'scrolled') {
+        // symmetric, like its class counterpart: forward past the threshold,
+        // rewound below it. The tween equivalent of a shrinking header.
+        scrolled.push(meta)
+      } else if (meta.t === 'change') {
+        // a control's checked / non-empty state drives the timeline, so a
+        // conditional field can slide in instead of merely appearing
+        const onChange = (event: Event) => {
+          const input = event.target as HTMLInputElement | null
+          if (!input) return
+          const on =
+            input.type === 'checkbox' || input.type === 'radio' ? input.checked : !!input.value
+          if (on) start(meta)
+          else reverseBinding(meta)
+        }
+        el.addEventListener('change', onChange)
+        el.addEventListener('input', onChange)
       } else if (meta.t === 'hover') {
         el.addEventListener('mouseenter', () => start(meta))
         el.addEventListener('mouseleave', () => reverseBinding(meta))
       } else if (meta.t === 'click') {
+        // `ac` aims the click: 'on' always runs it forward, 'off' always
+        // rewinds, and the default toggles. With the play keyed per
+        // (animation, target), that is what makes an open button, a close
+        // button and an overlay drive ONE timeline. useMotion.clickAction
+        // answers a click identically, so the canvas cannot drift from here.
         el.addEventListener('click', () => {
-          const play = plays.get(playKey(meta.k, 0))
+          if (meta.ac === 'on') return start(meta)
+          if (meta.ac === 'off') return reverseBinding(meta)
+          const play = plays.get(playKey(stateOf(meta), 0))
           if (play && play.direction === 1) reverseBinding(meta)
           else start(meta)
         })
       }
     }
   })
+
+  // one listener for every `scrolled` timeline, holding each one's last state so
+  // a scroll event does not restart a play that is already where it belongs
+  if (scrolled.length) {
+    const past = new Map<BindingMeta, boolean>()
+    const onScroll = () => {
+      const y = window.pageYOffset || document.documentElement.scrollTop || 0
+      for (const meta of scrolled) {
+        const on = y > (meta.at2 || 50)
+        if (past.get(meta) === on) continue
+        past.set(meta, on)
+        if (on) start(meta)
+        else reverseBinding(meta)
+      }
+    }
+    window.addEventListener('scroll', onScroll, { passive: true })
+    onScroll()
+  }
 
   // ---------- prime first frames (no flash) ----------
   // The exporter inlines the element-level first frame, but staggered children

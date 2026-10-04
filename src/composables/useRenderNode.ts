@@ -675,7 +675,9 @@ export function useRenderNode(
   }
 
   /** a form control's 'change' trigger: on while checked / non-empty, so an
-   * "Other" radio can reveal its text field */
+   * "Other" radio can reveal its text field. Symmetric, and the tween engine
+   * answers it the same way — forward while the condition holds, rewound when
+   * it stops. */
   function fireChangeInteractions(event: Event) {
     const target = event.target as HTMLInputElement | HTMLSelectElement | null
     if (!target) return
@@ -684,6 +686,11 @@ export function useRenderNode(
         ? target.checked
         : !!target.value
     for (const binding of ofTrigger('change')) applyIn(binding, on)
+    // the tween engine answers the same condition the same way
+    for (const binding of animOf('change')) {
+      if (on) playAnim(binding)
+      else motion.reverse(binding, animTargetId(binding), scopeOfOwn(binding))
+    }
   }
 
   // fire 'appear' interactions the first time the element scrolls into view
@@ -760,6 +767,8 @@ export function useRenderNode(
     if (wantsAppear.value) observe()
     // 'load' plays as soon as the element exists
     for (const binding of animOf('load')) playAnim(binding)
+    // 'load' on a class change is on from the first frame and never off
+    for (const binding of ofTrigger('load')) applyIn(binding, true)
 
     if (el.value && involvedStateKeys.value.length) {
       registeredKeys = involvedStateKeys.value
@@ -767,10 +776,22 @@ export function useRenderNode(
     }
 
     const scrolled = ofTrigger('scrolled')
-    if (scrolled.length) {
+    const scrolledAnims = animOf('scrolled')
+    if (scrolled.length || scrolledAnims.length) {
+      // the tween engine answers `scrolled` the same way the class one does,
+      // so each play is started or rewound only when the threshold is actually
+      // crossed — a scroll event must not restart a timeline mid-flight
+      const past = new Map<string, boolean>()
       scrollListener = () => {
         const y = window.scrollY
         for (const binding of scrolled) applyIn(binding, y > (binding.scrollAt ?? DEFAULT_SCROLL_AT))
+        for (const binding of scrolledAnims) {
+          const on = y > (binding.scrollAt ?? DEFAULT_SCROLL_AT)
+          if (past.get(binding.id) === on) continue
+          past.set(binding.id, on)
+          if (on) playAnim(binding)
+          else motion.reverse(binding, animTargetId(binding), scopeOfOwn(binding))
+        }
       }
       window.addEventListener('scroll', scrollListener, { passive: true })
       scrollListener()

@@ -6391,7 +6391,9 @@ var TRIGGERS = [
 	"appear",
 	"scrub",
 	"hover",
-	"click"
+	"click",
+	"scrolled",
+	"change"
 ];
 /** `once` is explicit; a binding that omits appearMode inherits the site
 * default (settings.motion.appearMode) — see effectiveAppearMode */
@@ -6458,6 +6460,10 @@ function validateBinding(binding, ctx) {
 	const known = ctx && ctx.animationIds;
 	if (known && known.indexOf(binding.animationId) === -1) return fail$1(`no animation "${binding.animationId}" in the library`);
 	if (TRIGGERS.indexOf(binding.trigger) === -1) return fail$1(`trigger must be one of: ${TRIGGERS.join(", ")}`);
+	if (binding.scrollAt !== void 0) {
+		if (binding.trigger !== "scrolled") return fail$1("scrollAt only applies to the 'scrolled' trigger");
+		if (typeof binding.scrollAt !== "number" || binding.scrollAt < 0) return fail$1("scrollAt must be a number of pixels");
+	}
 	if (binding.appearMode !== void 0 && APPEAR_MODES.indexOf(binding.appearMode) === -1) return fail$1(`appearMode must be one of: ${APPEAR_MODES.join(", ")}`);
 	if (binding.action !== void 0) {
 		if (ANIMATION_ACTIONS.indexOf(binding.action) === -1) return fail$1(`action must be one of: ${ANIMATION_ACTIONS.join(", ")}`);
@@ -6971,13 +6977,16 @@ var INTERACTION_ACTIONS = [
 * click   — on click; honours action
 * appear  — first time the trigger scrolls into view (fires once, never unfires)
 * scrolled— while the page is scrolled past `scrollAt` px (symmetric)
-* change  — an input's checked/non-empty state (symmetric, for conditional fields) */
+* change  — an input's checked/non-empty state (symmetric, for conditional fields)
+* load    — on as soon as the page renders, and never off (like appear, without
+*           waiting for the viewport) */
 var INTERACTION_TRIGGERS = [
 	"hover",
 	"click",
 	"appear",
 	"scrolled",
-	"change"
+	"change",
+	"load"
 ];
 /** user gestures that dismiss (force OFF) a fired interaction */
 var INTERACTION_CLOSE_ON = ["outside", "escape"];
@@ -6986,11 +6995,14 @@ var INTERACTION_ONCE = ["session", "local"];
 /** default scroll offset (px) for the `scrolled` trigger */
 var DEFAULT_SCROLL_AT = 50;
 /** triggers whose state is derived from a condition and so ignore `action`
-* (firing and unfiring are both driven by the trigger itself) */
+* (firing and unfiring are both driven by the trigger itself). `load` is here
+* too: it has no second direction to force, so an action on it would be a
+* silent no-op. */
 var SYMMETRIC_TRIGGERS = /* @__PURE__ */ new Set([
 	"hover",
 	"scrolled",
-	"change"
+	"change",
+	"load"
 ]);
 /** true when the trigger drives state in both directions on its own */
 function isSymmetricTrigger(trigger) {

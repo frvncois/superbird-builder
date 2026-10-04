@@ -27,8 +27,6 @@ const {
       v-if="canBuild"
       variant="ghost"
       aria-label="App"
-      tooltip="App"
-      tooltip-side="right"
       class="w-7"
       :class="isBuild && canvas === 'page' && !column ? 'text-accent-foreground' : 'text-foreground'"
       @click="showApp"
@@ -43,8 +41,7 @@ const {
     <ButtonUI
       variant="ghost"
       :icon="Files"
-      tooltip="Pages"
-      tooltip-side="right"
+      aria-label="Pages"
       class="w-7"
       :class="pagesOpen ? 'text-accent-foreground' : 'text-muted-foreground'"
       @click="togglePages"
@@ -57,8 +54,7 @@ const {
       v-if="canBuild"
       variant="ghost"
       :icon="Component"
-      tooltip="Components"
-      tooltip-side="right"
+      aria-label="Components"
       class="w-7"
       :class="showComponents ? 'text-accent-foreground' : 'text-muted-foreground'"
       @click="toggleComponents"
@@ -66,16 +62,14 @@ const {
     <ButtonUI
       variant="ghost"
       :icon="Image"
-      tooltip="Media library"
-      tooltip-side="right"
+      aria-label="Media library"
       class="w-7 text-muted-foreground"
       @click="openLibrary()"
     />
     <ButtonUI
       variant="ghost"
       :icon="Settings"
-      tooltip="Project settings"
-      tooltip-side="right"
+      aria-label="Project settings"
       class="w-7 text-muted-foreground"
       @click="openModal(SettingsPanel)"
     />
@@ -83,16 +77,14 @@ const {
     <ButtonUI
       variant="ghost"
       :icon="UserRound"
-      tooltip="My account"
-      tooltip-side="right"
+      aria-label="My account"
       class="mt-auto w-7 text-muted-foreground"
       @click="openModal(SettingsPanel, { initialSection: 'account' })"
     />
     <ButtonUI
       variant="ghost"
       :icon="LogOut"
-      tooltip="Logout"
-      tooltip-side="right"
+      aria-label="Logout"
       class="w-7 text-muted-foreground"
       @click="logout"
     />

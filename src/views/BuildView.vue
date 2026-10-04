@@ -18,6 +18,7 @@ import SettingsEditor from '@/components/editor/sidebar/SettingsEditor.vue'
 import ContextMenu from '@/components/editor/canvas/ContextMenu.vue'
 import InsertDragChip from '@/components/editor/canvas/InsertDragChip.vue'
 import ModeToggle from '@/components/editor/canvas/ModeToggle.vue'
+import EffectsDrawer from '@/components/editor/effects/EffectsDrawer.vue'
 import SitePreview from '@/components/site/SitePreview.vue'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import { useEditorShortcuts } from '@/composables/useEditorShortcuts'
@@ -59,27 +60,37 @@ const { isBuild, visibleColumn, showComponents } = useViewMode()
       </template>
 
       <!-- center: Build canvas or full-site preview, with the Edit / Play
-           toggle floating over whichever is up -->
-      <div class="relative h-full">
-        <template v-if="isBuild">
-          <ComponentsBoard v-if="showComponents" />
-          <CanvasEditor v-else />
-        </template>
-        <SitePreview v-else />
+           toggle floating over whichever is up, and the effects drawer docked
+           UNDER it. A column, not an overlay: the drawer pushes the canvas up
+           rather than covering the work, and it leaves both bottom corners
+           alone — Insert owns bottom-left, the mode toggle bottom-right. -->
+      <div class="flex h-full min-h-0 flex-col">
+        <div class="relative min-h-0 flex-1">
+          <template v-if="isBuild">
+            <ComponentsBoard v-if="showComponents" />
+            <CanvasEditor v-else />
+          </template>
+          <SitePreview v-else />
 
-        <!-- Bottom RIGHT: the bottom-left corner is the InsertDock's, and the
-             two must not share it — Insert belongs to the canvas, the mode
-             belongs to the whole surface. A page's mode, so the board (nothing
-             to play) doesn't get it, and neither does a contributor, who is
-             pinned to Play with no switch to offer. Switching must not move
-             it, or it slides out from under the pointer that just clicked it:
-             Play's extra 9px pays back the framed pane's my-2 + border, which
-             the unframed one doesn't have. -->
-        <ModeToggle
-          v-if="canBuild && !showComponents"
-          class="absolute right-1 z-40"
-          :class="isBuild ? 'bottom-1' : 'bottom-[13px]'"
-        />
+          <!-- Bottom RIGHT: the bottom-left corner is the InsertDock's, and
+               the two must not share it — Insert belongs to the canvas, the
+               mode belongs to the whole surface. A page's mode, so the board
+               (nothing to play) doesn't get it, and neither does a
+               contributor, who is pinned to Play with no switch to offer.
+               Switching must not move it, or it slides out from under the
+               pointer that just clicked it: Play's extra 9px pays back the
+               framed pane's my-2 + border, which the unframed one doesn't
+               have. -->
+          <ModeToggle
+            v-if="canBuild && !showComponents"
+            class="absolute right-1 z-40"
+            :class="isBuild ? 'bottom-1' : 'bottom-[13px]'"
+          />
+        </div>
+
+        <!-- an effect is shared by every element using it, so it is edited on
+             its own surface instead of taking the element panel over -->
+        <EffectsDrawer v-if="canBuild && isBuild" />
       </div>
       <template v-if="isBuild">
         <ContextMenu />

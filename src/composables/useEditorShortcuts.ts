@@ -3,6 +3,7 @@ import { useContextMenu } from './useContextMenu'
 import { usePersistence } from './usePersistence'
 import { useStructure } from './useStructure'
 import { togglePalette } from './useCommandPalette'
+import { useEffectsDrawer } from './useEffectsDrawer'
 import { useModal } from './useModal'
 import { useViewMode } from './useViewMode'
 import PublishDialog from '@/components/shared/PublishDialog.vue'
@@ -26,6 +27,7 @@ export function useEditorShortcuts() {
   const { undo, redo, saveNow } = usePersistence()
   const { openModal, stack } = useModal()
   const { isBuild } = useViewMode()
+  const { toggleDrawer } = useEffectsDrawer()
 
   // structural ops act on whatever the structure backend points at — the page,
   // or the component on the board — so they only need Build mode
@@ -60,8 +62,13 @@ export function useEditorShortcuts() {
     { key: 'z', mod: true, shift: true, handler: redo },
     // save works even from a focused field, so ⌘S never opens the browser dialog
     { key: 's', mod: true, shift: false, allowInInput: true, handler: saveNow },
-    // ⌘E toggles the insert dock; allowInInput so it works from a focused field
-    { key: 'e', mod: true, allowInInput: true, handler: buildOnly(togglePalette) },
+    // ⌘E toggles the insert dock; allowInInput so it works from a focused field.
+    // shift: false, or it would also answer the ⌘⇧E below — the first matching
+    // binding wins and Shift is ignored when unset.
+    { key: 'e', mod: true, shift: false, allowInInput: true, handler: buildOnly(togglePalette) },
+    // ⌘⇧E toggles the effects drawer. A bare letter is not an option: S/D/I
+    // only work because the Layers tree owns them while it has focus.
+    { key: 'e', mod: true, shift: true, allowInInput: true, handler: buildOnly(toggleDrawer) },
     // ⌘P publishes; allowInInput so it overrides the browser print dialog everywhere
     { key: 'p', mod: true, shift: false, allowInInput: true, handler: openPublish },
   ])

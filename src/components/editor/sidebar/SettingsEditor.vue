@@ -17,7 +17,6 @@ import { usePanel } from '@/composables/usePanel'
 import { usePopover } from '@/composables/usePopover'
 import { useModal } from '@/composables/useModal'
 import { useInteraction } from '@/composables/useInteraction'
-import { useEffectDetail } from '@/composables/useEffectDetail'
 import { isEditable } from '@/composables/useShortcut'
 import { useTheme } from '@/composables/useTheme'
 import { onBeforeUnmount, onMounted } from 'vue'
@@ -51,7 +50,6 @@ const panels = computed<Panel[]>(() =>
 const { activePanelId, togglePanel, closePanel } = usePanel()
 const activePanel = computed(() => panels.value.find((p) => p.id === activePanelId.value))
 const { pickingFor } = useInteraction()
-const { detail, chooser } = useEffectDetail()
 const { selectedElement, isMultiSelect, requestReveal } = useElement()
 
 // Escape always returns to the Layers tree with the current selection in view:
@@ -132,23 +130,16 @@ function onTabClick(id: string) {
   togglePanel(id)
 }
 const headerIcon = computed(() => {
-  // the focused effect editor is project-level — the selected element's icon
-  // would claim it belongs to that element
-  if (detail.value) return activePanel.value?.icon
   if (activePanel.value && ELEMENT_PANELS.includes(activePanel.value.id) && selectedElement.value) {
     return elementIcon(selectedElement.value.type)
   }
   return activePanel.value?.icon
 })
 
-/** the popover title: the panel's label, or what the focused effect editor is
- * doing. `title` is passed as a getter, so this stays live without reopening. */
+/** the popover title. `title` is passed as a getter, so it stays live without
+ * reopening — the panel no longer drills into anything, so it is just the
+ * panel's own label. */
 function panelTitle(): string {
-  if (detail.value) {
-    const noun = detail.value.kind === 'interaction' ? 'interaction' : 'animation'
-    return detail.value.created ? `New ${noun}` : `Edit ${noun}`
-  }
-  if (chooser.value && activePanel.value?.id === 'interactions') return 'Add interaction'
   return activePanel.value?.label ?? ''
 }
 
@@ -195,8 +186,7 @@ watch(activePanel, (panel) => {
       ref="statusBtn"
       variant="ghost"
       :icon="SAVE_ICONS[status]"
-      :tooltip="status === 'error' ? 'Save failed' : SAVE_STATES[status].label"
-      tooltip-side="left"
+      :aria-label="status === 'error' ? 'Save failed' : SAVE_STATES[status].label"
       class="w-7"
       :class="currentId === 'publish-status' ? '!bg-accent/30 text-accent-foreground' : SAVE_COLORS[status]"
       @click="togglePublish"
@@ -209,8 +199,7 @@ watch(activePanel, (panel) => {
         :ref="(el) => setPanelBtn(panel.id, el)"
         variant="ghost"
         :icon="panel.icon"
-        :tooltip="panel.label"
-        tooltip-side="left"
+        :aria-label="panel.label"
         class="w-7"
         :disabled="blocked(panel.id)"
         :class="
@@ -230,8 +219,7 @@ watch(activePanel, (panel) => {
       ref="commentsBtn"
       variant="ghost"
       :icon="MessageCircle"
-      tooltip="Comments"
-      tooltip-side="left"
+      aria-label="Comments"
       class="w-7"
       :class="currentId === 'comments' ? '!bg-accent/30 text-accent-foreground' : 'text-muted-foreground'"
       @click="toggleComments"
@@ -239,8 +227,7 @@ watch(activePanel, (panel) => {
     <ButtonUI
       variant="ghost"
       :icon="theme === 'light' ? Sun : Moon"
-      :tooltip="theme === 'light' ? 'Switch to dark' : 'Switch to light'"
-      tooltip-side="left"
+      :aria-label="theme === 'light' ? 'Switch to dark' : 'Switch to light'"
       class="mt-auto w-7 text-muted-foreground"
       @click="toggleTheme"
     />

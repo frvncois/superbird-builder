@@ -21,6 +21,7 @@ const SITE = join(resolve(import.meta.dirname, '..', '.e2e-data'), 'site')
 const SHOW = 'i-show'
 const OPEN = 'i-open'
 const HIDE = 'i-hide'
+const FADE = 'a-fade'
 
 const node = (id: string, type: string, extra: Record<string, unknown> = {}) => ({
   id,
@@ -104,10 +105,46 @@ function fixture() {
                   ],
                 }),
               ] }),
+              // --- an animated panel: ONE timeline, two buttons ---
+              node('animOpen', 'button', {
+                content: 'Open panel',
+                htmlId: 'anim-open',
+                animations: [
+                  { id: 'ab1', animationId: FADE, trigger: 'click', targetId: 'animPanel', action: 'on' },
+                ],
+              }),
+              node('animClose', 'button', {
+                content: 'Close panel',
+                htmlId: 'anim-close',
+                animations: [
+                  { id: 'ab2', animationId: FADE, trigger: 'click', targetId: 'animPanel', action: 'off' },
+                ],
+              }),
+              node('animPanel', 'div', { htmlId: 'anim-panel', classes: 'opacity-0' }),
+              // --- the two engines take the same triggers ---
+              // a class change on `load`: a state the page simply starts in
+              node('loaded', 'div', {
+                htmlId: 'loaded',
+                classes: 'hidden',
+                interactions: [{ id: 'b6', interactionId: SHOW, trigger: 'load' }],
+              }),
+              // a timeline on `scrolled`: a header that shrinks by tweening
+              node('shrink', 'div', {
+                htmlId: 'shrink',
+                classes: 'opacity-0',
+                animations: [
+                  { id: 'ab4', animationId: FADE, trigger: 'scrolled', scrollAt: 40 },
+                ],
+              }),
+              // tall enough that the threshold can actually be crossed
+              node('tall', 'div', { htmlId: 'tall', classes: 'h-[300vh]' }),
               // --- §1.2: external link on a non-anchor element ---
               node('card', 'div', {
                 htmlId: 'card',
                 link: 'https://example.com/',
+                // a hover timeline: symmetric, so it has no state to share and
+                // must emit no state key
+                animations: [{ id: 'ab3', animationId: FADE, trigger: 'hover' }],
                 attributes: { target: '_blank', 'aria-label': 'Example', title: 'Ex' },
                 children: [node('cardText', 'text', { content: 'go' })],
               }),
@@ -130,7 +167,20 @@ function fixture() {
       { id: OPEN, name: 'Open', toClasses: 'block', duration: 'duration-200', easing: 'ease-out' },
       { id: HIDE, name: 'Hide', toClasses: 'hidden', duration: 'duration-200', easing: 'ease-out' },
     ],
-    animations: [],
+    animations: [
+      {
+        id: FADE,
+        name: 'Fade panel',
+        steps: [
+          {
+            id: 'fs1',
+            tracks: [{ prop: 'opacity', from: 0, to: 1 }],
+            duration: 120,
+            easing: 'linear',
+          },
+        ],
+      },
+    ],
     breakpoints: [],
     comments: [],
     locales: ['en'],
@@ -186,6 +236,80 @@ test.describe('interactions', () => {
     // while the effect is on
     const fxrm = JSON.parse(/id="int-fxrm"[^>]*>([^<]*)</.exec(html)![1]!)
     expect(fxrm[`${SHOW}:modal`]).toBe('hidden')
+  })
+
+  test('a click play is keyed per (animation, target), not per binding', async () => {
+    const html = await readFile(join(SITE, 'index.html'), 'utf8')
+    const metas = [...html.matchAll(/data-anim="([^"]*)"/g)]
+      .map((m) => JSON.parse(m[1]!.replaceAll('&quot;', '"').replaceAll('&amp;', '&')))
+      .flat()
+
+    const open = metas.find((m) => m.k === 'ab1')
+    const close = metas.find((m) => m.k === 'ab2')
+    // THE fix: both clicks drive ONE play, so the close button can rewind what
+    // the open button ran. Keyed per binding, it rewound a play of its own that
+    // nothing had ever started.
+    expect(open.s).toBe(close.s)
+    expect(open.s).toBe(`${FADE}:animPanel`)
+    expect(open.ac).toBe('on')
+    expect(close.ac).toBe('off')
+
+    // a hover drives both directions itself, so it has no state to share and
+    // stays keyed per binding — no `s` on the wire at all
+    expect(metas.find((m) => m.k === 'ab3').s).toBeUndefined()
+
+    // the panel lists both bindings as targets, so either key resolves it
+    const tag = /<div[^>]*id="anim-panel"[^>]*>/.exec(html)![0]!
+    expect(tag).toContain('ab1')
+    expect(tag).toContain('ab2')
+  })
+
+  test('an animated panel is opened by one button and rewound by another', async ({ page }) => {
+    await page.goto('/')
+    const panel = page.locator('#anim-panel')
+    const opacity = () => panel.evaluate((el) => getComputedStyle(el).opacity)
+    expect(await opacity()).toBe('0')
+
+    await page.locator('#anim-open').click()
+    await expect.poll(opacity).toBe('1')
+
+    // the regression this guards: a DIFFERENT binding on a DIFFERENT element
+    // rewinds the play the open button started. Before the play was keyed by
+    // (animation, target) this click found nothing under its own key and the
+    // panel stayed open, with both the editor and publish reporting success.
+    await page.locator('#anim-close').click()
+    await expect.poll(opacity).toBe('0')
+  })
+
+  test('the two engines answer the same triggers', async ({ page }) => {
+    const html = await readFile(join(SITE, 'index.html'), 'utf8')
+
+    // a class change on load rides in data-int like any other trigger…
+    const metas = [...html.matchAll(/data-int="([^"]*)"/g)]
+      .map((m) => JSON.parse(m[1]!.replaceAll('&quot;', '"').replaceAll('&amp;', '&')))
+      .flat()
+    expect(metas.find((i) => i.k === 'b6').t).toBe('load')
+
+    // …and a timeline on scrolled carries its threshold
+    const anims = [...html.matchAll(/data-anim="([^"]*)"/g)]
+      .map((m) => JSON.parse(m[1]!.replaceAll('&quot;', '"').replaceAll('&amp;', '&')))
+      .flat()
+    const shrink = anims.find((m) => m.k === 'ab4')
+    expect(shrink.t).toBe('scrolled')
+    expect(shrink.at2).toBe(40)
+
+    await page.goto('/')
+    // the load state is on from the first frame — never off, no viewport wait
+    expect(await classesOf(page, 'loaded')).toContain('flex')
+
+    // and the scrolled timeline plays past its threshold, rewinding above it
+    const opacity = () =>
+      page.locator('#shrink').evaluate((el) => getComputedStyle(el).opacity)
+    expect(await opacity()).toBe('0')
+    await page.evaluate(() => window.scrollTo(0, 400))
+    await expect.poll(opacity).toBe('1')
+    await page.evaluate(() => window.scrollTo(0, 0))
+    await expect.poll(opacity).toBe('0')
   })
 
   test('a modal opens, and every dismissal path closes it', async ({ page }) => {

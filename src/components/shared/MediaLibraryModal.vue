@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import {
   ArrowDownWideNarrow,
   ArrowUpNarrowWide,
@@ -56,6 +56,10 @@ const KINDS = Object.keys(KIND_LABELS) as MediaKind[]
 const type = ref<'all' | MediaKind>('all')
 const query = ref('')
 const view = ref<'grid' | 'list'>('grid')
+const VIEW_OPTIONS = [
+  { value: 'grid', label: 'Grid', icon: LayoutGrid },
+  { value: 'list', label: 'List', icon: List },
+] as const
 const sortKey = ref<'date' | 'name' | 'size' | 'type'>('date')
 const sortDir = ref<'asc' | 'desc'>('desc')
 const sizeFilter = ref<'any' | 's' | 'm' | 'l' | 'xl'>('any')
@@ -187,6 +191,37 @@ const folderCounts = computed<Record<string, number>>(() => {
 
 // ----- selection (single → details rail, multiple → floating batch pill) -----
 const selectedIds = ref<string[]>([])
+// ---- the details rail is sized to the grid, not the other way round ----
+// The grid is `repeat(auto-fill, minmax(9.5rem, 1fr))`: n columns of equal
+// width col = (G − (n−1)·gap) / n over the content width G. A rail of any
+// other width makes the columns re-solve and every tile changes size on each
+// selection. A rail of exactly 2·col + 2·gap removes two whole columns and
+// leaves col unchanged, so tiles never move.
+const TILE_MIN = 152 // 9.5rem
+const TILE_GAP = 12 // gap-3
+const CONTENT_PAD = 32 // p-4 both sides
+const contentEl = ref<HTMLElement>()
+const railWidth = ref(288)
+let ro: ResizeObserver | null = null
+function measureRail() {
+  const el = contentEl.value
+  if (!el) return
+  // the full content width, as if the rail were closed
+  const full = el.clientWidth + (selected.value ? railWidth.value : 0) - CONTENT_PAD
+  const n = Math.floor((full + TILE_GAP) / (TILE_MIN + TILE_GAP))
+  if (n < 4) return // too narrow to give two columns away; keep the last width
+  const col = (full - (n - 1) * TILE_GAP) / n
+  railWidth.value = Math.round(2 * col + 2 * TILE_GAP)
+}
+onMounted(() => {
+  ro = new ResizeObserver(() => {
+    if (!selected.value) measureRail()
+  })
+  if (contentEl.value) ro.observe(contentEl.value)
+  measureRail()
+})
+onBeforeUnmount(() => ro?.disconnect())
+
 const selected = computed(() =>
   selectedIds.value.length === 1
     ? (assets.value.find((a) => a.id === selectedIds.value[0]) ?? null)
@@ -446,10 +481,10 @@ const MENU_ITEM =
                   <div class="min-w-0 flex-1"><SelectUI v-model="sortKey" :options="SORT_OPTIONS" /></div>
                   <ButtonUI
                     variant="outline"
-                    size="sm"
+                    size="xs"
                     :icon="sortDir === 'asc' ? ArrowUpNarrowWide : ArrowDownWideNarrow"
                     :tooltip="sortDir === 'asc' ? 'Ascending' : 'Descending'"
-                    class="w-8 shrink-0 text-muted-foreground"
+                    class="!h-7 w-7 shrink-0 text-muted-foreground"
                     @click="sortDir = sortDir === 'asc' ? 'desc' : 'asc'"
                   />
                 </div>
@@ -472,27 +507,30 @@ const MENU_ITEM =
           </template>
         </MenuUI>
 
-        <!-- view switch: one joined outline group, so it reads at the same
-             height and radius as the Filter and New folder buttons beside it -->
-        <div class="flex h-9 shrink-0 items-center divide-x divide-accent overflow-hidden rounded-xl border border-accent">
-          <ButtonUI
-            variant="ghost"
-            size="sm"
-            :icon="LayoutGrid"
-            tooltip="Grid"
-            class="w-9 rounded-none"
-            :class="view === 'grid' ? 'bg-accent/30 text-foreground' : 'text-muted-foreground'"
-            @click="view = 'grid'"
-          />
-          <ButtonUI
-            variant="ghost"
-            size="sm"
-            :icon="List"
-            tooltip="List"
-            class="w-9 rounded-none"
-            :class="view === 'list' ? 'bg-accent/30 text-foreground' : 'text-muted-foreground'"
-            @click="view = 'list'"
-          />
+        <!-- view switch: a segmented control — a recessed track with the
+             active segment raised, the same height as the buttons beside it -->
+        <div
+          role="radiogroup"
+          aria-label="View"
+          class="flex h-9 shrink-0 items-center gap-0.5 rounded-xl bg-input p-1"
+        >
+          <button
+            v-for="opt in VIEW_OPTIONS"
+            :key="opt.value"
+            v-tooltip="opt.label"
+            type="button"
+            role="radio"
+            :aria-checked="view === opt.value"
+            class="flex h-7 w-8 items-center justify-center rounded-lg transition-colors outline-none focus-visible:ring-2 focus-visible:ring-accent [&_svg]:size-3.5"
+            :class="
+              view === opt.value
+                ? 'bg-background text-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground'
+            "
+            @click="view = opt.value"
+          >
+            <component :is="opt.icon" />
+          </button>
         </div>
         <ButtonUI variant="outline" size="sm" :icon="FolderPlus" class="shrink-0" @click="createFolderHere">
           New folder
@@ -522,7 +560,9 @@ const MENU_ITEM =
       <div class="flex min-h-0 flex-1">
         <!-- content -->
         <div
-          class="relative min-w-0 flex-1 overflow-y-auto p-4"
+          ref="contentEl"
+          class="custom-scrollbar relative min-w-0 flex-1 overflow-y-auto p-4"
+          style="scrollbar-gutter: stable"
           @click.self="clearSelection"
           @dragenter.prevent="onDragEnter"
           @dragover.prevent
@@ -613,7 +653,7 @@ const MENU_ITEM =
                 <FolderInput class="size-3.5" /> Move to
               </template>
               <template #default="{ close }">
-                <div class="flex max-h-64 flex-col overflow-y-auto">
+                <div class="custom-scrollbar flex max-h-64 flex-col overflow-y-auto">
                   <button type="button" :class="MENU_ITEM" @click="(batchMove(null), close())">
                     <FolderInput class="size-3.5" /> Library (root)
                   </button>
@@ -645,8 +685,14 @@ const MENU_ITEM =
           </div>
         </div>
 
-        <!-- rail: single-item details -->
-        <div v-if="selected" class="flex w-72 shrink-0 flex-col border-l border-input">
+        <!-- rail: single-item details. Its width is exactly two grid columns
+             (plus their gaps), so opening it drops two columns and every
+             remaining tile keeps the width it had — see railWidth. -->
+        <div
+          v-if="selected"
+          class="flex shrink-0 flex-col border-l border-input"
+          :style="{ width: `${railWidth}px` }"
+        >
           <MediaDetails
             :asset="selected"
             :version="version"

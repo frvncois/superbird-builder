@@ -298,7 +298,7 @@ useDrawerEscape(panel, {
     </template>
 
     <!-- pb leaves room for a row kebab opened near the bottom -->
-    <div class="flex-1 space-y-0.5 overflow-y-auto pb-10">
+    <div class="custom-scrollbar flex-1 space-y-0.5 overflow-y-auto pb-10">
       <div v-if="visiblePages.length || !searching" class="flex items-center gap-1 px-2.5 pt-2 pb-1">
         <span class="flex-1 text-[9px] font-medium tracking-wide text-muted-foreground uppercase">
           Pages

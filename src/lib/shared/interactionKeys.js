@@ -53,8 +53,10 @@ export const INTERACTION_ACTIONS = ['toggle', 'on', 'off']
  * click   — on click; honours action
  * appear  — first time the trigger scrolls into view (fires once, never unfires)
  * scrolled— while the page is scrolled past `scrollAt` px (symmetric)
- * change  — an input's checked/non-empty state (symmetric, for conditional fields) */
-export const INTERACTION_TRIGGERS = ['hover', 'click', 'appear', 'scrolled', 'change']
+ * change  — an input's checked/non-empty state (symmetric, for conditional fields)
+ * load    — on as soon as the page renders, and never off (like appear, without
+ *           waiting for the viewport) */
+export const INTERACTION_TRIGGERS = ['hover', 'click', 'appear', 'scrolled', 'change', 'load']
 
 /** user gestures that dismiss (force OFF) a fired interaction */
 export const INTERACTION_CLOSE_ON = ['outside', 'escape']
@@ -66,8 +68,10 @@ export const INTERACTION_ONCE = ['session', 'local']
 export const DEFAULT_SCROLL_AT = 50
 
 /** triggers whose state is derived from a condition and so ignore `action`
- * (firing and unfiring are both driven by the trigger itself) */
-const SYMMETRIC_TRIGGERS = new Set(['hover', 'scrolled', 'change'])
+ * (firing and unfiring are both driven by the trigger itself). `load` is here
+ * too: it has no second direction to force, so an action on it would be a
+ * silent no-op. */
+const SYMMETRIC_TRIGGERS = new Set(['hover', 'scrolled', 'change', 'load'])
 
 /** true when the trigger drives state in both directions on its own */
 export function isSymmetricTrigger(trigger) {

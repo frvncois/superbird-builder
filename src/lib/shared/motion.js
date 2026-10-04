@@ -93,6 +93,48 @@ export function animationBindingKey(bindingId, scope) {
 }
 
 /**
+ * The key a CLICK animation's play is held under: one per (animation, target)
+ * within a scope, so an "open" button and a "close" button drive ONE timeline
+ * and agree on where it is. The exact counterpart of `interactionStateKey`
+ * (lib/shared/interactionKeys.js) — the same reasoning, the other engine.
+ *
+ * ONLY `click` uses it. `load`, `appear` and `scrub` have no state for a second
+ * trigger to join. `hover` is deliberately excluded too: it is symmetric, so
+ * sharing one play would make hovering a second trigger RESTART the timeline
+ * from zero under the first one's pointer, and leaving either would rewind it
+ * while the other is still hovered. Independent plays per hover trigger are the
+ * correct reading of a symmetric gesture.
+ *
+ * @param {string} animationId
+ * @param {string} targetId the node the timeline moves (never null — callers
+ *   resolve `binding.targetId ?? ownerId` first)
+ * @param {string} [scope] component instance + collection-list repeat isolation
+ * @returns {string}
+ */
+export function animationStateKey(animationId, targetId, scope) {
+  const base = `${animationId}:${targetId}`
+  return scope ? `${base}@${scope}` : base
+}
+
+/** what a click does to the play it drives. `toggle` is the default. */
+export const ANIMATION_ACTIONS = ['toggle', 'on', 'off']
+
+/**
+ * The play key for a binding, whichever kind it is — the ONE place the choice
+ * is made, shared by the editor, the exporter and the published runtime so a
+ * click bound in the canvas and the same click on the site cannot disagree.
+ * @param {{id: string, animationId: string, trigger: string}} binding
+ * @param {string} targetId resolved target (`binding.targetId ?? ownerId`)
+ * @param {string} [scope]
+ * @returns {string}
+ */
+export function animationPlayKey(binding, targetId, scope) {
+  return binding.trigger === 'click'
+    ? animationStateKey(binding.animationId, targetId, scope)
+    : animationBindingKey(binding.id, scope)
+}
+
+/**
  * Desktop-first breakpoint resolution — the tightest breakpoint still covering
  * `width`, else the widest. Mirrors breakpointIdForWidth in src/lib/responsive.ts
  * (canonical); duplicated here so the site runtime needs no TS import.
@@ -444,7 +486,7 @@ export const MOTION_CSS_PROPS = [
 
 // ---------- validation (shared by the editor and the MCP) ----------
 
-const TRIGGERS = ['load', 'appear', 'scrub', 'hover', 'click']
+const TRIGGERS = ['load', 'appear', 'scrub', 'hover', 'click', 'scrolled', 'change']
 /** `once` is explicit; a binding that omits appearMode inherits the site
  * default (settings.motion.appearMode) — see effectiveAppearMode */
 export const APPEAR_MODES = ['once', 'replay', 'reverse']
@@ -543,8 +585,27 @@ export function validateBinding(binding, ctx) {
   if (TRIGGERS.indexOf(binding.trigger) === -1) {
     return fail(`trigger must be one of: ${TRIGGERS.join(', ')}`)
   }
+  if (binding.scrollAt !== undefined) {
+    if (binding.trigger !== 'scrolled') return fail("scrollAt only applies to the 'scrolled' trigger")
+    if (typeof binding.scrollAt !== 'number' || binding.scrollAt < 0) {
+      return fail('scrollAt must be a number of pixels')
+    }
+  }
   if (binding.appearMode !== undefined && APPEAR_MODES.indexOf(binding.appearMode) === -1) {
     return fail(`appearMode must be one of: ${APPEAR_MODES.join(', ')}`)
+  }
+  if (binding.action !== undefined) {
+    if (ANIMATION_ACTIONS.indexOf(binding.action) === -1) {
+      return fail(`action must be one of: ${ANIMATION_ACTIONS.join(', ')}`)
+    }
+    // only a discrete gesture can be aimed. hover rewinds on leave and
+    // load/appear/scrub have no second direction to force, so an action there
+    // would be a silent no-op that reads like a bug.
+    if (binding.action !== 'toggle' && binding.trigger !== 'click') {
+      return fail(
+        `action is only meaningful on a click trigger ('${binding.trigger}' has no state to aim at)`,
+      )
+    }
   }
   if (binding.appearAt !== undefined) {
     if (typeof binding.appearAt !== 'number' || binding.appearAt < 0 || binding.appearAt > 1) {

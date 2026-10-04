@@ -2,6 +2,8 @@
 import { computed, onMounted, ref } from 'vue'
 import { Check, Copy, Link2, Plus, RefreshCw, Trash2, Clock, X } from 'lucide-vue-next'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
+import SettingsGroup from '@/components/shared/SettingsGroup.vue'
+import EmptyListUI from '@/components/ui/EmptyListUI.vue'
 import MenuUI from '@/components/ui/MenuUI.vue'
 import InputUI from '@/components/ui/InputUI.vue'
 import RowUI from '@/components/ui/RowUI.vue'
@@ -177,18 +179,21 @@ function revoke(i: InviteRow) {
 </script>
 
 <template>
-  <div class="flex flex-col gap-2 p-1">
-    <div class="flex items-center justify-between">
-      <p class="text-xs font-medium">Users</p>
+  <SettingsGroup
+    title="Users"
+    description="Who can sign in, and what each role may do."
+  >
+    <template #action>
       <ButtonUI
         v-if="admin"
         size="xs"
+        :variant="adding ? 'outline' : 'default'"
         :icon="adding ? X : Plus"
         @click="adding ? closeAdd() : openAdd()"
       >
         {{ adding ? 'Close' : 'Add user' }}
       </ButtonUI>
-    </div>
+    </template>
 
     <!-- inline add-user form (before the list) -->
     <div v-if="admin && adding" class="flex flex-col gap-2 rounded-xl border border-input p-3">
@@ -228,7 +233,10 @@ function revoke(i: InviteRow) {
       </template>
     </div>
 
-    <div class="flex flex-col rounded-xl border border-input">
+    <!-- the list is never empty once loaded (you are in it) — this is the
+         shape it keeps while the users are still being fetched -->
+    <EmptyListUI v-if="!sortedUsers.length && !invites.length">No users yet.</EmptyListUI>
+    <div v-else class="flex flex-col rounded-xl border border-input">
       <!-- members -->
       <div
         v-for="u in sortedUsers"
@@ -327,5 +335,5 @@ function revoke(i: InviteRow) {
     </p>
     <p v-if="error" class="px-1 text-[10px] text-danger">{{ error }}</p>
 
-  </div>
+  </SettingsGroup>
 </template>
