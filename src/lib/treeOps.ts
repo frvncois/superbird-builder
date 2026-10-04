@@ -74,7 +74,8 @@ export function enclosingInstance(host: StructureHost, id: string): ElementNode 
         found = instance
         return
       }
-      visit(node.children, instance ?? (isComponentType(node.type) ? node : null))
+      // what sits under a slot is the holder's own, whatever instance the slot is in
+      visit(node.children, node.slot ? null : (instance ?? (isComponentType(node.type) ? node : null)))
     }
   }
   visit(host.root.children, null)

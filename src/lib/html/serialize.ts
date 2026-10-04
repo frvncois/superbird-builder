@@ -103,6 +103,9 @@ function attrsFor(node: ElementNode, ctx: Ctx, inInstance: boolean): string[] {
   if (node.type === 'icon') rest.push(['data-icon', iconName(node)])
   if (node.type === 'text') rest.push(['data-type', 'text'])
   if (node.hidden !== undefined) rest.push(['data-hidden', String(node.hidden)])
+  // a slot: on a master read it is what declares one; inside an instance it
+  // marks where the page's own structure begins
+  if (node.slot) rest.push(['data-slot', true])
   const implied = impliedAttrs(node.type)
   for (const [name, value] of Object.entries(node.attributes ?? {})) {
     if (!shared && implied[name] === undefined) rest.push([name, value])
@@ -154,7 +157,8 @@ function emit(node: ElementNode, depth: number, ctx: Ctx, inInstance: boolean, o
   }
   out.push(`${pad}<${tag}${attrs}>`)
   for (const child of node.children) {
-    emit(child, depth + 1, ctx, inInstance || isInstance, out)
+    // under a slot the children are the holder's own again: full attributes
+    emit(child, depth + 1, ctx, (inInstance || isInstance) && !node.slot, out)
   }
   out.push(`${pad}</${tag}>`)
 }

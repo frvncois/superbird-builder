@@ -44,7 +44,10 @@ export function cloneForMaster(source: ElementNode): {
  * anchor), `arg`/`link` stay (code-owned).
  */
 export function stripExtractedInstanceState(source: ElementNode): void {
-  walkNodes([source], (n) => {
+  // slot content stays whole: it is the holder's own, and nothing above it
+  // would give it back
+  const strip = (n: ElementNode) => {
+    if (!n.slot) n.children.forEach(strip)
     delete n.classes
     delete n.interactions
     delete n.animations
@@ -57,7 +60,8 @@ export function stripExtractedInstanceState(source: ElementNode): void {
     delete n.background
     delete n.locales
     delete n.content
-  })
+  }
+  strip(source)
 }
 
 /** component types are Capitalized; built-in elements stay lowercase */
@@ -78,32 +82,77 @@ export function isComponentType(type: string): boolean {
 // the master it mirrors — the positional pairing in shared/instances.js relies
 // on it, and so does the push that realigns every instance.
 
-/** a fresh mirror of a master subtree: its structure, none of its state */
+/** a fresh mirror of a master subtree: its structure, none of its state —
+ *  except under a slot, where the master's children are the DEFAULT content
+ *  the holder starts from, copied whole (they are its own from then on) */
 export function createMirror(master: ElementNode): ElementNode {
   const node: ElementNode = {
     id: crypto.randomUUID(),
     type: master.type,
     content: '',
-    children: master.children.map(createMirror),
+    children: master.slot ? cloneSlotContent(master.children) : master.children.map(createMirror),
   }
   // arg + link are code-owned: a mirror that lacked them would serialize a
   // different block from the master's
   if (master.arg) node.arg = master.arg
   if (master.link) node.link = master.link
+  if (master.slot) node.slot = true
   return node
 }
 
-/** `arg` and `link` are CODE-OWNED: inside an instance they belong to the
- *  master, so they are copied down rather than kept. */
+/** a slot's default content, as a holder's own nodes: everything the master
+ *  nodes carry, under fresh ids, with bindings between them re-aimed */
+function cloneSlotContent(nodes: ElementNode[]): ElementNode[] {
+  const cloned = JSON.parse(JSON.stringify(nodes)) as ElementNode[]
+  const idMap = new Map<string, string>()
+  walkNodes(cloned, (n) => {
+    const next = crypto.randomUUID()
+    idMap.set(n.id, next)
+    n.id = next
+    delete n.ref
+  })
+  walkNodes(cloned, (n) => {
+    for (const b of [...(n.interactions ?? []), ...(n.animations ?? [])]) {
+      if (b.targetId && idMap.has(b.targetId)) b.targetId = idMap.get(b.targetId)!
+    }
+  })
+  return cloned
+}
+
+/**
+ * `arg` is CODE-OWNED: inside an instance it belongs to the master, so it is
+ * copied down rather than kept. A field binding is the component's by
+ * definition — every instance of it reads the same field.
+ *
+ * `link` is NOT, any more. It is per-instance with a component default, like
+ * `hidden`, `listQuery` and `slider`: every renderer already resolves it
+ * own-first (`node.link ?? master.link`, in useRenderNode AND export.mjs), so
+ * a per-instance destination rendered correctly everywhere and only the WRITE
+ * path forbade it — half of it here, where the push copied the master's link
+ * back down over anything an instance had set. The cost was that a Button
+ * component could not be a link, which is the first thing anyone wants from
+ * one, and the workaround was a second component.
+ *
+ * An instance link EQUAL to the master's is deleted rather than kept, so the
+ * key means "this placement differs" and nothing else. That also migrates the
+ * copies the old copy-down left behind: they are all equal by construction, so
+ * one push normalizes a project to pure inheritance and a later change to the
+ * master's link reaches every instance that did not override it.
+ */
 function adoptCodeOwned(node: ElementNode, master: ElementNode, box: { moved: boolean }): void {
   if ((node.arg ?? undefined) !== (master.arg ?? undefined)) {
     if (master.arg) node.arg = master.arg
     else delete node.arg
     box.moved = true
   }
-  if ((node.link ?? undefined) !== (master.link ?? undefined)) {
-    if (master.link) node.link = master.link
-    else delete node.link
+  if (node.link !== undefined && node.link === master.link) {
+    delete node.link
+    box.moved = true
+  }
+  // so is the slot flag: the boundary has to be visible in every tree
+  if (!!node.slot !== !!master.slot) {
+    if (master.slot) node.slot = true
+    else delete node.slot
     box.moved = true
   }
 }
@@ -119,6 +168,9 @@ function adoptCodeOwned(node: ElementNode, master: ElementNode, box: { moved: bo
  * slide every Card's button text onto the wrong node.
  */
 function alignLevel(node: ElementNode, master: ElementNode, box: { moved: boolean }): void {
+  // under a slot the children are the holder's own: a push never touches them
+  // (a node that has just become a slot keeps what it had, as its content)
+  if (master.slot) return
   const old = node.children
   const matches = lcsAlign(old.map(nodeSignature), master.children.map(nodeSignature))
   const used = new Set(matches.values())

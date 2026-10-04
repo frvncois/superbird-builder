@@ -64,6 +64,13 @@ export function buildInstanceMap(roots, components) {
       mirrors,
       picks: scope.picks,
     })
+    // a SLOT: the node is the component's, what is inside it is the holder's
+    // own — unmapped, so every renderer and every tool treats it as plain
+    // structure, and an instance placed in there is an instance in its own right
+    if (master.slot) {
+      visit(inst.children)
+      return
+    }
     const length = Math.min(inst.children.length, master.children.length)
     for (let i = 0; i < length; i++) {
       const child = inst.children[i]

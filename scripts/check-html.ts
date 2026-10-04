@@ -32,7 +32,6 @@ import { setStyleTokens } from '../src/lib/styles'
 import { setColorTokens } from '../src/lib/colors'
 import { walkNodes } from '../src/lib/tree'
 import { createProject } from '../src/lib/factories'
-import { catalogEntry, materializeCatalogEntry } from '../src/lib/catalog'
 import type { ElementNode, Project } from '../src/types/editor'
 
 let fails = 0
@@ -248,16 +247,14 @@ const ids = (n: ElementNode) => { const out: string[] = []; walkNodes([n], (x) =
 // ---------- components ----------
 {
   const p = fresh()
-  const made = materializeCatalogEntry(catalogEntry('card')!, p, (key) => {
-    const held = catalogEntry(key)
-    if (!held) return null
-    const inner = materializeCatalogEntry(held, p)
-    p.components.push(inner.def)
-    p.settings.tokens.push(...inner.tokens.filter((t) => !p.settings.tokens.some((x) => x.name === t.name)))
-    return inner.def
-  })
-  p.components.push(made.def)
-  p.settings.tokens.push(...made.tokens.filter((t) => !p.settings.tokens.some((x) => x.name === t.name)))
+  // a Card that holds a Button, written the way an agent writes one
+  const defOf = (name: string) => ({ id: crypto.randomUUID(), name, root: { id: crypto.randomUUID(), type: name, content: '', children: [] } })
+  const button = defOf('Button')
+  p.components.push(button)
+  write(p, '<button class="inline-flex h-9 items-center rounded-md px-4 text-sm"><span>Button</span></button>', button)
+  const card = defOf('Card')
+  p.components.push(card)
+  write(p, '<div class="rounded-xl border p-6"><h3 class="text-lg font-semibold" /><p class="text-sm" /><Button /></div>', card)
   setStyleTokens(p.settings.tokens.map((t) => t.name))
 
   // one write lands three filled Cards

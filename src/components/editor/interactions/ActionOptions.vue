@@ -1,23 +1,17 @@
 <script setup lang="ts">
-// ONE action in a trigger's section: what this element does when the section's
-// trigger fires, on one line.
+// The ONE action a trigger runs on the selected element: where it lands and how
+// it is aimed. The drawer's trigger view shows this beside the effect itself.
 //
-// The trigger is the section heading, so the row only has to say WHAT runs and
-// (for a click) in WHICH direction — "Open #modal", "Lift". A row may be ONE
-// effect wearing both engines: a class change that switches `display` and a
-// timeline that moves it. The engine is never named, and when/where is written
-// to EVERY half together — an effect whose two halves fired at different
-// moments, or landed on different elements, would simply be broken.
-//
-// What the effect DOES is shared by every element using it and is edited in the
-// bottom drawer (⋯ → Edit effect). What is left here is the long tail — target,
-// breakpoints, replay, scrub range — folded into the options strip, because a
-// value that applies must be reachable, not prominent.
+// The trigger is the view's heading, so the options only have to say WHERE the
+// effect lands and (for a click) in WHICH direction. An action may be ONE effect
+// wearing both engines: a class change that switches `display` and a timeline
+// that moves it. The engine is never named, and when/where is written to EVERY
+// half together — an effect whose two halves fired at different moments, or
+// landed on different elements, would simply be broken.
 import { computed } from 'vue'
-import { ChevronRight, Crosshair, Pencil, Play, Trash2, X } from 'lucide-vue-next'
+import { Crosshair, Play, Trash2, X } from 'lucide-vue-next'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import InputUI from '@/components/ui/InputUI.vue'
-import MenuUI from '@/components/ui/MenuUI.vue'
 import RowUI from '@/components/ui/RowUI.vue'
 import SelectUI from '@/components/ui/SelectUI.vue'
 import ValueFieldUI from '@/components/ui/ValueFieldUI.vue'
@@ -26,39 +20,31 @@ import { useComponents } from '@/composables/useComponents'
 import { useProject } from '@/composables/useProject'
 import { useInteraction } from '@/composables/useInteraction'
 import { useAnimation } from '@/composables/useAnimation'
-import { useEffects, type EffectPair } from '@/composables/useEffects'
+import { type EffectPair } from '@/composables/useEffects'
 import { useMotion } from '@/composables/useMotion'
 import { useSettings } from '@/composables/useSettings'
-import { useEffectsDrawer } from '@/composables/useEffectsDrawer'
 import { ACTION_VERBS, actionVerb, isDiscreteTrigger } from '@/lib/effectTriggers'
 import { SCRUB_DEFAULTS } from '@/lib/motion'
 import type { AnimationBinding, ElementNode } from '@/types/editor'
 
-const props = defineProps<{ pair: EffectPair; owner: ElementNode; open: boolean }>()
-const emit = defineEmits<{ toggle: [] }>()
+const props = defineProps<{ pair: EffectPair; owner: ElementNode }>()
 
 const { getElement, highlightElement } = useElement()
 const { findMasterNode } = useComponents()
 const { breakpoints } = useProject()
 const interactions = useInteraction()
 const animations = useAnimation()
-const effects = useEffects()
 const motion = useMotion()
 const { settings } = useSettings()
-const { openEffect } = useEffectsDrawer()
 const { pickingFor } = interactions
-
-const MENU_ITEM =
-  'flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs outline-none hover:bg-accent/30 focus-visible:bg-accent/30'
 
 const inter = computed(() => props.pair.interaction ?? null)
 const anim = computed(() => props.pair.animation ?? null)
-/** every binding this row stands for — one, or both halves of one effect */
+/** every binding this action stands for — one, or both halves of one effect */
 const halves = computed(() => [inter.value, anim.value].filter((b) => !!b))
-/** the half the row READS its when/where from; writes go to all of them */
+/** the half the options are READ from; writes go to all of them */
 const primary = computed(() => inter.value ?? anim.value!)
 
-const effectName = computed(() => effects.nameOf(props.pair))
 /** at least one half still resolves in its library */
 const resolved = computed(
   () =>
@@ -92,8 +78,8 @@ const targetName = computed(() => {
   const node = getElement(primary.value.targetId!) ?? findMasterNode(primary.value.targetId!)
   return node ? (node.ref ? `#${node.ref}` : node.type) : 'Missing'
 })
-/** by MEMBERSHIP, not identity: a pending pick may be the array this row made,
- *  and a computed hands back a fresh array every time it re-evaluates */
+/** by MEMBERSHIP, not identity: a pending pick may be the array this made, and
+ *  a computed hands back a fresh array every time it re-evaluates */
 const picking = computed(() => interactions.pendingPicks().some((b) => halves.value.includes(b)))
 function togglePicking() {
   pickingFor.value = picking.value ? null : [...halves.value]
@@ -118,7 +104,7 @@ const APPEAR_MODE_LABELS: Record<string, string> = {
 }
 // 'inherit' is the stored `undefined` — the site default
 // (settings.motion.appearMode). Naming it keeps the distinction: writing the
-// resolved value back would PIN every binding the moment its row was opened.
+// resolved value back would PIN every binding the moment it was shown.
 const APPEAR_MODES = computed(() => [
   {
     label: `Site default (${APPEAR_MODE_LABELS[settings.value.motion?.appearMode ?? 'once']})`,
@@ -154,21 +140,6 @@ function toggleBreakpoint(id: string) {
   for (const binding of halves.value) binding.breakpoints = next
 }
 
-/** a dot when something inside the strip is set away from its default — never
- *  for the target, which the row already names */
-const optionsSet = computed(() => {
-  if (primary.value.breakpoints) return true
-  if (inter.value?.scrollAt !== undefined) return true
-  return anim.value?.appearMode !== undefined || anim.value?.appearAt !== undefined
-})
-
-/** the drawer opens on the EFFECT when there is one, so both halves are there */
-function edit() {
-  if (props.pair.effect) openEffect('effect', props.pair.effect.id)
-  else if (inter.value) openEffect('interaction', inter.value.interactionId)
-  else if (anim.value) openEffect('animation', anim.value.animationId)
-}
-
 function remove() {
   if (anim.value) {
     motion.stop(anim.value, anim.value.targetId ?? props.owner.id)
@@ -180,65 +151,26 @@ function remove() {
 </script>
 
 <template>
-  <div
-    data-binding-row
-    class="rounded-xl border transition-colors"
-    :class="open ? 'border-accent bg-accent/5' : 'border-input hover:border-accent'"
-  >
-    <!-- the line: verb · effect · target -->
-    <div class="flex h-8 items-center gap-1 pr-1">
-      <button
-        type="button"
-        class="flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-xl px-2.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-accent"
-        @click="emit('toggle')"
-      >
-        <span v-if="verb" class="shrink-0 text-xs text-muted-foreground">{{ verb }}</span>
-        <span
-          class="min-w-0 flex-1 truncate text-xs font-medium"
-          :class="!resolved && 'text-danger'"
-        >
-          {{ effectName }}
-        </span>
-        <span
-          v-if="hasTarget"
-          class="max-w-20 shrink-0 truncate text-[10px] text-muted-foreground"
-          @mouseenter="previewTarget"
-          @mouseleave="clearPreview"
-        >
-          → {{ targetName }}
-        </span>
-        <span
-          v-if="optionsSet && !open"
-          class="size-1.5 shrink-0 rounded-full bg-accent-foreground/60"
+  <div data-binding-row class="flex flex-col gap-1 rounded-xl border border-input pt-1 pb-2">
+    <div class="flex h-7 items-center gap-1.5 pr-1 pl-2.5">
+      <span class="text-[9px] font-medium tracking-wide text-muted-foreground uppercase">Options</span>
+      <span v-if="verb" class="text-[10px] text-muted-foreground">· {{ verb }}</span>
+      <div class="ml-auto flex items-center gap-0.5">
+        <ButtonUI
+          v-if="anim && resolved"
+          variant="icon" size="sm" :icon="Play" tooltip="Play on the canvas"
+          class="w-6 text-muted-foreground"
+          @click="preview"
         />
-        <ChevronRight
-          class="size-3 shrink-0 text-muted-foreground transition-transform"
-          :class="open && 'rotate-90'"
+        <ButtonUI
+          variant="icon" size="sm" :icon="Trash2" tooltip="Remove action"
+          class="w-6 text-muted-foreground hover:!text-danger"
+          @click="remove"
         />
-      </button>
-
-      <ButtonUI
-        v-if="anim"
-        variant="icon" size="sm" :icon="Play" tooltip="Play on the canvas"
-        class="w-6 shrink-0 text-muted-foreground"
-        @click="preview"
-      />
-
-      <MenuUI width="w-44" side="bottom" align="right" label="Action options">
-        <template #default="{ close }">
-          <button type="button" :class="MENU_ITEM" @click="(edit(), close())">
-            <Pencil class="size-3.5" /> Edit effect
-          </button>
-          <div class="mx-1 my-1 h-px bg-input" />
-          <button type="button" :class="[MENU_ITEM, 'text-danger']" @click="(remove(), close())">
-            <Trash2 class="size-3.5" /> Remove
-          </button>
-        </template>
-      </MenuUI>
+      </div>
     </div>
 
-    <!-- the options strip: the long tail, folded by default -->
-    <div v-if="open && resolved" class="flex flex-col gap-1 border-t border-input/60 pb-2 pt-1.5">
+    <template v-if="resolved">
       <RowUI label="On">
         <ButtonUI
           variant="outline" size="sm" :icon="Crosshair"
@@ -328,14 +260,9 @@ function remove() {
       </RowUI>
 
       <p v-if="error" class="px-2.5 text-[10px] text-danger">{{ error }}</p>
-    </div>
+    </template>
 
     <!-- the effect was deleted from the library while bound here -->
-    <div v-else-if="open" class="flex items-center justify-between border-t border-input/60 px-2.5 py-2">
-      <p class="text-[10px] text-muted-foreground">This effect no longer exists.</p>
-      <ButtonUI variant="ghost" size="xs" :icon="X" class="text-muted-foreground" @click="remove">
-        Remove
-      </ButtonUI>
-    </div>
+    <p v-else class="px-2.5 text-[10px] text-muted-foreground">This effect no longer exists.</p>
   </div>
 </template>

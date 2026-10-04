@@ -30,6 +30,9 @@ import { useAuth } from '@/composables/useAuth'
 import { useModal } from '@/composables/useModal'
 import FormSubmissionsModal from '@/components/editor/forms/FormSubmissionsModal.vue'
 import { useComponents } from '@/composables/useComponents'
+import { useComponentBoard } from '@/composables/useComponentBoard'
+import { acceptsChildren } from '@/lib/treeOps'
+import { pushMasterStructure } from '@/lib/componentOps'
 import type { CollectionEntry, CollectionField, ElementNode } from '@/types/editor'
 
 const { selectedElement, getElement } = useElement()
@@ -39,6 +42,7 @@ const { backend } = useStructure()
 const changeElementType = (id: string, type: string) => backend.value.retype(id, type)
 const setElementArg = (id: string, arg: string | null) => backend.value.setArg(id, arg)
 const setElementLink = (id: string, link: string | null) => backend.value.setLink(id, link)
+const { masterFor } = useComponents()
 const { activePage, pages } = usePage()
 const { breakpoints } = useProject()
 const { settings } = useSettings()
@@ -121,8 +125,17 @@ const canLink = computed(() => {
     !isSlider.value
   )
 })
+// a link is per-instance with a component default, so the field shows what
+// this element actually renders with — its own link, else the one it inherits
+// from the master. Clearing it falls back to the master's rather than to
+// nothing, which is what an empty field means here.
 const link = computed({
-  get: () => selectedElement.value?.link ?? '',
+  get: () => {
+    const el = selectedElement.value
+    if (!el) return ''
+    const mapping = masterFor(el.id)
+    return el.link ?? (mapping && mapping.master !== el ? (mapping.master.link ?? '') : '')
+  },
   set: (value: string) => {
     if (selectedElement.value) setElementLink(selectedElement.value.id, value.trim() || null)
   },
@@ -758,7 +771,7 @@ const contentPlaceholder = computed(() => {
 // --- icon ---
 
 const { canBuild } = useAuth()
-const { masterFor, isHidden, setHidden } = useComponents()
+const { isHidden, setHidden } = useComponents()
 
 // --- the component instance the selection sits in ---
 //
@@ -813,6 +826,33 @@ const instanceParts = computed(() => {
     seen.set(p.label, n)
     return { ...p, label: `${p.label} ${n}` }
   })
+})
+
+// --- slot: a master container whose children are each instance's own ---
+//
+// Board only: a slot is declared on the component, never from a page. The
+// push carries the flag onto every instance (what one already held under it
+// becomes its content) and gives a fresh instance the master's children.
+const { boardActive, activeCard } = useComponentBoard()
+const { project } = useProject()
+const canSlot = computed(() => {
+  const node = selectedElement.value
+  const def = activeCard.value?.def
+  return (
+    !!node && !!def && boardActive.value && canBuild.value &&
+    node !== def.root && !masterFor(node.id) && acceptsChildren(node)
+  )
+})
+const isSlot = computed({
+  get: () => !!selectedElement.value?.slot,
+  set: (value) => {
+    const node = selectedElement.value
+    const def = activeCard.value?.def
+    if (!node || !def) return
+    if (value) node.slot = true
+    else delete node.slot
+    pushMasterStructure(project.value, def)
+  },
 })
 
 /** an icon's markup is not content a contributor may change: the server keeps
@@ -998,6 +1038,15 @@ const src = computed({
           @update:model-value="(v) => setHidden(part.node, !v)"
         />
       </RowUI>
+    </GroupPopover>
+
+    <GroupPopover v-if="canSlot" label="Component">
+      <RowUI label="Slot">
+        <ToggleUI v-model="isSlot" data-slot-toggle />
+      </RowUI>
+      <p v-if="isSlot" class="px-1 text-xs text-muted-foreground">
+        Each instance holds its own content here; what is inside now is the default a new one starts from.
+      </p>
     </GroupPopover>
 
     <GroupPopover v-if="isIcon" label="Icon">

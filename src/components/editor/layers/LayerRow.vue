@@ -86,7 +86,9 @@ const canHide = computed(() => canBuild.value && props.node.type !== 'body')
 const label = computed(() => layerLabel(props.node, masterFor))
 
 /** shown after the label when the label isn't already the type */
-const secondary = computed(() => (label.value === props.node.type ? '' : props.node.type))
+const secondary = computed(() =>
+  props.node.slot ? 'slot' : label.value === props.node.type ? '' : props.node.type,
+)
 
 // the three badges mirror the panels they open — and stand in for the `(+)`,
 // `{+}` and `[+]` markers the code editor used to show on the token line

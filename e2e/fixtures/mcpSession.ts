@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 // @ts-expect-error untyped server module
 import { exportSite } from '../../server/export.mjs'
+import { withComponents } from './components'
 
 // The in-process MCP harness shared by the mcp-* specs: the toolset and its
 // bundled runtime are plain ESM driven against an in-memory store. No server,
@@ -24,6 +25,8 @@ export interface McpSession {
   call: (name: string, args?: Record<string, unknown>) => Promise<any>
   tool: (name: string) => { description: string; inputSchema: Record<string, unknown> }
   stored: () => any
+  /** put ready-made components (e2e/fixtures/components.json) into Main */
+  seed: (keys: string[]) => Promise<void>
   /** the exported <body>… of the first route */
   html: () => Promise<string>
   /** the exported stylesheet — for a rule the renderer emits itself */
@@ -68,6 +71,9 @@ export async function mcpSession(
     call: (name: string, args: Record<string, unknown> = {}) => set.toolMap.get(name)!.handler(args),
     tool: (name: string) => set.toolMap.get(name)!,
     stored,
+    seed: async (keys: string[]) => {
+      store.set('guano-project:main', JSON.stringify(withComponents(stored(), keys)))
+    },
     html: async () => {
       const dir = mkdtempSync(join(tmpdir(), 'guano-mcp-'))
       try {

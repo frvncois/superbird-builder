@@ -92,6 +92,9 @@ export function parseHtml(input: string, components: string[] = []): ParseResult
   }
 
   const stack: ParsedNode[] = []
+  /** refused open tags, by name, whose matching close must be swallowed so one
+   * bad tag reports once instead of cascading */
+  const unknownOpen = new Map<string, number>()
   const push = (node: ParsedNode) => {
     const parent = stack[stack.length - 1]
     if (parent) parent.children.push(node)
@@ -128,6 +131,18 @@ export function parseHtml(input: string, components: string[] = []): ParseResult
       const end = input.indexOf('>', i)
       if (!match || end === -1) return bail(i, 'malformed closing tag')
       const tag = match[0]
+      // the close of a tag we already refused on the way in. Its open was
+      // reported and nothing was pushed, so without this the `</figure>` of an
+      // `<figure>` we just named produced a SECOND error about not closing
+      // whatever block it landed in — noise on top of the one real diagnostic,
+      // and in a cascade it buries it.
+      const skipping = unknownOpen.get(tag)
+      if (skipping) {
+        if (skipping === 1) unknownOpen.delete(tag)
+        else unknownOpen.set(tag, skipping - 1)
+        i = end + 1
+        continue
+      }
       const open = stack[stack.length - 1]
       if (!open) {
         fail(i, `</${tag}> closes nothing`)
@@ -154,14 +169,22 @@ export function parseHtml(input: string, components: string[] = []): ParseResult
     const { attrs, selfClosed } = head
     i = head.after
 
+    /** a refused open tag whose close must be swallowed rather than reported */
+    const refuseTag = (message: string) => {
+      fail(start, message)
+      if (!selfClosed && !isLenientVoidTag(tag)) {
+        unknownOpen.set(tag, (unknownOpen.get(tag) ?? 0) + 1)
+      }
+    }
+
     if (FORBIDDEN_TAGS.has(tag.toLowerCase())) {
-      fail(start, `<${tag}> is never allowed; script and style belong in the project's custom code`)
+      refuseTag(`<${tag}> is never allowed; script and style belong in the project's custom code`)
       continue
     }
 
     const resolved = typeForTag(tag, attrs, components)
     if (!resolved || !isRenderableType(resolved.type)) {
-      fail(start, `unknown element <${tag}>`)
+      refuseTag(`unknown element <${tag}>`)
       continue
     }
     if (resolved.note && !notes.includes(resolved.note)) notes.push(resolved.note)

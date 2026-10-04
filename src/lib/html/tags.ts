@@ -174,6 +174,7 @@ export const RESERVED_ATTRS = new Set([
   'data-ref',
   'data-field',
   'data-hidden',
+  'data-slot',
   'data-type',
   'data-icon',
   'data-interactions',

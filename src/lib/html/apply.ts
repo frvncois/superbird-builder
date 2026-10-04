@@ -186,6 +186,11 @@ export function applyHtml(
     if (!mapping || isInstanceWrapper(mapping)) addressable.push(n)
   })
   const byKey = nodesByShortId([root])
+  // every id in the tree, addressable or not: a node INSIDE an instance is a
+  // positional part and carries its id in the read, so echoing it back is
+  // normal and must stay silent. Only an id that names nothing at all is
+  // worth reporting.
+  const known = new Set(byKey.keys())
   for (const [key, node] of [...byKey]) if (!addressable.includes(node)) byKey.delete(key)
   const byRef = new Map<string, ElementNode>()
   for (const node of addressable) if (node.ref) byRef.set(node.ref, node)
@@ -197,13 +202,57 @@ export function applyHtml(
       eachParsed(node.children, visit)
     }
   }
+  //
+  // A claim that cannot be honoured is REPORTED, never dropped quietly. It
+  // used to `return` on all three conditions, and the duplicate was the one
+  // that bit: echo one id onto two elements — what copy-pasting a block during
+  // a restructure looks like — and the FIRST in document order took the node,
+  // so an overlay's close binding silently moved onto a new trigger wrapper
+  // while the response said `kept: 3, created: 1, refused: []`. `kept` counts
+  // an LCS pairing exactly as it counts a claim, so nothing downstream could
+  // tell "adopted the node you named" from "adopted a different one".
   for (const pass of ['data-id', 'data-ref'] as const) {
     eachParsed(children, (node) => {
       if (claim.has(node)) return
       const key = node.attrs[pass]
       if (!key) return
       const found = pass === 'data-id' ? byKey.get(key) : byRef.get(key)
-      if (!found || claimed.has(found) || !sameType(found.type, node.type)) return
+      const at = `${name(root)} > ${node.type}`
+      if (!found) {
+        // an id that names a node the write cannot address by id — a part
+        // inside an instance — is the ordinary round-trip and says nothing.
+        // An id that names NOTHING is a stale or foreign read, and the element
+        // it is on carries none of the identity the agent meant to keep.
+        if (pass === 'data-id' && !known.has(key)) {
+          warn(
+            at,
+            `data-id="${key}" matches nothing here, so it carried no identity: this element ` +
+              'was matched by position, or created new. Check it against your last read.',
+          )
+        }
+        return
+      }
+      if (claimed.has(found)) {
+        refuse(
+          at,
+          `${pass}="${key}" is on two elements in this write. One id is one node: honouring ` +
+            'the first would silently move that node — with its interactions and its ' +
+            'translations — onto whichever element you listed first. Give the new element no ' +
+            `${pass} and it is created fresh.`,
+        )
+        return
+      }
+      if (!sameType(found.type, node.type)) {
+        // a legitimate retype (a div becoming a section) is written WITHOUT the
+        // old id; echoing it asks for two incompatible things at once
+        warn(
+          at,
+          `${pass}="${key}" names a <${found.type}>, not a <${node.type}> — the id is ignored ` +
+            'and this element is matched by position instead. To change an element\'s type, ' +
+            'write it without the id (it is a new node), or keep the type and the id together.',
+        )
+        return
+      }
       claim.set(node, found)
       claimed.add(found)
     })
@@ -326,18 +375,25 @@ export function applyHtml(
     alignStructure(node, def.root)
     if (!parsed.children.length) return
 
+    //
+    // `owner` is the component whose parts THIS level belongs to — the host at
+    // the top, and the nested component once the walk steps into one. It used
+    // to be `def.name` all the way down, so a `<Button>` inside a `<Card>` that
+    // had to be written out was reported as "<Card> has 1 part here", naming a
+    // component the agent had written correctly.
     const fill = (
       instance: ElementNode[],
       master: ElementNode[],
       written: ParsedNode[],
       at: string,
+      owner: string,
     ) => {
       if (written.length !== master.length) {
         refuse(
           at,
-          `<${def.name}> has ${master.length} part${master.length === 1 ? '' : 's'} here and ` +
+          `<${owner}> has ${master.length} part${master.length === 1 ? '' : 's'} here and ` +
             `${written.length} ${written.length === 1 ? 'was' : 'were'} written. Write ` +
-            `<${def.name} /> to leave its parts alone, or change the component itself with ` +
+            `<${owner} /> to leave its parts alone, or change the component itself with ` +
             'update_component.',
         )
         return
@@ -350,15 +406,28 @@ export function applyHtml(
         if (!sameType(target.type, child.type)) {
           refuse(
             childPath,
-            `part ${i + 1} of <${def.name}> is a <${target.type}>, not a <${child.tag}>`,
+            `part ${i + 1} of <${owner}> is a <${target.type}>, not a <${child.tag}>`,
           )
           return
         }
-        fillPart(target, child, def.name, childPath)
-        fill(target.children, below.children, child.children, childPath)
+        fillPart(target, child, owner, childPath)
+        // a slot's children are this instance's own structure: written like
+        // any other level of the page, adopted by id/ref/LCS
+        if (below.slot) alignLevel(target, child.children, childPath)
+        // stepping into a nested instance hands ownership to IT: its parts are
+        // the inner component's, and so is the name a refusal has to say
+        else {
+          fill(
+            target.children,
+            below.children,
+            child.children,
+            childPath,
+            isComponentType(below.type) ? below.type : owner,
+          )
+        }
       })
     }
-    fill(node.children, def.root.children, parsed.children, path)
+    fill(node.children, def.root.children, parsed.children, path, def.name)
   }
 
   /**
@@ -416,6 +485,10 @@ export function applyHtml(
           setHidden(node, value)
           break
 
+        // the slot flag is the component's; reading it back is a no-op
+        case attr === 'data-slot':
+          break
+
         case attr === 'data-icon':
           // an icon's markup is per-instance state, but it is never IN the
           // HTML; writing the name back can only mean "unchanged"
@@ -447,12 +520,40 @@ export function applyHtml(
           )
           break
 
-        case attr === 'href':
-          shared('href', node.link)
+        case attr === 'href': {
+          // THIS placement's destination, not the component's. Every renderer
+          // already resolves a link own-first (`node.link ?? master.link`), so
+          // a per-instance href renders correctly; it was refused here, and
+          // copied back over by the push, which is what made a Button
+          // component unable to be a link.
+          //
+          // Written as given, NOT normalized against what it inherits: the
+          // old copy-down left every instance holding a copy of its master's
+          // link, and deleting those here would make a plain round-trip
+          // rewrite the stored tree. `adoptCodeOwned` drops a redundant copy
+          // on the next push, where changing the data is the point.
+          // `href=""` clears an override back to the master's.
+          assign(node, 'link', value)
           break
+        }
         case attr === 'source':
-        case attr === 'data-field':
           shared(attr, node.arg)
+          break
+
+        case attr === 'data-field':
+          // the generic shared-attribute advice ("change it with
+          // update_component") is actively wrong for a binding: putting the
+          // field on the component's own part binds EVERY instance of it to
+          // that one field, which is never what a per-entry value wants.
+          if ((parsed.attrs['data-field'] ?? '') !== (node.arg ?? '')) {
+            refuse(
+              path,
+              `'data-field' inside <${component}> would bind EVERY <${component}> on the site ` +
+                'to that field — a binding is the component\'s, not this instance\'s. Draw the ' +
+                'per-entry value with an element the page (or the surrounding component) owns, ' +
+                `beside the <${component}> rather than inside it.`,
+            )
+          }
           break
 
         case NEAR_MISS_BINDINGS.has(attr):
@@ -469,6 +570,9 @@ export function applyHtml(
     const has = (attr: string) => parsed.attrs[attr] !== undefined
     if (!has('id') && node.htmlId !== undefined) delete node.htmlId
     if (!has('src') && node.src !== undefined) delete node.src
+    // a dropped href means "this placement adds nothing", i.e. back to the
+    // master's link — the same thing an absent href means on the way in
+    if (!has('href') && node.link !== undefined) delete node.link
     if (!has('data-hidden') && node.hidden !== undefined) delete node.hidden
     if (!has('alt') && node.instanceAttributes?.alt !== undefined) {
       const attrs = { ...node.instanceAttributes }
@@ -508,6 +612,10 @@ export function applyHtml(
 
         case attr === 'data-ref':
           setRef(node, value, path)
+          break
+
+        case attr === 'data-slot':
+          setSlot(node, parsed, path)
           break
 
         case attr === 'class':
@@ -611,6 +719,9 @@ export function applyHtml(
     if (!has('data-ref') && node.ref !== undefined) delete node.ref
     if (!has('id') && node.htmlId !== undefined) delete node.htmlId
     if (!has('data-hidden') && node.hidden !== undefined) delete node.hidden
+    // only a master write may take a slot away; on a page the flag is the
+    // component's, and the serializer prints it, so an echo keeps it
+    if (opts.def && !has('data-slot') && node.slot !== undefined) delete node.slot
     if (!has(SOURCE_TYPES.has(node.type) ? 'source' : 'data-field') && node.arg !== undefined) {
       delete node.arg
     }
@@ -759,6 +870,28 @@ export function applyHtml(
       return
     }
     assign(node, 'content', text)
+  }
+
+  /**
+   * `data-slot` declares a SLOT on a component's master: a container whose
+   * children are each instance's own. Only a master write can set one — on a
+   * page the flag is the component's and arrives as an echo of the read.
+   */
+  function setSlot(node: ElementNode, parsed: ParsedNode, path: string) {
+    if (!opts.def) return
+    if (node === root) {
+      refuse(path, "the component's own element can't be a slot — mark a container inside it")
+      return
+    }
+    if (isComponentType(node.type) || isLeafType(node.type)) {
+      refuse(
+        path,
+        `<${parsed.tag}> can't be a slot: a slot is a container of this component's own ` +
+          '(a <div>, a <section>…) whose children each instance fills',
+      )
+      return
+    }
+    if (!node.slot) node.slot = true
   }
 
   /** `data-hidden` is the editor's hide, not the HTML `hidden` attribute: a

@@ -3,9 +3,7 @@ import { ref } from 'vue'
 
 // expand state — module-level because the column unmounts when it is toggled
 // off, and the tree should come back as the user left it. Groups default to
-// open, components to closed. Components are keyed by the def's id, NOT the
-// board card's key: a library preview's key changes the moment an edit copies
-// it into the project, and the row being edited must not snap shut.
+// open, components to closed. Components are keyed by the def's id.
 const expanded = ref<Record<string, boolean>>({})
 const openComponents = ref<Record<string, boolean>>({})
 </script>
@@ -57,8 +55,7 @@ function groupsOf(list: BoardCard[], prefix: string, sort: boolean): Group[] {
   const byCategory = new Map<string, BoardCard[]>()
   for (const card of list) {
     const keepAll = searching.value && matches(card.category)
-    const hit =
-      matches(card.def.name) || (!!card.preview && matches(card.preview.description))
+    const hit = matches(card.def.name)
     if (searching.value && !keepAll && !hit) continue
     const group = byCategory.get(card.category)
     if (group) group.push(card)
@@ -69,7 +66,7 @@ function groupsOf(list: BoardCard[], prefix: string, sort: boolean): Group[] {
     name,
     cards: sort ? [...cards].sort((a, b) => a.def.name.localeCompare(b.def.name)) : cards,
   }))
-  if (!sort) return groups // the library keeps the order it was authored in
+  if (!sort) return groups
   return groups.sort((a, b) => {
     if (a.name === UNCATEGORIZED) return 1
     if (b.name === UNCATEGORIZED) return -1
@@ -77,15 +74,9 @@ function groupsOf(list: BoardCard[], prefix: string, sort: boolean): Group[] {
   })
 }
 
-// The library lists what the project does NOT have yet. An entry moves up to
-// Project the moment it is edited here or used on a page — there is no
-// separate "add" step, so there is nothing to mark as added.
-const sections = computed(() => [
-  { title: 'Project', groups: groupsOf(cards.value.filter((c) => !c.preview), 'own:', true) },
-  { title: 'Library', groups: groupsOf(cards.value.filter((c) => c.preview), 'lib:', false) },
-])
+const sections = computed(() => [{ title: 'Project', groups: groupsOf(cards.value, 'own:', true) }])
 
-const hasOwn = computed(() => cards.value.some((c) => !c.preview))
+const hasOwn = computed(() => cards.value.length > 0)
 const noResults = computed(
   () => searching.value && sections.value.every((section) => !section.groups.length),
 )
@@ -123,8 +114,7 @@ const { onKeydown } = useLayerSurface({
     const owner = cards.value.find((c) => !!findNode(c.def.root.children, id))
     if (!owner) return
     openComponents.value[owner.def.id] = true
-    const section = owner.preview ? 'lib:' : 'own:'
-    expanded.value[`${section}${owner.category}`] = true
+    expanded.value[`own:${owner.category}`] = true
   },
 })
 
@@ -183,8 +173,7 @@ useDrawerEscape(panel, {
           v-if="section.title === 'Project' && !hasOwn"
           class="px-2.5 py-1 text-[10px] text-muted-foreground"
         >
-          Nothing yet. Edit one from the library below, use one on a page, or select an
-          element on a page and choose “Create component”.
+          Nothing yet. Select an element on a page and choose “Create component”.
         </p>
 
         <div v-for="group in section.groups" :key="group.key">
@@ -207,8 +196,7 @@ useDrawerEscape(panel, {
           <div v-if="isExpanded(group.key)" class="mt-0.5 mb-1 ml-3.5 border-l border-input pl-1">
             <template v-for="card in group.cards" :key="card.def.id">
               <div
-                :data-component="card.preview ? undefined : card.def.name"
-                :data-catalog="card.preview?.key"
+                :data-component="card.def.name"
                 class="group/row mr-1 flex h-7 items-center rounded-md pr-0.5 pl-1"
                 :class="activeCard?.def.id === card.def.id ? 'bg-accent/25' : 'hover:bg-accent/15'"
               >
@@ -225,7 +213,6 @@ useDrawerEscape(panel, {
                   />
                 </button>
                 <button
-                  v-tooltip="card.preview ? { text: card.preview.description, side: 'right' } : ''"
                   type="button"
                   data-row-main
                   class="flex h-full min-w-0 flex-1 items-center gap-1.5 text-left outline-none"
@@ -238,7 +225,6 @@ useDrawerEscape(panel, {
                   >{{ card.def.name }}</span>
                 </button>
                 <MenuUI
-                  v-if="!card.preview"
                   width="w-40"
                   class="opacity-0 group-hover/row:opacity-100 data-[open]:opacity-100"
                   trigger-class="flex size-6 items-center justify-center rounded-lg text-muted-foreground outline-none hover:bg-accent/30 focus-visible:ring-2 focus-visible:ring-accent"

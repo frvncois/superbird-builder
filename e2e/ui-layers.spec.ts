@@ -102,6 +102,13 @@ async function insertFromDock(page: Page, key: string) {
   await closeDock(page)
 }
 
+/** insert one of the project's components on the page from the ⌘E dock */
+async function insertComponent(page: Page, name: string) {
+  await page.keyboard.press('ControlOrMeta+e')
+  await page.locator('[data-dock-item^="component:"]', { hasText: new RegExp(`^${name}$`) }).first().click()
+  await closeDock(page)
+}
+
 /** drag one row onto another, landing in the given zone of the target row */
 async function dragRow(page: Page, from: string, to: string, zone: 'before' | 'after' | 'inside') {
   const a = await page.locator(`[data-layer-row="${from}"]`).boundingBox()
@@ -114,9 +121,9 @@ async function dragRow(page: Page, from: string, to: string, zone: 'before' | 'a
   await page.mouse.up()
 }
 
-/** expand a library card's layers in the Components drawer */
+/** expand a component's layers in the Components drawer */
 async function insertOnBoardSetup(page: Page) {
-  await page.locator('[data-catalog="alert"] [data-row-toggle]').click()
+  await page.locator('[data-component="Alert"] [data-row-toggle]').click()
   await expect(rows(page).first()).toBeVisible()
 }
 
@@ -283,10 +290,9 @@ test('one instance hides a part of its component; the other keeps it', async ({ 
   await openLayers(page)
 
   // two instances of the same component, side by side
-  // (using a library entry copies it into the project, so the second insert
-  // finds it among the project's own components)
+  // (the second insert finds it among the project's own components)
   await rows(page).first().click()
-  await insertFromDock(page, 'catalog:alert')
+  await insertComponent(page, 'Alert')
   await rows(page).first().click()
   await page.keyboard.press('ControlOrMeta+e')
   await page.locator('[data-dock-item^="component:"]', { hasText: 'Alert' }).first().click()
@@ -325,7 +331,7 @@ test('a component gains an element on the board, and its page instance follows',
 
   // put a Card on the page: an instance for the master edit to reach
   await rows(page).first().click()
-  await insertFromDock(page, 'catalog:card')
+  await insertComponent(page, 'Card')
   const pageRows = await rows(page).count()
 
   // edit the COMPONENT: expanding its row in the Components drawer shows its
@@ -351,7 +357,7 @@ test('removing an element from a component removes it from the page instance', a
   await openEditor(page)
   await openLayers(page)
   await rows(page).first().click()
-  await insertFromDock(page, 'catalog:alert')
+  await insertComponent(page, 'Alert')
 
   // delete the heading on the board — the instance on the page loses it too
   await rail(page, 'Components').click()
@@ -381,13 +387,13 @@ test('Pages and Components share one column; layers live inside each', async ({ 
   await expect(page.getByPlaceholder('Search pages, items…')).toBeHidden()
   await expect(page.locator('[data-board-card]').first()).toBeVisible()
 
-  // a component's layers unfold under its row, library entries included
-  await page.locator('[data-catalog="alert"] [data-row-toggle]').click()
+  // a component's layers unfold under its row
+  await page.locator('[data-component="Alert"] [data-row-toggle]').click()
   // the alert, its icon, the text column, its title and its description
   await expect(rows(page)).toHaveCount(5)
 
   // selecting on the board opens the component it belongs to
-  await page.locator('[data-board-card="catalog:card"]').getByText('Card title').click()
+  await page.locator('[data-board-card]', { hasText: 'Card title' }).first().getByText('Card title').click()
   await expect(rows(page).filter({ hasText: 'Card title' })).toBeVisible()
 })
 

@@ -17,8 +17,6 @@ import {
   renameComponent as renameComponentInProject,
   setComponentCategory,
 } from '@/lib/componentOps'
-import { catalogEntry, materializeCatalogEntry } from '@/lib/catalog'
-import { useSettings } from './useSettings'
 import { findNode, findParent, walkNodes } from '@/lib/tree'
 import { buildInstanceMap, isNodeHidden, setNodeHidden, type InstanceMapping } from '@/lib/instances'
 import { useAuth } from './useAuth'
@@ -40,14 +38,8 @@ const components = computed(() => project.value.components)
 
 const { cards, boardActive } = useComponentBoard()
 
-/** what a name can resolve to right now: the project's components, plus — on
- *  the board — the library previews it shows, which hold instances of each
- *  other by name exactly as project components do */
-const resolvable = computed(() =>
-  boardActive.value
-    ? [...components.value, ...cards.value.filter((c) => c.preview).map((c) => c.def)]
-    : components.value,
-)
+/** what a name can resolve to right now */
+const resolvable = computed(() => components.value)
 
 function findComponent(name: string): ComponentDef | null {
   return resolvable.value.find((c) => c.name === name) ?? null
@@ -173,32 +165,6 @@ export function useComponents() {
     if (detachInstance(project.value, activePage.value, instanceId)) selectElement(instanceId)
   }
 
-  /**
-   * Copies a library entry into the project as an ordinary component, adding
-   * the design tokens and shared effects it needs. Nothing links back to the
-   * catalog afterwards. Returns what was created, so the drawer can say so.
-   */
-  function addFromCatalog(key: string): { def: ComponentDef; tokens: string[] } | null {
-    const entry = catalogEntry(key)
-    if (!entry) return null
-    // what the entry holds comes first: the component the project already made
-    // from it, else that entry added right here — so the whole family lands in
-    // one tick, and one undo step
-    const made = materializeCatalogEntry(
-      entry,
-      project.value,
-      (held) =>
-        project.value.components.find((c) => c.source === held) ??
-        addFromCatalog(held)?.def ??
-        null,
-    )
-    // one synchronous tick: tokens first, so the classes referencing them are
-    // valid the moment the component exists, and one undo step for the lot
-    const tokens = useSettings().ensureTokens(made.tokens)
-    if (made.interactions.length) project.value.interactions.push(...made.interactions)
-    project.value.components.push(made.def)
-    return { def: made.def, tokens }
-  }
 
   /** Renames a component and every instance token in the project. */
   function renameComponent(id: string, rawName: string): string | null {
@@ -237,7 +203,6 @@ export function useComponents() {
     findMasterNode,
     createComponent,
     detachComponent,
-    addFromCatalog,
     renameComponent,
     duplicateComponent,
     setCategory,

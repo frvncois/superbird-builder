@@ -103,6 +103,13 @@ async function insertFromDock(page: Page, key: string) {
   await closeDock(page)
 }
 
+/** insert one of the project's components on the page from the ⌘E dock */
+async function insertComponent(page: Page, name: string) {
+  await page.keyboard.press('ControlOrMeta+e')
+  await page.locator('[data-dock-item^="component:"]', { hasText: new RegExp(`^${name}$`) }).first().click()
+  await closeDock(page)
+}
+
 
 /** type into an element on the canvas, the way a person does: double-click it */
 async function retype(page: Page, rowId: string, text: string) {
@@ -121,7 +128,7 @@ test('a component is given a Button: each instance says its own, and Button is s
 
   // two of them on the page
   await rows(page).first().click()
-  await insertFromDock(page, 'catalog:testimonial')
+  await insertComponent(page, 'Testimonial')
   await rows(page).first().click()
   await page.keyboard.press('ControlOrMeta+e')
   await page.locator('[data-dock-item^="component:"]', { hasText: /^Testimonial$/ }).first().click()
@@ -135,7 +142,7 @@ test('a component is given a Button: each instance says its own, and Button is s
   await rail(page, 'Components').click()
   await componentRow(page, 'Testimonial').locator('[data-row-toggle]').click()
   await rows(page).first().click() // the testimonial's own box
-  await insertFromDock(page, 'catalog:button')
+  await insertComponent(page, 'Button')
   await expect(componentRow(page, 'Button')).toBeVisible()
   // a component never offers to go inside itself, or inside what it holds
   await componentRow(page, 'Button').locator('[data-row-toggle]').click()

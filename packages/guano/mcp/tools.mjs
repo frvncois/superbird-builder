@@ -115,10 +115,12 @@ export function createToolSet({ api, runtime, elicit, hasElicitation = () => nul
     isComponentType,
     buildScopeRoots,
     isLeafElement,
+    isInstancePart,
     isRich,
     sanitizeRich,
     isKnownElement,
     SAFE_SRC,
+    SAFE_HREF,
     customSchemaError,
     sanitizeAttributes,
     isAllowedAttribute,
@@ -161,6 +163,7 @@ export function createToolSet({ api, runtime, elicit, hasElicitation = () => nul
     formEnabled,
     collectFormFields,
     sanitizeInlineSvg,
+    MAX_SVG_BYTES,
     lucideSvg,
     lucideNameOf,
     buildInstanceMap: sharedInstanceMap,
@@ -183,10 +186,7 @@ export function createToolSet({ api, runtime, elicit, hasElicitation = () => nul
     setComponentCategory,
     detachInstance,
     deleteComponent: deleteComponentDetaching,
-    CATALOG,
-    catalogEntry,
-    catalogDependencies,
-    materializeCatalogEntry,
+    nodesByShortId,
   } = runtime
 
   // ---------- the bundled icon table ----------
@@ -542,9 +542,14 @@ const sha256 = (s) => createHash('sha256').update(s).digest('hex')
  * human's open editor can legitimately advance the version between two calls,
  * not just its own stale read */
 const STALE_MESSAGE =
-  'the page changed since your last read/write. If the human has the editor open, their own ' +
+  'it changed since your last read/write. If the human has the editor open, their own ' +
   'edits advance the version between your calls — retrying with currentVersion is safe when ' +
   'you made the only changes since'
+
+/** the same, naming what actually moved — `edit_structure` and `edit_elements`
+ * both take a componentId, and "the page changed" sent agents looking at a
+ * page that had not. */
+const staleMessage = (what) => `the ${what} ${STALE_MESSAGE}`
 
 // ---------- session state (this MCP process only) ----------
 
@@ -783,16 +788,8 @@ function readHtml(project, html) {
   return { ok: true, roots: parsed.roots, notes: parsed.notes }
 }
 
-/**
- * The diagnostics an agent sees.
- *
- * `validateTree` reports the fact; `libraryHints` turns "Unknown component
- * 'Hero'" into the `add_library_components` call that fixes it when Hero is
- * sitting in the bundled library. One funnel, so a reporting path cannot be
- * added without the hint.
- */
-const diagnose = (project, root) =>
-  root ? libraryHints(project, validateTree(root, contextFromProject(project))) : []
+/** the diagnostics an agent sees — one funnel for every reporting path */
+const diagnose = (project, root) => (root ? validateTree(root, contextFromProject(project)) : [])
 
 function elementSummary(project, page, opts = {}) {
   // "own" (default) collapses each component instance to a single row and drops
@@ -934,7 +931,7 @@ function elementSummary(project, page, opts = {}) {
         const mapping = instMap.get(n.id)
         const by = hiddenBy ?? (isNodeHidden(n, mapping) ? n.id : null)
         const holds = isComponentType(n.type)
-        if (holds || (isLeafElement(n.type) && ELEMENTS[n.type])) {
+        if (holds || n.slot || (isInstancePart(n.type) && ELEMENTS[n.type])) {
           let text = {}
           if (opts.includeContent && !holds) {
             const own = n.content
@@ -948,12 +945,15 @@ function elementSummary(project, page, opts = {}) {
             id: n.id,
             type: n.type,
             ...(holds ? { component: n.type } : {}),
+            // this instance's own structure lives under it: insert there with
+            // edit_structure, or write it out inside the instance's HTML
+            ...(n.slot ? { slot: true, childCount: countDescendants(n.children ?? []) } : {}),
             ...(n.variants ? { variants: n.variants } : {}),
             ...(by ? { hidden: true, ...(by !== n.id ? { hiddenBy: by } : {}) } : {}),
             ...text,
           })
         }
-        walk(n.children, by)
+        if (!n.slot) walk(n.children, by)
       }
     }
     walk(wrapper.children, null)
@@ -981,7 +981,7 @@ function elementSummary(project, page, opts = {}) {
           })
           return
         }
-        visit(n.children ?? [], inComponent || isComponentType(n.type), path)
+        visit(n.children ?? [], n.slot ? false : inComponent || isComponentType(n.type), path)
         return
       }
       if ((mode === 'own' || mode === 'refs') && !inComponent && isComponentType(n.type)) {
@@ -1001,15 +1001,25 @@ function elementSummary(project, page, opts = {}) {
         return // collapse the whole instance subtree
       }
       out.push(summarize(n, path))
-      visit(n.children ?? [], inComponent || isComponentType(n.type), path)
+      visit(n.children ?? [], n.slot ? false : inComponent || isComponentType(n.type), path)
     })
   }
   // the body is the root: its own path is empty, and its children count from 0.
   // "ref-parts" is ONLY the ref'd instances, so it gets no body row.
-  const body = (page.elements ?? []).find((n) => n.type === 'body')
-  if (body) {
-    if (mode !== 'ref-parts') out.push(summarize(body, ''))
-    visit(body.children ?? [], false, '')
+  //
+  // `subtree` scopes the summary the way it already scopes the HTML. It did
+  // not, so `get_page {ref}` returned one element's markup beside every row on
+  // the page — which is most of what a targeted read was trying to avoid, and
+  // left `elementIds` (ids you are reading the page to find) as the only way
+  // to narrow it.
+  const root = opts.subtree
+    ? (findNode(page.elements ?? [], fullNodeId(page.elements ?? [], opts.subtree)) ??
+      (page.elements ?? []).find((n) => n.ref === opts.subtree))
+    : (page.elements ?? []).find((n) => n.type === 'body')
+  if (root) {
+    const inInstance = opts.subtree ? !!buildInstanceMap(project, page).get(root.id) : false
+    if (mode !== 'ref-parts') out.push(summarize(root, ''))
+    visit(root.children ?? [], root.slot ? false : inInstance || isComponentType(root.type), '')
   }
   // document order, which is what the walk already produced
   return out
@@ -1035,8 +1045,13 @@ function instanceParts(wrapper) {
   const walk = (nodes) => {
     for (const n of nodes ?? []) {
       const holds = isComponentType(n.type)
-      if (holds || (isLeafElement(n.type) && ELEMENTS[n.type])) flat.push(n)
-      walk(n.children)
+      // a slot is a part too — the container an agent inserts into — but what
+      // is under it is the page's own and is addressed directly.
+      // `isInstancePart` is the test, not leaf-ness: a :textarea, a :select
+      // and a :link all hold children, and are exactly the elements an
+      // instance has its own say about (its name, its placeholder, its href).
+      if (holds || n.slot || (isInstancePart(n.type) && ELEMENTS[n.type])) flat.push(n)
+      if (!n.slot) walk(n.children)
     }
   }
   walk(wrapper.children)
@@ -1081,7 +1096,7 @@ function resolveEditNode(page, edit, project = null, scopeDef = null) {
           inComponent = inside
           return true
         }
-        if (mark(n.children ?? [], inside || isComponentType(n.type))) return true
+        if (mark(n.children ?? [], n.slot ? false : inside || isComponentType(n.type))) return true
       }
       return false
     }
@@ -1109,16 +1124,18 @@ function resolveEditNode(page, edit, project = null, scopeDef = null) {
     return { node, inComponent }
   }
   if (edit.id) {
+    // the short `data-id` the HTML read prints is a valid address here too
+    const wanted = fullNodeId(page.elements ?? [], edit.id)
     let found = null
     let foundInComponent = false
     const visit = (nodes, inComponent) => {
       for (const n of nodes) {
-        if (n.id === edit.id) {
+        if (n.id === wanted) {
           found = n
           foundInComponent = inComponent
           return true
         }
-        if (visit(n.children ?? [], inComponent || isComponentType(n.type))) return true
+        if (visit(n.children ?? [], n.slot ? false : inComponent || isComponentType(n.type))) return true
       }
       return false
     }
@@ -1131,7 +1148,7 @@ function resolveEditNode(page, edit, project = null, scopeDef = null) {
     // what a host says about an instance it holds (its mirror) at all.
     for (const def of project?.components ?? []) {
       if (scopeDef && def !== scopeDef) continue
-      const master = findNode([def.root], edit.id)
+      const master = findNode([def.root], fullNodeId([def.root], edit.id))
       if (master) return { node: master, inComponent: false, masterDef: def }
     }
     throw new Error(
@@ -1210,8 +1227,18 @@ function resolveBindTarget(project, page, ownerNode, inComponent, rawTarget, raw
     }
     rawTarget = matches[0].id
   }
-  const target = rawTarget === 'null' || rawTarget === '' ? null : (rawTarget ?? null)
+  let target = rawTarget === 'null' || rawTarget === '' ? null : (rawTarget ?? null)
   if (target === null) return { targetId: null }
+  // the short `data-id` a page read prints is a valid address: it used to come
+  // back "is not an element in this page", which is both false and the most
+  // expensive refusal in the toolset (it sends the agent re-reading the page)
+  for (const roots of [page.elements ?? [], ...(project?.components ?? []).map((c) => [c.root])]) {
+    const full = fullNodeId(roots, target)
+    if (full !== target) {
+      target = full
+      break
+    }
+  }
   if (!inComponent) {
     if (!findNode(page.elements ?? [], target)) {
       // a MASTER node id deserves the same explanation as an instance-side id
@@ -1377,6 +1404,7 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
         ['attributes', edit.attributes !== undefined],
         ['background', edit.background !== undefined && edit.background !== ''],
         ['htmlId', edit.htmlId !== undefined && edit.htmlId !== ''],
+        ['link', edit.link !== undefined && edit.link !== ''],
         ['bindInteractions', edit.bindInteractions?.length],
         ['bindAnimations', edit.bindAnimations?.length],
         ['fieldAttrs', edit.fieldAttrs !== undefined],
@@ -1591,6 +1619,31 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
       }
     }
 
+    // --- slot (a master container) ---
+    // Declares that this container's CHILDREN are each instance's own. The
+    // push carries the flag onto every instance; what an instance already
+    // held under it becomes its content, and a fresh one starts from the
+    // master's children.
+    if (edit.slot !== undefined) {
+      if (typeof edit.slot !== 'boolean') {
+        errors.push('slot must be true or false')
+      } else if (!masterDef) {
+        errors.push('slot refused: a slot is declared on the component itself — address its node with componentId')
+      } else if (mapping) {
+        errors.push(`slot refused: this node is inside a nested <${mapping.def.name}> — declare the slot on ${mapping.def.name}`)
+      } else if (node === masterDef.root) {
+        errors.push("slot refused: the component's own element can't be a slot — mark a container inside it")
+      } else if (isComponentType(node.type) || isLeafElement(node.type)) {
+        errors.push(`slot refused: '${node.type}' is not a container`)
+      } else if (!!node.slot !== edit.slot) {
+        if (edit.slot) node.slot = true
+        else delete node.slot
+        pushMasterStructure(project, masterDef)
+        applied.push('slot')
+        changed = true
+      }
+    }
+
     // --- icon markup (icon only) ---
     // `icon` names a bundled Lucide icon; `svg` is custom markup. Both land as
     // sanitized markup on `node.svg` — the one thing a renderer ever reads.
@@ -1760,8 +1813,46 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
             const missing = q.pick.filter((id) => !ids.has(id))
             if (missing.length) bad.push(`pick ids ${missing.join(', ')} not in "${node.arg}"`)
           }
+          // A REFERENCE field stores the target entry's ID, while
+          // `upsert_entries` accepts a slug when WRITING one. So a filter
+          // written with that same slug compared a slug against an id, matched
+          // nothing, and shipped an empty list — accepted by this tool,
+          // rendered blank by every renderer, unmentioned by publish, and with
+          // no empty state on a bound slider to show for it. Resolve the slug
+          // here, and refuse a value that names no entry.
+          let refusedFilter = null
+          const filterField = q.filter?.field
+            ? (col?.fields ?? []).find((f) => f.name === q.filter.field)
+            : null
+          if (
+            !bad.length &&
+            filterField &&
+            (filterField.type === 'reference' || filterField.type === 'multi-reference') &&
+            typeof q.filter.equals === 'string' &&
+            q.filter.equals
+          ) {
+            const refCol = (project.collections ?? []).find((c) => c.id === filterField.refCollectionId)
+            const entries = refCol?.entries ?? []
+            const hit =
+              entries.find((e) => e.id === q.filter.equals) ??
+              entries.find((e) => e.slug === q.filter.equals) ??
+              entries.find((e) => e.name === q.filter.equals)
+            if (!hit) {
+              refusedFilter =
+                `listQuery refused: filter.equals "${q.filter.equals}" names no entry of ` +
+                `"${refCol?.name ?? 'the referenced collection'}" — a reference filter matches ` +
+                'the entry ID, and a slug that names nothing would have rendered an empty list' +
+                (entries.length
+                  ? ` (slugs: ${entries.slice(0, 8).map((e) => e.slug || e.name).join(', ')})`
+                  : '')
+            } else if (hit.id !== q.filter.equals) {
+              q.filter = { ...q.filter, equals: hit.id }
+            }
+          }
           if (bad.length) {
             errors.push(`listQuery refused: ${bad.join(', ')} not in collection "${node.arg}"`)
+          } else if (refusedFilter) {
+            errors.push(refusedFilter)
           } else {
             node.listQuery = q
             applied.push('listQuery')
@@ -1957,6 +2048,32 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
       }
     }
 
+    // --- link (where this element goes; '' clears) ---
+    //
+    // Per-instance with a component default, like `hidden`: a Button
+    // component's instances each need their OWN destination, which is the
+    // first thing anyone wants from a Button and used to require a second
+    // component. Written only where it differs from what the node inherits,
+    // so a master's link still reaches every instance that did not override
+    // it.
+    if (edit.link !== undefined) {
+      const value = String(edit.link ?? '')
+      if (localized) {
+        errors.push('link is not localizable — an @locale: switcher link is the same on every route')
+      } else if (value && value !== '@item' && !value.startsWith('@locale:') && !SAFE_HREF.test(value)) {
+        errors.push(
+          `link refused: "${value}" is not a usable destination — a path ("/about"), an anchor ` +
+            '("#faq"), an absolute http(s)/mailto/tel URL, "@item" (the entry\'s own page) or ' +
+            '"@locale:<code>" (this route in another locale)',
+        )
+      } else {
+        if (!value) delete node.link
+        else node.link = value
+        applied.push('link')
+        changed = true
+      }
+    }
+
     // --- custom attributes (allowlisted; replaces the whole set). SHARED
     //     state like classes: the renderer reads attributes from the mapped
     //     master inside an instance, so an instance-side write rendered
@@ -2101,6 +2218,7 @@ function masterNodeRows(project, def, opts = {}) {
       ...(n === def.root ? { root: true } : {}),
       ...(mapping ? { in: mapping.def.name } : {}),
       ...(n.variants ? { variants: n.variants } : {}),
+      ...(n.slot ? { slot: true } : {}),
       ...(n.arg ? { arg: n.arg } : {}),
       ...(n.link ? { link: n.link } : {}),
       ...(n.classes ? { classes: n.classes } : {}),
@@ -2203,7 +2321,7 @@ function applyComponentHtml(project, def, html) {
     ok: true,
     applied: { kept: result.kept, created: result.created, removed: result.removed },
     ...(result.warnings.length ? { warnings: result.warnings } : {}),
-    diagnostics: libraryHints(project, result.diagnostics),
+    diagnostics: result.diagnostics,
     updatedInstances,
     touchedPages,
   }
@@ -2214,42 +2332,6 @@ function touchedVersions(project, before) {
   return (project.pages ?? [])
     .filter((p) => before.get(p.id) !== pageVersion(project, p))
     .map((p) => ({ pageId: p.id, version: pageVersion(project, p) }))
-}
-
-// ---------- the bundled library ----------
-
-/** the project component made from a library entry, if it has one */
-const libraryComponent = (project, key) =>
-  (project.components ?? []).find((c) => c.source === key) ?? null
-
-/**
- * Copy a library entry into the project — what it holds first, then the
- * design tokens and shared effects it needs. The editor's `addFromCatalog`,
- * on a plain project. `report` collects what was created along the way.
- */
-function addLibraryEntry(project, key, report) {
-  const entry = catalogEntry(key)
-  if (!entry) return null
-  project.components = project.components ?? []
-  project.interactions = project.interactions ?? []
-  project.settings = project.settings ?? defaultSettings()
-  project.settings.tokens = project.settings.tokens ?? []
-  const made = materializeCatalogEntry(
-    entry,
-    project,
-    (held) => libraryComponent(project, held) ?? addLibraryEntry(project, held, report),
-  )
-  // never overwrite a token the project already has: the point of the library
-  // is that it restyles from the project's own palette
-  const have = new Set(project.settings.tokens.map((t) => t.name))
-  const tokens = made.tokens.filter((t) => !have.has(t.name) && !tokenError(t))
-  project.settings.tokens.push(...tokens)
-  project.interactions.push(...made.interactions)
-  project.components.push(made.def)
-  report.added.push({ key, def: made.def, holds: catalogDependencies(entry) })
-  report.tokens.push(...tokens.map((t) => t.name))
-  report.interactions.push(...made.interactions.map((i) => ({ id: i.id, name: i.name })))
-  return made.def
 }
 
 /**
@@ -2312,6 +2394,25 @@ function breakpointUsage(project, id) {
   return where
 }
 
+/**
+ * An element address → the FULL node id.
+ *
+ * `get_page` prints an 8-hex `data-id` (src/lib/html/ids.ts) and `applyHtml`
+ * resolves one back, so every tool that takes an `id` has to as well. It did
+ * not: `edit_structure`, `edit_elements` and `bind_interaction` all compared
+ * `n.id === key`, so the id an agent had just read came back "is not an
+ * element in this page" — which is false, and sends it re-reading a whole page
+ * to find a uuid it already had in short form.
+ *
+ * Accepts a full uuid, an undashed uuid, and any prefix the read emitted.
+ * Returns the key unchanged when nothing matches, so the caller's own
+ * not-found message is still the one the agent sees.
+ */
+function fullNodeId(roots, key) {
+  if (!key || typeof key !== 'string') return key
+  return nodesByShortId(roots).get(key)?.id ?? key
+}
+
 /** the id of the page node carrying `#ref`, or null. Refs are unique per page
  * (validateTree enforces it), so the first match is the only one. */
 function refNodeId(page, ref) {
@@ -2322,22 +2423,6 @@ function refNodeId(page, ref) {
     if (!found && n.ref === want) found = n.id
   })
   return found
-}
-
-/** "Unknown component 'Hero'" is a dead end when Hero is sitting in the
- * library: say which tool turns the name into a component */
-function libraryHints(project, diagnostics) {
-  return diagnostics.map((d) => {
-    const m = /^Unknown component '([A-Z][a-zA-Z0-9-]*)'/.exec(d.message ?? '')
-    const entry = m ? CATALOG.find((e) => e.name === m[1]) : null
-    if (!entry || libraryComponent(project, entry.key)) return d
-    return {
-      ...d,
-      message:
-        `${d.message} — the bundled library has a ${entry.name} (${entry.description}). ` +
-        `Copy it into the project first: add_library_components {keys: ["${entry.key}"]}`,
-    }
-  })
 }
 
 /**
@@ -2359,6 +2444,11 @@ function makeComponentFrom(project, page, elementId, rawName, category) {
   // button keeps working), and the source nodes are stripped so the instance
   // INHERITS from the master instead of shadowing it
   const { cloned, idMap } = cloneForMaster(source)
+  const twin = colorTwinOf(project, { name, root: { type: name, children: [cloned] } })
+  if (twin) {
+    const { saved: _saved, ...why } = colorTwinRefusal(name, twin)
+    return why
+  }
   // bindings elsewhere on this page that target INTO the extracted subtree
   // cannot survive: the published site scopes effects per component instance,
   // so a cross-boundary target is not expressible. Surface them loudly.
@@ -2426,6 +2516,7 @@ function makeComponentFrom(project, page, elementId, rawName, category) {
  * the same rules and a `replace` that echoes back `data-id`s keeps those nodes.
  */
 function runStructureOp(project, root, op, def, where) {
+  let shortIndex = null
   const find = (key) => {
     if (!key) return null
     // the COMPONENT's id addresses its root: that is the id list_components
@@ -2436,6 +2527,9 @@ function runStructureOp(project, root, op, def, where) {
     walkNodes([root], (n) => {
       if (!hit && (n.id === key || n.ref === key)) hit = n
     })
+    // the short `data-id` form the HTML read prints, resolved the same way
+    // applyHtml resolves it
+    if (!hit) hit = (shortIndex ??= nodesByShortId([root])).get(key) ?? null
     return hit
   }
   const parentOf = (node) => {
@@ -2914,6 +3008,102 @@ function collectPublishWarnings(project) {
  * is where it is said. Warnings, never refusals: a landing page may want the
  * body transition.
  */
+// ---------- "the same thing again, in another colour" ----------
+//
+// A review session once left a media library of one icon in six shades and a
+// components list of one Card in four colours. Both are the same mistake —
+// colour is a CLASS on the thing, not a reason for another thing — and both
+// are cheaper to refuse at the write than to clean up after.
+
+/** non-colour forms of the families whose other values are colours */
+const NOT_A_COLOR = {
+  bg: /^(?:auto$|cover$|contain$|center$|top|bottom|left|right|repeat|no-repeat|fixed$|local$|scroll$|clip-|origin-|gradient-|linear-|radial-|conic-|none$|blend-|size-|position-)/,
+  text: /^(?:xs|sm|base|lg|xl|[2-9]xl|left|center|right|justify|start|end|wrap|nowrap|balance|pretty|ellipsis|clip)$/,
+  border: /^(?:[xytblrse]|solid|dashed|dotted|double|hidden|none|collapse|separate|spacing|\d+)(?:-\d+)?$/,
+  ring: /^(?:\d+$|inset$|offset-\d+$)/,
+  outline: /^(?:\d+$|none$|hidden$|solid$|dashed$|dotted$|double$|offset-)/,
+  stroke: /^\d+$/,
+  divide: /^(?:[xy](?:-\d+|-reverse)?$|solid$|dashed$|dotted$|double$|none$)/,
+  decoration: /^(?:\d+$|solid$|double$|dotted$|dashed$|wavy$|auto$|from-font$)/,
+  shadow: /^(?:xs|sm|md|lg|xl|2xl|none|inner)$/,
+  from: /^\d+%$/, via: /^\d+%$/, to: /^\d+%$/,
+  placeholder: /^opacity-/,
+  accent: /^$/, caret: /^$/, fill: /^$/,
+}
+const ARBITRARY_COLOR_RE = /^\[(?:#|rgb|hsl|oklch|oklab|color\(|var\()/
+/** true for a class that only chooses a colour: `bg-red-500`, `md:text-primary/80` */
+function isColorClass(cls) {
+  const base = cls.slice(cls.lastIndexOf(':') + 1).replace(/^-/, '')
+  if (base === 'shadow') return false
+  const dash = base.indexOf('-')
+  if (dash === -1) return false
+  const not = NOT_A_COLOR[base.slice(0, dash)]
+  if (!not) return false
+  const value = base.slice(dash + 1)
+  if (not.test(value)) return false
+  if (value.startsWith('[')) return ARBITRARY_COLOR_RE.test(value)
+  return true
+}
+/** a component's shape — structure and classes, text left out, and with
+ * `colors: false` every colour class left out too */
+function componentShape(def, { colors }) {
+  const sig = (n) => {
+    const classes = (n.classes ?? '').split(/\s+/).filter((c) => c && (colors || !isColorClass(c)))
+    return `${n.type}|${n.arg ?? ''}|${n.link ?? ''}|${classes.join(' ')}[${(n.children ?? []).map(sig).join(',')}]`
+  }
+  return (def.root.children ?? []).map(sig).join(',')
+}
+/** the existing component `def` repeats — exactly, or in other colours */
+function colorTwinOf(project, def) {
+  const plain = componentShape(def, { colors: false })
+  if (!plain) return null
+  for (const other of project.components ?? []) {
+    if (other === def || other.id === def.id) continue
+    if (componentShape(other, { colors: false }) !== plain) continue
+    return { def: other, identical: componentShape(other, { colors: true }) === componentShape(def, { colors: true }) }
+  }
+  return null
+}
+function colorTwinRefusal(name, twin) {
+  if (twin.identical) {
+    return {
+      ok: false,
+      saved: false,
+      reason: 'duplicate-component',
+      message: `"${name}" is "${twin.def.name}" again, element for element — write '<${twin.def.name} />' instead.`,
+      componentId: twin.def.id,
+    }
+  }
+  return {
+    ok: false,
+    saved: false,
+    reason: 'colour-twin',
+    message:
+      `"${name}" is "${twin.def.name}" in other colours: nothing differs but bg-/text-/border-… classes. ` +
+      `One component, one look per option — set_component_variants {componentId: "${twin.def.id}", ` +
+      `axes: [{name: "tone", options: [...]}]}, write each option's colours with edit_elements ` +
+      `{componentId, variant: "tone:<option>", classes}, and an instance wears one with ` +
+      `edit_elements {variants: {tone: "<option>"}}. See get_guide {section: "variants"}.`,
+    componentId: twin.def.id,
+  }
+}
+
+/** a single-colour SVG that would work as an inline icon: as a FILE it can
+ * only ever be that one colour, which is how a library fills with copies */
+function monochromeIconMarkup(markup) {
+  if (markup.length > MAX_SVG_BYTES) return false
+  // what the inline sanitizer would drop or cannot recolour faithfully
+  if (/<(?:text|tspan|image|style|filter|use|foreignObject|pattern|symbol|linearGradient|radialGradient)\b/i.test(markup)) return false
+  if (!sanitizeInlineSvg(markup)) return false
+  const paints = new Set()
+  for (const m of markup.matchAll(/(?:fill|stroke|stop-color|color)\s*[=:]\s*["']?\s*([^"';\s>]+)/gi)) {
+    const v = m[1].toLowerCase()
+    if (['none', 'currentcolor', 'inherit', 'transparent'].includes(v) || v.startsWith('url(')) continue
+    paints.add(v)
+  }
+  return paints.size <= 1
+}
+
 function designWarnings(project) {
   const warnings = []
   const published = (project.pages ?? []).filter((p) => p.status === 'published')
@@ -2921,12 +3111,17 @@ function designWarnings(project) {
   const masterByName = new Map(components.map((c) => [c.name, c]))
   const classesOf = (n) => n.classes ?? ''
   /** every node that renders: page nodes outside instances, and masters */
+  // `mm` is the tree's instance map, handed to the checks that have to read a
+  // node the way a RENDERER reads it — a mapped node's shared state lives on
+  // its master, so a check that looks only at the node's own keys reports on
+  // half the element.
   const eachRendered = (fn) => {
     for (const page of published) {
+      const mm = buildInstanceMap(project, page)
       const visit = (nodes, inInstance) => {
         for (const n of nodes) {
-          if (!inInstance) fn(n, `page "${page.name}"`)
-          visit(n.children ?? [], inInstance || isComponentType(n.type))
+          if (!inInstance) fn(n, `page "${page.name}"`, mm)
+          visit(n.children ?? [], n.slot ? false : inInstance || isComponentType(n.type))
         }
       }
       visit(page.elements ?? [], false)
@@ -2934,10 +3129,11 @@ function designWarnings(project) {
     // a master's own nodes — not what sits inside an instance it holds, whose
     // classes are the inner component's
     for (const c of components) {
+      const mm = sharedInstanceMap([c.root], components)
       const visit = (nodes) => {
         for (const n of nodes) {
           if (isComponentType(n.type)) continue
-          fn(n, `component ${c.name}`)
+          fn(n, `component ${c.name}`, mm)
           visit(n.children ?? [])
         }
       }
@@ -3195,6 +3391,7 @@ function designWarnings(project) {
   const nonDefault = locales.filter((l) => l !== (project.defaultLocale || 'en'))
   if (nonDefault.length) {
     const untranslated = []
+    const flagStructural = structuralFlagger(project)
     for (const page of published) {
       const mm = buildInstanceMap(project, page)
       walkNodes(page.elements ?? [], (n) => {
@@ -3205,6 +3402,10 @@ function designWarnings(project) {
         )
         for (const [name, value] of Object.entries(attrs)) {
           if (!isLocalizableAttribute(name) || !String(value).trim()) continue
+          // the same gate the worklist applies: a bare number, a glyph or a
+          // locale label is not work left, so naming it here would contradict
+          // the worklist's own `looksStructural` advice
+          if (flagStructural(value)) continue
           const missing = nonDefault.filter((l) => !n.locales?.[l]?.attributes?.[name])
           if (missing.length) {
             untranslated.push(`${name} on :${n.type} in page "${page.name}" (${missing.join(', ')})`)
@@ -3248,10 +3449,34 @@ function designWarnings(project) {
         'Delete them (delete_interaction / delete_animation) or bind them.',
     })
   }
-  // 5. forms — the ways an enabled form silently collects nothing
+  // 5. components that are another one in other colours (a duplicate that
+  // was then restyled slips past the create-time refusal)
+  const twins = []
+  const seenTwin = new Set()
+  for (const c of components) {
+    const twin = colorTwinOf(project, c)
+    if (!twin) continue
+    const key = [c.id, twin.def.id].sort().join(':')
+    if (seenTwin.has(key)) continue
+    seenTwin.add(key)
+    twins.push(`${c.name} ↔ ${twin.def.name}${twin.identical ? ' (identical)' : ''}`)
+  }
+  if (twins.length) {
+    warnings.push({
+      kind: 'colour-twin-components',
+      pairs: twins.slice(0, 8),
+      message:
+        'components that differ only by colour (or not at all): ' +
+        twins.slice(0, 3).join('; ') +
+        (twins.length > 3 ? ` (+${twins.length - 3} more)` : '') +
+        '. Fold each pair into ONE component with a variant axis (set_component_variants) and ' +
+        'delete_component {detach: true} the other. See get_guide {section: "variants"}.',
+    })
+  }
+  // 6. forms — the ways an enabled form silently collects nothing
   const formIssues = []
   const seenForm = new Set()
-  eachRendered((n, where) => {
+  eachRendered((n, where, mm) => {
     if (n.type !== 'form') return
     if (seenForm.has(`${where}:${n.id}`)) return
     seenForm.add(`${where}:${n.id}`)
@@ -3268,7 +3493,20 @@ function designWarnings(project) {
     // form wired by custom code), so an absent config is never a warning
     if (!formEnabled(config)) return
 
-    const { fields, unnamed, duplicates } = collectFormFields(n, (child) => child.attributes)
+    // read each control the way the EXPORT reads it (export.mjs, buildFormManifest):
+    // the shared layer from the master when the control is a component part,
+    // then this placement's own `instanceAttributes`. Reading `child.attributes`
+    // alone reported "no NAMED field" for a form built the way the guide says to
+    // build one — one Input component, named per placement — in the same
+    // response whose `stats.forms` listed the names.
+    const { fields, unnamed, duplicates } = collectFormFields(n, (child) => {
+      const mapping = mm?.get(child.id)
+      return mergeAttributeLayers(
+        mapping ? mapping.master.attributes : child.attributes,
+        child.instanceAttributes,
+        undefined,
+      )
+    })
     if (!fields.length) {
       formIssues.push(
         `the form in ${where} accepts submissions but has no NAMED field — only a control with ` +
@@ -3289,9 +3527,17 @@ function designWarnings(project) {
     }
     let hasSubmit = false
     walkNodes(n.children ?? [], (c) => {
-      if (c.type === 'button' || (c.type === 'input' && c.attributes?.type === 'submit')) {
-        hasSubmit = true
-      }
+      // the same master-aware read as the field scan above: a submit <input>
+      // that is a component part carries its `type` on the master
+      const type =
+        c.type === 'input'
+          ? mergeAttributeLayers(
+              mm?.get(c.id)?.master.attributes ?? c.attributes,
+              c.instanceAttributes,
+              undefined,
+            ).type
+          : null
+      if (c.type === 'button' || type === 'submit') hasSubmit = true
     })
     if (!hasSubmit) {
       formIssues.push(`the form in ${where} has no submit button, so a visitor cannot send it`)
@@ -3360,6 +3606,27 @@ function looksStructural(value) {
   if (/^(?:yes|no|true|false|on|off)$/i.test(v)) return true
   if (!/[\p{L}\p{N}]/u.test(v)) return true // no letters/digits → punctuation/glyph only
   return false
+}
+
+/**
+ * `looksStructural` plus the project's own locale codes: a switcher label
+ * ("EN", "FR | DE") reads as prose to the generic heuristic but must NOT be
+ * translated (run #2, F8).
+ *
+ * ONE implementation, shared by the translation worklist and the publish
+ * warning. They disagreed: the worklist flagged a placeholder of "8" as
+ * `looksStructural` (skip it), and `publish` then reported the same string as
+ * an untranslated attribute — in a message promising that
+ * "missingTranslatable: 0 now means it". The only way out was to write "8" as
+ * the French for "8".
+ */
+function structuralFlagger(project) {
+  const localeCodes = new Set((project.locales ?? []).map((l) => l.toLowerCase()))
+  const isLocaleLabel = (value) => {
+    const parts = String(value).trim().split(/\s*[|/·•,]\s*/).filter(Boolean)
+    return parts.length > 0 && parts.every((p) => localeCodes.has(p.toLowerCase()))
+  }
+  return (value) => looksStructural(value) || isLocaleLabel(value)
 }
 
 /** extension → mime for local-file uploads. The server re-validates by magic
@@ -3942,17 +4209,20 @@ const tools = [
     handler: async (args) => {
       const { project } = await loadTargetProject()
       const page = findPage(project, args.pageId)
+      const subtree = args.ref || args.id
       let elements = elementSummary(project, page, {
         includeContent: args.includeContent,
         includeInteractions: args.includeInteractions,
         mode: args.elements,
+        subtree,
       }) ?? [] // mode "none" omits the summary
       const totalElements = elements.length
       if (args.elementIds?.length) {
-        const wanted = new Set(args.elementIds)
+        // short `data-id`s are valid addresses everywhere else now, so they
+        // are valid here
+        const wanted = new Set(args.elementIds.map((k) => fullNodeId(page.elements ?? [], k)))
         elements = elements.filter((e) => wanted.has(e.id))
       }
-      const subtree = args.ref || args.id
       const html = args.summaryOnly
         ? undefined
         : pageToHtml(page, project, { mode: args.mode, subtree })
@@ -4050,7 +4320,7 @@ const tools = [
 
       const current = pageVersion(project, page)
       if (args.version !== current) {
-        return { saved: false, reason: 'stale-version', message: STALE_MESSAGE, currentVersion: current }
+        return { saved: false, reason: 'stale-version', message: staleMessage('page'), currentVersion: current }
       }
       const read = readHtml(project, args.html)
       if (!read.ok) return { saved: false, reason: read.reason, diagnostics: read.diagnostics }
@@ -4066,7 +4336,7 @@ const tools = [
       if (args.fresh) body.children = []
 
       const result = applyHtml(body, read.roots, { project, validate: contextFromProject(project) })
-      result.diagnostics = libraryHints(project, result.diagnostics)
+      result.diagnostics = result.diagnostics
       await saveTargetProject(project)
 
       const notes = [...(read.notes ?? [])]
@@ -4181,7 +4451,7 @@ const tools = [
       if (!def && !page) throw new Error('pass a `pageId` or a `componentId`')
       const current = def ? componentVersion(project, def) : pageVersion(project, page)
       if (args.version !== current) {
-        return { saved: false, reason: 'stale-version', message: STALE_MESSAGE, currentVersion: current }
+        return { saved: false, reason: 'stale-version', message: staleMessage(def ? 'component' : 'page'), currentVersion: current }
       }
       const root = def ? def.root : (page.elements ?? []).find((n) => n.type === 'body')
       if (!root) throw new Error('the page has no body')
@@ -4277,6 +4547,94 @@ const tools = [
       project.pages.push(page)
       await saveTargetProject(project)
       return { saved: true, pageId: page.id, slug: path, version: pageVersion(project, page) }
+    },
+  },
+  {
+    name: 'update_page',
+    description:
+      "Rename a page, change its slug, or publish/unpublish it (`status`). Takes the page's " +
+      '`version`. This is the only way to change a status after create_page — a draft ' +
+      'template keeps its entry routes out of the export. Requires a target.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        pageId: { type: 'string' },
+        version: { type: 'string' },
+        name: { type: 'string' },
+        slug: { type: 'string', description: 'route path, e.g. /about' },
+        status: { type: 'string', enum: ['published', 'draft'] },
+      },
+      required: ['pageId', 'version'],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const { project } = await loadTargetProject()
+      const page = findPage(project, args.pageId)
+      const current = pageVersion(project, page)
+      if (args.version !== current) {
+        return { saved: false, reason: 'stale-version', message: staleMessage('page'), currentVersion: current }
+      }
+      const changed = []
+      if (args.name !== undefined) {
+        const name = String(args.name).trim()
+        if (!name) throw new Error('a page name cannot be empty')
+        if (name !== page.name) {
+          page.name = name
+          changed.push('name')
+        }
+      }
+      if (args.slug !== undefined && String(args.slug) !== page.path) {
+        const path = String(args.slug)
+        if (!path.startsWith('/')) throw new Error('slug must start with "/"')
+        // a template page's routes are minted from the COLLECTION's name, not
+        // from its own path — renaming the page would move nothing
+        if (page.collectionId) {
+          return {
+            saved: false,
+            reason: 'collection-template',
+            message:
+              'this is a collection template page: its entry routes come from the collection, ' +
+              'so change the URL prefix with update_collection instead.',
+          }
+        }
+        if (page.path === '/' && path !== '/') {
+          return {
+            saved: false,
+            reason: 'home-slug',
+            message: 'the home page is the site root — its slug stays "/"',
+          }
+        }
+        if ((project.pages ?? []).some((p) => p !== page && p.path === path)) {
+          return {
+            saved: false,
+            reason: 'slug-taken',
+            message: `a page with slug "${path}" already exists`,
+          }
+        }
+        page.path = path
+        changed.push('slug')
+      }
+      if (args.status !== undefined && args.status !== page.status) {
+        page.status = args.status
+        changed.push('status')
+      }
+      if (!changed.length) {
+        return { saved: true, pageId: page.id, changed: [], version: current, note: 'nothing to change' }
+      }
+      await saveTargetProject(project)
+      return {
+        saved: true,
+        pageId: page.id,
+        name: page.name,
+        slug: page.path,
+        status: page.status,
+        changed,
+        version: pageVersion(project, page),
+        // a renamed route is a route nothing links to any more
+        ...(changed.includes('slug')
+          ? { note: 'links to the old slug are now dead — check anything pointing at it' }
+          : {}),
+      }
     },
   },
   {
@@ -4446,7 +4804,6 @@ const tools = [
             id: def.id,
             name: def.name,
             ...(def.category ? { category: def.category } : {}),
-            ...(def.source ? { source: def.source } : {}),
             ...(def.variants?.length ? { variants: def.variants } : {}),
             ...(nestedComponentNames(def).length ? { holds: nestedComponentNames(def) } : {}),
             instances,
@@ -4464,8 +4821,8 @@ const tools = [
       'Make a shared component, either from scratch with `html` (no page involved; the response ' +
       'returns element ids ready for edit_elements {componentId}) or from an existing element ' +
       'with pageId + id + version, which turns its subtree into the master and wraps the ' +
-      'original as an instance. Check list_library first — copying a library entry and ' +
-      'restyling it is less work than building one. Styles and interactions on inner elements ' +
+      'original as an instance. Check list_components first — a piece the project has is reused, ' +
+      'never rebuilt. Styles and interactions on inner elements ' +
       'are SHARED across instances; text falls back to the master\'s and is overridable per ' +
       'instance. Requires a target. See get_guide {section: "components"}.',
     inputSchema: {
@@ -4513,6 +4870,12 @@ const tools = [
           const { ok: _ok, ...why } = done
           return { saved: false, ...why }
         }
+        const twin = colorTwinOf(project, def)
+        if (twin) {
+          project.components = project.components.filter((c) => c !== def)
+          const { ok: _ok, ...why } = colorTwinRefusal(name, twin)
+          return why
+        }
         await saveTargetProject(project)
         return {
           saved: true,
@@ -4532,7 +4895,7 @@ const tools = [
       const page = findPage(project, args.pageId)
       const current = pageVersion(project, page)
       if (args.version !== current) {
-        return { saved: false, reason: 'stale-version', message: STALE_MESSAGE, currentVersion: current }
+        return { saved: false, reason: 'stale-version', message: staleMessage('page'), currentVersion: current }
       }
       const rootId = args.id ?? refNodeId(page, args.ref)
       if (!rootId) {
@@ -4633,7 +4996,7 @@ const tools = [
         const current = pageVersion(project, page)
         if (versionFor.get(pageId) !== current) stale.push({ pageId, currentVersion: current })
       }
-      if (stale.length) return { saved: false, reason: 'stale-version', message: STALE_MESSAGE, stale }
+      if (stale.length) return { saved: false, reason: 'stale-version', message: staleMessage('page'), stale }
 
       const results = []
       const failures = []
@@ -4717,7 +5080,7 @@ const tools = [
       if (args.html !== undefined) {
         const current = componentVersion(project, def)
         if (args.version !== current) {
-          return { saved: false, reason: 'stale-version', message: STALE_MESSAGE, currentVersion: current }
+          return { saved: false, reason: 'stale-version', message: staleMessage('component'), currentVersion: current }
         }
       }
       const before = pageVersions(project)
@@ -4859,18 +5222,27 @@ const tools = [
           return used
         })
         .map((p) => ({ pageId: p.id, name: p.name }))
+      // a component HOLDING it is a use too, even with no instance on any page.
+      // Computed BEFORE the usedOn branch: a component held by another one
+      // normally has instances as well, so the pages branch returned first and
+      // `heldBy` — the field that says WHERE the thing actually lives, and the
+      // one the guide promises — was never reported at all.
+      const heldBy = (project.components ?? [])
+        .filter((c) => c !== def && nestedComponentNames(c).includes(def.name))
+        .map((c) => ({ componentId: c.id, name: c.name }))
       if (usedOn.length) {
         return {
           saved: false,
           reason: 'in-use',
-          message: `":${def.name}:" still has instances — pass detach: true to turn them into plain elements and delete it`,
+          message:
+            `":${def.name}:" still has instances — pass detach: true to turn them into plain elements and delete it` +
+            (heldBy.length
+              ? `. It is also held by ${heldBy.map((c) => c.name).join(', ')}, which is where its instances come from`
+              : ''),
           usedOn,
+          ...(heldBy.length ? { heldBy } : {}),
         }
       }
-      // a component HOLDING it is a use too, even with no instance on any page
-      const heldBy = (project.components ?? [])
-        .filter((c) => c !== def && nestedComponentNames(c).includes(def.name))
-        .map((c) => ({ componentId: c.id, name: c.name }))
       if (heldBy.length) {
         return {
           saved: false,
@@ -4888,9 +5260,8 @@ const tools = [
     name: 'duplicate_component',
     description:
       'An independent copy of a component under a new name — for a second piece that starts ' +
-      'from the first (a PricingCard from a Card). The copy has no instances and follows ' +
-      'nothing: restyle it freely. For a second LOOK of the same piece, do not copy it — give ' +
-      'it a variant option (set_component_variants). Requires a target.',
+      'from the first (a PricingCard from a Card). The copy follows nothing. For a second ' +
+      'LOOK of the same piece use a variant option (set_component_variants). Requires a target.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -4919,10 +5290,10 @@ const tools = [
     name: 'detach_instance',
     description:
       'Turn ONE instance of a component on a page back into plain elements that look exactly ' +
-      'the same — for the one placement that must differ in STRUCTURE (a variant covers a ' +
-      'different look, `hidden` a missing part). The block keeps its text and images, takes the ' +
-      'component\'s classes and bindings as its own, and no longer follows the component. ' +
-      "Address the instance's own element by `ref` or `id`. Requires a target.",
+      'the same — for the one placement whose STRUCTURE must differ (a slot usually covers ' +
+      'that). The block keeps its text and images, takes the component\'s classes and ' +
+      "bindings as its own, and no longer follows the component. Address the instance's own " +
+      'element by `ref` or `id`. Requires a target.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -4946,7 +5317,7 @@ const tools = [
       const page = findPage(project, args.pageId)
       const current = pageVersion(project, page)
       if (args.version !== current) {
-        return { saved: false, reason: 'stale-version', message: STALE_MESSAGE, currentVersion: current }
+        return { saved: false, reason: 'stale-version', message: staleMessage('page'), currentVersion: current }
       }
       const { node, inComponent } = resolveEditNode(page, args)
       if (!isComponentType(node.type)) {
@@ -4978,168 +5349,6 @@ const tools = [
         ...(args.elements === 'none'
           ? {}
           : { elements: elementSummary(project, page, { mode: args.elements ?? 'refs' }) }),
-      }
-    },
-  },
-  {
-    name: 'list_library',
-    description:
-      'The BUNDLED component library — ready-made, accessible pieces (button, card, input, ' +
-      'accordion, dialog, tabs, navbar, hero, footer…) built on the project\'s design tokens. ' +
-      'LOOK HERE BEFORE BUILDING a common piece from plain elements: copying an entry with ' +
-      'add_library_components and restyling it is less work, and the interactive ones arrive ' +
-      'with their behaviour wired. Each row carries the key, the `<Name />` it becomes, ' +
-      'category, description, variant axes, what it `holds`, and whether the project already ' +
-      "has it. Pass `keys` to also get an entry's HTML and shipped texts. Requires a target.",
-    inputSchema: {
-      type: 'object',
-      properties: {
-        category: { type: 'string', description: 'only this category' },
-        query: { type: 'string', description: 'only entries whose key, name or description contain this' },
-        keys: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'only these entries — and in DETAIL: their HTML, texts, design tokens',
-        },
-      },
-      additionalProperties: false,
-    },
-    handler: async (args) => {
-      const { project } = await loadTargetProject()
-      const wanted = args.keys?.length ? new Set(args.keys.map(String)) : null
-      const q = String(args.query ?? '').trim().toLowerCase()
-      const category = String(args.category ?? '').trim().toLowerCase()
-      const entries = CATALOG.filter(
-        (e) =>
-          (!wanted || wanted.has(e.key)) &&
-          (!category || e.category.toLowerCase() === category) &&
-          (!q || `${e.key} ${e.name} ${e.description}`.toLowerCase().includes(q)),
-      )
-      // detail is read off a throwaway copy of the entry, made against a
-      // scratch project so that looking never adds anything
-      const detail = (entry) => {
-        const scratch = {
-          ...project,
-          components: [...(project.components ?? [])],
-          interactions: [...(project.interactions ?? [])],
-          settings: { ...(project.settings ?? {}), tokens: [...(project.settings?.tokens ?? [])] },
-        }
-        const def =
-          libraryComponent(project, entry.key) ??
-          addLibraryEntry(scratch, entry.key, { added: [], tokens: [], interactions: [] })
-        const texts = []
-        const bindings = []
-        walkNodes(def.root.children ?? [], (n) => {
-          if (n.content) texts.push({ type: n.type, text: n.content })
-          for (const b of n.interactions ?? []) {
-            const it = scratch.interactions.find((i) => i.id === b.interactionId)
-            bindings.push({
-              on: n.type,
-              trigger: b.trigger,
-              ...(b.action ? { action: b.action } : {}),
-              ...(b.group ? { group: b.group } : {}),
-              ...(b.closeOn?.length ? { closeOn: b.closeOn } : {}),
-              ...(it ? { interaction: it.name, toClasses: it.toClasses } : {}),
-            })
-          }
-        })
-        return {
-          html: masterToHtml(def, scratch),
-          ...(texts.length ? { texts } : {}),
-          // how the interactive ones work — the recipe, readable without adding
-          // the entry just to look at it
-          ...(bindings.length ? { bindings } : {}),
-          tokens: entry.tokens,
-        }
-      }
-      return {
-        ...(wanted ? { unknown: [...wanted].filter((k) => !catalogEntry(k)) } : {}),
-        categories: [...new Set(CATALOG.map((e) => e.category))],
-        library: entries.map((entry) => {
-          const have = libraryComponent(project, entry.key)
-          return {
-            key: entry.key,
-            name: entry.name,
-            category: entry.category,
-            description: entry.description,
-            ...(entry.variants?.length ? { variants: entry.variants } : {}),
-            ...(catalogDependencies(entry).length ? { holds: catalogDependencies(entry) } : {}),
-            added: !!have,
-            ...(have ? { componentId: have.id, componentName: have.name } : {}),
-            ...(wanted ? detail(entry) : {}),
-          }
-        }),
-      }
-    },
-  },
-  {
-    name: 'add_library_components',
-    description:
-      'Copy bundled library entries into the project as ordinary components; see list_library ' +
-      'for the keys. An entry that holds others brings them along. Tokens the entries name are ' +
-      'created with neutral defaults only where the project has none of that name — an existing ' +
-      'token is NEVER overwritten, which is how the library takes the project\'s palette. The ' +
-      'copy is independent: nothing follows the library afterwards, so restyle it freely. An ' +
-      'entry the project already has is reported under `alreadyInProject`, not copied twice. ' +
-      'Requires a target.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        keys: { type: 'array', items: { type: 'string' }, minItems: 1 },
-        includeNodes: {
-          type: 'boolean',
-          description: 'return each new component\'s element ids (what edit_elements {componentId} addresses)',
-        },
-      },
-      required: ['keys'],
-      additionalProperties: false,
-    },
-    handler: async (args) => {
-      const { project } = await loadTargetProject()
-      const report = { added: [], tokens: [], interactions: [] }
-      const alreadyInProject = []
-      const failures = []
-      args.keys.forEach((raw, index) => {
-        // a NAME is an honest mistake for a key ("Footer" for "footer",
-        // "PricingCard" for "pricing-card"): take it rather than cost a round trip
-        const given = String(raw)
-        const key = catalogEntry(given)
-          ? given
-          : (CATALOG.find((e) => e.name.toLowerCase() === given.toLowerCase())?.key ?? given)
-        if (!catalogEntry(key)) {
-          failures.push({ index, key, message: `no library entry with key "${key}" (use list_library)` })
-          return
-        }
-        const have = libraryComponent(project, key)
-        if (have) {
-          // added a moment ago as something another entry holds: not a repeat
-          if (!report.added.some((a) => a.key === key)) {
-            alreadyInProject.push({ key, componentId: have.id, name: have.name })
-          }
-          return
-        }
-        try {
-          addLibraryEntry(project, key, report)
-        } catch (e) {
-          failures.push({ index, key, message: e.message ?? String(e) })
-        }
-      })
-      if (report.added.length) await saveTargetProject(project)
-      return {
-        saved: report.added.length > 0,
-        added: report.added.map(({ key, def, holds }) => ({
-          key,
-          componentId: def.id,
-          name: def.name,
-          token: `:${def.name}:`,
-          ...(def.variants?.length ? { variants: def.variants } : {}),
-          ...(holds.length ? { holds } : {}),
-          ...(args.includeNodes ? { nodes: masterNodeRows(project, def) } : {}),
-        })),
-        ...(alreadyInProject.length ? { alreadyInProject } : {}),
-        ...(report.tokens.length ? { tokensAdded: [...new Set(report.tokens)] } : {}),
-        ...(report.interactions.length ? { interactionsAdded: report.interactions } : {}),
-        ...(failures.length ? { partial: report.added.length > 0, failures } : {}),
       }
     },
   },
@@ -5516,7 +5725,7 @@ const tools = [
           const deadSwitcherLinks = []
           const scanLinks = (nodes, where) => {
             walkNodes(nodes, (n) => {
-              const code = n.link?.startsWith('locale:') ? n.link.slice('locale:'.length) : null
+              const code = n.link?.startsWith('@locale:') ? n.link.slice('@locale:'.length) : null
               if (code && !next.includes(code)) deadSwitcherLinks.push({ ...where, id: n.id, locale: code })
             })
           }
@@ -5987,6 +6196,13 @@ const tools = [
                 description: 'any element: background media behind its content, same URL rules; "" clears',
               },
               htmlId: { type: 'string', description: 'the html id (anchor target); "" clears' },
+              link: {
+                type: 'string',
+                description:
+                  'where it goes: "/about", "#faq", an http(s)/mailto/tel URL, "@item" (the ' +
+                  'entry\'s own page) or "@locale:fr" (this route in another locale). ' +
+                  'Per-instance inside a component; "" falls back to the master\'s.',
+              },
               attributes: {
                 type: ['object', 'null'],
                 description:
@@ -6071,6 +6287,10 @@ const tools = [
                   'not rendered and not exported. Inside a component instance this is THIS ' +
                   "instance's own flag; with onMaster it sets the component default. null drops " +
                   'the override and inherits.',
+              },
+              slot: {
+                type: 'boolean',
+                description: 'componentId only: a container each instance fills (get_guide {section: "slots"})',
               },
               icon: {
                 type: 'string',
@@ -6327,7 +6547,7 @@ const tools = [
             saved: false,
             reason: 'stale-version',
             currentVersion: current,
-            message: STALE_MESSAGE,
+            message: staleMessage('page'),
           })
           continue
         }
@@ -6425,15 +6645,7 @@ const tools = [
       // build the FULL project-wide item set first (so the counters are stable
       // regardless of filter/paging), then filter and window
       const shadow = masterShadowStats(project)
-      // a locale-switcher label ("EN", "FR | DE") reads as prose to the generic
-      // heuristic but must NOT be translated — flag content that is nothing but
-      // registered locale codes (run #2, F8)
-      const localeCodes = new Set((project.locales ?? []).map((l) => l.toLowerCase()))
-      const isLocaleLabel = (value) => {
-        const parts = String(value).trim().split(/\s*[|/·•,]\s*/).filter(Boolean)
-        return parts.length > 0 && parts.every((p) => localeCodes.has(p.toLowerCase()))
-      }
-      const flagStructural = (value) => looksStructural(value) || isLocaleLabel(value)
+      const flagStructural = structuralFlagger(project)
       const all = []
       // attributes.translate === "no" excludes a node AND its whole subtree —
       // the way to keep code samples (each token a :span:) out of the worklist
@@ -7203,7 +7415,7 @@ const tools = [
       const page = findPage(project, args.pageId)
       const current = pageVersion(project, page)
       if (args.version !== current) {
-        return { saved: false, reason: 'stale-version', message: STALE_MESSAGE, currentVersion: current }
+        return { saved: false, reason: 'stale-version', message: staleMessage('page'), currentVersion: current }
       }
       if (!(project.interactions ?? []).some((it) => it.id === args.interactionId)) {
         throw new Error(`no interaction with id "${args.interactionId}" (use list_interactions)`)
@@ -7261,7 +7473,7 @@ const tools = [
       const page = findPage(project, args.pageId)
       const current = pageVersion(project, page)
       if (args.version !== current) {
-        return { saved: false, reason: 'stale-version', message: STALE_MESSAGE, currentVersion: current }
+        return { saved: false, reason: 'stale-version', message: staleMessage('page'), currentVersion: current }
       }
       const { node } = resolveEditNode(page, args)
       const before = node.interactions?.length ?? 0
@@ -7806,13 +8018,37 @@ const tools = [
     name: 'list_media',
     description:
       'The media library: assets (id, name, kind, mime, size, url to use as an element `src`/' +
-      '`background`) and folders. Library-wide, not per-target.',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-    handler: async () => {
+      '`background`) and folders. Library-wide, not per-target and often long: narrow it with ' +
+      '`query`/`kind`/`folderId`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'substring of the name, case-insensitive' },
+        kind: { type: 'string', description: '"image", "video", …' },
+        folderId: { type: 'string' },
+        offset: { type: 'integer', minimum: 0 },
+        limit: { type: 'integer', minimum: 1, description: 'default 200' },
+      },
+      additionalProperties: false,
+    },
+    handler: async (args = {}) => {
       if (!mediaIndex) throw new Error('media is not supported by this connection')
       const { assets, folders } = await mediaIndex()
+      // the whole library on every call was ~30 KB of mostly other projects'
+      // icons — paid for on a read that usually wants one logo
+      const q = args.query ? String(args.query).toLowerCase() : null
+      let rows = (assets ?? []).filter(
+        (a) =>
+          (!q || String(a.name ?? '').toLowerCase().includes(q)) &&
+          (!args.kind || a.kind === args.kind) &&
+          (!args.folderId || a.folderId === args.folderId),
+      )
+      const total = rows.length
+      const offset = args.offset ?? 0
+      const limit = args.limit ?? 200
+      rows = rows.slice(offset, offset + limit)
       return {
-        assets: (assets ?? []).map((a) => ({
+        assets: rows.map((a) => ({
           id: a.id,
           name: a.name,
           kind: a.kind,
@@ -7822,6 +8058,7 @@ const tools = [
           ...(a.folderId ? { folderId: a.folderId } : {}),
         })),
         folders: (folders ?? []).map((f) => ({ id: f.id, name: f.name })),
+        ...(rows.length < total ? { window: { offset, returned: rows.length, total } } : {}),
       }
     },
   },
@@ -7854,10 +8091,14 @@ const tools = [
             'no localhost/private hosts) (single upload)',
         },
         folderId: { type: 'string' },
+        asFile: {
+          type: 'boolean',
+          description: 'keep a one-colour SVG as a file (favicon); refused otherwise — use an inline icon',
+        },
         items: {
           type: 'array',
           minItems: 1,
-          description: 'batch form: upload many assets in one call (each {name?, path?|url?|dataUrl?, folderId?})',
+          description: 'batch form: upload many assets in one call (each {name?, path?|url?|dataUrl?, folderId?, asFile?})',
           items: {
             type: 'object',
             properties: {
@@ -7866,6 +8107,7 @@ const tools = [
               dataUrl: { type: 'string' },
               url: { type: 'string' },
               folderId: { type: 'string' },
+              asFile: { type: 'boolean' },
             },
             additionalProperties: false,
           },
@@ -7960,13 +8202,26 @@ const tools = [
           mime = (res.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase()
           if (!mime) throw new Error('the server sent no content-type — download and pass a dataUrl instead')
         }
+        const name =
+          String(spec.name ?? '').trim() ||
+          (spec.path ? basename(String(spec.path)) : '') ||
+          'untitled'
+        // a one-colour SVG as a FILE is that one colour forever: the next
+        // shade is another upload, and the library fills with the same mark
+        // six times. Inline, it is one icon that follows the text colour.
+        if (mime === 'image/svg+xml' && !spec.asFile && monochromeIconMarkup(bytes.toString('utf8'))) {
+          throw new Error(
+            `"${name}" is a single-colour SVG — as a file it can only ever be this one colour, ` +
+              'so do not upload it: put it on the page as an inline icon, which follows the text ' +
+              'colour (`<svg data-icon class="size-5 text-primary" />`, then edit_elements {id, svg: ' +
+              '"<the markup>"} — or {icon: "<name>"} if list_icons has it). Pass asFile: true only ' +
+              'if it is needed as a file (a favicon, an og image).',
+          )
+        }
         const asset = await mediaUpload({
           // a local upload names itself from the file — no reason to make the
           // caller repeat it
-          name:
-            String(spec.name ?? '').trim() ||
-            (spec.path ? basename(String(spec.path)) : '') ||
-            'untitled',
+          name,
           folderId: spec.folderId,
           mime,
           bytes,
@@ -8042,6 +8297,7 @@ const tools = [
         dataUrl: args.dataUrl,
         url: args.url,
         folderId: args.folderId,
+        asFile: args.asFile,
       })
       return {
         saved: true,
@@ -8059,7 +8315,8 @@ const tools = [
       'time you want to check a layout. A preview touches nothing live, needs no publish ' +
       'permission, and includes DRAFT pages (the live export drops them), which is exactly what ' +
       'you want while building. Re-run it after any change; the last render wins. Call it after ' +
-      'each page instead of publishing, and publish once at the end. Requires a target.',
+      'each page instead of publishing, and publish once at the end. Returns the same ' +
+      '`warnings` publish does. Requires a target.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     handler: async () => {
       if (!preview) {
@@ -8073,6 +8330,11 @@ const tools = [
       for (const code of (project.locales ?? []).filter((l) => l !== defaultLocale)) {
         localeUrls[code] = `${origin}/${code}/`
       }
+      // the SAME checks publish runs. They used to be publish-only, which meant
+      // the one surface that puts bytes on the live origin was also the only
+      // way to find out a page had a problem — the opposite of "preview after
+      // each page, publish once at the end".
+      const warnings = collectPublishWarnings(project)
       return {
         previewed: true,
         target,
@@ -8080,9 +8342,13 @@ const tools = [
         localeUrls,
         routes: stats.routes,
         bytes: stats.bytes,
+        ...(warnings.length ? { warnings } : {}),
         note:
           'Nothing live changed. Open the url to look; draft pages are included here and are ' +
-          'NOT in a publish.',
+          'NOT in a publish.' +
+          (warnings.length
+            ? ' `warnings` are the same design checks publish runs — fix them here, before you ship.'
+            : ''),
       }
     },
   },

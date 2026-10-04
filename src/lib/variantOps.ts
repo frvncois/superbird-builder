@@ -65,7 +65,7 @@ function rewrite(project: Project, def: ComponentDef, next: VariantAxis[], renam
   const oldAxisName = (axis: string) => renames.axes?.[axis] ?? axis
   const oldOptionName = (axis: string, option: string) => renames.options?.[axis]?.[option] ?? option
 
-  setComponentMeta(def, { category: def.category, source: def.source, variants: next })
+  setComponentMeta(def, { category: def.category, variants: next })
 
   walkNodes([def.root], (node) => {
     const old = node.variantClasses

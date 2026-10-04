@@ -1,110 +1,68 @@
 <script setup lang="ts">
-// A named effect in full: its class change, its timeline, or both.
+// A named effect in full: the classes it wears and the motion it runs, as ONE
+// thing.
 //
-// The two engines are drawn as two sections of ONE thing rather than two
-// library entries, because the split is ours and not the author's: a panel that
+// The two engines are not two sections the author chooses between. A panel that
 // slides in needs `hidden` → `flex` (which no tween can do — the first frame
 // after a display change does not animate) AND a slide (which no class swap can
-// express without fighting the cascade). Naming that pair once is the whole
-// point; see useEffects for what is actually stored, which is only the name and
+// express without fighting the cascade); that split is ours, so the editor
+// shows the class row and the timeline in one flow, with nothing naming an
+// engine. See useEffects for what is actually stored, which is only the name and
 // the two ids.
+//
+// A new effect always has both halves. One made before that was so — by a
+// preset, an agent, or an older project — may be missing one, and the missing
+// half is a single button here: nothing is created merely by opening it, since a
+// library row you only looked at must not come back changed.
 import { computed } from 'vue'
-import { Plus, Sparkles, Trash2 } from 'lucide-vue-next'
+import { Plus } from 'lucide-vue-next'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import StyleEffectEditor from '@/components/editor/effects/StyleEffectEditor.vue'
 import TimelineEditor from '@/components/editor/effects/TimelineEditor.vue'
 import { useEffects } from '@/composables/useEffects'
-import { useModal } from '@/composables/useModal'
 
 const props = defineProps<{ id: string }>()
 
-const { effectById, halfIds, addHalf, removeHalf } = useEffects()
-const { confirm } = useModal()
+const { effectById, halfIds, addHalf } = useEffects()
 
 const effect = computed(() => effectById(props.id))
-/** a half whose library entry has gone counts as absent, so the section offers
+/** a half whose library entry has gone counts as absent, so the editor offers
  *  to make it again rather than rendering nothing */
 const halves = computed(() => (effect.value ? halfIds(effect.value) : {}))
-
-async function drop(kind: 'interaction' | 'animation') {
-  const target = effect.value
-  if (!target) return
-  const ok = await confirm({
-    title: kind === 'interaction' ? 'Remove the style change' : 'Remove the motion',
-    message:
-      `“${target.name}” keeps its other half, but every element using this one loses it. ` +
-      'This cannot be undone from here.',
-    confirmLabel: 'Remove',
-  })
-  if (ok) removeHalf(target, kind)
-}
 </script>
 
 <template>
   <div v-if="effect" class="flex flex-col">
-    <!-- the class change -->
-    <section data-effect-half="interaction" class="flex flex-col border-b border-input">
-      <header class="flex h-8 items-center gap-2 px-2.5">
-        <span class="text-[9px] font-medium tracking-wide text-muted-foreground uppercase">
-          Style change
-        </span>
-        <ButtonUI
-          v-if="halves.interactionId"
-          variant="icon"
-          size="xs"
-          :icon="Trash2"
-          tooltip="Remove the style change"
-          class="ml-auto w-5 text-muted-foreground hover:!text-danger"
-          @click="drop('interaction')"
-        />
-      </header>
+    <!-- the classes worn while it is on -->
+    <div data-effect-half="interaction" class="border-b border-input">
       <StyleEffectEditor v-if="halves.interactionId" :id="halves.interactionId!" />
-      <div v-else class="px-2.5 pb-2">
+      <div v-else class="px-2.5 py-2">
         <ButtonUI
-          variant="outline"
+          variant="ghost"
           size="xs"
           :icon="Plus"
+          class="text-muted-foreground"
           @click="addHalf(effect, 'interaction')"
         >
-          Add a style change
+          Classes
         </ButtonUI>
-        <p class="pt-1 text-[10px] text-muted-foreground">
-          Classes worn while the effect is on — the only way to switch
-          <span class="font-mono">display</span>, which no timeline can tween.
-        </p>
       </div>
-    </section>
+    </div>
 
     <!-- the timeline -->
-    <section data-effect-half="animation" class="flex flex-col">
-      <header class="flex h-8 items-center gap-2 px-2.5">
-        <span class="text-[9px] font-medium tracking-wide text-muted-foreground uppercase">
-          Motion
-        </span>
-        <ButtonUI
-          v-if="halves.animationId"
-          variant="icon"
-          size="xs"
-          :icon="Trash2"
-          tooltip="Remove the motion"
-          class="ml-auto w-5 text-muted-foreground hover:!text-danger"
-          @click="drop('animation')"
-        />
-      </header>
+    <div data-effect-half="animation">
       <TimelineEditor v-if="halves.animationId" :id="halves.animationId!" />
-      <div v-else class="px-2.5 pb-2">
+      <div v-else class="px-2.5 py-2">
         <ButtonUI
-          variant="outline"
+          variant="ghost"
           size="xs"
-          :icon="Sparkles"
+          :icon="Plus"
+          class="text-muted-foreground"
           @click="addHalf(effect, 'animation')"
         >
-          Add motion
+          Motion
         </ButtonUI>
-        <p class="pt-1 text-[10px] text-muted-foreground">
-          A timeline over real values — movement a class swap cannot express.
-        </p>
       </div>
-    </section>
+    </div>
   </div>
 </template>

@@ -19,6 +19,7 @@ export interface ElementDef {
 }
 
 import { ELEMENTS_DATA } from './shared/elements.js'
+import { isFormControl } from './shared/forms.js'
 
 /** the element registry — data lives in the shared plain-JS module so the
  * node exporter (server/export.mjs) consumes the exact same source */
@@ -36,6 +37,28 @@ export function isKnownElement(type: string) {
 export function isLeafElement(type: string): boolean {
   const def = ELEMENTS[type]
   return !!def && (def.defaultContent !== undefined || def.void === true)
+}
+
+/**
+ * Does an INSTANCE address this element as one of its parts?
+ *
+ * Leaf-ness used to be the only test, and it is the wrong question. It made an
+ * `:input` (void) a part and a `:textarea` (a container, because its value is
+ * its text) not one — so a Textarea component exposed its label and hid the
+ * control an agent has to name per placement, while the Input beside it
+ * exposed both. And an `:link` was not a part at all, which is why a Button
+ * component could not be given a destination per placement.
+ *
+ * The real question is whether an instance has anything of its OWN to say
+ * about the element: its text or media (a leaf), its `name`/`placeholder` (a
+ * form control), or where it goes (a link — per-instance with a component
+ * default, which is what lets one Button serve a dozen destinations).
+ */
+export function isInstancePart(type: string): boolean {
+  // `isFormControl` is the one list of what a visitor types into or picks from
+  // (shared/forms.js, where the export and the endpoint read it); a second
+  // copy here would be the drift this codebase keeps paying for.
+  return isLeafElement(type) || isFormControl(type) || type === 'link'
 }
 
 export function createNode(type: string): ElementNode {

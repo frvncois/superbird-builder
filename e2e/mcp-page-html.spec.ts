@@ -124,7 +124,7 @@ test.describe('reading and writing a page as HTML', () => {
 
   test('a page of filled-in components is one write', async () => {
     const s = await mcpSession()
-    await s.call('add_library_components', { keys: ['card'] })
+    await s.seed(['card'])
     const home = await s.home()
     // self-closed: each instance arrives as the component defines it
     await s.call('set_page_html', {
@@ -159,7 +159,7 @@ test.describe('reading and writing a page as HTML', () => {
 
   test('a class inside an instance is refused by name, not dropped', async () => {
     const s = await mcpSession()
-    await s.call('add_library_components', { keys: ['card'] })
+    await s.seed(['card'])
     const home = await s.home()
     await s.call('set_page_html', {
       pageId: home.id,
@@ -181,7 +181,7 @@ test.describe('reading and writing a page as HTML', () => {
 
   test('a part count that does not match the component is refused', async () => {
     const s = await mcpSession()
-    await s.call('add_library_components', { keys: ['card'] })
+    await s.seed(['card'])
     const home = await s.home()
     await s.call('set_page_html', {
       pageId: home.id,

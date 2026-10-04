@@ -141,6 +141,56 @@ test.describe('attribute values bound to fields', () => {
     expect(html).toContain('data-status="waiting"')
   })
 
+  // `alt` is emitted by its own branch in export.mjs (an image ALWAYS carries
+  // one: the author's, else the library asset's default, else ''), and that
+  // branch ran BEFORE fieldAttrs resolved while `alt` sat in the exporter's
+  // `managed` set — so a bound alt could never reach the page, no matter what
+  // the static value was. The canvas and Play rendered it correctly the whole
+  // time, which is exactly what made it invisible.
+  test('a bound alt reaches the exported image, per entry', async () => {
+    const s = await mcpSession()
+    const c = (await s.call('create_collection', { name: 'gear', detailRoutes: false })).collection
+    await s.call('update_collection', {
+      collectionId: c.id,
+      addFields: [
+        { name: 'title', type: 'text' },
+        { name: 'photo', type: 'image' },
+      ],
+    })
+    await s.call('upsert_entries', {
+      collectionId: c.id,
+      entries: [
+        { name: 'Kayak', values: { title: 'A red sea kayak', photo: '/media/a.png' } },
+        { name: 'Tent', values: { title: 'A two-person tent', photo: '/media/b.png' } },
+      ],
+    })
+    const home = await s.home()
+    await s.call('set_page_html', {
+      pageId: home.id,
+      html: pageHtml(
+        [
+          '<collection-list source="gear">',
+          '  <img data-ref="shot" data-field="photo" alt="" />',
+          '</collection-list>',
+        ].join('\n'),
+      ),
+      version: home.version,
+    })
+    const after = await s.home()
+    const r = await s.call('edit_elements', {
+      pageId: after.id,
+      version: after.version,
+      edits: [{ ref: 'shot', fieldAttrs: { alt: 'title' } }],
+    })
+    expect(r.failed).toBe(0)
+
+    const html = await s.html()
+    expect(html).toContain('alt="A red sea kayak"')
+    expect(html).toContain('alt="A two-person tent"')
+    // and the empty static alt it used to fall back to is gone from both
+    expect(html).not.toContain('alt=""')
+  })
+
   test('an attribute name outside the allowlist is refused, not silently dropped', async () => {
     const s = await seeded()
     const home = await s.home()

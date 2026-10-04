@@ -52,15 +52,18 @@ async function openPanel(page: Page) {
   await expect(page.getByRole('button', { name: 'Trigger', exact: true })).toBeVisible()
 }
 
-/** "+ Trigger" → a section for that trigger, with its action picker already open */
+/** "+ Trigger" → the trigger's action exists at once (a new effect, bound under
+ *  it) and the drawer is open on it: options and effect side by side */
 async function addTrigger(page: Page, label: RegExp) {
   await page.getByRole('button', { name: 'Trigger', exact: true }).click()
   await page.getByRole('button', { name: label }).first().click()
-  await expect(picker(page)).toBeVisible()
+  await expect(triggerView(page)).toBeVisible()
+  await expect(actionRows(page)).toHaveCount(1)
 }
 
-const picker = (page: Page) => page.locator('[data-action-picker]')
 const drawer = (page: Page) => page.locator('[data-effects-drawer]')
+/** the drawer's trigger view — where an element's action lives */
+const triggerView = (page: Page) => page.locator('[data-trigger-editor]')
 const actionRows = (page: Page) => page.locator('[data-binding-row]')
 const stateCards = (page: Page) => page.locator('[data-state-card]')
 const libraryRows = (page: Page) => page.locator('[data-effect-row]')
@@ -80,7 +83,7 @@ async function publish(page: Page) {
   await expect(page.getByText('Published!')).toBeVisible({ timeout: 60_000 })
 }
 
-test('a new effect opens in the drawer, and Cancel discards it completely', async ({ page }) => {
+test('adding a trigger makes its effect, and Cancel discards it completely', async ({ page }) => {
   await openEditor(page)
   await openPanel(page)
 
@@ -93,14 +96,12 @@ test('a new effect opens in the drawer, and Cancel discards it completely', asyn
     return n
   })()
 
+  // one gesture: the trigger, its action and the effect to edit all exist, and
+  // the panel KEEPS its context — the element and its trigger are listed there
   await addTrigger(page, /^Click/)
-  await picker(page).getByRole('button', { name: 'Style change' }).click()
-
-  // the drawer opens on the new effect and the panel KEEPS its context — the
-  // element, its trigger and the action that was just added are all still there
-  await expect(drawer(page)).toBeVisible()
-  await expect(page.getByText('On click')).toBeVisible()
-  await expect(actionRows(page)).toHaveCount(1)
+  await expect(page.locator('[data-trigger-row]').filter({ hasText: 'On click' })).not.toContainText(
+    'empty',
+  )
 
   // give it a class, so a half-discard would leave a visible trace
   const marker = 'outline-dashed'
@@ -109,9 +110,12 @@ test('a new effect opens in the drawer, and Cancel discards it completely', asyn
 
   await drawer(page).getByRole('button', { name: 'Cancel' }).click()
 
-  // the cascading delete took the binding with it. One that removed the library
-  // entry but orphaned the binding would leave a row behind.
-  await expect(actionRows(page)).toHaveCount(0)
+  // Cancel closes the drawer, and the cascading delete took the binding with
+  // it: the trigger is gone from the panel. A delete that removed the library
+  // entry but orphaned the binding would leave the row behind.
+  await expect(drawer(page)).toBeHidden()
+  await expect(page.locator('[data-trigger-row]')).toHaveCount(0)
+  await page.keyboard.press('ControlOrMeta+Shift+e')
   await expect(libraryRows(page)).toHaveCount(effectsBefore)
 
   // and the discarded class never reaches the published site
@@ -120,88 +124,68 @@ test('a new effect opens in the drawer, and Cancel discards it completely', asyn
   expect(await page.content()).not.toContain(marker)
 })
 
-test('an effect added from the picker is editable in the drawer, and ⋯ removes it', async ({
+test("a trigger's effect is edited in place, and Remove takes it off the element", async ({
   page,
 }) => {
   await openEditor(page)
   await openPanel(page)
 
-  // the picker offers the project's saved effects without ever naming an engine
   await addTrigger(page, /^Hover/)
-  const saved = picker(page).locator('[data-saved-effect]').filter({ hasText: 'Card lift' })
-  await saved.getByRole('button', { name: 'Add' }).click()
-
-  await expect(page.getByText('On hover')).toBeVisible()
-  await expect(actionRows(page)).toHaveCount(1)
-  // a symmetric effect on itself has no state to manage, so it stays one row
-  // and the panel does not say the same thing twice
+  await expect(triggerView(page).getByText('On hover')).toBeVisible()
+  // a symmetric effect on itself has no state to manage, so there is no card
   await expect(stateCards(page)).toHaveCount(0)
 
-  // ⋯ → Edit effect opens the drawer on the SHARED effect
-  await actionRows(page).getByRole('button', { name: 'Action options' }).click()
-  await page.getByRole('button', { name: 'Edit effect' }).click()
-  await expect(drawer(page)).toBeVisible()
-
+  // the SHARED effect is right there beside the options — nothing to open
   const marker = 'ring-offset-4'
-  await drawer(page).getByPlaceholder('Add class').fill(marker)
+  await triggerView(page).getByPlaceholder('Add class').fill(marker)
   await page.keyboard.press('Enter')
+  await drawer(page).getByRole('button', { name: 'Save' }).click()
+  await expect(drawer(page)).toBeHidden()
 
-  // ⋯ → Remove takes the action off THIS element…
-  await actionRows(page).getByRole('button', { name: 'Action options' }).click()
-  await page.getByRole('button', { name: 'Remove' }).click()
-  await expect(actionRows(page)).toHaveCount(0)
-
-  // …while the edit to the shared effect still reaches the four fixture
-  // elements that were already bound to it and were never touched here
   await publish(page)
   await page.goto('/')
   expect(await page.content()).toContain(marker)
+
+  // Remove takes the action off THIS element…
+  await page.goto('/admin/')
+  await openPanel(page)
+  await page.locator('[data-trigger-row]').filter({ hasText: 'On hover' }).click()
+  await actionRows(page).getByRole('button', { name: 'Remove action' }).click()
+  await expect(actionRows(page)).toHaveCount(0)
+
+  // …so the class it carried no longer ships, while the effect stays in the
+  // library for the next element
+  await publish(page)
+  await page.goto('/')
+  expect(await page.content()).not.toContain(marker)
 })
 
-test('two triggers drive one state, and its dismissal is stored once', async ({ page }) => {
+test('a click action is a state, and its dismissal is stored on the binding', async ({ page }) => {
   await openEditor(page)
   await openPanel(page)
 
-  // an open action…
   await addTrigger(page, /^Click/)
-  await picker(page).getByRole('button', { name: 'Style change' }).click()
-  // name it, so the picker's state list can be addressed by what it is called
-  // rather than by position — the list holds every state already on the page
   await drawer(page).getByPlaceholder('Effect name').fill('Panel open')
   await drawer(page).getByPlaceholder('Add class').fill('opacity-50')
   await page.keyboard.press('Enter')
-  await drawer(page).getByRole('button', { name: 'Done' }).click()
+  await drawer(page).getByRole('button', { name: 'Save' }).click()
 
-  // …and a close action on the SAME state, offered by the picker because the
-  // state already exists on the page
-  await page.getByRole('button', { name: 'action', exact: true }).click()
-  await picker(page)
-    .locator('[data-state-option]')
-    .filter({ hasText: 'Panel open' })
-    .getByRole('button', { name: 'Close' })
-    .click()
-  await expect(actionRows(page)).toHaveCount(2)
-
-  // one card for the one state, however many triggers drive it
+  // Save closes the drawer; the panel's row brings the trigger back. A click
+  // drives a state: the card is where dismissal is edited
+  await page.locator('[data-trigger-row]').filter({ hasText: 'On click' }).click()
   await expect(stateCards(page)).toHaveCount(1)
   await stateCards(page).getByRole('button', { name: 'Escape' }).click()
 
   await publish(page)
   await page.goto('/')
 
-  // the export is the referee: both bindings ride on the body, and exactly ONE
-  // of them carries the dismissal. Written to both, the runtime would arm it
-  // twice — and the panel would be showing a union it cannot write back.
+  // the export is the referee: the binding rides on the body and carries the
+  // dismissal
   const metas = await page.evaluate(() =>
     JSON.parse(document.body.getAttribute('data-int') || '[]'),
   )
-  expect(metas).toHaveLength(2)
-  const dismissing = metas.filter((m: { c?: string[] }) => m.c)
-  expect(dismissing).toHaveLength(1)
-  expect(dismissing[0].c).toEqual(['escape'])
-  // …and both bindings drive the SAME state key, which is what makes an open
-  // button and a close button agree
-  expect(new Set(metas.map((m: { s: string }) => m.s)).size).toBe(1)
+  expect(metas).toHaveLength(1)
+  expect(metas[0].c).toEqual(['escape'])
 })
 
 test('the drawer opens with ⌘⇧E and Escape closes it without closing the panel', async ({
@@ -224,67 +208,52 @@ test('the drawer opens with ⌘⇧E and Escape closes it without closing the pan
   await expect(page.getByRole('button', { name: 'Trigger', exact: true })).toBeHidden()
 })
 
-test('several buttons drive one timeline, aimed with a verb', async ({ page }) => {
+test('a click is aimed with a verb, never an engine', async ({ page }) => {
   await openEditor(page)
   await openPanel(page)
 
-  // a motion effect on click — the picker never says "animation", only what the
-  // effect does
   await addTrigger(page, /^Click/)
-  await picker(page).getByRole('button', { name: 'Motion' }).click()
   await drawer(page).getByPlaceholder('Effect name').fill('Panel fade')
-  await drawer(page).getByRole('button', { name: 'Done' }).click()
-  await expect(actionRows(page)).toHaveCount(1)
+  await drawer(page).getByRole('button', { name: 'Save' }).click()
+  await page.locator('[data-trigger-row]').filter({ hasText: 'On click' }).click()
 
-  // the timeline is now a state on this page, so the picker offers to join it
-  // in either direction — the gesture that builds an animated panel
-  const joinState = async (verb: string) => {
-    await page.getByRole('button', { name: 'action', exact: true }).click()
-    await picker(page)
-      .locator('[data-state-option]')
-      .filter({ hasText: 'Panel fade' })
-      .getByRole('button', { name: verb, exact: true })
-      .click()
-  }
-  await joinState('Open')
-  await joinState('Close')
-  await expect(actionRows(page)).toHaveCount(3)
-
-  // a timeline several triggers share is a state, exactly like a class change
-  await expect(stateCards(page)).toHaveCount(1)
+  // the direction lives in the action's options
+  await actionRows(page).locator('[data-row]').filter({ hasText: 'Does' }).getByRole('button').click()
+  await page.getByRole('button', { name: 'Open', exact: true }).click()
 
   await publish(page)
   await page.goto('/')
 
-  const metas = await page.evaluate(() =>
-    JSON.parse(document.body.getAttribute('data-anim') || '[]'),
-  )
-  expect(metas).toHaveLength(3)
-  // ONE play key for the three of them: that is what lets the close button
-  // rewind what the open button ran, instead of starting a play of its own
-  expect(new Set(metas.map((m: { s: string }) => m.s)).size).toBe(1)
-  // Array.sort puts undefined last whatever the comparator — the toggle default
-  expect(metas.map((m: { ac?: string }) => m.ac).sort()).toEqual(['off', 'on', undefined])
+  // both halves of the one effect landed on the body, aimed the same way
+  const landed = await page.evaluate(() => ({
+    classes: JSON.parse(document.body.getAttribute('data-int') || '[]'),
+    motion: JSON.parse(document.body.getAttribute('data-anim') || '[]'),
+  }))
+  expect(landed.classes).toHaveLength(1)
+  expect(landed.motion).toHaveLength(1)
+  expect(landed.classes[0].a).toBe('on')
+  expect(landed.motion[0].ac).toBe('on')
 })
 
 test('one effect wears both engines, and binds as one action', async ({ page }) => {
   await openEditor(page)
   await openPanel(page)
 
-  // a style change, then motion on the SAME effect. A sliding panel needs both:
-  // `hidden` → `flex` is the only way to switch display, and no class swap
-  // expresses the slide — but that split is ours, not the author's.
+  // ONE new effect carries both a style change and motion. A sliding panel
+  // needs both: `hidden` → `flex` is the only way to switch display, and no
+  // class swap expresses the slide — but that split is ours, not the author's,
+  // so nothing is chosen between.
   await addTrigger(page, /^Click/)
-  await picker(page).getByRole('button', { name: 'Style change' }).click()
   await drawer(page).getByPlaceholder('Effect name').fill('Sheet')
   await drawer(page).getByPlaceholder('Add class').fill('flex')
   await page.keyboard.press('Enter')
-  await drawer(page).getByRole('button', { name: 'Add motion' }).click()
-  await drawer(page).getByRole('button', { name: 'Done' }).click()
+  await expect(drawer(page).locator('[data-effect-half="animation"]')).toBeVisible()
+  await drawer(page).getByRole('button', { name: 'Save' }).click()
+  await page.locator('[data-trigger-row]').filter({ hasText: 'On click' }).click()
 
-  // ONE row, not two: the pair is recognised from the bindings themselves
+  // ONE action, not two: the pair is recognised from the bindings themselves
   await expect(actionRows(page)).toHaveCount(1)
-  await expect(actionRows(page)).toContainText('Sheet')
+  await expect(triggerView(page).getByPlaceholder('Effect name')).toHaveValue('Sheet')
 
   // and the library lists one effect, not one per engine
   await expect(libraryRows(page).filter({ hasText: 'Sheet' })).toHaveCount(1)
@@ -313,7 +282,7 @@ test('an effect that predates the pairing can still gain the other engine', asyn
   // the missing half, or the feature would only ever apply to new work.
   await page.keyboard.press('ControlOrMeta+Shift+e')
   await libraryRows(page).filter({ hasText: 'Card lift' }).first().click()
-  await drawer(page).getByRole('button', { name: 'Add motion' }).click()
+  await drawer(page).getByRole('button', { name: 'Motion', exact: true }).click()
 
   // now it is one effect with two halves, and the library still lists it once
   await expect(drawer(page).locator('[data-effect-half="interaction"]')).toBeVisible()

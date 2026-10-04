@@ -7,12 +7,13 @@ import { createToolSet } from '../packages/guano/mcp/tools.mjs'
 // @ts-expect-error untyped server module
 import { exportSite } from '../server/export.mjs'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { withComponents } from './fixtures/components'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-// An agent building a site WITH components: what the project and the library
-// offer, a page written as `:Name:` lines, and the component itself edited as
-// the board edits it. The checks that matter read the published HTML — a tool
+// An agent building a site WITH components: a page written with `<Name />`
+// instances, and the component itself edited as the board edits it. The
+// ready-made ones come from e2e/fixtures/components.json. The checks that matter read the published HTML — a tool
 // reporting success for a write that renders nowhere is the bug class here.
 
 const runtimePromise = import(
@@ -40,6 +41,9 @@ async function session() {
   const call = (name: string, args: Record<string, unknown> = {}) =>
     set.toolMap.get(name)!.handler(args)
   const stored = () => JSON.parse(store.get('guano-project:main')!)
+  const seed = async (keys: string[]) => {
+    store.set('guano-project:main', JSON.stringify(withComponents(stored(), keys)))
+  }
   const html = async () => {
     const dir = mkdtempSync(join(tmpdir(), 'guano-mcp-'))
     try {
@@ -51,55 +55,12 @@ async function session() {
     }
   }
   const home = async () => (await call('list_pages')).pages[0]
-  return { call, stored, html, home }
+  return { call, stored, html, home, seed }
 }
 
-test('the library is listed, copied in by key or name, and never copied twice', async () => {
-  const { call, stored } = await session()
-
-  const library = await call('list_library')
-  expect(library.library.length).toBeGreaterThan(30)
-  expect(library.library.every((e: { added: boolean }) => e.added === false)).toBe(true)
-  // looking — even in detail — adds nothing
-  const detail = await call('list_library', { keys: ['card'] })
-  expect(detail.library[0].html).toContain('<Button')
-  expect(stored().components).toEqual([])
-
-  // a card holds a button: it comes along, with the tokens both name
-  const added = await call('add_library_components', { keys: ['card', 'PricingCard', 'nope'] })
-  expect(added.added.map((a: { name: string }) => a.name)).toEqual(
-    expect.arrayContaining(['Button', 'Card', 'PricingCard']),
-  )
-  expect(added.tokensAdded).toContain('primary')
-  expect(added.failures).toHaveLength(1)
-  expect(stored().components.filter((c: { name: string }) => c.name === 'Button')).toHaveLength(1)
-
-  const again = await call('add_library_components', { keys: ['button'] })
-  expect(again.saved).toBe(false)
-  expect(again.alreadyInProject[0].name).toBe('Button')
-
-  // a token the project already has is the project's
-  const before = stored().settings.tokens.find((t: { name: string }) => t.name === 'primary').value
-  await call('add_library_components', { keys: ['badge'] })
-  expect(stored().settings.tokens.filter((t: { name: string }) => t.name === 'primary')).toHaveLength(1)
-  expect(stored().settings.tokens.find((t: { name: string }) => t.name === 'primary').value).toBe(before)
-})
-
-test('an unknown component the library has says how to get it', async () => {
-  const { call, home } = await session()
-  const h = await home()
-  const written = await call('set_page_html', { pageId: h.id, version: h.version, html: page('<Hero />') })
-  // the markup is well-formed and storable, so this is a diagnostic rather
-  // than a refusal — and a diagnostic can name the element, which only exists
-  // once the write landed. The library hint is what makes it actionable.
-  expect(written.saved).toBe(true)
-  expect(written.diagnostics[0].message).toContain('add_library_components {keys: ["hero"]}')
-  expect(written.diagnostics[0].nodeId).toBeTruthy()
-})
-
 test('an instance written with a ref expands, and lists the parts to fill', async () => {
-  const { call, home, html } = await session()
-  await call('add_library_components', { keys: ['card'] })
+  const { call, home, html, seed } = await session()
+  await seed(['card'])
   const h = await home()
   const written = await call('set_page_html', {
     pageId: h.id,
@@ -138,8 +99,8 @@ test('an instance written with a ref expands, and lists the parts to fill', asyn
 })
 
 test("an instance's own line takes no classes or bindings", async () => {
-  const { call, home, stored, html } = await session()
-  await call('add_library_components', { keys: ['card'] })
+  const { call, home, stored, html, seed } = await session()
+  await seed(['card'])
   const h = await home()
   const written = await call('set_page_html', {
     pageId: h.id,
@@ -168,8 +129,8 @@ test("an instance's own line takes no classes or bindings", async () => {
 })
 
 test('a component is written from scratch, and edited as the board edits it', async () => {
-  const { call, home, stored, html } = await session()
-  await call('add_library_components', { keys: ['button'] })
+  const { call, home, stored, html, seed } = await session()
+  await seed(['button'])
 
   const made = await call('create_component', {
     name: 'promo',
@@ -220,9 +181,9 @@ test('a component is written from scratch, and edited as the board edits it', as
 })
 
 test('rename, duplicate, detach and delete keep every page in step', async () => {
-  const { call, home, stored, html } = await session()
-  const added = await call('add_library_components', { keys: ['card'] })
-  const card = added.added.find((a: { name: string }) => a.name === 'Card')
+  const { call, home, stored, html, seed } = await session()
+  await seed(['card'])
+  const card = { componentId: stored().components.find((c: { name: string }) => c.name === 'Card').id }
   const h = await home()
   let written = await call('set_page_html', {
     pageId: h.id,
@@ -323,8 +284,8 @@ test('a list keeps its filter inside a component, and an instance can narrow it'
 })
 
 test("an instance wears the default even when its host picked otherwise", async () => {
-  const { call, home, html } = await session()
-  await call('add_library_components', { keys: ['button'] })
+  const { call, home, html, seed } = await session()
+  await seed(['button'])
   const card = await call('create_component', { name: 'Card', html: '<div>\n  <Button />\n</div>' })
   const mirror = card.nodes.find((n: { type: string }) => n.type === 'Button')
   await call('edit_elements', { componentId: card.componentId, edits: [{ id: mirror.id, variants: { variant: 'outline' } }] })
@@ -339,8 +300,8 @@ test("an instance wears the default even when its host picked otherwise", async 
 })
 
 test('what a host cannot say about an instance is refused, not dropped', async () => {
-  const { call, home } = await session()
-  await call('add_library_components', { keys: ['button'] })
+  const { call, home, seed } = await session()
+  await seed(['button'])
   const card = await call('create_component', { name: 'Card', html: '<div>\n  <Button />\n</div>' })
 
   // a link on the instance's own line renders nowhere
@@ -368,8 +329,8 @@ test('what a host cannot say about an instance is refused, not dropped', async (
 })
 
 test('publish warns about what a design review would send back', async () => {
-  const { call, home } = await session()
-  await call('add_library_components', { keys: ['select', 'navbar'] })
+  const { call, home, seed } = await session()
+  await seed(['select', 'navbar'])
   await call('create_interactions', { items: [{ name: 'Never bound', toClasses: 'hidden' }] })
   await call('update_settings', { motion: { transitions: { enabled: true, preset: 'fade' } } })
   const h = await home()
@@ -391,4 +352,333 @@ test('publish warns about what a design review would send back', async () => {
   expect(kinds).toContain('body-transition-under-app-shell')
   expect(kinds).toContain('unused-effects')
   expect(kinds).not.toContain('unstyled-controls')
+})
+
+// Colour is a class on a thing, never a reason for another thing. A review
+// session produced one Card in four colours and one icon in six shades; both
+// are refused at the write now, and the slower route (duplicate, then restyle)
+// is caught at publish.
+
+test('a component that is another one in other colours is refused', async () => {
+  const { call } = await session()
+  const card = (tone: string) =>
+    `<div class="rounded-lg border p-4 ${tone}"><h3 class="text-lg font-semibold">T</h3><p class="text-sm">Body</p></div>`
+
+  const first = await call('create_component', { name: 'Card', html: card('bg-white text-black') })
+  expect(first.saved).toBe(true)
+
+  // same elements, only colours differ → refused, pointing at the variant route
+  const twin = await call('create_component', { name: 'DarkCard', html: card('bg-black text-white') })
+  expect(twin.saved).toBe(false)
+  expect(twin.reason).toBe('colour-twin')
+  expect(twin.componentId).toBe(first.componentId)
+  expect(twin.message).toContain('set_component_variants')
+  // nothing was left behind
+  expect((await call('list_components')).components.map((c: { name: string }) => c.name)).toEqual(['Card'])
+
+  // nothing differs at all → a duplicate
+  const same = await call('create_component', { name: 'Card2', html: card('bg-white text-black') })
+  expect(same.saved).toBe(false)
+  expect(same.reason).toBe('duplicate-component')
+
+  // a real difference (layout, not colour) is a second component
+  const wide = await call('create_component', { name: 'WideCard', html: card('bg-white text-black flex gap-4') })
+  expect(wide.saved).toBe(true)
+
+  // the extraction path is held to the same rule
+  const home = await call('list_pages').then((r) => r.pages[0])
+  const read = await call('get_page', { pageId: home.id })
+  const put = await call('set_page_html', {
+    pageId: home.id,
+    version: read.version,
+    html: page(`<div data-ref="c" class="rounded-lg border p-4 bg-red-500 text-white"><h3 class="text-lg font-semibold">X</h3><p class="text-sm">Y</p></div>`),
+  })
+  expect(put.saved).toBe(true)
+  const extracted = await call('create_component', { pageId: home.id, ref: 'c', name: 'RedCard', version: put.version })
+  expect(extracted.saved).toBe(false)
+  expect(extracted.reason).toBe('colour-twin')
+})
+
+test('publish warns about components that differ only by colour', async () => {
+  const { call, stored } = await session()
+  const made = await call('create_component', {
+    name: 'Pill',
+    html: '<span class="rounded-full px-3 py-1 text-xs bg-primary text-primary-foreground">A</span>',
+  })
+  // duplicate, then restyle in colour only — the create-time refusal cannot see this
+  const copy = await call('duplicate_component', { componentId: made.componentId, name: 'DangerPill' })
+  const row = copy.nodes[0]
+  await call('edit_elements', {
+    componentId: copy.componentId,
+    edits: [{ id: row.id, removeClasses: ['bg-primary', 'text-primary-foreground'], addClasses: ['bg-red-500', 'text-white'] }],
+  })
+  expect(JSON.stringify(stored().components[1].root)).toContain('bg-red-500')
+  const published = await call('publish', {})
+  const warn = (published.warnings ?? []).find((w: { kind: string }) => w.kind === 'colour-twin-components')
+  expect(warn).toBeTruthy()
+  expect(warn.pairs[0]).toMatch(/Pill ↔ DangerPill|DangerPill ↔ Pill/)
+})
+
+test('a single-colour SVG is refused as a file, and goes on the page as an icon', async () => {
+  const { call } = await session()
+  const mono = (color: string) =>
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 4h16v16H4z" fill="${color}"/></svg>`
+  const dataUrl = (svg: string) => `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`
+
+  await expect(call('upload_media', { name: 'box.svg', dataUrl: dataUrl(mono('#ff0000')) })).rejects.toThrow(
+    /single-colour SVG/,
+  )
+  // the same mark, another shade — the case that filled a library
+  await expect(call('upload_media', { name: 'box-blue.svg', dataUrl: dataUrl(mono('#0000ff')) })).rejects.toThrow(
+    /inline icon/,
+  )
+  // a file is what a favicon needs
+  const kept = await call('upload_media', { name: 'favicon.svg', dataUrl: dataUrl(mono('#ff0000')), asFile: true })
+  expect(kept.url).toBe('/media/m1')
+  // a multi-colour logo is a file
+  const logo =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 4h8v16H4z" fill="#f00"/><path d="M12 4h8v16h-8z" fill="#00f"/></svg>'
+  expect((await call('upload_media', { name: 'logo.svg', dataUrl: dataUrl(logo) })).url).toBe('/media/m1')
+  // the batch form names the refused item and keeps going
+  const batch = await call('upload_media', {
+    items: [{ name: 'a.svg', dataUrl: dataUrl(mono('#000')) }, { name: 'logo.svg', dataUrl: dataUrl(logo) }],
+  })
+  expect(batch.failures?.[0]?.index).toBe(0)
+  expect(batch.assets).toHaveLength(1)
+})
+
+// A slot: the one place an instance's STRUCTURE is its own. One Modal holds a
+// different body on every page; the component's chrome stays shared.
+
+test('a slot holds per-instance structure while the rest of the component stays shared', async () => {
+  const { call, stored, html, home } = await session()
+  const modal = await call('create_component', {
+    name: 'Modal',
+    html: `<div class="fixed inset-0 flex items-center justify-center bg-black/50">
+  <div class="rounded-xl bg-white p-6">
+    <div data-slot class="space-y-4"><h2 class="text-lg">Title</h2><p>Body</p></div>
+    <button class="mt-6 rounded bg-black px-4 py-2 text-white"><span>Close</span></button>
+  </div>
+</div>`,
+  })
+  expect(modal.saved).toBe(true)
+  const slotRow = modal.nodes.find((n: { slot?: boolean }) => n.slot)
+  expect(slotRow).toBeTruthy()
+  expect(modal.html).toContain('data-slot')
+
+  // two instances: each starts from the default content, as its own nodes
+  const page = await home()
+  let read = await call('get_page', { pageId: page.id })
+  const put = await call('set_page_html', {
+    pageId: page.id,
+    version: read.version,
+    html: `<body><Modal data-ref="a" /><Modal data-ref="b" /></body>`,
+  })
+  expect(put.saved).toBe(true)
+  read = await call('get_page', { pageId: page.id, elements: 'ref-parts' })
+  const a = read.elements.find((e: { ref: string }) => e.ref === 'a')
+  const slotPart = a.parts.find((p: { slot?: boolean }) => p.slot)
+  expect(slotPart).toBeTruthy()
+  expect(slotPart.childCount).toBe(2)
+  // the slot's children print with their own attributes; the chrome prints as content only
+  expect(read.html).toMatch(/<h2 data-id="[0-9a-f]+" class="text-lg">Title<\/h2>/)
+  expect(read.html).not.toContain('class="mt-6')
+
+  // restructure ONE instance's slot: a page edit, nothing shared moves
+  const ins = await call('edit_structure', {
+    pageId: page.id,
+    version: read.version,
+    ops: [{ op: 'insert', parent: slotPart.id, html: '<p data-ref="extra" class="text-red-500">Only here</p>' }],
+  })
+  expect(ins.saved).toBe(true)
+  let out = await html()
+  expect(out.match(/Only here/g)?.length).toBe(1)
+  expect(out.match(/Close/g)?.length).toBe(2)
+  // the slot content is NOT a part: it is addressed directly, by ref
+  const styled = await call('edit_elements', {
+    pageId: page.id,
+    version: (await call('get_page', { pageId: page.id })).version,
+    edits: [{ ref: 'extra', removeClasses: ['text-red-500'], addClasses: ['text-blue-500'] }],
+  })
+  expect(styled.saved).toBe(true)
+  expect(JSON.stringify(stored().components[0])).not.toContain('Only here')
+
+  // a round trip of the page is a no-op — slot content included
+  read = await call('get_page', { pageId: page.id })
+  const before = JSON.stringify(stored().pages[0])
+  const echo = await call('set_page_html', { pageId: page.id, version: read.version, html: read.html })
+  expect(echo.saved).toBe(true)
+  expect(JSON.stringify(stored().pages[0])).toBe(before)
+
+  // the component changes: every instance follows, every slot keeps its own
+  const cv = (await call('list_components')).components.find((c: { name: string }) => c.name === 'Modal').version
+  const upd = await call('update_component', {
+    componentId: modal.componentId,
+    version: cv,
+    html: modal.html.replace('>Body<', '>New default<').replace('mt-6', 'mt-8'),
+  })
+  expect(upd.saved).toBe(true)
+  const closeRow = modal.nodes.find((n: { type: string }) => n.type === 'span')
+  const restyle = await call('edit_elements', {
+    componentId: modal.componentId,
+    edits: [{ id: closeRow.id, content: 'Dismiss' }],
+  })
+  expect(restyle.saved).toBe(true)
+  out = await html()
+  expect(out.match(/Dismiss/g)?.length).toBe(2)
+  expect(out.match(/mt-8/g)?.length).toBe(2)
+  expect(out).toContain('Only here')
+  expect(out).not.toContain('New default') // the default is for NEW instances only
+  // a third instance starts from the new default
+  read = await call('get_page', { pageId: page.id })
+  const more = await call('edit_structure', {
+    pageId: page.id,
+    version: read.version,
+    ops: [{ op: 'insert', parent: read.elements?.[0]?.id ?? 'body', html: '<Modal data-ref="c" />' }],
+  })
+  if (more.saved) expect(await html()).toContain('New default')
+
+  // detach keeps slot content as it is, and the chrome it had
+  read = await call('get_page', { pageId: page.id })
+  const det = await call('detach_instance', { pageId: page.id, version: read.version, ref: 'a' })
+  expect(det.saved).toBe(true)
+  out = await html()
+  expect(out).toContain('Only here')
+  expect(out.match(/Dismiss/g)?.length).toBeGreaterThanOrEqual(2)
+})
+
+test('a slot is refused where it cannot mean anything', async () => {
+  const { call } = await session()
+  const leaf = await call('create_component', { name: 'Bad', html: '<div><p data-slot>x</p></div>' })
+  expect(leaf.saved).toBe(false)
+  expect(JSON.stringify(leaf.refused)).toMatch(/can't be a slot/)
+  const root = await call('create_component', { name: 'Bad2', html: '<Bad2 data-slot><div /></Bad2>' })
+  expect(root.saved).toBe(false)
+  // on a page, data-slot is the component's: an authored one is dropped, not stored
+  const ok = await call('create_component', { name: 'Box', html: '<div data-slot class="p-4"><p>d</p></div>' })
+  expect(ok.saved).toBe(true)
+  const page = (await call('list_pages')).pages[0]
+  const read = await call('get_page', { pageId: page.id })
+  const put = await call('set_page_html', {
+    pageId: page.id,
+    version: read.version,
+    html: '<body><section data-slot><p>plain</p></section><Box /></body>',
+  })
+  expect(put.saved).toBe(true)
+  const after = await call('get_page', { pageId: page.id })
+  expect(after.html.indexOf('data-slot')).toBe(after.html.lastIndexOf('data-slot')) // only the Box's
+})
+
+// A link is PER-INSTANCE with a component default. Every renderer already
+// resolved it own-first (`node.link ?? master.link`), so a per-instance
+// destination rendered correctly everywhere — and the WRITE path forbade it
+// twice: `apply.ts` refused an `href` inside an instance as the component's,
+// and `adoptCodeOwned` copied the master's link back down on the next push.
+// A Button component therefore could not be a link, which is the first thing
+// anyone wants from a Button.
+test('each instance of one component carries its own link', async () => {
+  const { call, home, html, stored } = await session()
+  const made = await call('create_component', {
+    name: 'Cta',
+    html: '<a class="rounded bg-black px-4 py-2 text-white" href="/default"><span>Go</span></a>',
+  })
+  expect(made.saved).toBe(true)
+
+  const h = await home()
+  const put = await call('set_page_html', {
+    pageId: h.id,
+    version: h.version,
+    html: page('<Cta data-ref="one" />\n<Cta data-ref="two" />\n<Cta data-ref="three" />'),
+  })
+  expect(put.saved).toBe(true)
+
+  const after = await home()
+  const r = await call('edit_elements', {
+    pageId: after.id,
+    version: after.version,
+    edits: [
+      { ref: 'one', part: 'link', link: '/pricing' },
+      { ref: 'two', part: 'link', link: 'https://example.com/docs' },
+    ],
+  })
+  expect(r.failed).toBe(0)
+
+  const out = await html()
+  expect(out).toContain('href="/pricing"')
+  expect(out).toContain('href="https://example.com/docs"')
+  // the one that said nothing still inherits the master's
+  expect(out).toContain('href="/default"')
+  // and the shared styling is still the component's on all three
+  expect((out.match(/bg-black/g) ?? []).length).toBe(3)
+
+  // only the two that differ store a link of their own
+  const links: (string | undefined)[] = []
+  const walk = (nodes: { link?: string; type: string; children?: unknown[] }[]) => {
+    for (const n of nodes) {
+      if (n.type === 'link') links.push(n.link)
+      walk((n.children ?? []) as never[])
+    }
+  }
+  walk(stored().pages[0].elements)
+  expect(links.filter(Boolean).sort()).toEqual(['/pricing', 'https://example.com/docs'])
+})
+
+test('a link written as href in the page markup is the instance’s own', async () => {
+  const { call, home, html } = await session()
+  await call('create_component', {
+    name: 'Cta',
+    html: '<a class="underline" href="/default"><span>Go</span></a>',
+  })
+  const h = await home()
+  const put = await call('set_page_html', {
+    pageId: h.id,
+    version: h.version,
+    html: page('<Cta data-ref="one">\n  <a href="/signup"><span>Start</span></a>\n</Cta>'),
+  })
+  expect(put.saved).toBe(true)
+  expect(put.refused ?? []).toEqual([])
+
+  const out = await html()
+  expect(out).toContain('href="/signup"')
+  expect(out).not.toContain('href="/default"')
+  // a round-trip of the read is still a no-op: the href comes back as written
+  const read = await call('get_page', { pageId: (await home()).id })
+  expect(read.html).toContain('href="/signup"')
+})
+
+// The master's link is a DEFAULT, so changing it has to reach the instances
+// that never set one — which is what the old copy-down did for free.
+test('changing the master’s link moves every instance that did not override it', async () => {
+  const { call, home, html } = await session()
+  const made = await call('create_component', {
+    name: 'Cta',
+    html: '<a class="underline" href="/old"><span>Go</span></a>',
+  })
+  const h = await home()
+  await call('set_page_html', {
+    pageId: h.id,
+    version: h.version,
+    html: page('<Cta data-ref="one" />\n<Cta data-ref="two" />'),
+  })
+  const after = await home()
+  await call('edit_elements', {
+    pageId: after.id,
+    version: after.version,
+    edits: [{ ref: 'two', part: 'link', link: '/kept' }],
+  })
+
+  const comp = (await call('list_components')).components.find(
+    (c: { name: string }) => c.name === 'Cta',
+  )
+  const moved = await call('update_component', {
+    componentId: made.componentId,
+    version: comp.version,
+    html: '<a class="underline" href="/new"><span>Go</span></a>',
+  })
+  expect(moved.saved).toBe(true)
+
+  const out = await html()
+  expect(out).toContain('href="/new"') // the one that inherits followed
+  expect(out).toContain('href="/kept"') // the one that overrode did not
+  expect(out).not.toContain('href="/old"')
 })

@@ -1,5 +1,8 @@
 import type { Component } from 'vue'
 import {
+  Quote,
+  ImagePlay,
+  Captions,
   Square,
   SquareDashed,
   Container,
@@ -83,6 +86,7 @@ export const ELEMENT_GROUPS: { title: string; items: PaletteItem[] }[] = [
       { type: 'paragraph', label: 'Paragraph', icon: Pilcrow },
       { type: 'span', label: 'Span', icon: Baseline },
       { type: 'label', label: 'Label', icon: Tag },
+      { type: 'blockquote', label: 'Quote', icon: Quote },
     ],
   },
   {
@@ -91,6 +95,8 @@ export const ELEMENT_GROUPS: { title: string; items: PaletteItem[] }[] = [
       { type: 'image', label: 'Image', icon: Image },
       { type: 'video', label: 'Video', icon: Video },
       { type: 'icon', label: 'Icon', icon: Smile },
+      { type: 'figure', label: 'Figure', icon: ImagePlay },
+      { type: 'figcaption', label: 'Caption', icon: Captions },
     ],
   },
   {

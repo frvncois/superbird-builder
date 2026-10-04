@@ -120,9 +120,6 @@ function onBoardClick() {
                 <span :class="focusedKey === card.key ? 'font-medium text-foreground' : ''">
                   {{ card.def.name }}
                 </span>
-                <span v-if="card.preview" class="rounded-full bg-input px-1.5 py-0.5 text-[9px]">
-                  Library
-                </span>
               </div>
               <!-- `contain: layout` makes the card the containing block for
                    position:fixed, so a dialog's overlay covers its own card

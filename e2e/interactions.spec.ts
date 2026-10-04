@@ -93,6 +93,24 @@ function fixture() {
               }),
               node('pA', 'div', { htmlId: 'pA', classes: 'hidden' }),
               node('pB', 'div', { htmlId: 'pB', classes: 'hidden' }),
+              // --- an interaction whose TARGET is an <svg> ---
+              // On an SVG element `className` is a read-only SVGAnimatedString,
+              // so the runtime's `el.className.split(…)` threw while BUILDING
+              // its target list — taking every interaction on the route down
+              // with it, not just this one. An :icon is a void leaf rendering
+              // <svg>, so a chevron that flips is all it took.
+              node('chevronBtn', 'button', {
+                children: [node('chevronLabel', 'span', { content: 'Toggle' })],
+                htmlId: 'chevron-btn',
+                interactions: [
+                  { id: 'b9', interactionId: SHOW, trigger: 'click', targetId: 'chevron' },
+                ],
+              }),
+              node('chevron', 'icon', {
+                htmlId: 'chevron',
+                classes: 'size-4',
+                svg: '<svg viewBox="0 0 24 24" data-icon="chevron-down"><path d="m6 9 6 6 6-6"/></svg>',
+              }),
               // --- dismissible bar, remembered for the session ---
               node('bar', 'div', { htmlId: 'bar', children: [
                 node('dismiss', 'button', {
@@ -371,6 +389,27 @@ test.describe('interactions', () => {
 
     await page.reload()
     expect(await classesOf(page, 'bar')).toContain('hidden')
+  })
+
+  test('an svg target toggles, and does not take the page down with it', async ({ page }) => {
+    await page.goto('/')
+    const errors: string[] = []
+    page.on('pageerror', (e) => errors.push(String(e)))
+
+    // the svg itself flips…
+    expect(await classesOf(page, 'chevron')).not.toContain('flex')
+    await page.locator('#chevron-btn').click()
+    expect(await classesOf(page, 'chevron')).toContain('flex')
+    // …and it keeps the class it was authored with: the runtime recomputes the
+    // whole list from a captured base, so a lost base would strip `size-4`
+    expect(await classesOf(page, 'chevron')).toContain('size-4')
+
+    // the real regression: EVERY OTHER interaction on the route still works.
+    // The throw happened in the collection loop, so one svg target left the
+    // modal, the menu and the accordion all dead.
+    await page.locator('#open').click()
+    expect(await classesOf(page, 'modal')).not.toContain('hidden')
+    expect(errors).toEqual([])
   })
 
   test('link attributes land on the generated anchor, not the inner element', async () => {

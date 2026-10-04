@@ -42,14 +42,12 @@ import { effectiveClasses } from './variants'
  */
 export function setComponentMeta(
   def: ComponentDef,
-  meta: { category?: string; source?: string; variants?: VariantAxis[] },
+  meta: { category?: string; variants?: VariantAxis[] },
 ): void {
   delete def.category
-  delete def.source
   delete def.variants
   const category = meta.category?.trim()
   if (category) def.category = category
-  if (meta.source) def.source = meta.source
   if (meta.variants?.length) {
     // rebuilt key by key: an axis object's own key order is part of the signature
     def.variants = meta.variants.map((axis) => ({
@@ -155,7 +153,7 @@ export function duplicateComponent(project: Project, id: string): ComponentDef |
 export function setComponentCategory(project: Project, id: string, category: string): boolean {
   const def = project.components.find((c) => c.id === id)
   if (!def) return false
-  setComponentMeta(def, { category, source: def.source, variants: def.variants })
+  setComponentMeta(def, { category, variants: def.variants })
   return true
 }
 
@@ -221,6 +219,8 @@ function bakeMasterState(pairs: Pair[], masterToInstance: Map<string, string>): 
     // component left to pick an option on
     if (classes) node.classes = classes
     delete node.variants
+    // the boundary meant something only while a component stood behind it
+    delete node.slot
     if (master.attributes) node.attributes = deepClone(master.attributes)
     // fresh binding ids: the master's bindings keep running on the instances
     // that are still attached, and two bindings sharing an id would key the

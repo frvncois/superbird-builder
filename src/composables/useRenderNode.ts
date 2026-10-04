@@ -449,6 +449,15 @@ export function useRenderNode(
   // the current entry's page and is inert outside an entry scope. Same
   // scheme allowlist the static export enforces — drops javascript:,
   // data:, etc. Renderers turn the raw value into their own href/nav.
+  /** the locale-less path of the route being rendered — what '@locale:xx'
+   * re-prefixes, and what `isCurrentLink` compares against. Entry routes live
+   * at the collection path, not the template page's. */
+  const routePath = computed(() => {
+    const entry = scope?.entry ?? activeEntry.value
+    const collection = scope?.collection ?? activeCollection.value
+    return (entry && collection ? entryPath(collection, entry) : activePage.value.path) || '/'
+  })
+
   const linkRaw = computed(() => {
     let raw = node.value.link ?? mapping.value?.master.link
     if (raw === '@item') {
@@ -456,6 +465,19 @@ export function useRenderNode(
       // null for a data-only collection (no detail routes) — render unlinked
       // rather than pointing at a route that was never exported
       raw = entryPath(scope.collection, scope.entry) ?? undefined
+    }
+    // '@locale:xx' — THIS route in another locale (the language switcher).
+    // Mirrors resolveHref in server/export.mjs; Play's `navigate` reads the
+    // locale back off the path, so the switch is the ordinary nav it already
+    // does. The '@' is part of the sentinel, as it is for '@item' — without it
+    // the link fell through the scheme test below and rendered no href at all.
+    if (raw?.startsWith('@locale:')) {
+      const code = raw.slice('@locale:'.length)
+      if (!project.value.locales.includes(code)) return null
+      const path = routePath.value
+      return code === (project.value.defaultLocale || 'en')
+        ? path
+        : `/${code}${path === '/' ? '' : path}`
     }
     if (!raw) return null
     if (!/^(\/|#|https?:|mailto:|tel:)/i.test(raw)) return null
@@ -466,10 +488,7 @@ export function useRenderNode(
   const isCurrentLink = computed(() => {
     const raw = linkRaw.value
     if (!raw || !raw.startsWith('/')) return false
-    const entry = scope?.entry ?? activeEntry.value
-    const collection = scope?.collection ?? activeCollection.value
-    const here = entry && collection ? entryPath(collection, entry) : activePage.value.path
-    return !!here && raw === here
+    return raw === routePath.value
   })
 
   // --- classes (shared core; renderers append their own chrome) ---

@@ -190,6 +190,116 @@ test.describe('what a review sends back', () => {
     expect(await s.kinds()).not.toContain('untranslated-attributes')
   })
 
+  // The worklist flags a bare number or a glyph as `looksStructural` ("do NOT
+  // translate") while this check flagged the same string as work left — in a
+  // message promising that `missingTranslatable: 0` now means it. The only way
+  // out was to write "8" as the French for "8".
+  test('a structural attribute value is not counted as untranslated', async () => {
+    const s = await mcpSession()
+    await s.call('update_settings', { addLocales: ['fr'] })
+    const home = await s.home()
+    await s.call('set_page_html', {
+      pageId: home.id,
+      html: pageHtml('<input data-ref="size" />\n<input data-ref="search" />'),
+      version: home.version,
+    })
+    const after = await s.home()
+    await s.call('edit_elements', {
+      pageId: after.id,
+      version: after.version,
+      edits: [
+        { ref: 'size', attributes: { placeholder: '8' } },
+        { ref: 'search', attributes: { 'aria-label': 'Search' } },
+      ],
+    })
+    // the prose one is real work and is named…
+    const warning = (await s.call('publish', {})).warnings.find(
+      (w: { kind: string }) => w.kind === 'untranslated-attributes',
+    )
+    expect(JSON.stringify(warning.where)).toContain('aria-label')
+    // …and the bare number the worklist told the agent to skip is not
+    expect(JSON.stringify(warning.where)).not.toContain('placeholder')
+  })
+
+  // The form check read each control's `attributes` alone, while the EXPORT
+  // (and the Data panel) read the merged layers. So a form built the way the
+  // guide says to build one — one Input component, named per placement with
+  // `instanceAttributes` — was reported as "has no NAMED field" in the same
+  // response whose `stats.forms` listed the names.
+  test('a form whose controls are named per placement is not flagged', async () => {
+    const s = await mcpSession()
+    await s.call('create_component', {
+      name: 'Field',
+      html: '<input class="rounded border px-3 py-2" type="text" />',
+    })
+    const home = await s.home()
+    await s.call('set_page_html', {
+      pageId: home.id,
+      html: pageHtml(
+        [
+          '<form data-ref="contact">',
+          '  <Field />',
+          '  <Field />',
+          '  <button><span>Send</span></button>',
+          '  <form-success><span>Thanks</span></form-success>',
+          '</form>',
+        ].join('\n'),
+      ),
+      version: home.version,
+    })
+    let after = await s.home()
+    const inputs = (
+      await s.call('get_page', { pageId: after.id, elements: 'all' })
+    ).elements.filter((e: { type: string }) => e.type === 'input')
+    expect(inputs).toHaveLength(2)
+    await s.call('edit_elements', {
+      pageId: after.id,
+      version: after.version,
+      edits: [
+        { id: inputs[0].id, instanceAttributes: { name: 'email' } },
+        { id: inputs[1].id, instanceAttributes: { name: 'message' } },
+      ],
+    })
+    after = await s.home()
+    await s.call('edit_elements', {
+      pageId: after.id,
+      version: after.version,
+      edits: [{ ref: 'contact', form: { enabled: true } }],
+    })
+
+    expect(await s.kinds()).not.toContain('form-setup')
+    // and the names the warning could not see are the ones that really ship:
+    // the export reads the same merged layers the check now reads
+    const html = await s.html()
+    expect(html).toContain('name="email"')
+    expect(html).toContain('name="message"')
+  })
+
+  test('a form that really collects nothing is still flagged', async () => {
+    const s = await mcpSession()
+    const home = await s.home()
+    await s.call('set_page_html', {
+      pageId: home.id,
+      html: pageHtml(
+        [
+          '<form data-ref="contact">',
+          '  <input />',
+          '  <button><span>Send</span></button>',
+          '  <form-success><span>Thanks</span></form-success>',
+          '</form>',
+        ].join('\n'),
+      ),
+      version: home.version,
+    })
+    const after = await s.home()
+    await s.call('edit_elements', {
+      pageId: after.id,
+      version: after.version,
+      edits: [{ ref: 'contact', form: { enabled: true } }],
+    })
+    expect(await s.kinds()).toContain('form-setup')
+  })
+
   test('a trigger and a target in two different repeats is flagged', async () => {
     const s = await mcpSession()
     const c = (await s.call('create_collection', { name: 'row', detailRoutes: false })).collection

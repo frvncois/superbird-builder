@@ -20,7 +20,6 @@ export function useCommandPalette() {
     backend.value.insert({ kind: 'element', type, classes }, null, 'inside')
   const insertComponent = (name: string) => backend.value.insert({ kind: 'component', name }, null, 'inside')
   /** insert a library entry the project hasn't added yet: using it adds it */
-  const insertCatalog = (key: string) => backend.value.insert({ kind: 'catalog', key }, null, 'inside')
 
-  return { open, closePalette, togglePalette, insertElement, insertComponent, insertCatalog }
+  return { open, closePalette, togglePalette, insertElement, insertComponent }
 }

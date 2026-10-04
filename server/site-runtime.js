@@ -57,11 +57,18 @@
     return !set || set.indexOf(curBp) !== -1
   }
 
+  // getAttribute('class'), never `.className`: on an SVG element `className` is
+  // a read-only SVGAnimatedString, so `.split` threw — INSIDE this loop, which
+  // killed the whole target list and with it every interaction on the route.
+  // An :icon is a void leaf rendering <svg>, so "flip a chevron" was enough.
+  var classOf = function (el) {
+    return el.getAttribute('class') || ''
+  }
   var targets = []
   document.querySelectorAll('[data-tgt]').forEach(function (el) {
     targets.push({
       el: el,
-      base: el.className.split(/\s+/).filter(Boolean),
+      base: classOf(el).split(/\s+/).filter(Boolean),
       keys: el.getAttribute('data-tgt').split(' '),
     })
   })
@@ -87,7 +94,7 @@
             return !rm[c]
           })
         : t.base
-      t.el.className = base.join(' ') + extra
+      t.el.setAttribute('class', base.join(' ') + extra)
     })
   }
 

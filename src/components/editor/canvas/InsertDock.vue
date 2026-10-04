@@ -10,13 +10,11 @@ import { useStructure } from '@/composables/useStructure'
 import { useInsertDrag, type InsertPayload } from '@/composables/useInsertDrag'
 import { ELEMENT_GROUPS, paletteKey } from '@/lib/elementPalette'
 import { fuzzyScore } from '@/lib/fuzzy'
-import { CATALOG } from '@/lib/catalog'
 import { canNest } from '@/lib/instances'
 import { useComponentBoard } from '@/composables/useComponentBoard'
 
 const { components } = useComponents()
-const { open, closePalette, togglePalette, insertElement, insertComponent, insertCatalog } =
-  useCommandPalette()
+const { open, closePalette, togglePalette, insertElement, insertComponent } = useCommandPalette()
 const { requestReveal } = useElement()
 const { backend } = useStructure()
 const { activeCard } = useComponentBoard()
@@ -27,12 +25,11 @@ const active = ref(0)
 
 // the filter chips: which part of the set is on show. `all` shows every
 // group; the others narrow both the grid and the search. Reset on open.
-type Tab = 'all' | 'basic' | 'components' | 'library'
+type Tab = 'all' | 'basic' | 'components'
 const TABS: { key: Tab; label: string }[] = [
   { key: 'all', label: 'All' },
   { key: 'basic', label: 'Basic' },
   { key: 'components', label: 'Components' },
-  { key: 'library', label: 'Library' },
 ]
 const tab = ref<Tab>('all')
 const input = ref<InstanceType<typeof InputUI>>()
@@ -109,33 +106,6 @@ const allGroups = computed<DockGroup[]>(() => {
       })),
     })
   }
-  // every library entry is available without an "add" step: inserting one
-  // copies it into the project, after which it lists under Components
-  const added = new Set(components.value.map((c) => c.source).filter(Boolean))
-  // a library entry being previewed on the board IS the host when it is the
-  // card being edited — it cannot go inside itself
-  const library = CATALOG.filter((e) => !added.has(e.key) && e.key !== card?.preview?.key).filter(
-    (e) => fits(e.name),
-  )
-  // one group per catalog category, in the order the library was authored
-  const byCategory = new Map<string, DockItem[]>()
-  for (const e of library) {
-    const item: DockItem = {
-      key: `catalog:${e.key}`,
-      label: e.name,
-      keywords: [e.category, e.key],
-      icon: Component,
-      accent: true,
-      payload: { kind: 'catalog', key: e.key, name: e.name },
-      run: () => insertCatalog(e.key),
-    }
-    const group = byCategory.get(e.category)
-    if (group) group.push(item)
-    else byCategory.set(e.category, [item])
-  }
-  for (const [category, items] of byCategory) {
-    base.push({ title: category, tab: 'library', items })
-  }
   return base
 })
 
@@ -178,9 +148,8 @@ const emptyHint = computed(() => {
   if (results.value.flat.length) return ''
   if (query.value.trim()) return 'No results'
   if (tab.value === 'components') {
-    return 'Nothing yet — use a library entry, or select an element on a page and choose “Create component”.'
+    return 'Nothing yet — select an element on a page and choose “Create component”.'
   }
-  if (tab.value === 'library') return 'Everything from the library is already in your project.'
   return 'No results'
 })
 watch(

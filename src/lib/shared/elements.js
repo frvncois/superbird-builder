@@ -34,6 +34,12 @@ export const ELEMENTS_DATA = {
   label: { tag: 'label', suggest: 'span', seed: { type: 'span', content: 'Label' } },
   paragraph: { tag: 'p', defaultContent: 'Dolor sit amet' },
   span: { tag: 'span', defaultContent: 'Dolor sit amet' },
+  // a quotation and a captioned media block — the two structures a
+  // testimonial or an article pull-quote is made of. Containers: the words go
+  // in a child, and <figcaption> is what a <figure> is FOR.
+  blockquote: { tag: 'blockquote', suggest: 'paragraph' },
+  figure: { tag: 'figure', suggest: 'image' },
+  figcaption: { tag: 'figcaption', defaultContent: 'Caption' },
   list: { tag: 'ul', suggest: 'list-item' },
   // a container (its HTML <li> routinely wraps a tag/title/meta block); put a
   // :text: (or richer children) inside it rather than text on the row itself

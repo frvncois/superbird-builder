@@ -25,7 +25,6 @@ import {
 } from '@/lib/treeOps'
 import { deepClone, findNode, findParent, walkNodes } from '@/lib/tree'
 import { canNest, isInstanceWrapper } from '@/lib/instances'
-import { catalogEntry } from '@/lib/catalog'
 import type { ComponentDef, ElementNode } from '@/types/editor'
 
 /**
@@ -44,8 +43,7 @@ import type { ComponentDef, ElementNode } from '@/types/editor'
  *   diverge and then adopting it;
  * - that structure inside a nested instance is refused on the board, because it
  *   is edited in the inner component's own card;
- * - promoting a library preview into the project before a push, which skips
- *   defs the project does not own.
+ * - pushing a master's new shape to every instance after an edit.
  *
  * It also answers the capability questions (`isContainer`, `can`, `canDrop`)
  * that callers — the Layers tree, the canvas drag, the ⌘E dock, the context
@@ -58,8 +56,6 @@ export type InsertPayload =
    *  type of its own — see lib/elementPalette */
   | { kind: 'element'; type: string; classes?: string }
   | { kind: 'component'; name: string }
-  /** a bundled library entry — using it copies it into the project first */
-  | { kind: 'catalog'; key: string }
 
 export type StructureAction =
   | 'move'
@@ -107,33 +103,22 @@ const clipboard = ref<ElementNode[] | null>(null)
 export function useStructure() {
   const el = useElement()
   const { project } = useProject()
-  const { components, findComponent, masterFor, addFromCatalog } = useComponents()
+  const { components, findComponent, masterFor } = useComponents()
   const { withReorderAnimation } = useReorderAnimation()
-  const { activeCard, boardActive, promoteIfPreview } = useComponentBoard()
+  const { activeCard, boardActive } = useComponentBoard()
 
   // --- shared helpers ---
 
-  /** the component name a library entry has, or will have once it is added */
-  const catalogName = (key: string) =>
-    components.value.find((c) => c.source === key)?.name ?? catalogEntry(key)?.name ?? null
-
-  /** the type an insert payload lands, copying a library entry into the project
-   *  if that is what it takes. Null when the payload can't be placed. */
+  /** the type an insert payload lands. Null when the payload can't be placed. */
   function typeFor(payload: InsertPayload): string | null {
     if (payload.kind === 'element') return payload.type
-    if (payload.kind === 'component') return findComponent(payload.name) ? payload.name : null
-    return addFromCatalog(payload.key)?.def.name ?? null
+    return findComponent(payload.name) ? payload.name : null
   }
 
   /** run a change on a host, then push a master's new shape to its instances */
   function runOn(host: StructureHost, fn: () => boolean): boolean {
     if (!fn()) return false
-    if (host.def) {
-      // a library preview has to enter the project BEFORE the push, which skips
-      // defs the project doesn't own
-      promoteIfPreview(host.def)
-      pushMasterStructure(project.value, host.def)
-    }
+    if (host.def) pushMasterStructure(project.value, host.def)
     return true
   }
 
@@ -183,6 +168,9 @@ export function useStructure() {
         ? { host: masterHost(mapping.def), targetId: mapping.def.root.id }
         : { host: pageHost(body), targetId: id }
     }
+    // a slot is the component's element holding the PAGE's content: dropping
+    // inside it is a page edit, and so is anything around its children
+    if (position === 'inside' && mapping.master.slot) return { host: pageHost(body), targetId: id }
     return { host: masterHost(mapping.def), targetId: mapping.master.id }
   }
 
@@ -257,13 +245,10 @@ export function useStructure() {
       const resolved = targetHost(target.id, position)
       if (!resolved) return null
       // a component may land inside an instance of another — that is nesting —
-      // but never where it would end up holding itself, at any distance.
-      // Checked BEFORE a library entry is copied in: a refused insert must not
-      // leave a component behind.
-      if (payload.kind !== 'element') {
+      // but never where it would end up holding itself, at any distance
+      if (payload.kind === 'component') {
         const holder = resolved.host.def?.name
-        const inner = payload.kind === 'component' ? payload.name : catalogName(payload.key)
-        if (holder && inner && !canNest(components.value, holder, inner)) return null
+        if (holder && !canNest(components.value, holder, payload.name)) return null
       }
       const type = typeFor(payload)
       if (!type) return null
@@ -345,7 +330,19 @@ export function useStructure() {
       if (resolved) runOn(resolved.host, () => setNodeArg(resolved.host, resolved.ids[0]!, arg))
     },
 
+    // A link is PER-INSTANCE with a component default (see adoptCodeOwned):
+    // one Button component serves a dozen destinations, so a link set on an
+    // instance's element stays on the page node instead of being redirected to
+    // the master, where it would re-point every instance on the site. Empty
+    // falls back to the master's. Everything else here — classes,
+    // interactions, arg — is still the master's.
     setLink(id, link) {
+      const body = pageBody.value
+      const mapping = masterFor(id)
+      if (body && mapping && !isInstanceWrapper(mapping)) {
+        setNodeLink(pageHost(body), id, link)
+        return
+      }
       const resolved = nodesHost([id])
       if (resolved) runOn(resolved.host, () => setNodeLink(resolved.host, resolved.ids[0]!, link))
     },
@@ -397,11 +394,8 @@ export function useStructure() {
       const h = host()
       if (!h || !h.def) return null
       const target = targetId ?? el.selectedElement.value?.id ?? null
-      if (payload.kind !== 'element') {
-        // checked BEFORE a library entry is copied in: a refused insert must
-        // not leave a component behind
-        const name = payload.kind === 'component' ? payload.name : catalogName(payload.key)
-        if (!name || !canNest(nestable(h.def), h.def.name, name)) return null
+      if (payload.kind === 'component' && !canNest(nestable(h.def), h.def.name, payload.name)) {
+        return null
       }
       const type = typeFor(payload)
       if (!type) return null
@@ -493,7 +487,7 @@ export function useStructure() {
   }
 
   /** what a component name resolves to while editing `def` — the project's
-   *  components, and `def` itself when it is still a library preview */
+   *  components, and `def` itself when it is not in the project yet */
   const nestable = (def: ComponentDef) =>
     components.value.includes(def) ? components.value : [...components.value, def]
 

@@ -212,6 +212,20 @@ export interface ElementNode {
    * component: an instance hides a part for itself, or — with an explicit
    * `false` — shows one its component hides by default. Omitted = inherit. */
   hidden?: boolean
+  /** empty ON PURPOSE (a spacer, a decorative box): the Edit canvas draws a
+   * drop hint inside a childless container, and this is the Ignore button's
+   * answer. Node-only state, never rendered, not in the HTML — it rides on
+   * adoption like `listQuery`. Only ever `true`; restoring deletes the key. */
+  allowEmpty?: boolean
+  /** MASTER container only: a SLOT. The element itself is the component's
+   * (classes, attributes, bindings, hidden — shared like any other master
+   * node) but its CHILDREN belong to whoever placed the instance: on a page
+   * they are ordinary page nodes, styled, restructured and addressed like any
+   * other, and never realigned to the component. The master's own children
+   * under it are the DEFAULT content a fresh instance is given, once. Carried
+   * down onto mirrors and instance nodes like `arg`/`link`, so every tree
+   * knows where the boundary is without consulting the master. */
+  slot?: boolean
   /** background media (a /media/<id> URL) layered behind the element's content;
    * image → CSS background-image, video → an absolutely-positioned <video> layer.
    * node-only visual state like classes/src */
@@ -491,10 +505,6 @@ export interface ComponentDef {
   root: ElementNode
   /** drawer grouping; omitted = "Uncategorized" */
   category?: string
-  /** the library entry this was copied from — drives the "Added" state in the
-   * components drawer. A copy is a plain component from here on: nothing
-   * follows the catalog. */
-  source?: string
   /** the axes its instances can differ along. Written ONLY through
    * `setComponentMeta`, like the two keys above. */
   variants?: VariantAxis[]

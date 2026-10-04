@@ -440,8 +440,8 @@ function resolveHref(node, ctx) {
   // '@locale:xx' — THIS page in another locale (the language-switcher target).
   // A plain '/…' link can't express it: internal links are auto-prefixed with
   // the CURRENT locale, so from /fr every path leads back to /fr/….
-  if (raw?.startsWith('locale:')) {
-    const code = raw.slice('locale:'.length)
+  if (raw?.startsWith('@locale:')) {
+    const code = raw.slice('@locale:'.length)
     if (!ctx.project.locales.includes(code)) return null
     const path = ctx.routePath ?? '/'
     return code === ctx.defaultLocale ? path : `/${code}${path === '/' ? '' : path}`
@@ -572,10 +572,29 @@ function attrsFor(node, ctx, bg, { wrapLink = true, extraClass = '' } = {}) {
   const custom = withSafeRel(
     sanitizeAttributes(nodeAttributes(node, mapping, ctx.locale, ctx.defaultLocale)),
   )
-  // images always carry alt: the author's attributes.alt, else the library
-  // asset's default, else '' (decorative)
+  // attribute values bound to collection fields, resolved in the entry scope
+  // being rendered (mirrors useRenderNode's customAttrs). Per-instance with a
+  // component default, like listQuery.
+  //
+  // Resolved HERE, before `alt`/`href` are emitted, and not after: those names
+  // are in `managed` below, so the pass-through loop skips them. Bound last,
+  // a `data-bind-alt` could never reach the page while the canvas and Play
+  // rendered it correctly — the whole point of the binding is the per-entry
+  // alt text a <img data-field> cannot otherwise have.
+  const boundAttrs = resolveInstanceValue(node, mapping, 'fieldAttrs')
+  const withBound =
+    boundAttrs && ctx.scope?.entry
+      ? resolveFieldAttrs(
+          boundAttrs,
+          ctx.scope.collection,
+          (field) => entryValue(ctx.scope.entry, field, ctx.locale, ctx.defaultLocale) ?? '',
+          custom,
+        )
+      : custom
+  // images always carry alt: the bound field, else the author's attributes.alt,
+  // else the library asset's default, else '' (decorative)
   if (def?.tag === 'img') {
-    attrs.push(`alt="${escapeHtml(custom.alt ?? ctx.altFor?.(rawSrc) ?? '')}"`)
+    attrs.push(`alt="${escapeHtml(withBound.alt ?? ctx.altFor?.(rawSrc) ?? '')}"`)
   }
 
   // href: link elements only, scheme-allowlisted, locale-prefixed internals.
@@ -764,19 +783,6 @@ function attrsFor(node, ctx, bg, { wrapLink = true, extraClass = '' } = {}) {
   // <a> and is skipped here.
   const managed = new Set(['id', 'class', 'style', 'src', 'alt', 'href'])
   const wrapsInAnchor = wrapLink && def?.tag !== 'a' && !!resolveHref(node, ctx)
-  // attribute values bound to collection fields, resolved in the entry scope
-  // being rendered (mirrors useRenderNode's customAttrs). Per-instance with a
-  // component default, like listQuery.
-  const boundAttrs = resolveInstanceValue(node, mapping, 'fieldAttrs')
-  const withBound =
-    boundAttrs && ctx.scope?.entry
-      ? resolveFieldAttrs(
-          boundAttrs,
-          ctx.scope.collection,
-          (field) => entryValue(ctx.scope.entry, field, ctx.locale, ctx.defaultLocale) ?? '',
-          custom,
-        )
-      : custom
   const own = wrapsInAnchor ? splitLinkAttributes(withBound).element : withBound
   // attributes the element TYPE implies (:checkbox → type="checkbox"), unless
   // the author set that attribute themselves

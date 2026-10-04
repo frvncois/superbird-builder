@@ -2675,6 +2675,753 @@
           }
         ]
       }
+    },
+    {
+      "id": "c6a19fc9-29bc-4a4b-91d6-be41d6dc2d60",
+      "name": "Button",
+      "root": {
+        "id": "1820083c-0648-4778-92f9-8aadb92fc284",
+        "type": "Button",
+        "content": "",
+        "children": [
+          {
+            "id": "4a193710-fc7a-4031-b875-081f16f1303f",
+            "type": "button",
+            "content": "",
+            "children": [
+              {
+                "id": "c5612884-30c5-45f3-99d2-a27edf1e89be",
+                "type": "icon",
+                "content": "",
+                "children": [],
+                "classes": "size-4 shrink-0",
+                "hidden": true,
+                "svg": "<svg data-icon=\"lucide:arrow-left\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"m12 19-7-7 7-7\"/><path d=\"M19 12H5\"/></svg>"
+              },
+              {
+                "id": "ea405d31-a924-4571-af8a-e0b91359efe5",
+                "type": "span",
+                "content": "Button",
+                "children": []
+              },
+              {
+                "id": "d230ec0e-66bc-4bac-b4cb-e2bc61628705",
+                "type": "icon",
+                "content": "",
+                "children": [],
+                "classes": "size-4 shrink-0",
+                "hidden": true,
+                "svg": "<svg data-icon=\"lucide:arrow-right\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M5 12h14\"/><path d=\"m12 5 7 7-7 7\"/></svg>"
+              }
+            ],
+            "classes": "inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-medium whitespace-nowrap text-primary-foreground transition-colors outline-none hover:opacity-90 disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-ring",
+            "variantClasses": {
+              "variant:secondary": "bg-secondary text-secondary-foreground",
+              "variant:outline": "border border-input bg-background text-foreground hover:bg-accent hover:text-accent-foreground hover:opacity-100",
+              "variant:ghost": "bg-transparent text-foreground hover:bg-accent hover:text-accent-foreground hover:opacity-100",
+              "variant:destructive": "bg-destructive text-destructive-foreground",
+              "variant:link": "h-auto bg-transparent px-0 text-primary underline-offset-4 hover:underline hover:opacity-100",
+              "size:sm": "h-8 gap-1.5 rounded-md px-3 text-xs",
+              "size:lg": "h-10 px-6 text-base",
+              "size:icon": "w-9 px-0"
+            }
+          }
+        ]
+      },
+      "category": "Buttons",
+      "variants": [
+        {
+          "name": "variant",
+          "options": [
+            "default",
+            "secondary",
+            "outline",
+            "ghost",
+            "destructive",
+            "link"
+          ],
+          "default": "default"
+        },
+        {
+          "name": "size",
+          "options": [
+            "md",
+            "sm",
+            "lg",
+            "icon"
+          ],
+          "default": "md"
+        }
+      ]
+    },
+    {
+      "id": "9891628f-1aae-46f9-8fee-49c6a4a2378f",
+      "name": "Card",
+      "root": {
+        "id": "f6547bef-fa1a-42ec-a251-65b534b74089",
+        "type": "Card",
+        "content": "",
+        "children": [
+          {
+            "id": "4eace109-3c14-4052-bca6-ea030afe600d",
+            "type": "div",
+            "content": "",
+            "children": [
+              {
+                "id": "d1bd190d-6ec1-44a5-ae61-24636728ef70",
+                "type": "div",
+                "content": "",
+                "children": [
+                  {
+                    "id": "3fbae467-7475-42f7-ab56-dc8c19b2ba5f",
+                    "type": "h3",
+                    "content": "Card title",
+                    "children": [],
+                    "classes": "text-lg font-semibold tracking-tight text-card-foreground"
+                  },
+                  {
+                    "id": "a8607c40-f990-4c81-ad1c-21b6041e3a15",
+                    "type": "paragraph",
+                    "content": "A short line about what this card holds.",
+                    "children": [],
+                    "classes": "text-sm text-muted-foreground"
+                  }
+                ],
+                "classes": "flex flex-col gap-1.5 p-6"
+              },
+              {
+                "id": "6912853f-7761-42e9-884c-9a14dc9800b6",
+                "type": "div",
+                "content": "",
+                "children": [
+                  {
+                    "id": "df472b3f-8362-40e3-a77e-a9f147c90f3b",
+                    "type": "paragraph",
+                    "content": "Card content goes here.",
+                    "children": [],
+                    "classes": "text-sm text-card-foreground"
+                  }
+                ],
+                "classes": "px-6 pb-6"
+              },
+              {
+                "id": "a5e17ed9-e864-4099-a25f-645a71b65777",
+                "type": "div",
+                "content": "",
+                "children": [
+                  {
+                    "id": "60371630-7c80-4068-acab-87d1674e274f",
+                    "type": "Button",
+                    "content": "",
+                    "children": [
+                      {
+                        "id": "0ea8a95c-43d8-4558-a193-4f63bea43a02",
+                        "type": "button",
+                        "content": "",
+                        "children": [
+                          {
+                            "id": "6e2c5e67-c8b6-417c-bd04-9c29c9434d08",
+                            "type": "icon",
+                            "content": "",
+                            "children": []
+                          },
+                          {
+                            "id": "556e12d9-5ef1-46a3-abc1-85d1e651dab7",
+                            "type": "span",
+                            "content": "Continue",
+                            "children": []
+                          },
+                          {
+                            "id": "36641cde-3c5b-4338-9276-172b14c15c0e",
+                            "type": "icon",
+                            "content": "",
+                            "children": []
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ],
+                "classes": "flex items-center justify-end gap-2 border-t border-border px-6 py-4",
+                "hidden": true
+              }
+            ],
+            "classes": "rounded-xl border border-border bg-card text-card-foreground shadow-sm"
+          }
+        ]
+      },
+      "category": "Cards"
+    },
+    {
+      "id": "2ffb91e7-3a21-462e-985d-ff1af42bed8f",
+      "name": "Tabs",
+      "root": {
+        "id": "9e81cfda-5524-4483-a958-46f630425428",
+        "type": "Tabs",
+        "content": "",
+        "children": [
+          {
+            "id": "5af956c9-827b-4b80-8d6d-1d633fe8effc",
+            "type": "div",
+            "content": "",
+            "children": [
+              {
+                "id": "6ab22130-3cc8-408c-afe2-9ae13594e800",
+                "type": "div",
+                "content": "",
+                "children": [
+                  {
+                    "id": "fb7a2870-6740-49af-902a-241ec8606af8",
+                    "type": "button",
+                    "content": "",
+                    "children": [
+                      {
+                        "id": "0a7dc428-64d3-4fad-bcc6-be6cfa197367",
+                        "type": "span",
+                        "content": "Overview",
+                        "children": []
+                      }
+                    ],
+                    "classes": "flex-1 rounded-md px-3 py-1.5 text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring bg-background text-foreground",
+                    "interactions": [
+                      {
+                        "id": "69753010-4840-48c5-af15-e71496345cc2",
+                        "interactionId": "6b9329c4-2f87-4112-8b4c-e0ee18cc1d54",
+                        "trigger": "click",
+                        "targetId": "74751a7d-32cc-46e0-9e55-f61940f39d1b",
+                        "action": "off"
+                      },
+                      {
+                        "id": "d721baa6-a0a7-4a2d-a2b5-7d66b98d03ce",
+                        "interactionId": "87dacd4d-f22d-4a3b-804d-5236fc456e53",
+                        "trigger": "click",
+                        "targetId": "3bb13c08-4cdc-4255-8452-4cbe37dc4394",
+                        "action": "off"
+                      },
+                      {
+                        "id": "db46207e-ae89-4f53-a7de-b4ef3ca4b37d",
+                        "interactionId": "87dacd4d-f22d-4a3b-804d-5236fc456e53",
+                        "trigger": "click",
+                        "targetId": "f3e65fc4-6bcc-4a38-a67e-383035fc5ae1",
+                        "action": "off"
+                      },
+                      {
+                        "id": "a7e28a37-4097-4fee-b65a-18fb4773ce9c",
+                        "interactionId": "d7b953d0-f58f-43b6-8345-1328f8bf6738",
+                        "trigger": "click",
+                        "targetId": "fb7a2870-6740-49af-902a-241ec8606af8",
+                        "action": "off"
+                      },
+                      {
+                        "id": "25c76c83-b2a7-4d0c-ac28-c62244e31fd0",
+                        "interactionId": "e71e4323-16b2-4700-8342-b5532a6e2471",
+                        "trigger": "click",
+                        "targetId": "2cf1bdef-0547-4af6-82d9-c71c56be6195",
+                        "action": "off"
+                      },
+                      {
+                        "id": "97072cdc-d34e-4c68-90ba-e41ac2bacb77",
+                        "interactionId": "e71e4323-16b2-4700-8342-b5532a6e2471",
+                        "trigger": "click",
+                        "targetId": "993db2fb-e093-488c-9bef-72233276d552",
+                        "action": "off"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "2cf1bdef-0547-4af6-82d9-c71c56be6195",
+                    "type": "button",
+                    "content": "",
+                    "children": [
+                      {
+                        "id": "2f469b65-3eb1-4bf0-8229-7b11c610e5a8",
+                        "type": "span",
+                        "content": "Details",
+                        "children": []
+                      }
+                    ],
+                    "classes": "flex-1 rounded-md px-3 py-1.5 text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring text-muted-foreground",
+                    "interactions": [
+                      {
+                        "id": "9944bf62-12f9-4238-a1b6-7df20e9c534c",
+                        "interactionId": "87dacd4d-f22d-4a3b-804d-5236fc456e53",
+                        "trigger": "click",
+                        "targetId": "3bb13c08-4cdc-4255-8452-4cbe37dc4394",
+                        "action": "on",
+                        "group": "panels"
+                      },
+                      {
+                        "id": "5c3185ab-f58d-40cd-9eeb-5f33aa63a96e",
+                        "interactionId": "6b9329c4-2f87-4112-8b4c-e0ee18cc1d54",
+                        "trigger": "click",
+                        "targetId": "74751a7d-32cc-46e0-9e55-f61940f39d1b",
+                        "action": "on"
+                      },
+                      {
+                        "id": "79396638-bfce-4efe-81f7-4f124c1439ac",
+                        "interactionId": "e71e4323-16b2-4700-8342-b5532a6e2471",
+                        "trigger": "click",
+                        "targetId": "2cf1bdef-0547-4af6-82d9-c71c56be6195",
+                        "action": "on",
+                        "group": "tabs"
+                      },
+                      {
+                        "id": "837aad4c-495f-40bb-8919-5e96f9210e11",
+                        "interactionId": "d7b953d0-f58f-43b6-8345-1328f8bf6738",
+                        "trigger": "click",
+                        "targetId": "fb7a2870-6740-49af-902a-241ec8606af8",
+                        "action": "on"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "993db2fb-e093-488c-9bef-72233276d552",
+                    "type": "button",
+                    "content": "",
+                    "children": [
+                      {
+                        "id": "09850605-ef90-49a8-8a9d-ff1b6c70f197",
+                        "type": "span",
+                        "content": "Activity",
+                        "children": []
+                      }
+                    ],
+                    "classes": "flex-1 rounded-md px-3 py-1.5 text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring text-muted-foreground",
+                    "interactions": [
+                      {
+                        "id": "821de14d-ba5b-4a99-bcd2-994b12c5d8d7",
+                        "interactionId": "87dacd4d-f22d-4a3b-804d-5236fc456e53",
+                        "trigger": "click",
+                        "targetId": "f3e65fc4-6bcc-4a38-a67e-383035fc5ae1",
+                        "action": "on",
+                        "group": "panels"
+                      },
+                      {
+                        "id": "9929e24e-4d59-484f-ba48-284c4e36c034",
+                        "interactionId": "6b9329c4-2f87-4112-8b4c-e0ee18cc1d54",
+                        "trigger": "click",
+                        "targetId": "74751a7d-32cc-46e0-9e55-f61940f39d1b",
+                        "action": "on"
+                      },
+                      {
+                        "id": "194a389b-1d5e-4038-afe8-654585ec93cf",
+                        "interactionId": "e71e4323-16b2-4700-8342-b5532a6e2471",
+                        "trigger": "click",
+                        "targetId": "993db2fb-e093-488c-9bef-72233276d552",
+                        "action": "on",
+                        "group": "tabs"
+                      },
+                      {
+                        "id": "d70871a3-e2f1-49c8-ae1c-a4ba3e8d181e",
+                        "interactionId": "d7b953d0-f58f-43b6-8345-1328f8bf6738",
+                        "trigger": "click",
+                        "targetId": "fb7a2870-6740-49af-902a-241ec8606af8",
+                        "action": "on"
+                      }
+                    ]
+                  }
+                ],
+                "classes": "flex items-center gap-1 rounded-lg bg-muted p-1"
+              },
+              {
+                "id": "74751a7d-32cc-46e0-9e55-f61940f39d1b",
+                "type": "div",
+                "content": "The first panel is the one visible before anything is clicked.",
+                "children": [],
+                "classes": "py-4 text-sm text-muted-foreground"
+              },
+              {
+                "id": "3bb13c08-4cdc-4255-8452-4cbe37dc4394",
+                "type": "div",
+                "content": "The second panel. Clicking its tab hides the others.",
+                "children": [],
+                "classes": "hidden py-4 text-sm text-muted-foreground"
+              },
+              {
+                "id": "f3e65fc4-6bcc-4a38-a67e-383035fc5ae1",
+                "type": "div",
+                "content": "The third panel, same again.",
+                "children": [],
+                "classes": "hidden py-4 text-sm text-muted-foreground"
+              }
+            ],
+            "classes": "flex w-full flex-col"
+          }
+        ]
+      },
+      "category": "Interactive"
+    },
+    {
+      "id": "7ee76698-4746-4ba5-ae4d-4699f40ec75f",
+      "name": "Dialog",
+      "root": {
+        "id": "13040f13-7fbf-4355-9d0b-24353be77add",
+        "type": "Dialog",
+        "content": "",
+        "children": [
+          {
+            "id": "a96a4df6-3f7e-4c27-a6ba-4b6a9ef8c12c",
+            "type": "div",
+            "content": "",
+            "children": [
+              {
+                "id": "b4b43635-5532-4c6b-8036-884fd8e311af",
+                "type": "div",
+                "content": "",
+                "children": [
+                  {
+                    "id": "c424cde3-52cd-4840-858c-4462bf913495",
+                    "type": "Button",
+                    "content": "",
+                    "children": [
+                      {
+                        "id": "265930c3-b124-4f2a-9eba-6ce27dcd7089",
+                        "type": "button",
+                        "content": "",
+                        "children": [
+                          {
+                            "id": "ac49b12c-8e93-4c25-9156-dd7196537a0d",
+                            "type": "icon",
+                            "content": "",
+                            "children": []
+                          },
+                          {
+                            "id": "04c74340-7861-46ac-8d5b-97515734a995",
+                            "type": "span",
+                            "content": "Open dialog",
+                            "children": []
+                          },
+                          {
+                            "id": "840ce62c-5076-4fa6-85ba-5dd74519a355",
+                            "type": "icon",
+                            "content": "",
+                            "children": []
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ],
+                "classes": "contents",
+                "interactions": [
+                  {
+                    "id": "493f8266-e6fc-4871-8d57-5247b96b3def",
+                    "interactionId": "d3881dfb-0d4e-4f57-a987-d617163f5414",
+                    "trigger": "click",
+                    "targetId": "f1d22d64-2562-4af1-974e-f43c5a2837f7",
+                    "action": "on"
+                  }
+                ]
+              },
+              {
+                "id": "f1d22d64-2562-4af1-974e-f43c5a2837f7",
+                "type": "div",
+                "content": "",
+                "children": [
+                  {
+                    "id": "00fa3bf9-61c7-4b2e-bf55-395f7e44cc2d",
+                    "type": "div",
+                    "content": "",
+                    "children": [],
+                    "classes": "absolute inset-0 bg-black/50",
+                    "interactions": [
+                      {
+                        "id": "634ca23f-5e14-41e8-9a91-0771a5a113f7",
+                        "interactionId": "d3881dfb-0d4e-4f57-a987-d617163f5414",
+                        "trigger": "click",
+                        "targetId": "f1d22d64-2562-4af1-974e-f43c5a2837f7",
+                        "action": "off"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "0f371a8e-3195-4730-8f53-e4a1d8e02e78",
+                    "type": "div",
+                    "content": "",
+                    "children": [
+                      {
+                        "id": "eb8ddc81-fd94-49f7-b94f-f4c9594f59fd",
+                        "type": "h3",
+                        "content": "Edit profile",
+                        "children": [],
+                        "classes": "text-lg font-semibold tracking-tight text-card-foreground"
+                      },
+                      {
+                        "id": "8bd4201e-22fc-4ed6-b689-fa1f40910a7e",
+                        "type": "paragraph",
+                        "content": "Make your changes here, then save when you are done.",
+                        "children": [],
+                        "classes": "text-sm text-muted-foreground"
+                      },
+                      {
+                        "id": "d9f27575-cfe3-491d-8fa6-666069e1b572",
+                        "type": "div",
+                        "content": "",
+                        "children": [
+                          {
+                            "id": "f895f293-e77e-4e35-a8d2-2328b554a670",
+                            "type": "div",
+                            "content": "",
+                            "children": [
+                              {
+                                "id": "edaeb7c9-5a98-416c-b348-c63971f7e702",
+                                "type": "Button",
+                                "content": "",
+                                "children": [
+                                  {
+                                    "id": "deca64ea-e130-4dbe-ba29-4fdf10151335",
+                                    "type": "button",
+                                    "content": "",
+                                    "children": [
+                                      {
+                                        "id": "7101649c-fb0a-42cc-9073-87b4bc17a215",
+                                        "type": "icon",
+                                        "content": "",
+                                        "children": []
+                                      },
+                                      {
+                                        "id": "d1e0f77b-0236-4120-9249-76dded8710af",
+                                        "type": "span",
+                                        "content": "Cancel",
+                                        "children": []
+                                      },
+                                      {
+                                        "id": "87d913ed-783d-4278-afce-7a022141cd51",
+                                        "type": "icon",
+                                        "content": "",
+                                        "children": []
+                                      }
+                                    ]
+                                  }
+                                ],
+                                "variants": {
+                                  "variant": "outline"
+                                }
+                              }
+                            ],
+                            "classes": "contents",
+                            "interactions": [
+                              {
+                                "id": "3f4780bc-9757-47ff-85d9-c9bc165d965a",
+                                "interactionId": "d3881dfb-0d4e-4f57-a987-d617163f5414",
+                                "trigger": "click",
+                                "targetId": "f1d22d64-2562-4af1-974e-f43c5a2837f7",
+                                "action": "off",
+                                "closeOn": [
+                                  "escape"
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "id": "563ac963-0d8f-4829-a99a-437b579f47d5",
+                            "type": "div",
+                            "content": "",
+                            "children": [
+                              {
+                                "id": "b499dd2d-9415-4b7d-9bb1-c0c8c5d1abf1",
+                                "type": "Button",
+                                "content": "",
+                                "children": [
+                                  {
+                                    "id": "b68526dc-e5af-406b-a510-a8a2948439a7",
+                                    "type": "button",
+                                    "content": "",
+                                    "children": [
+                                      {
+                                        "id": "2089619a-dc05-4da4-a875-96add9c0199a",
+                                        "type": "icon",
+                                        "content": "",
+                                        "children": []
+                                      },
+                                      {
+                                        "id": "a9855d6e-1927-4d61-ab1c-d806808049e0",
+                                        "type": "span",
+                                        "content": "Save changes",
+                                        "children": []
+                                      },
+                                      {
+                                        "id": "8f0bf512-7196-497b-a8d4-c794b6493555",
+                                        "type": "icon",
+                                        "content": "",
+                                        "children": []
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            ],
+                            "classes": "contents",
+                            "interactions": [
+                              {
+                                "id": "3de70d9a-1bc4-48dd-bd46-be519ba607f7",
+                                "interactionId": "d3881dfb-0d4e-4f57-a987-d617163f5414",
+                                "trigger": "click",
+                                "targetId": "f1d22d64-2562-4af1-974e-f43c5a2837f7",
+                                "action": "off"
+                              }
+                            ]
+                          }
+                        ],
+                        "classes": "flex items-center justify-end gap-2"
+                      }
+                    ],
+                    "classes": "relative z-50 flex w-full max-w-md flex-col gap-4 rounded-xl p-6 shadow-lg border border-border bg-card text-card-foreground",
+                    "attributes": {
+                      "role": "dialog",
+                      "aria-modal": "true"
+                    }
+                  }
+                ],
+                "classes": "hidden fixed inset-0 z-50 items-center justify-center p-6"
+              }
+            ],
+            "classes": "flex flex-col items-start gap-4"
+          }
+        ]
+      },
+      "category": "Interactive"
+    },
+    {
+      "id": "b70ca1d1-c33f-486f-99d9-899bca52bda8",
+      "name": "Testimonial",
+      "root": {
+        "id": "e75c1a6c-36fb-4302-942e-4f94ab6eac01",
+        "type": "Testimonial",
+        "content": "",
+        "children": [
+          {
+            "id": "6e76b79e-aca2-4327-a378-49e65657e39b",
+            "type": "div",
+            "content": "",
+            "children": [
+              {
+                "id": "2b566333-dba3-41a7-b3c5-5c6362c51940",
+                "type": "paragraph",
+                "content": "This is the single best tool we have adopted all year.",
+                "children": [],
+                "classes": "text-base text-card-foreground"
+              },
+              {
+                "id": "f91b7d85-531a-4af9-b33f-b7ce0de61707",
+                "type": "div",
+                "content": "",
+                "children": [
+                  {
+                    "id": "b0aa1b04-cf0f-45d2-a404-f0a4be09d571",
+                    "type": "div",
+                    "content": "",
+                    "children": [
+                      {
+                        "id": "ae507fcd-4832-4c72-99a2-2b52b26337fa",
+                        "type": "image",
+                        "content": "",
+                        "children": [],
+                        "classes": "h-full w-full object-cover"
+                      }
+                    ],
+                    "classes": "size-10 shrink-0 overflow-hidden rounded-full bg-muted"
+                  },
+                  {
+                    "id": "c08a24da-90e5-4996-ae2c-88f78ad9a754",
+                    "type": "div",
+                    "content": "",
+                    "children": [
+                      {
+                        "id": "848bee00-367e-4d0c-a3b6-e6270e6501ee",
+                        "type": "span",
+                        "content": "Jane Doe",
+                        "children": [],
+                        "classes": "truncate text-sm font-medium text-card-foreground"
+                      },
+                      {
+                        "id": "10c60f18-b486-4d22-b022-98d86750a669",
+                        "type": "span",
+                        "content": "Head of Design, Acme",
+                        "children": [],
+                        "classes": "truncate text-xs text-muted-foreground"
+                      }
+                    ],
+                    "classes": "flex min-w-0 flex-col"
+                  }
+                ],
+                "classes": "flex items-center gap-3"
+              }
+            ],
+            "classes": "flex flex-col gap-4 p-6 rounded-xl border border-border bg-card text-card-foreground shadow-sm"
+          }
+        ]
+      },
+      "category": "Content"
+    },
+    {
+      "id": "4e739f5d-d175-48c9-a42d-88cb9992bc88",
+      "name": "Alert",
+      "root": {
+        "id": "ee6ccc79-9383-4a89-94ce-5af9883931e8",
+        "type": "Alert",
+        "content": "",
+        "children": [
+          {
+            "id": "059cd719-c3cf-4236-b954-0d6346b4988b",
+            "type": "div",
+            "content": "",
+            "children": [
+              {
+                "id": "4b9146e5-1744-4a8d-bd0d-425e46d37126",
+                "type": "icon",
+                "content": "",
+                "children": [],
+                "classes": "mt-0.5 size-4 shrink-0",
+                "svg": "<svg data-icon=\"lucide:info\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><circle cx=\"12\" cy=\"12\" r=\"10\"/><path d=\"M12 16v-4\"/><path d=\"M12 8h.01\"/></svg>"
+              },
+              {
+                "id": "717163fb-ea67-4644-808b-a3031c629c2e",
+                "type": "div",
+                "content": "",
+                "children": [
+                  {
+                    "id": "0ff99478-74b6-497c-a555-2fe4e9380ecd",
+                    "type": "h4",
+                    "content": "Heads up",
+                    "children": [],
+                    "classes": "text-sm font-medium"
+                  },
+                  {
+                    "id": "5a254c26-9a4d-4df8-bb38-57836725afb6",
+                    "type": "paragraph",
+                    "content": "Something worth knowing before you carry on.",
+                    "children": [],
+                    "classes": "text-sm text-muted-foreground",
+                    "variantClasses": {
+                      "variant:destructive": "text-destructive"
+                    }
+                  }
+                ],
+                "classes": "flex min-w-0 flex-col gap-1"
+              }
+            ],
+            "classes": "flex w-full gap-3 rounded-lg border border-border bg-background p-4 text-foreground",
+            "attributes": {
+              "role": "alert"
+            },
+            "variantClasses": {
+              "variant:destructive": "border-destructive text-destructive"
+            }
+          }
+        ]
+      },
+      "category": "Feedback",
+      "variants": [
+        {
+          "name": "variant",
+          "options": [
+            "default",
+            "destructive"
+          ],
+          "default": "default"
+        }
+      ]
     }
   ],
   "collections": [
@@ -2794,6 +3541,41 @@
       "toClasses": "bg-primary/10 text-primary",
       "duration": "duration-200",
       "easing": "ease-[cubic-bezier(0.2,0,0,1)]"
+    },
+    {
+      "id": "87dacd4d-f22d-4a3b-804d-5236fc456e53",
+      "name": "Tabs · show panel",
+      "toClasses": "block",
+      "duration": "duration-200",
+      "easing": "ease-out"
+    },
+    {
+      "id": "6b9329c4-2f87-4112-8b4c-e0ee18cc1d54",
+      "name": "Tabs · hide first panel",
+      "toClasses": "hidden",
+      "duration": "duration-200",
+      "easing": "ease-out"
+    },
+    {
+      "id": "e71e4323-16b2-4700-8342-b5532a6e2471",
+      "name": "Tabs · active tab",
+      "toClasses": "bg-background text-foreground",
+      "duration": "duration-200",
+      "easing": "ease-out"
+    },
+    {
+      "id": "d7b953d0-f58f-43b6-8345-1328f8bf6738",
+      "name": "Tabs · inactive first tab",
+      "toClasses": "bg-muted text-muted-foreground",
+      "duration": "duration-200",
+      "easing": "ease-out"
+    },
+    {
+      "id": "d3881dfb-0d4e-4f57-a987-d617163f5414",
+      "name": "Dialog · open",
+      "toClasses": "flex",
+      "duration": "duration-200",
+      "easing": "ease-out"
     }
   ],
   "breakpoints": [
@@ -2901,6 +3683,86 @@
         "id": "d574c3c9-6535-48a7-a078-f3294031df49",
         "name": "outline",
         "value": "#79747E"
+      },
+      {
+        "id": "c4df938f-92ab-4989-a01a-87d986fb2663",
+        "name": "ring",
+        "value": "#a1a1a1"
+      },
+      {
+        "id": "c56ef0a9-4961-4dd9-a488-5fce892ace3d",
+        "name": "primary-foreground",
+        "value": "#fafafa"
+      },
+      {
+        "id": "988cd18c-ee22-40b9-9d89-fc832507ead3",
+        "name": "secondary",
+        "value": "#f5f5f5"
+      },
+      {
+        "id": "17299b52-71d3-409b-8d19-96c98048c872",
+        "name": "secondary-foreground",
+        "value": "#171717"
+      },
+      {
+        "id": "90e1702b-029f-4a1d-9236-264415473f1c",
+        "name": "destructive",
+        "value": "#e7000b"
+      },
+      {
+        "id": "274b65b1-cecb-42c4-bb7a-e428443fba27",
+        "name": "destructive-foreground",
+        "value": "#ffffff"
+      },
+      {
+        "id": "d3f7bbb8-30dc-443a-82a5-d3c37a8c5cfe",
+        "name": "input",
+        "value": "#e5e5e5"
+      },
+      {
+        "id": "4514d590-57fc-4730-a4a7-de8d80709600",
+        "name": "background",
+        "value": "#ffffff"
+      },
+      {
+        "id": "282a79ba-c8ce-478f-b78a-87494aafb1e3",
+        "name": "foreground",
+        "value": "#0a0a0a"
+      },
+      {
+        "id": "9d9e8b6c-20e7-4ec7-9eb9-b58794c5c59d",
+        "name": "accent",
+        "value": "#f5f5f5"
+      },
+      {
+        "id": "681c3450-9427-489e-9032-65de11f5e8fb",
+        "name": "accent-foreground",
+        "value": "#171717"
+      },
+      {
+        "id": "0c7078b6-3f0b-4667-966a-2562bc1d4780",
+        "name": "border",
+        "value": "#e5e5e5"
+      },
+      {
+        "id": "7c862133-1469-4e88-87da-8fe49af67476",
+        "name": "card",
+        "value": "#ffffff"
+      },
+      {
+        "id": "c9db1140-a3a7-4523-84fc-4c487235c558",
+        "name": "card-foreground",
+        "value": "#0a0a0a"
+      },
+      {
+        "id": "5ff88ec0-a4d9-4f35-bbf8-94065eef9106",
+        "name": "muted-foreground",
+        "value": "#737373"
+      },
+      {
+        "id": "fac2d88b-513a-41dc-9973-ca1f9a9ad1b1",
+        "name": "muted",
+        "value": "#f5f5f5"
       }
     ],
     "customCode": {

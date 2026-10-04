@@ -1,15 +1,13 @@
 import { test, expect, type Page } from '@playwright/test'
 import { loadFixture } from './fixtures/project'
 
-// The Components column: the shared-slot rail behaviour, the components board
-// it puts on the canvas, and the bundled library's round trip — use an entry on
-// a page, publish, and check the real exported page.
+// The Components column: the shared-slot rail behaviour, and a component's
+// round trip — use one on a page, publish, and check the real exported page.
 //
-// The interactive entries are the reason this spec exists. Tabs and Dialog are
-// built out of class-toggle interactions with groups and forced on/off states,
-// wired by data in src/lib/catalog; nothing short of driving the published page
-// proves that wiring is right. The headless catalog gate checks every entry is
-// well-formed — it cannot tell you a click shows the right panel.
+// The interactive components are the reason this spec exists. The fixture's
+// Tabs and Dialog are built out of class-toggle interactions with groups and
+// forced on/off states; nothing short of driving the published page proves
+// that wiring is right.
 //
 // Named to sort AFTER smoke.spec: smoke owns the first-run flow and needs a
 // server with no admin account yet, so any spec that logs in has to run later.
@@ -62,15 +60,10 @@ async function publish(page: Page) {
 
 const rail = (page: Page, name: string) => page.getByRole('button', { name, exact: true })
 
-/** the drawer's rows carry stable hooks — `data-catalog` in the Library,
- *  `data-component` under Project — so these don't hang off class strings */
-const libraryRow = (page: Page, key: string) => page.locator(`[data-catalog="${key}"]`)
+/** the drawer's rows carry a stable hook — `data-component` — so these don't
+ *  hang off class strings */
 const projectRow = (page: Page, name: string) => page.locator(`[data-component="${name}"]`)
 
-const boardCard = (page: Page, key: string) => page.locator(`[data-board-card="${key}"]`)
-
-/** insert a library entry on the home page from the ⌘E dock. There is no
- *  separate "add" step — using an entry is what copies it into the project */
 /** Escape, then wait for the dock to actually be gone.
  *
  * It closes on the next render flush, and the next action can outrun it —
@@ -81,9 +74,10 @@ async function closeDock(page: Page) {
   await expect(page.locator('[data-dock-tab]').first()).toBeHidden()
 }
 
-async function insertFromLibrary(page: Page, key: string) {
+/** insert one of the project's components on the home page from the ⌘E dock */
+async function insertComponent(page: Page, name: string) {
   await page.keyboard.press('ControlOrMeta+e')
-  await page.locator(`[data-dock-item="catalog:${key}"]`).click()
+  await page.locator('[data-dock-item^="component:"]', { hasText: new RegExp(`^${name}$`) }).first().click()
   await closeDock(page)
 }
 
@@ -108,85 +102,9 @@ test('the three left columns share one slot', async ({ page }) => {
   await expect(page.getByPlaceholder('Search components…')).toBeHidden()
 })
 
-test('the board shows every component, and editing a library one adds it', async ({ page }) => {
-  await openEditor(page)
-  await rail(page, 'Components').click()
-
-  // library entries are on the board without having been added
-  const card = boardCard(page, 'catalog:card')
-  await expect(boardCard(page, 'catalog:button')).toBeVisible()
-  await expect(projectRow(page, 'Card')).toHaveCount(0)
-
-  // a drawer row moves the camera to its card — the board is an infinite
-  // canvas, so anything off-screen is reached this way (or by panning)
-  await libraryRow(page, 'tabs').locator('[data-row-main]').click()
-  await expect(boardCard(page, 'catalog:tabs')).toBeInViewport()
-  await libraryRow(page, 'button').locator('[data-row-main]').click()
-  await expect(boardCard(page, 'catalog:button')).toBeInViewport()
-
-  // looking is not editing: selecting an element and opening the Style panel
-  // must leave a library entry out of the project. (It used to add it — the
-  // panel wrote a stray `flex` beside `inline-flex` just for being opened.)
-  const button = boardCard(page, 'catalog:button')
-  await button.locator('button').first().click() // the rendered element, not the card label
-  await page.getByRole('button', { name: 'Style', exact: true }).click()
-  await expect(page.getByText('CLASSES')).toBeVisible()
-  await page.keyboard.press('Escape')
-  await expect(button).toHaveCount(1)
-  await expect(projectRow(page, 'Button')).toHaveCount(0)
-
-  // editing it in place is what copies it into the project
-  await libraryRow(page, 'card').locator('[data-row-main]').click()
-  await expect(card).toBeInViewport()
-  const title = card.getByText('Card title')
-  await title.dblclick()
-  await page.keyboard.press('ControlOrMeta+a')
-  await page.keyboard.type('Edited on the board')
-  await page.keyboard.press('Enter')
-
-  await expect(projectRow(page, 'Card')).toHaveCount(1)
-  await expect(boardCard(page, 'catalog:card')).toHaveCount(0)
-  // (twice: on the board, and in the component's now-open layers in the drawer)
-  await expect(page.getByText('Edited on the board').first()).toBeVisible()
-
-  // and the edit is the component's: an instance on a page carries it
-  await page.getByRole('button', { name: 'App', exact: true }).click()
-  await page.keyboard.press('ControlOrMeta+e')
-  await page.locator('[data-dock-item^="component:"]', { hasText: 'Card' }).click()
-  await closeDock(page)
-  await publish(page)
-  await page.goto('/')
-  await expect(page.getByText('Edited on the board')).toBeVisible()
-})
-
-test('a library button reaches the published page, styled by a created token', async ({ page }) => {
-  await openEditor(page)
-  await insertFromLibrary(page, 'button')
-
-  // using it added it: it is a project component now
-  await rail(page, 'Components').click()
-  await expect(projectRow(page, 'Button')).toHaveCount(1)
-  // …and has left the Library, which lists only what the project lacks
-  await expect(libraryRow(page, 'button')).toHaveCount(0)
-
-  await publish(page)
-  await page.goto('/')
-
-  const button = page.locator('button', { hasText: 'Button' }).first()
-  await expect(button).toBeVisible()
-  await expect(button).toHaveClass(/text-primary-foreground/)
-  // both halves of the token rule, in one element:
-  // · the demo already defines `primary` (#6750A4) — adding a library entry
-  //   must adopt the project's palette, never overwrite it with the default
-  await expect(button).toHaveCSS('background-color', 'rgb(103, 80, 164)')
-  // · it does NOT define `primary-foreground`, so that one was created from the
-  //   catalog default and compiled into the published stylesheet
-  await expect(button).toHaveCSS('color', 'rgb(250, 250, 250)')
-})
-
 test('Tabs: clicking a tab swaps the panel, and tab one restores the default', async ({ page }) => {
   await openEditor(page)
-  await insertFromLibrary(page, 'tabs')
+  await insertComponent(page, 'Tabs')
   await publish(page)
   await page.goto('/')
 
@@ -222,7 +140,7 @@ test('Tabs: clicking a tab swaps the panel, and tab one restores the default', a
 
 test('Dialog: opens, dismisses from the overlay, and from Escape', async ({ page }) => {
   await openEditor(page)
-  await insertFromLibrary(page, 'dialog')
+  await insertComponent(page, 'Dialog')
   await publish(page)
   await page.goto('/')
 
@@ -246,7 +164,7 @@ test('Dialog: opens, dismisses from the overlay, and from Escape', async ({ page
 
 test('renaming a component keeps every instance rendering', async ({ page }) => {
   await openEditor(page)
-  await insertFromLibrary(page, 'card')
+  await insertComponent(page, 'Card')
 
   await rail(page, 'Components').click()
   const row = projectRow(page, 'Card')

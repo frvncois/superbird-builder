@@ -102,7 +102,7 @@ test.describe('attribute text per placement and per locale', () => {
 
   test('one placement overrides a component’s attribute without touching the others', async () => {
     const s = await mcpSession()
-    await s.call('add_library_components', { keys: ['input'] })
+    await s.seed(['input'])
     const home = await s.home()
     await s.call('set_page_html', {
       pageId: home.id,
@@ -130,5 +130,51 @@ test.describe('attribute text per placement and per locale', () => {
     expect(html).toContain('placeholder="Your email"')
     // and the shared `type` still comes from the master
     expect((html.match(/type="text"/g) ?? []).length).toBe(2)
+  })
+
+  // The language switcher. `@locale:<code>` is THIS route in another locale —
+  // a plain `/…` link cannot express it, because internal links are prefixed
+  // with the CURRENT locale and from /fr every path leads back to /fr/….
+  //
+  // Every reader tested `startsWith('locale:')` while the stored sentinel
+  // carries the `@`, exactly as `@item` does — so the href resolved to null
+  // and the switcher shipped as an `<a>` with no destination at all, on every
+  // route, in both languages.
+  test('an @locale: link exports the same route in the other language', async () => {
+    const s = await mcpSession()
+    await s.call('update_settings', { addLocales: ['fr'] })
+    const home = await s.home()
+    await s.call('create_page', { name: 'About', slug: '/about' })
+    await s.call('set_page_html', {
+      pageId: home.id,
+      html: pageHtml(
+        [
+          '<a data-ref="to-fr" href="@locale:fr"><span>FR</span></a>',
+          '<a data-ref="to-en" href="@locale:en"><span>EN</span></a>',
+        ].join('\n'),
+      ),
+      version: home.version,
+    })
+    const about = (await s.call('list_pages', {})).pages.find(
+      (p: { slug: string }) => p.slug === '/about',
+    )
+    await s.call('set_page_html', {
+      pageId: about.id,
+      html: pageHtml('<a data-ref="to-fr" href="@locale:fr"><span>FR</span></a>'),
+      version: about.version,
+    })
+
+    const routes = await s.exportAll()
+    // from the English home, FR goes to /fr — and EN to the route itself
+    expect(routes['index.html']).toContain('href="/fr"')
+    expect(routes['index.html']).toContain('href="/"')
+    // from the French home it is still /fr: the switcher names a language,
+    // it does not toggle
+    expect(routes['fr/index.html']).toContain('href="/fr"')
+    // and it re-prefixes THIS route, not the home page
+    expect(routes['about/index.html']).toContain('href="/fr/about"')
+    expect(routes['fr/about/index.html']).toContain('href="/fr/about"')
+    // never an anchor with no destination, which is what shipped before
+    expect(routes['index.html']).not.toMatch(/<a class=[^>]*><span>FR<\/span>/)
   })
 })

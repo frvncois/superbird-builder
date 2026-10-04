@@ -25,8 +25,13 @@ the whole thing, which some clients will not return in one result.
 3. **Echo back the `data-id`s you read.** They are how an element keeps its identity —
    its interactions, its translations, the human's comments anchored to it — through a
    rewrite. Keep them and a write adopts; drop them and the element is replaced, which
-   `removed` in the response will tell you. `data-ref` is your own readable name for an
-   element and is the address every tool prefers; `data-id` is the machine one.
+   `removed` in the response will tell you. The short `data-id` a read prints is a
+   valid address EVERYWHERE an `id` is taken (`edit_elements`, `edit_structure`,
+   `bind_interaction`, `get_page {id}`) — never go hunting for a full uuid. One id
+   belongs to one element: echoing it onto two is refused, because honouring the first
+   would move that element's interactions and translations onto whichever you listed
+   first. `data-ref` is your own readable name for an element and is the address every
+   tool prefers; `data-id` is the machine one.
 4. **Never touch the instance's files or store directly.** If you can see the server's
    `data/` directory or the raw `/api/store` keys, do not edit them: a write through the
    tools carries element identity, validates what it is given, and refuses what cannot
@@ -62,9 +67,9 @@ the whole thing, which some clients will not return in one result.
 7. **Build with components, not with loose elements.** A button, a card, a nav, a
    footer, a pricing table, an accordion: each is ONE component, used everywhere it
    appears — so the human restyles it once, on the components board, and the whole
-   site follows. Before you write a piece as plain elements, look for it in this order:
-   the project's own components (`list_components`), then the bundled library
-   (`list_library`), and only then make a new one (`create_component`). A page written
+   site follows. Before you write a piece as plain elements, look for it in the
+   project's own components (`list_components`), and only then make a new one
+   (`create_component`). A page written
    as hundreds of individually-styled `<div>`s works, and is the wrong thing to hand
    over. See **Components** below.
 
@@ -76,15 +81,15 @@ get_status                    → who you are, whether a target is set, which dr
 set_target                    → the HUMAN picks Main or a draft — a dialog on elicitation-capable
                                  clients (call early, suggestion welcome); otherwise ask in chat first
 update_settings               → design tokens / fonts / SEO defaults FIRST (styling uses them)
-list_components / list_library → what the project already has, and what the bundled
-                                 library offers — BEFORE writing any structure
-add_library_components        → copy the pieces you will use (button, card, navbar, hero…)
-create_component {html}       → make the ones the library lacks, from markup
+list_components               → what the project already has — BEFORE writing any structure
+create_component {html}       → make the pieces the site needs (button, card, navbar, hero…)
+                                 from markup, each ONCE
 edit_elements {componentId}   → restyle a component ITSELF (every instance follows)
 create_page / set_page_html   → write the WHOLE page as HTML — structure, classes and
                                  text in ONE call, components as `<Name />`; the response
                                  returns the element ids and each instance's `parts`
 edit_structure                → change PART of a page afterwards, by ref
+update_page                   → rename a page, change its slug, publish/unpublish it
 edit_elements                 → text + media + variants for the instances, classes for
                                  the plain elements around them, MANY per call
                                  (or `pages:[…]` to span several pages at once)
@@ -231,7 +236,8 @@ attributes in a fixed order. That matters — the page `version` is a hash of it
 
 Most registry types ARE their tag: `section` `div` `header` `footer` `nav` `main`
 `aside` `article` `h1`–`h6` `span` `label` `button` `form` `input` `textarea` `select`
-`option` `fieldset` `legend` `table` `thead` `tbody` `tr` `th` `td` `video`. The rest:
+`option` `fieldset` `legend` `table` `thead` `tbody` `tr` `th` `td` `video`
+`blockquote` `figure` `figcaption`. The rest:
 
 | write | means | |
 |---|---|---|
@@ -252,7 +258,9 @@ Most registry types ARE their tag: `section` `div` `header` `footer` `nav` `main
 **A leaf carries text; a container carries elements.** Leaf-ness comes from the
 registry, not from what you write: `<h1>Hello</h1>` is text, `<section>Hello</section>`
 is refused because a `<section>` holds elements. The leaves are the headings, `<p>`,
-`<span>`, `<option>`, `<legend>`, `<div data-type="text">`, and the void ones.
+`<span>`, `<option>`, `<legend>`, `<figcaption>`, `<div data-type="text">`, and the
+void ones. A `<blockquote>` and a `<figure>` are containers — the words go in a `<p>`
+inside, and a `<figure>` holds its `<img>` and its `<figcaption>`.
 
 **`<button>`, `<a>` and `<label>` are containers.** Their words live in a child, which
 is what lets an icon or a badge sit beside the label:
@@ -268,8 +276,11 @@ A leaf's inner markup is its content, and rich copy keeps its own tags:
 `<p>Read the <a href="/docs">docs</a>.</p>`. Those inline tags are content, not
 elements of this format.
 
-Form caveat: **forms are visual-only** — `<form>` exports with no action/method and
-nothing submits (state that as a limit). The controls are complete: `<input>` honours
+Forms: a `<form>` is a plain form until it is ENABLED, and then it really submits —
+`edit_elements {form: {enabled: true}}` exports an `action` at this instance and stores
+every submission (see `get_guide {section: "forms"}`). Left alone it carries no
+action/method and nothing is sent, which is the right shape for a visual mock.
+The controls are complete: `<input>` honours
 its own `type` (`email`, `tel`, `date`, …), checkbox/radio bake theirs in (the `change`
 interaction trigger reads their checked state), `<select>` takes `<option>` children,
 and `<fieldset>` wraps a `<legend>`. Give a `<label>` a `for` pointing at the control's
@@ -303,8 +314,9 @@ name** rather than kept — a `data-*` attribute is otherwise authorable, so a n
 would land as an ordinary DOM attribute and bind nothing.
 
 **Not in the HTML**, and preserved on every element a write adopts: interactions,
-animations, translations, slider config, `listQuery`, the picked `entryId`, and
-per-placement attribute overrides. Those have their own tools.
+animations, translations, slider config, `listQuery`, the picked `entryId`,
+per-placement attribute overrides, and the editor's `allowEmpty` mark on a
+container left empty on purpose. Those have their own tools.
 
 ### `data-ref` and `data-id`
 
@@ -337,7 +349,11 @@ name — the element type plus `[n]` for the nth of that type:
 ```
 
 `get_page {elements: "ref-parts"}` lists exactly these — only the ref'd instances, each
-with its parts — which is the small, targeted read for a page of components.
+with its parts — which is the small, targeted read for a page of components. A part is
+a leaf an instance fills, a form CONTROL (`<input>`, `<textarea>`, `<select>` — what a
+visitor types into, named per placement with `instanceAttributes`), a slot, or an
+instance the component holds. Structural containers are not parts: to reach one, read
+the subtree (`get_page {ref}`) and address it by `data-id`.
 
 Or fill them in the markup itself: write the instance out with its parts and their text,
 and one `set_page_html` lands a page of eight filled-in Cards.
@@ -418,7 +434,8 @@ translations.
 ### Reading a big page
 
 - `get_page {mode: "structure"}` — the shape, with no content or classes.
-- `get_page {ref: "hero"}` — one subtree.
+- `get_page {ref: "hero"}` / `{id: "<data-id>"}` — one subtree, and the element rows
+  for that subtree alone.
 - `get_page {elements: "ref-parts"}` — only the ref'd instances and their parts.
 - `get_page {summaryOnly: true}` — the element rows alone.
 
@@ -553,14 +570,12 @@ with `bg-<token>`/`text-<token>`/`border-<token>` instead of repeating arbitrary
 values — tokens are the project's theming system, the single place a human retheme
 happens. Token names are kebab-case and values are `#hex`.
 
-The bundled library is built on a **semantic palette**: `background` `foreground`
-`primary` `primary-foreground` `secondary` `muted` `muted-foreground` `accent` `card`
-`border` `input` `ring` `destructive` (and their `-foreground` pairs). Adding a library
-component — you with `add_library_components`, or a human in the editor — CREATES the
-ones it names with neutral defaults, and never overwrites one that already exists. So
-**set the brand's values under those names first** and every library component arrives
-in the brand's colours; and re-read `get_settings` before replacing the token list:
-`update_settings { tokens }` replaces it wholesale, and a stale list would drop them.
+Build on a **semantic palette** — `background` `foreground` `primary`
+`primary-foreground` `secondary` `muted` `muted-foreground` `accent` `card` `border`
+`input` `ring` `destructive` (and their `-foreground` pairs) — declared with
+`update_settings { tokens }` BEFORE the components that use them, so a retheme is one
+token edit. Re-read `get_settings` before replacing the token list: `update_settings
+{ tokens }` replaces it wholesale, and a stale list would drop them.
 
 A token whose name matches a Tailwind palette name (`blue`, `orange`, `slate`, …) is
 accepted with `allowShadow: true` and a warning. A token defines `bg-blue`, NOT
@@ -603,9 +618,9 @@ taste; they are the defects a review finds first.
 
 **Controls**
 - A form control is never left to the browser. Every `<input>`, `<textarea>`, `<select>`
-  and `<button>` carries height, padding, border, radius, background and a focus ring —
-  or is the library's. A `<select>` needs `appearance-none` and a drawn chevron (the
-  library Select does this); without it the browser draws its own.
+  and `<button>` carries height, padding, border, radius, background and a focus ring.
+  A `<select>` needs `appearance-none` and a drawn chevron; without it the browser
+  draws its own.
 - Every interactive element has a hover state and a visible focus state; a disabled
   state is dimmed, not hidden.
 - Icons in one size per context (`size-4` inline, `size-5` in nav), stroke matching
@@ -678,9 +693,9 @@ Element text/media attaches to the node, not the code. Write it with `edit_eleme
   **this instance's** choice — hide a part here (`true`), or show one the component hides
   by default (`false`); `null` goes back to inheriting. In markup it is `data-hidden`.
   With `onMaster: true` it sets the component's default for every instance. This is how one Button has an icon and the
-  next does not, without a second component. Library components ship **optional parts**
-  this way — a Button's two icons, a Card's footer — hidden until an instance shows
-  them; `get_page` marks them (`hidden` on a part, `hiddenByComponent` on an element).
+  next does not, without a second component. Give a component **optional parts** this
+  way — a Button's two icons, a Card's footer — hidden until an instance shows them;
+  `get_page` marks them (`hidden` on a part, `hiddenByComponent` on an element).
   Text written on a hidden part renders nowhere until it is shown.
 - **`src`** — image/video elements only: a `/media/<id>` path (media library), an
   `https://` URL, or a `data:image/…` / `data:video/…` URL.
@@ -718,12 +733,19 @@ Element text/media attaches to the node, not the code. Write it with `edit_eleme
     `true` and serialize bare (`<a download>`); `false` removes them.
   - On images, `attributes.alt` is the accessible alt text and wins over the media
     library's default.
-  - **Link attributes hoist.** On a non-`<a>` element that carries a `@link`, the
+  - **Link attributes hoist.** On a non-`<a>` element that carries a link, the
     renderer wraps it in an `<a>`, and `target`, `rel`, `download`, `title` and
     `aria-label`/`aria-labelledby`/`aria-describedby`/`aria-current` go on that anchor
     (they would do nothing on the inner element). `target: "_blank"` without a `rel`
     automatically gets `rel="noopener noreferrer"`.
-- **`arg`** — rebind or clear the token's `[…]` field binding without rewriting the
+- **`link`** — where the element goes: `"/about"`, `"#faq"`, an http(s)/mailto/tel
+  URL, `"@item"` (the entry's own page, inside an entry scope) or `"@locale:fr"` (THIS
+  route in another locale — the language switcher). Equivalent to writing `href` in
+  the HTML. It is **per-instance with a component default**: one `Button` component
+  serves a dozen destinations, because an instance's own link wins over the master's
+  and `link: ""` falls back to the master's. That is the exception — classes,
+  interactions and `arg` on an instance element are all still the component's.
+- **`arg`** — rebind or clear the element's field binding without rewriting the
   page code (`arg: "title"` / `arg: ""`); on `<collection-list>`/`item` it must name a
   real collection. On a **component's** element (through `componentId`, or inside an
   instance) it is STRUCTURE: the component changes and every instance follows — the
@@ -736,7 +758,11 @@ Element text/media attaches to the node, not the code. Write it with `edit_eleme
   whole page.
 
 **Media library**: `list_media` gives every asset's `/media/<id>` url; `upload_media`
-adds assets. Each one comes from exactly one source, in this order of preference:
+adds assets. **A single-colour SVG is refused**: as a file it is that one colour forever,
+and a library of the same mark in six shades is the result. It goes on the page as an
+inline icon (`<svg data-icon>` + `edit_elements {svg}`, see Icons), where one copy follows
+the text colour; `asFile: true` keeps it as a file only when a file is what is needed (a
+favicon, an og image). Each upload comes from exactly one source, in this order of preference:
 
 1. **`path`** — an absolute local file path. Best by far: the bytes are read from disk
    and never pass through your context. Use this for anything on the machine you are
@@ -943,15 +969,15 @@ multi-line code blocks — leading indentation still collapses).
 3. **Publish**: every non-default registered locale gets its own full route tree —
    `/fr`, `/fr/collections`, `/fr/<collection>/<slug>`, … — rendered with `<html
    lang="fr">`, override values where they exist, and base-content fallback where they
-   don't. Internal links are locale-prefixed automatically — both `@target` links and
-   `<a href>` anchors inside rich-text content — so ONE set of pages serves
-   every locale: do NOT build parallel per-language pages, collections, or components.
+   don't. Internal links are locale-prefixed automatically — both an element's own
+   `href` and the `<a href>` anchors inside rich-text content — so ONE set of pages
+   serves every locale: do NOT build parallel per-language pages, collections, or components.
 
-The `locale:` line in a page's `@setup` block is metadata pinned to the default locale —
+A page's own `locale` is metadata pinned to the default locale —
 it does not select what renders and cannot make a single page French.
 
-Localization checklist beyond content: the **language switcher** is `@locale:<code>`
-link targets (see `@target`) — placed where a user expects it (a marketing site's
+Localization checklist beyond content: the **language switcher** is an `href` of
+`@locale:<code>` — placed where a user expects it (a marketing site's
 footer or header; an app's settings or profile area), ONCE, in a component, never
 appended to the bottom of every page; **page titles/descriptions** localize via `set_page_seo
 {locale}`; **site-wide seo defaults** via `update_settings {seo: {locales: {fr:
@@ -970,17 +996,11 @@ here is what they see there. Golden rule 7: reach for one before plain elements.
 ### Where a component comes from
 
 1. **The project** — `list_components`. Use what is there; a site that already has a
-   `Button` must not get a second one.
-2. **The bundled library** — `list_library`: ~40 ready-made pieces (button, badge, input,
-   card, pricing card, hero, navbar, footer, accordion, tabs, dialog, dropdown menu…),
-   accessible, built on the semantic design tokens, the interactive ones with their
-   behaviour already wired. `list_library {keys: ["accordion"]}` shows an entry's
-   HTML and texts. **`add_library_components {keys: ["button", "card", "hero"]}`**
-   copies them in — what an entry holds comes along (a card brings the button), and the
-   tokens it names are created where the project has none. The copy is an ordinary
-   component from then on: nothing follows the library, so restyle and restructure it
-   freely.
-3. **From scratch** — `create_component {name, html, category?}`:
+   `Button` must not get a second one. **A component that is an existing one in other
+   colours is refused** (`colour-twin`: same elements, same classes but for `bg-`/`text-`/
+   `border-`… — and `duplicate-component` when nothing differs at all). Colour is a
+   variant option, not a second component: see Variants.
+2. **From scratch** — `create_component {name, html, category?}`:
 
    ```html
    create_component {name: "LogoCloud", category: "Sections", html: `
@@ -994,7 +1014,7 @@ here is what they see there. Golden rule 7: reach for one before plain elements.
 
    Classes and text land with the structure. The response returns the new elements' ids
    (`nodes`) and a `version`. No page is involved, and none has to hold an instance.
-4. **From a page** — `create_component {pageId, ref, name, version}` (batch:
+3. **From a page** — `create_component {pageId, ref, name, version}` (batch:
    `create_components`) turns an element you already built into a component: its
    subtree becomes the master, classes/content/bindings WITH it, and the original block
    becomes the first instance. `ref` or `id`, whichever you have — the practical way to
@@ -1018,6 +1038,7 @@ by. Self-closed means "as the component defines it"; written out with its parts
 | structure | the component | `update_component {html}`, or `edit_structure {componentId}` |
 | classes, attributes, interactions, animations | the component | `edit_elements` on any element of it — shared by every instance |
 | variant options (what `size:sm` looks like) | the component | `edit_elements {variant: "size:sm", addClasses}` |
+| what is under a **slot** | each instance (the page) | ordinary page HTML inside the instance; `edit_structure` into the slot's id |
 | text, `src`, `icon`, `background` | **each instance**, falling back to the component's | `edit_elements {id, content}` on the instance's part |
 | which option it wears | each instance | `data-variant-size="sm"` in the markup, or `edit_elements {variants}` |
 | which parts show | each instance | `edit_elements {hidden: true/false}` |
@@ -1028,7 +1049,7 @@ So a page full of cards is: the Card component, placed N times, with N sets of t
 
 Pass `componentId` instead of `pageId` + `version` and the edits address the
 component's own elements, by the ids `list_components {includeNodes: true}` (or
-`create_component` / `add_library_components {includeNodes}`) reports:
+`create_component`) reports:
 
 ```
 edit_elements {componentId: "<Button id>", edits: [
@@ -1082,33 +1103,20 @@ after:
   (`interactive-inside-link`). A `<slider>` is never wrapped, for the same reason: its
   arrows are buttons.
 
-### A component has no slots
+### Page-specific structure inside a component: slots
 
-Every instance of a component has the **same structure**. There is no way to pass
-page-specific children into one. What varies per instance is `content`, `src`, `svg`,
-`background`, `hidden`, `variants`, `listQuery`, `slider` and `entryId` — text, media,
-which parts show, which look it wears, which entries a list inside it pulls. Not
-structure.
-
-So for a shell that must hold different things on different pages — a sheet, a dialog, a
-card body — pick one of these:
-
-- **A component per filled-in shell**: `NewMessageSheet`, `TemplatesSheet`. Each is its
-  own component, built once and reused where that exact panel appears. This is the usual
-  answer, and several sheet components is the right shape, not a workaround.
-- **Build it on the page** when it appears once. A one-off dialog does not need to be a
-  component at all.
-- **Hidden parts** when the variation is "this placement shows three of these five rows":
-  one component, `hidden: true` on the parts a given instance leaves out.
-
-The practical way to build a big one: write it on a page with `#ref`s, style it by ref
-(refs read like selectors and survive lines moving), then
-`create_component {pageId, ref, name, version}`. The response hands back the master's
-`nodes`, which is what `edit_elements {componentId}` takes from then on.
+Every instance of a component has the same structure — EXCEPT under a **slot**, a
+container the component declares whose children are each instance's own. See **Slots**
+below. Without one, what varies per instance is `content`, `src`, `svg`, `background`,
+`hidden`, `variants`, `listQuery`, `slider` and `entryId` — text, media, which parts
+show, which look it wears, which entries a list inside it pulls. For a shell that holds
+different things on different pages (a dialog, a sheet, a card body), a slot is the
+answer; for "this placement shows three of these five rows", `hidden` parts; for a
+one-off, build it on the page.
 
 ### The other verbs
 
-- `update_component {componentId, code}` — replace the structure with a full
+- `update_component {componentId, html}` — replace the structure with a full
   markup; every instance is realigned to match. Master nodes keep their
   identity (classes/content/interactions) wherever the code still lines up — matched by
   signature (type + arg + link, with a type+arg fallback). The response reports
@@ -1122,7 +1130,7 @@ The practical way to build a big one: write it on a page with `#ref`s, style it 
 - `duplicate_component {componentId, name?}` — an independent copy, for a second PIECE
   that starts from the first. For a second LOOK of the same piece, add a variant
   option instead.
-- `detach_instance {pageId, version, ref|id|line}` — ONE instance becomes plain elements
+- `detach_instance {pageId, version, ref|id}` — ONE instance becomes plain elements
   that look the same and no longer follow the component: for the placement whose
   STRUCTURE has to differ.
 - `delete_component {componentId}` — refused (with the list of pages, or `heldBy`)
@@ -1141,8 +1149,6 @@ The practical way to build a big one: write it on a page with `#ref`s, style it 
 - **Components nest.** A component may hold instances of others — see Nesting below.
   It can never end up holding itself, at any distance.
 - **`category` is a drawer grouping, nothing more** (absent = "Uncategorized").
-  **`source`** records the library entry a component was copied from — provenance,
-  not a link.
 - Component masters are not page code and have no `version`: the whole-project guard
   protects the save. Re-read with `list_components` before replacing a block you did
   not just write.
@@ -1212,6 +1218,73 @@ Rules:
 - Changing the inner component's structure reaches every instance of it, nested or
   not, on every page — and every host's mirror, keeping what each host said.
 
+## Slots
+
+A **slot** is a container inside a component whose CHILDREN belong to whoever placed
+the instance. The container itself is the component's — its classes, attributes,
+bindings and `hidden` are shared like any other master node — but what is inside it
+is ordinary page structure: styled, restructured, ref'd and addressed like anything
+else on the page, never realigned when the component changes, and an instance placed
+in there is an instance in its own right.
+
+This is how ONE `Modal` (overlay, panel, close button, the open/close effects) holds a
+different body and different buttons on every page without a second component.
+
+**Declare it on the component** — `data-slot` on a container of the master, or
+`edit_elements {componentId, edits: [{id, slot: true}]}`:
+
+```html
+create_component {name: "Modal", html: `
+  <div class="fixed inset-0 hidden items-center justify-center bg-black/50">
+    <div class="w-full max-w-md rounded-xl bg-background p-6 shadow-xl">
+      <div data-slot class="space-y-4">
+        <h2 class="text-lg font-semibold">Title</h2>
+        <p class="text-sm text-muted-foreground">Body</p>
+      </div>
+      <button class="mt-6 …"><span>Close</span></button>
+    </div>
+  </div>`}
+```
+
+The master's own children under the slot are the **default content**: a fresh
+instance starts from a copy of them (as its own nodes) and keeps its copy from then on.
+Changing the default later changes nothing on existing instances — that is the point.
+A container that BECOMES a slot keeps what every instance already held under it, as
+that instance's content.
+
+**Fill it on the page** like any other structure. `get_page` prints the slot's
+children with their full attributes (everything else inside an instance is content
+only), and the slot shows as a part (`slot: true`, with its id) in `parts`:
+
+```html
+<Modal data-ref="confirm">
+  <div>
+    <div>
+      <div data-slot>
+        <h2 class="text-lg font-semibold">Delete this project?</h2>
+        <p class="text-sm">This cannot be undone.</p>
+        <Button data-variant-tone="danger"><span>Delete</span></Button>
+      </div>
+      <button><span>Cancel</span></button>
+    </div>
+  </div>
+</Modal>
+```
+
+or `edit_structure {pageId, ops: [{op: "insert", parent: "<slot id>", html: "…"}]}`.
+
+Rules: a slot is a container of the component's own (not its root, not a leaf, not an
+instance it holds, not inside one); a slot inside a slot is meaningless, since what is
+under a slot is not the component's. `detach_instance` keeps slot content as it is —
+it was the page's already.
+
+**The trigger that opens it must live INSIDE the component.** An effect from outside
+an instance can never reach a node inside it — in-instance targets are scoped to the
+master, per instance, so a page button bound at the overlay's id ships a binding that
+matches nothing (`bind_interaction` refuses it by name). Give the Modal its own
+trigger element and bind there; a page then places `<Modal>` and fills the slot,
+and the open/close effects come with it.
+
 ## Variants
 
 A component comes in more than one look **without being more than one component**. It
@@ -1270,7 +1343,8 @@ Set it with `edit_elements`:
   g defs clipPath mask linearGradient radialGradient stop title desc`), every paint is
   recoloured to `currentColor`, and scripts, styles, links, event handlers and external
   references are dropped. One `<svg>`, 32 KB at most. A multi-colour logo belongs in an
-  `<img>` instead.
+  `<img>` instead — and a single-colour one never does: `upload_media` refuses it, since a
+  file cannot follow the text colour and one icon would become one upload per shade.
 
 Pass one or the other, never both; `""` clears back to the placeholder circle. An icon
 is not localizable. `get_page` reports a set icon as `icon: "<name>"` (or
@@ -1378,9 +1452,8 @@ every trigger with the same target. Nothing you read back changes.
 
 `translate-x-0 translate-y-0` cancels the off-position on either axis, so ONE effect
 slides a panel in from any edge — park it with `translate-x-full`, `-translate-x-full`,
-`-translate-y-full` or `translate-y-full` and the same effect brings it home. The
-library's `Sheet` is built exactly this way; copy it with `add_library_components`
-rather than rebuilding it.
+`-translate-y-full` or `translate-y-full` and the same effect brings it home — a Sheet
+component is exactly this, built once.
 
 **You never add `transition-*` classes for this.** An interaction carries its own
 `transition-all <duration> <easing>`, which replaces whatever transition the element
@@ -1917,7 +1990,8 @@ layout. Preview as you go, publish once at the end.
   existing content from it; use `get_page {includeContent: true}`). `publish` returns
   `warnings` for things it ships silently — most importantly a **draft collection
   template**: its entry routes aren't exported, so `<collection-list>` cards and `@item`
-  links to it 404. Publish the template (`status: published`) to emit those routes.
+  links to it 404. Publish the template (`update_page {pageId, version, status:
+  "published"}`) to emit those routes.
 - Verifying below-the-fold content that uses `appear` interactions: it starts at its base
   state (often `opacity-0`) and only reveals when scrolled into view — append `?noanim` to
   a route URL to force everything visible (there is also a 3s fallback that reveals
@@ -1968,8 +2042,8 @@ list's empty state, a filter against the current entry, attribute values bound t
 per-placement and per-locale attribute text, and a preview that renders without
 publishing — reach for the named tool rather than working around it. **Forms** render real
 controls (`<input>` `<textarea>` `<input type="checkbox">` `<input type="radio">`
-`<select>`/`<option>` `<fieldset>`/`<legend>`) but are still visual-only — nothing is wired to a backend, so
-say so rather than implying a form will deliver anything. Beware: a `<button>` inside a
+`<select>`/`<option>` `<fieldset>`/`<legend>`) and DO deliver once enabled — see the
+Forms section; a form left unenabled submits nothing, so say which one you built. Beware: a `<button>` inside a
 `<form>` is `type=submit` by default, so clicking it reloads the page — for a fake/demo
 booking flow keep the controls in a styled `<div>` (or write `type="button"` on it).
 Truly empty leaf elements are not expressible — build decorative rules/spacers from
@@ -1984,6 +2058,8 @@ marquees, parallax, and pinned sections — CSS `sticky top-0` inside a tall sec
 marker-driven scrubs, see Scrub mechanics above). What remains out of reach:
 **character-level text splitting** (an animation moves whole elements, so a
 per-character cascade means authoring one element per character)
-and **scroll hijacking** (the native scrollbar is never taken over; CSS-sticky pinning
+and, unless the human asks for it, **scroll hijacking** (`update_settings {motion:
+{scroll}}` is inertia scrolling and does take the wheel from the browser — an
+accessibility trade, off on touch and reduced-motion; CSS-sticky pinning
 is the supported pin, and `scrub: {smooth}` is the supported scroll smoothing — see
 Scrub mechanics). Say so for those rather than approximating them.

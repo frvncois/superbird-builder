@@ -99,6 +99,7 @@ export {
   createNode,
   isKnownElement,
   isLeafElement,
+  isInstancePart,
   typeOptionsFor,
 } from './elements'
 export type { ElementDef } from './elements'
@@ -132,7 +133,7 @@ export { customSchemaError } from './shared/structuredData.js'
 // inline SVG for the `:icon:` element — the sanitizer every renderer trusts.
 // The icon TABLE is deliberately not re-exported: it is the whole Lucide set,
 // and the tools import it on demand (see loadIcons in mcp/tools.mjs)
-export { sanitizeInlineSvg, lucideSvg, lucideNameOf } from './shared/svg.js'
+export { sanitizeInlineSvg, lucideSvg, lucideNameOf, MAX_SVG_BYTES } from './shared/svg.js'
 
 // variants: picks → classes. The exporter takes `effectiveClasses` from this
 // bundle too — it needs the full style catalog, which is TypeScript
@@ -250,13 +251,3 @@ export { createBody, createPage, createProject, defaultBreakpoints } from './fac
 
 // --- shared element/node types (compile-time only; erased at runtime)
 export type { ElementNode } from '@/types/editor'
-
-// the bundled component library — so the exporter's own tests, and any tool
-// that adds a library entry, build components with the editor's code
-export {
-  CATALOG,
-  CATALOG_TOKENS,
-  catalogEntry,
-  catalogDependencies,
-  materializeCatalogEntry,
-} from './catalog'

@@ -17,7 +17,6 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { migrateProject, SCHEMA_VERSION } from '../src/lib/migrate'
-import { materializeCatalogEntry, catalogEntry } from '../src/lib/catalog'
 import { createProject } from '../src/lib/factories'
 import { walkNodes } from '../src/lib/tree'
 import type { ElementNode, Project } from '../src/types/editor'
@@ -143,21 +142,29 @@ function aliasProject(): V1 {
  *  nothing ever materialized, which therefore rendered as nothing at all */
 function unexpandedProject(): V1 {
   const project = v1Base()
-  // a Card holds a Button, so that comes in first — the order
-  // `add_library_components` uses
-  const add = (key: string): { name: string } => {
-    const made = materializeCatalogEntry(
-      catalogEntry(key)!,
-      project,
-      (held) => project.components.find((c) => c.source === held) ?? (add(held) as never),
-    )
-    const have = new Set(project.settings.tokens.map((t) => t.name))
-    project.settings.tokens.push(...made.tokens.filter((t) => !have.has(t.name)))
-    project.interactions.push(...made.interactions)
-    project.components.push(made.def)
-    return made.def
+  // a Card holds a Button (the mirror in Card's master is Button's structure)
+  const button = {
+    id: crypto.randomUUID(),
+    name: 'Button',
+    root: node('Button', [
+      node('button', [node('span', [], { content: 'Button' })], { classes: 'rounded-md px-4 py-2' }),
+    ]),
   }
-  const card = add('card')
+  const card = {
+    id: crypto.randomUUID(),
+    name: 'Card',
+    root: node('Card', [
+      node(
+        'div',
+        [
+          node('h3', [], { content: 'Card title', classes: 'text-lg font-semibold' }),
+          node('Button', [node('button', [node('span')])]),
+        ],
+        { classes: 'rounded-xl border p-6' },
+      ),
+    ]),
+  }
+  project.components.push(button, card)
   project.pages = [v1Page(node('body', [node(card.name, [], { ref: 'promo' })]))]
   return withLines(fixIds(project) as V1)
 }

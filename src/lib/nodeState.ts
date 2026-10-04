@@ -19,6 +19,8 @@ export const NODE_STATE_KEYS = [
   'src',
   'svg',
   'hidden',
+  // the canvas's "this container is empty on purpose" acknowledgement
+  'allowEmpty',
   // an instance's variant picks, which live on its own wrapper
   'variants',
   'background',

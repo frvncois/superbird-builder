@@ -73,57 +73,6 @@ function canonicalizeIds(project) {
   return JSON.parse(out)
 }
 
-/** `addLibraryEntry` from the MCP toolset, which is `addFromCatalog` on a plain
- *  project: what the entry holds first, then its tokens and shared effects. */
-function addLibraryEntry(rt, project, key) {
-  const entry = rt.catalogEntry(key)
-  if (!entry) throw new Error(`catalog: no entry "${key}"`)
-  const made = rt.materializeCatalogEntry(
-    entry,
-    project,
-    (held) =>
-      project.components.find((c) => c.source === held) ?? addLibraryEntry(rt, project, held),
-  )
-  const have = new Set(project.settings.tokens.map((t) => t.name))
-  project.settings.tokens.push(
-    ...made.tokens.filter((t) => !have.has(t.name) && !rt.tokenError(t)),
-  )
-  project.interactions.push(...made.interactions)
-  project.components.push(made.def)
-  return made.def
-}
-
-/**
- * One project holding every bundled library entry, each placed on its own page.
- *
- * Per entry rather than one big page so a render difference names the entry
- * that caused it, and because an entry's interactions are scoped per instance —
- * a route per entry is also how the published site would carry them.
- */
-function catalogProject(rt) {
-  const project = rt.createProject('Catalog corpus')
-  project.pages = []
-  for (const entry of rt.CATALOG) {
-    const def = addLibraryEntry(rt, project, entry.key)
-    const slug = `/c/${entry.key}`
-    // the instance, materialized: a childless one renders nothing
-    const wrapper = rt.createNode(def.name)
-    rt.alignStructure(wrapper, def.root)
-    const body = rt.createBody()
-    body.children.push(wrapper)
-    project.pages.push({
-      id: crypto.randomUUID(),
-      name: entry.name,
-      path: slug,
-      status: 'published',
-      elements: [body],
-      createdAt: 0,
-      updatedAt: 0,
-    })
-  }
-  return canonicalizeIds(project)
-}
-
 /** every stored project blob in a local `server/data` store, if there is one */
 async function storeProjects() {
   const dir = join(ROOT, 'server/data/store')
@@ -154,7 +103,6 @@ async function buildInputs({ force }) {
 
   const projects = [
     ['fixture', JSON.parse(await readFile(join(ROOT, 'e2e/fixtures/project.json'), 'utf8'))],
-    ['catalog', catalogProject(rt)],
     ...(await storeProjects()),
   ]
   for (const [name, project] of projects) {

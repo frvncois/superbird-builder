@@ -102,14 +102,21 @@ async function insertFromDock(page: Page, key: string) {
   await closeDock(page)
 }
 
+/** insert one of the project's components on the page from the ⌘E dock */
+async function insertComponent(page: Page, name: string) {
+  await page.keyboard.press('ControlOrMeta+e')
+  await page.locator('[data-dock-item^="component:"]', { hasText: new RegExp(`^${name}$`) }).first().click()
+  await closeDock(page)
+}
+
 
 test('an axis is named, an option styled, and one instance of two wears it', async ({ page }) => {
   await openEditor(page)
   await openLayers(page)
 
-  // two Buttons on the page. Using the library entry copies it into the project
+  // two Buttons on the page
   await rows(page).first().click()
-  await insertFromDock(page, 'catalog:button')
+  await insertComponent(page, 'Button')
   await rows(page).first().click()
   await page.keyboard.press('ControlOrMeta+e')
   await page.locator('[data-dock-item^="component:"]', { hasText: /^Button$/ }).first().click()
@@ -126,7 +133,7 @@ test('an axis is named, an option styled, and one instance of two wears it', asy
   await row.getByRole('button').last().click() // the row kebab
   await page.getByRole('button', { name: 'Settings', exact: true }).click()
 
-  // the library's Button comes with two axes already; this adds a third
+  // the fixture's Button comes with two axes already; this adds a third
   const axes = page.locator('[data-variant-axes]')
   await expect(page.locator('[data-variant-axis="variant"]')).toBeVisible()
   await expect(page.locator('[data-variant-axis="size"]')).toBeVisible()

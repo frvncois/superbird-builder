@@ -148,6 +148,17 @@ export function validateTree(root: ElementNode, ctx: ValidateContext): TreeDiagn
     let childScopes = scopes
     let childInstances = instances
 
+    if (node.slot) {
+      if (node.type === 'body' || isComponentType(node.type) || !node.children) {
+        diags.push({ nodeId: node.id, message: `'${node.type}' can't be a slot — a slot is a container inside the component` })
+      } else if (parent === null) {
+        diags.push({ nodeId: node.id, message: "The component's own element can't be a slot" })
+      }
+      // what is under a slot belongs to the holder: a page's own structure
+      // again, where a ref is fine and an instance is an instance
+      childInstances = []
+    }
+
     if (isComponentType(node.type)) {
       if (!ctx.componentNames.includes(node.type)) {
         diags.push({ nodeId: node.id, message: `Unknown component '${node.type}'` })

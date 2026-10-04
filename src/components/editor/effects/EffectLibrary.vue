@@ -6,7 +6,7 @@
 // implementation. Here they are sorted together by name: an effect is an
 // effect, and what it does is visible the moment you select it.
 import { computed } from 'vue'
-import { CircleAlert, Plus, Sparkles, Trash2 } from 'lucide-vue-next'
+import { CircleAlert, Trash2 } from 'lucide-vue-next'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import { useInteraction } from '@/composables/useInteraction'
 import { useAnimation } from '@/composables/useAnimation'
@@ -73,14 +73,6 @@ async function remove(item: LibraryItem) {
   }
 }
 
-/** a new effect is NAMED first and given its half second, so gaining the other
- *  one later is an ordinary edit rather than a conversion */
-function newEffect(kind: 'interaction' | 'animation') {
-  const half =
-    kind === 'interaction' ? interactions.createInteraction() : animations.createAnimation()
-  const effect = effects.wrap(kind, half.id, half.name)
-  openEffect('effect', effect.id, true)
-}
 </script>
 
 <template>
@@ -125,27 +117,6 @@ function newEffect(kind: 'interaction' | 'animation') {
           @click="remove(item)"
         />
       </div>
-    </div>
-
-    <div class="flex shrink-0 flex-col gap-1 border-t border-input p-2">
-      <ButtonUI
-        variant="outline"
-        size="xs"
-        :icon="Plus"
-        class="w-full !justify-start"
-        @click="newEffect('interaction')"
-      >
-        Style change
-      </ButtonUI>
-      <ButtonUI
-        variant="outline"
-        size="xs"
-        :icon="Sparkles"
-        class="w-full !justify-start"
-        @click="newEffect('animation')"
-      >
-        Motion
-      </ButtonUI>
     </div>
   </div>
 </template>

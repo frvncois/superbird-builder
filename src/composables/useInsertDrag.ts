@@ -10,7 +10,6 @@ export type InsertPayload =
   | { kind: 'element'; type: string; label: string; icon: Component }
   | { kind: 'component'; name: string }
   /** a library entry the project hasn't added yet — using it adds it */
-  | { kind: 'catalog'; key: string; name: string }
 
 /** the floating chip's content; null = no drag in flight */
 const payload = ref<InsertPayload | null>(null)
@@ -91,9 +90,7 @@ export function useInsertDrag() {
     const payload =
       p.kind === 'element'
         ? ({ kind: 'element', type: p.type } as const)
-        : p.kind === 'catalog'
-          ? ({ kind: 'catalog', key: p.key } as const)
-          : ({ kind: 'component', name: p.name } as const)
+        : ({ kind: 'component', name: p.name } as const)
     backend.value.insert(payload, target.id, target.position)
   }
 
