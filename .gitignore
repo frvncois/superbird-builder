@@ -38,9 +38,13 @@ __screenshots__/
 # Vite
 *.timestamp-*-*.mjs
 
-# publish server data
+# publish server data — every copy of it. A backup dir holds publish.json
+# (GitHub token, SMTP password, the site-password hash), users.json,
+# api-tokens.json and sessions.json, so the glob has to catch `data.backup-…`
+# and `data-backup-…` alike.
 server/data
 server/data-backup-*
+server/data.backup-*
 
 # e2e
 .e2e-data
@@ -52,3 +56,7 @@ playwright-report
 
 # tree-source migration render referee (scripts/corpus.mjs)
 .corpus
+
+# throwaway headless probes (CLAUDE.md's `.tmp-test.ts` recipe)
+.tmp-test.ts
+*.tmp-test.ts
