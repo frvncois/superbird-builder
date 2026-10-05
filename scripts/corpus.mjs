@@ -17,6 +17,7 @@
 // broken the project. Identity is compared the same way.
 //
 //   node scripts/corpus.mjs build [--force]   construct/refresh the input projects
+//   node scripts/corpus.mjs media [--from d]  snapshot the media they reference
 //   node scripts/corpus.mjs save              export every input → .corpus/baseline/
 //   node scripts/corpus.mjs check             export every input → .corpus/check/, diff
 //   node scripts/corpus.mjs                   build (if needed) then save
@@ -30,6 +31,16 @@
 // The saved inputs are v1 captures (`page.code` beside the tree). `check` runs
 // each one through `migrateProject` before exporting, because what has to be
 // byte-identical is what the app renders from them TODAY.
+//
+// MEDIA is part of the referee. A `/media/<id>` reference is resolved by
+// `export-media.mjs` out of `$GUANO_DATA_DIR/media`, so a referee that read the
+// live data dir compared against whatever happened to be on this machine: the
+// baseline's 305 extracted files came from one dev store, and `check` on a
+// fresh clone diffed every one of them as missing — a failure that looks
+// exactly like the bug it exists to catch. So `build` (and `media`) snapshots
+// the referenced bytes into `.corpus/inputs/media/`, and every export points
+// GUANO_DATA_DIR at `.corpus/inputs`. An input that references an id the
+// snapshot does not hold REFUSES to run rather than exporting a hole.
 
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
@@ -43,6 +54,11 @@ const CORPUS = join(ROOT, '.corpus')
 const INPUTS = join(CORPUS, 'inputs')
 
 const RUNTIME = join(ROOT, 'packages/guano/runtime/mcp-runtime.mjs')
+
+// where `media` reads from by default: whatever data dir the caller points at,
+// else the repo's own. Captured BEFORE exportInto repoints GUANO_DATA_DIR at
+// the snapshot.
+const DATA_DIR_DEFAULT = process.env.GUANO_DATA_DIR || join(ROOT, 'server', 'data')
 
 const sha256 = (data) => createHash('sha256').update(data).digest('hex')
 
@@ -159,7 +175,116 @@ async function manifestOf(dir) {
   return files
 }
 
+// ---------- media: the referee's own copy ----------
+
+const MEDIA_RE = /\/media\/([a-f0-9]{16})/g
+
+/** every `/media/<id>` id any input references, from the raw JSON — a whole-text
+ *  scan, because the refs live in a dozen different places (a node's src,
+ *  background and link, rich copy, entry values, favicons, @font-face) and the
+ *  referee only needs the SET */
+async function referencedMediaIds() {
+  const ids = new Set()
+  const names = (await readdir(INPUTS)).filter((f) => f.endsWith('.json'))
+  for (const file of names) {
+    const text = await readFile(join(INPUTS, file), 'utf8')
+    for (const [, id] of text.matchAll(MEDIA_RE)) ids.add(id)
+  }
+  return ids
+}
+
+/**
+ * Copy the bytes every input references into `.corpus/inputs/media/`, in the
+ * media-library layout `export-media.mjs` reads (`index.json` + `files/<id>`).
+ *
+ * `from` is a data dir — the live one by default, or a backup. Only the
+ * referenced assets are copied, and the index is rewritten to exactly those, so
+ * the snapshot is reproducible and does not grow with the dev store.
+ */
+async function snapshotMedia({ from } = {}) {
+  const source = from ?? DATA_DIR_DEFAULT
+  const ids = await referencedMediaIds()
+  const dest = join(INPUTS, 'media')
+  if (!ids.size) {
+    await rm(dest, { recursive: true, force: true })
+    console.log('media: no inputs reference the library — nothing to snapshot')
+    return
+  }
+  let index = { assets: [] }
+  try {
+    index = JSON.parse(await readFile(join(source, 'media', 'index.json'), 'utf8'))
+  } catch {
+    throw new Error(
+      `media: no library index at ${join(source, 'media', 'index.json')} — point --from at a ` +
+        'data dir that holds the assets these inputs reference',
+    )
+  }
+  const byId = new Map((index.assets ?? []).map((a) => [a.id, a]))
+  await rm(dest, { recursive: true, force: true })
+  await mkdir(join(dest, 'files'), { recursive: true })
+  const kept = []
+  const missing = []
+  for (const id of [...ids].sort()) {
+    const asset = byId.get(id)
+    if (!asset) {
+      missing.push(id)
+      continue
+    }
+    try {
+      await writeFile(join(dest, 'files', id), await readFile(join(source, 'media', 'files', id)))
+    } catch {
+      missing.push(id)
+      continue
+    }
+    kept.push(asset)
+  }
+  await writeFile(join(dest, 'index.json'), JSON.stringify({ assets: kept, folders: [] }, null, 1))
+  console.log(`media: snapshotted ${kept.length} asset(s) from ${source}`)
+  if (missing.length) {
+    console.warn(
+      `media: ${missing.length} referenced asset(s) are not in that data dir ` +
+        `(${missing.slice(0, 4).join(', ')}${missing.length > 4 ? ', …' : ''}). ` +
+        'The baseline will export them as dropped media.',
+    )
+  }
+}
+
+/**
+ * Refuse to export against a media snapshot that cannot answer the inputs.
+ *
+ * Without this the export drops the asset with a warning and the diff blames
+ * the code — which is the one thing a referee must never do.
+ */
+async function requireMedia() {
+  const ids = await referencedMediaIds()
+  if (!ids.size) return
+  const dest = join(INPUTS, 'media')
+  let index = null
+  try {
+    index = JSON.parse(await readFile(join(dest, 'index.json'), 'utf8'))
+  } catch {
+    throw new Error(
+      `the inputs reference ${ids.size} media asset(s) and ${dest} does not exist.\n` +
+        'Run `node scripts/corpus.mjs media --from <data dir>` once (the dir that holds them —\n' +
+        'a backup is fine), and commit nothing: .corpus is gitignored and local to this machine.',
+    )
+  }
+  const have = new Set((index.assets ?? []).map((a) => a.id))
+  const gone = [...ids].filter((id) => !have.has(id))
+  if (gone.length) {
+    throw new Error(
+      `the media snapshot is missing ${gone.length} asset(s) the inputs reference ` +
+        `(${gone.slice(0, 4).join(', ')}${gone.length > 4 ? ', …' : ''}).\n` +
+        'Re-run `node scripts/corpus.mjs media --from <data dir>`.',
+    )
+  }
+}
+
 async function exportInto(outRoot) {
+  await requireMedia()
+  // the snapshot IS the data dir for the export — set before the import,
+  // because server/util.mjs reads GUANO_DATA_DIR at module load
+  process.env.GUANO_DATA_DIR = INPUTS
   const { exportSite } = await import(join(ROOT, 'server/export.mjs'))
   const rt = await import(RUNTIME)
   // the referee is the MIGRATED input's render: the saved inputs are v1 blobs
@@ -310,15 +435,24 @@ const [, , ...argv] = process.argv
 const cmd = argv.find((a) => !a.startsWith('--')) ?? 'default'
 const force = argv.includes('--force')
 
+const fromAt = argv.indexOf('--from')
+const from = fromAt !== -1 && argv[fromAt + 1] ? resolve(argv[fromAt + 1]) : undefined
+
 let code = 0
-if (cmd === 'build') await buildInputs({ force })
+if (cmd === 'build') {
+  await buildInputs({ force })
+  await snapshotMedia({ from })
+} else if (cmd === 'media') await snapshotMedia({ from })
 else if (cmd === 'save') await exportInto(join(CORPUS, 'baseline'))
 else if (cmd === 'check') code = await check()
 else if (cmd === 'default') {
   await buildInputs({ force })
+  await snapshotMedia({ from })
   await exportInto(join(CORPUS, 'baseline'))
 } else {
-  console.error(`usage: node scripts/corpus.mjs [build|save|check] [--force]`)
+  console.error(
+    'usage: node scripts/corpus.mjs [build|media|save|check] [--force] [--from <data dir>]',
+  )
   code = 2
 }
 process.exit(code)
