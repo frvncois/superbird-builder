@@ -1,5 +1,6 @@
 import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
+import { mitBanner } from './scripts/mit-banner'
 
 // Browser build for the published site's slider runtime. Bundles
 // src/slider/runtime.ts + the shared engine (src/lib/shared/slider.js) into one
@@ -10,6 +11,7 @@ import { defineConfig } from 'vite'
 // can't drift. The output is committed so `npm run serve` works on a fresh
 // checkout; `npm run build:slider` regenerates it.
 export default defineConfig({
+  plugins: [mitBanner()],
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),

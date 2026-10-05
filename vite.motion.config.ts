@@ -1,5 +1,6 @@
 import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
+import { mitBanner } from './scripts/mit-banner'
 
 // Browser build for the published site's motion runtime. Bundles
 // src/motion/runtime.ts + the shared engine (src/lib/shared/motion.js) into one
@@ -11,6 +12,7 @@ import { defineConfig } from 'vite'
 // source serve both. The output is committed so `npm run serve` works on a
 // fresh checkout; `npm run build:motion` regenerates it.
 export default defineConfig({
+  plugins: [mitBanner()],
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
