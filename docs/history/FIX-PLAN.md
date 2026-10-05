@@ -538,7 +538,7 @@ green except the one deliberate exception (F21's baseline, D1). 299 e2e tests, u
 
 | # | Question | What I did |
 |---|---|---|
-| D1 | F21: re-save the corpus baseline after the SPDX banner | **Yours.** `check` reports exactly 2 differences — the one added line in `assets/slider.js` and in `assets/motion.js` — and no node id moved. `node scripts/corpus.mjs save` is safe. |
+| D1 | F21: re-save the corpus baseline after the SPDX banner | **Yours.** `check` reports exactly 2 differences — `assets/slider.js` and `assets/motion.js` — and no node id moved, no HTML byte moved. TWO intended changes land in them: the SPDX banner line (F21), and `assets/motion.js` is also **1,099 bytes smaller** because F14's dead `TRANSITION_PRESET_OPTIONS` was being bundled into every published site through `@/lib/motion`. `node scripts/corpus.mjs save` is safe. |
 | D2 | E8: per-instance binding overrides on the page wrapper? | Took the default: BACKLOGged under Interactions with what it would cost. The refusal and the GUIDE now name the wrapper recipe. |
 | D3 | E15: validate `select` options / `email` at the endpoint? | No code needed — both were already validated. The bug was the MANIFEST they validate against. Documented in GUIDE ("what is checked is what the markup DECLARES"). |
 | D4 | F22: move `TREE-SOURCE-PLAN.md`? | Took the default: moved, six references updated, `grep -rn TREE-SOURCE-PLAN` clean outside `docs/history/` and this file. |
