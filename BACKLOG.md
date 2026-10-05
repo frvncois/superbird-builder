@@ -654,6 +654,105 @@ collection" diagnostic on a list, and on a leaf there was none at all.
   it. The publish-warnings spec is the real gate; this is a note that a green
   publish here does not mean much.
 
+## Code review + MCP evaluation run (Harbour, 2026-10-05) — FIXED
+
+Two reviews, one fixing session: a code review (F1–F26) and an MCP evaluation run
+(E1–E40), worked through `FIX-PLAN.md` (now `docs/history/`). 30 commits; the e2e suite
+went 221 → 299 tests. Every finding below has a spec.
+
+### Release blockers
+
+- **The published npm tarball's server could not start** (F1). `prepack`'s
+  `readdir(server)` loop reads one level and filters on filename, so `server/public/` —
+  five modules `index.mjs` imports — never shipped. Verified by packing, extracting and
+  booting; the server specs now run green against the tarball via `GUANO_E2E_SERVER`.
+- **A draft that deleted the last effect was silently reverted** (F3). A conditional
+  spread made an empty merged list indistinguishable from "no side has any", so `...mine`
+  put Main's back. `computeMerge` had no coverage at all; `e2e/store-drafts.spec.ts` is
+  the first.
+- **`guano build` exported an unmigrated blob** (F20) — a v1 store exported with an
+  unexpanded `:Card:` leaf rendering as nothing at all.
+- **A data backup dir was one `git add -A` from the history** (F2): the ignore glob was
+  `server/data-backup-*` and the directory is `server/data.backup-…`. It holds the
+  GitHub token, the SMTP password, the site-password hash, users, sessions and API
+  tokens.
+- **The built runtimes shipped with no licence line** (F21), embedded verbatim in every
+  exported site while LICENSE-EXCEPTIONS.md is what carves them out of the AGPL. The
+  minifier drops `rollupOptions.output.banner`, even as `/*!`, so it is a
+  `generateBundle` plugin.
+
+### Writes that reported success and rendered nowhere
+
+The class `e2e/mcp-components.spec.ts` exists to guard. Five more:
+
+- **A host's `link` on a nested instance** (E3/E38) was stored by the write and skipped
+  by every renderer: `MIRROR_KEYS` did not carry `link` while both readers did
+  `node.link ?? master.link`, a two-step read that misses the mirror layer.
+- **Detach dropped every per-instance value a renderer resolves own-first** (E4/E5) —
+  `link`, `listQuery`, `slider`, `form`, `entryId`, `fieldAttrs`. A sidebar of nine
+  component links lost all nine destinations.
+- **`edit_structure {replace}` dropped the element it replaced** (E2) and hoisted its
+  children, re-seating its id onto a sibling, with `saved: true` and nothing refused.
+  The same `applyHtml` adopt-onto collision silently broke `wrap` for any `<div>` inside
+  a `<div>`. `ApplyOptions.asChildren` makes the contract explicit, and a per-op
+  post-apply assertion refuses the batch when a declared `data-ref` is not in the tree
+  afterwards.
+- **A `<select>` inside a component refused every value it offers** (E15, worse than
+  reported): an `<option>`'s value lives on the master, the manifest read the page
+  nodes, and a visitor picking the first option got a 400.
+- **Five silent data-binding no-ops** (E9/E10/E11/E35/E36): `equalsCurrent` on a
+  non-reference field, a `data-field` or `fieldAttrs` naming no field in scope, and
+  hidden form controls counted as nameless ones. Each is a refusal or a diagnostic now,
+  and `validateTree`'s diagnostics reach the publish warnings.
+
+### Reads and refusals that cost calls
+
+- `get_page {ref}` returned the subtree's HTML and `elements: []` (E18) — the ref lookup
+  searched `page.elements`, which is `[body]`.
+- `elementIds` given a `#ref` filtered the summary to nothing, silently (E19).
+- `edit_structure`'s `elements` returned the whole page (E20); `update_settings` echoed
+  the whole settings object; `list_components` had no index mode (3G).
+- A master's own short `data-id` was refused as a binding target (E1), and no master
+  write returned a `version` (E16).
+- Valid Tailwind v4 variants were refused and the hint suggested a different BASE class
+  (E7); `position`, `overflow`, `flex-direction`, `align-items`, `justify-content`,
+  `text-align` and five more were not interaction conflict groups (E6).
+- The translation counter counted the masters the guide says to skip (E12), and page SEO
+  was not in the worklist at all (E13).
+
+### Cost (3I)
+
+Ids print in the 8-hex form the HTML already used — ~30% off every element read,
+measured. `list_components {brief}`, a scoped `edit_structure` summary, a
+touched-keys-only `update_settings` echo, a counters-first worklist, and a worklist
+`handle` that keeps item addresses out of the transcript entirely. GUIDE gained golden
+rule 8 and a **Cost discipline** section; the eval prompts gained the session-side
+habits.
+
+### Deliberately NOT done
+
+- **E17** — a binding write returning the same page `version` is by design (the HTML
+  reports node state it does not carry). One GUIDE sentence so the next agent does not
+  file it.
+- **E8's feature** — per-instance binding overrides on the page wrapper. Deferred, see
+  Interactions above; the wrapper recipe is named in the refusal and written out in
+  GUIDE's design-standards.
+- **Date and number formatting** (E28) — stated plainly in GUIDE as a gap rather than
+  approximated.
+- **`inspect_route`** (3I.4) — see "MCP (v1 limits)" above for why it needs a decision
+  first.
+- **The canvas-vs-export referee** — scoped under "Still open from this run" below.
+
+### Also fixed, found while fixing
+
+- `delete_animation` had never worked: the handler builds `touched` and the response
+  reads `changed.size`, so every call threw before returning. Nothing covered it.
+- `update_settings {tokens}` dropped an in-use token silently — the replacing form
+  never ran the check `removeTokens` has always had.
+- `delete_interaction` / `delete_animation` unbound from everything and reported the
+  count afterwards. Interlocked, with `bindings` on the list tools so the refusal is not
+  the only way to find out.
+
 ## MCP evaluation run (Ridgeline, 2026-10-04) — FIXED
 
 **E1–E16 were all fixed in the pass that followed this triage** (see git log). The
