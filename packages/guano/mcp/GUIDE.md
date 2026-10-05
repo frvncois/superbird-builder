@@ -994,14 +994,25 @@ multi-line code blocks — leading indentation still collapses).
    paginates: call `{locale, countsOnly: true}` first to size the job, then pull with
    `offset`/`limit` (default 200) and/or the filters `kind`/`pageId`/`pageIds`/`componentId`/
    `collectionId` (`pageIds: [...]` covers several pages in one call). Header counters are
-   always project-wide — read **`missingTranslatable`** (no override AND not structural) to
-   know when the job is actually done; plain `missing` also counts numerals/glyphs/
-   separators correctly left at base, and `structural` counts those. `matched`/`returned`/
-   `nextOffset` describe the window. Skip the items flagged `looksStructural: true` (a
-   number, "71%", "yes", a separator like "—"/"→" — translating them breaks sorting/flags
-   or is dead work), and translate an element's `shadowsMaster: true` item (its own text
-   wins) rather than the `shadowedByAll: true` master it shadows. Fields marked
-   `localize: false` never appear in the worklist at all.
+   always project-wide — read **`missingTranslatable`** to know when the job is actually
+   done: it counts the items with no override that are NOT structural and NOT a master
+   every instance shadows, which is exactly the set this guide tells you to translate.
+   Plain `missing` also counts numerals/glyphs/separators correctly left at base
+   (`structural` counts those) and masters nothing renders (`shadowedByAll`).
+   `matched`/`returned`/`nextOffset` describe the window. Skip the items flagged
+   `looksStructural: true` (a number, "71%", "yes", a separator like "—"/"→" — translating
+   them breaks sorting/flags or is dead work), and translate an element's
+   `shadowsMaster: true` item (its own text wins) rather than the `shadowedByAll: true`
+   master it shadows. Fields marked `localize: false` never appear in the worklist at all.
+   A page's **SEO title and description** are in the worklist too, as `kind: "seo"` with
+   a `field` — they are text a visitor reads, in the tab and in every search result and
+   link preview, and `set_translations` writes them through the same path
+   `set_page_seo {locale}` does.
+   A worklist for a real site is tens of kilobytes, and it costs that twice if it travels
+   out through your context and back in: pass **`outputPath`** (an absolute path) and the
+   items are written to disk instead, then hand the same file back as
+   `set_translations {itemsPath}` once each item carries a translation. `countsOnly: true`
+   first, always — it sizes the job in a few hundred bytes.
    `set_translations` covers element/master/entry kinds in one call and returns `written`
    (items) + `fieldsWritten` (values — compare to the worklist total). For one-off
    touch-ups, `edit_elements` (content/src) and `upsert_entries` (values) also take a

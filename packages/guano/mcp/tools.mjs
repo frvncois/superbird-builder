@@ -9,7 +9,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { lookup as dnsLookup } from 'node:dns/promises'
-import { readFile, realpath, stat } from 'node:fs/promises'
+import { readFile, realpath, stat, writeFile } from 'node:fs/promises'
 import { basename, extname, isAbsolute, resolve as resolvePath, sep } from 'node:path'
 
 // the AI-first handbook (the HTML format, element registry, style rules, workflow) —
@@ -247,6 +247,24 @@ export function createToolSet({ api, runtime, elicit, hasElicitation = () => nul
             'Move the file inside that directory, or ask the operator to widen the root.',
         )
       }
+    }
+    return full
+  }
+
+  /**
+   * Write JSON to a local absolute path, under the same fence as the reads.
+   *
+   * The mirror of `*Path`: a 45 KB translation worklist costs the same whether
+   * it comes IN or goes OUT, and an agent that can hand the file straight back
+   * as `itemsPath` never pays for it in context at all.
+   */
+  async function writeJsonFile(file, label, data) {
+    const path = String(file)
+    const full = await resolveInputPath(path, label)
+    try {
+      await writeFile(full, JSON.stringify(data, null, 2))
+    } catch (e) {
+      throw new Error(`cannot write ${label} "${path}": ${e.message ?? e}`)
     }
     return full
   }
@@ -6971,7 +6989,17 @@ const tools = [
         locale: { type: 'string', description: 'a registered non-default locale, e.g. "fr"' },
         missingOnly: { type: 'boolean', description: 'return only items without an override yet' },
         countsOnly: { type: 'boolean', description: 'return the counters only, no items — size the job first' },
-        kind: { type: 'string', enum: ['element', 'master', 'entry', 'attribute'], description: 'restrict to one kind' },
+        kind: {
+          type: 'string',
+          enum: ['element', 'master', 'entry', 'attribute', 'seo'],
+          description: 'restrict to one kind',
+        },
+        outputPath: {
+          type: 'string',
+          description:
+            'absolute path to write the items to instead of returning them — hand the same ' +
+            'file back as set_translations {itemsPath} and the worklist never enters your context',
+        },
         pageId: { type: 'string', description: 'element items on this page only' },
         pageIds: {
           type: 'array',
@@ -7089,6 +7117,27 @@ const tools = [
         }
         visit([comp.root], false)
       }
+      // E13: a page's SEO title and description are text a visitor reads (in
+      // the tab, in a search result, in a link preview) and they were not in
+      // the worklist at all — so `missingTranslatable: 0` could be reached with
+      // every title still in the default language.
+      for (const page of project.pages ?? []) {
+        const draftPage = page.status !== 'published'
+        for (const field of ['title', 'description']) {
+          const base = page.seo?.[field]
+          if (!base || !String(base).trim()) continue
+          all.push({
+            kind: 'seo',
+            pageId: page.id,
+            page: page.name,
+            field,
+            base: fence(base),
+            override: fence(page.seo?.locales?.[locale]?.[field]),
+            ...(draftPage ? { draftPage: true } : {}),
+            ...(flagStructural(base) ? { looksStructural: true } : {}),
+          })
+        }
+      }
       for (const c of project.collections ?? []) {
         // fields flagged localize:false are not translatable — skip them so they
         // never inflate the counters or invite dead-work translations
@@ -7118,7 +7167,14 @@ const tools = [
       // separators that are correctly left at base.
       const translated = all.filter((i) => i.override).length
       const structural = all.filter((i) => i.looksStructural).length
-      const missingTranslatable = all.filter((i) => !i.override && !i.looksStructural).length
+      // `shadowedByAll` masters are excluded: the guide tells you to translate
+      // the instance's own `shadowsMaster` item INSTEAD of the master it
+      // shadows, so counting the master as work left meant the counter could
+      // never reach 0 for anyone who followed the advice (E12).
+      const shadowedByAll = all.filter((i) => i.shadowedByAll).length
+      const missingTranslatable = all.filter(
+        (i) => !i.override && !i.looksStructural && !i.shadowedByAll,
+      ).length
       const onDraftPages = all.filter((i) => i.draftPage).length
       const counters = {
         locale,
@@ -7127,6 +7183,7 @@ const tools = [
         missing: all.length - translated,
         missingTranslatable,
         structural,
+        ...(shadowedByAll ? { shadowedByAll } : {}),
         ...(onDraftPages ? { onDraftPages } : {}),
         ...(translateNo ? { excludedTranslateNo: translateNo } : {}),
       }
@@ -7146,6 +7203,20 @@ const tools = [
       const window = filtered.slice(offset, offset + limit)
       // strip undefined `override` so absent-override items stay compact
       const items = window.map((i) => (i.override ? i : (({ override, ...rest }) => rest)(i)))
+      // the items to DISK instead of to the transcript: a 45 KB worklist costs
+      // the same either way, and the file is the input set_translations takes
+      if (args.outputPath) {
+        const written = await writeJsonFile(args.outputPath, 'outputPath', { locale, items })
+        return {
+          ...counters,
+          matched,
+          returned: items.length,
+          offset,
+          nextOffset: offset + items.length < matched ? offset + items.length : null,
+          outputPath: written,
+          next: `set_translations {locale: "${locale}", itemsPath: "${written}"} once each item carries a translation`,
+        }
+      }
       return {
         // every `base`/`override` below is site copy written by a user. This
         // Fenced PER ITEM, like every other tool that returns site copy. A
@@ -7186,7 +7257,8 @@ const tools = [
           items: {
             type: 'object',
             properties: {
-              kind: { type: 'string', enum: ['element', 'master', 'entry', 'attribute'] },
+              kind: { type: 'string', enum: ['element', 'master', 'entry', 'attribute', 'seo'] },
+              field: { type: 'string', description: 'kind "seo" only: "title" or "description"' },
               pageId: { type: 'string' },
               componentId: { type: 'string' },
               collectionId: { type: 'string' },
@@ -7353,6 +7425,34 @@ const tools = [
           else delete entry.locales[locale]
           if (entry.locales && !Object.keys(entry.locales).length) delete entry.locales
           written++
+        } else if (item.kind === 'seo') {
+          // the SAME path set_page_seo {locale} writes: page.seo.locales[code]
+          const page = (project.pages ?? []).find((p) => p.id === item.pageId)
+          if (!page) {
+            fail(item, `no page with id "${item.pageId}"`)
+            continue
+          }
+          const field = String(item.field ?? '')
+          if (field !== 'title' && field !== 'description') {
+            fail(item, 'seo items need `field`: "title" or "description"')
+            continue
+          }
+          if (item.content === undefined) {
+            fail(item, 'seo items need `content`')
+            continue
+          }
+          page.seo = page.seo ?? {}
+          const locales = { ...(page.seo.locales ?? {}) }
+          const bucket = { ...(locales[locale] ?? {}) }
+          if (item.content) bucket[field] = String(item.content)
+          else delete bucket[field]
+          // prune, so touch-then-clear leaves the page byte-identical
+          if (Object.keys(bucket).length) locales[locale] = bucket
+          else delete locales[locale]
+          if (Object.keys(locales).length) page.seo.locales = locales
+          else delete page.seo.locales
+          written++
+          fieldsWritten++
         } else {
           fail(item, `unknown kind "${item.kind}"`)
         }
@@ -7738,13 +7838,12 @@ const tools = [
     name: 'bind_interaction',
     description:
       'Apply ONE library interaction to an element — for several, batch them through ' +
-      'edit_elements.bindInteractions instead (one call, one version). Address by `ref`, ' +
-      'element `id`. `targetId`/`targetRef` is the node the effect animates; ' +
-      'omit it for the element itself. Effect state is shared per (interaction, target), so ' +
-      'several triggers drive ONE effect: an `action: "on"` button plus `action: "off"` on a ' +
-      'close button and an overlay make a working modal. Elements inside a component instance ' +
-      'are refused — interactions live on the master. Requires a target; pass the `version` ' +
-      'from get_page. See get_guide {section: "class-interactions"}.',
+      'edit_elements.bindInteractions (one call, one version). Address by `ref` or `id`; ' +
+      '`targetId`/`targetRef` is the node the effect changes, omitted for the element itself. ' +
+      'State is shared per (interaction, target), so several triggers drive ONE effect. ' +
+      'Elements inside a component instance are refused — interactions live on the master. ' +
+      'Requires a target; pass the `version` from get_page. See get_guide {section: ' +
+      '"class-interactions"}.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -8774,13 +8873,10 @@ const tools = [
     name: 'preview',
     description:
       'Render the CURRENT TARGET to the PREVIEW site and return its url — then OPEN it and ' +
-      'look. This is how you see your own work: publishing is the only other way to render ' +
-      'anything, and it puts bytes on the live origin, so a half-built draft goes live every ' +
-      'time you want to check a layout. A preview touches nothing live, needs no publish ' +
-      'permission, and includes DRAFT pages (the live export drops them), which is exactly what ' +
-      'you want while building. Re-run it after any change; the last render wins. Call it after ' +
-      'each page instead of publishing, and publish once at the end. Returns the same ' +
-      '`warnings` publish does. Requires a target.',
+      'look. This is how you see your own work: it touches nothing live, needs no publish ' +
+      'permission, and includes DRAFT pages. Re-run after any change; the last render wins. ' +
+      'Use it after each page and publish once at the end. Returns the same `warnings` publish ' +
+      'does. Requires a target.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     handler: async () => {
       if (!preview) {
@@ -8853,13 +8949,10 @@ const tools = [
     name: 'publish',
     description:
       'Publish the CURRENT TARGET as the live static site. To LOOK at your work use `preview` ' +
-      'instead — this one puts bytes on the live origin, and publishing a draft bypasses the ' +
-      'merge-into-Main flow. Editor+ only, enforced server-side. Returns export stats, the ' +
-      '`url` the site is now live at, `localeUrls`, and `warnings` — READ THEM AND ACT: they ' +
-      'are the design checks a review would send back, plus issues that otherwise publish ' +
-      'silently, such as a collection whose template page is still a draft, whose entry routes ' +
-      'are not exported and whose cards 404 live. Requires a target. See get_guide {section: ' +
-      '"design-standards"}.',
+      'instead — this puts bytes on the live origin. Editor+ only, enforced server-side. ' +
+      'Returns export stats, the `url`, `localeUrls`, and `warnings` — READ THEM AND ACT: they ' +
+      'are the design checks a review would send back, plus what otherwise ships silently. ' +
+      'Requires a target. See get_guide {section: "design-standards"}.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     handler: async () => {
       const { project } = await loadTargetProject()
