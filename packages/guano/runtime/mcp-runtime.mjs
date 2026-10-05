@@ -5430,7 +5430,7 @@ function applyHtml(root, parsed, opts) {
 	const host = opts.def ? masterHost(opts.def) : pageHost(root);
 	let topAttrs = null;
 	let children = parsed;
-	if (parsed.length === 1 && sameType(parsed[0].type, root.type)) {
+	if (!opts.asChildren && parsed.length === 1 && sameType(parsed[0].type, root.type)) {
 		topAttrs = parsed[0].attrs;
 		children = parsed[0].children;
 	}

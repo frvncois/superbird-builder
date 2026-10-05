@@ -59,6 +59,16 @@ export interface ApplyOptions {
   def?: ComponentDef | null
   /** validation context; omitted = derived from the project */
   validate?: ValidateContext
+  /**
+   * `parsed` is the root's CHILDREN, always — never the root element itself.
+   *
+   * For a caller writing into a throwaway holder (edit_structure's insert and
+   * wrap ops), the single-root shortcut below is a trap: the holder is typed
+   * after the real parent, so a `<div>` going into a `<div>` was adopted onto
+   * the holder and the holder is discarded. The wrap op's wrapper came out
+   * undefined and an insert lost the element it was asked to place.
+   */
+  asChildren?: boolean
 }
 
 /**
@@ -148,7 +158,7 @@ export function applyHtml(
 
   let topAttrs: Record<string, string> | null = null
   let children = parsed
-  if (parsed.length === 1 && sameType(parsed[0]!.type, root.type)) {
+  if (!opts.asChildren && parsed.length === 1 && sameType(parsed[0]!.type, root.type)) {
     topAttrs = parsed[0]!.attrs
     children = parsed[0]!.children
   }

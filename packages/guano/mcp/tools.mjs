@@ -104,6 +104,7 @@ export function createToolSet({ api, runtime, elicit, hasElicitation = () => nul
     contextFromProject,
     validateTree,
     tagForType,
+    sameType,
     slugify,
     createBody,
     createNode,
@@ -2550,6 +2551,21 @@ function makeComponentFrom(project, page, elementId, rawName, category) {
  * identity-carrying write as `set_page_html`, so an inserted subtree is held to
  * the same rules and a `replace` that echoes back `data-id`s keeps those nodes.
  */
+/** every `data-ref` a piece of markup declares, at any depth — what the
+ *  post-apply assertion in edit_structure checks really landed */
+function declaredRefs(roots) {
+  const out = []
+  const visit = (nodes) => {
+    for (const n of nodes) {
+      const ref = n.attrs?.['data-ref']
+      if (ref) out.push(ref)
+      visit(n.children ?? [])
+    }
+  }
+  visit(roots)
+  return out
+}
+
 function runStructureOp(project, root, op, def, where) {
   let shortIndex = null
   const find = (key) => {
@@ -2585,12 +2601,25 @@ function runStructureOp(project, root, op, def, where) {
       const first = parsed.errors[0]
       return { error: `${first.line}:${first.col} ${first.message}` }
     }
-    return { roots: parsed.roots }
+    return { roots: parsed.roots, refs: declaredRefs(parsed.roots) }
   }
-  /** apply `roots` as the children of a throwaway holder, then splice them in */
+  /**
+   * Apply `roots` as the children of a throwaway holder, then splice them in.
+   *
+   * `asChildren` is load-bearing: the holder is typed after the REAL parent so
+   * validation sees the right container, and without the flag applyHtml's
+   * single-root shortcut adopted a `<div>` onto a `<div>` holder — which is
+   * discarded. `wrap` then had no wrapper at all ("could not build the
+   * wrapper", for perfectly good markup) and an insert lost its element.
+   */
   const build = (roots, holderType) => {
     const holder = { id: randomUUID(), type: holderType, content: '', children: [] }
-    const res = applyHtml(holder, roots, { project, def, validate: contextFromProject(project) })
+    const res = applyHtml(holder, roots, {
+      project,
+      def,
+      validate: contextFromProject(project),
+      asChildren: true,
+    })
     return { nodes: holder.children, res }
   }
   const slotFor = () => {
@@ -2619,7 +2648,7 @@ function runStructureOp(project, root, op, def, where) {
     let gone = 0
     walkNodes([node], () => gone++)
     parent.children.splice(parent.children.indexOf(node), 1)
-    return { removed: gone }
+    return { removed: gone, placed: [] }
   }
 
   if (op.op === 'move') {
@@ -2639,7 +2668,7 @@ function runStructureOp(project, root, op, def, where) {
     parent.children.splice(parent.children.indexOf(node), 1)
     const at = anchor ? slot.parent.children.indexOf(anchor) : slot.parent.children.length
     slot.parent.children.splice(at === -1 ? slot.parent.children.length : at, 0, node)
-    return { kept: 1 }
+    return { kept: 1, placed: [node] }
   }
 
   if (op.op === 'insert') {
@@ -2649,7 +2678,7 @@ function runStructureOp(project, root, op, def, where) {
     if (parsed.error) return { error: parsed.error }
     const { nodes, res } = build(parsed.roots, slot.parent.type)
     slot.parent.children.splice(slot.index, 0, ...nodes)
-    return { ...res, refused: res.refused.map((r) => ({ ...r, path: `${where} > ${r.path}` })) }
+    return { ...res, placed: nodes, placedRefs: parsed.refs, refused: res.refused.map((r) => ({ ...r, path: `${where} > ${r.path}` })) }
   }
 
   if (op.op === 'replace') {
@@ -2660,12 +2689,25 @@ function runStructureOp(project, root, op, def, where) {
     const parsed = read(op.html)
     if (parsed.error) return { error: parsed.error }
     // the markup is applied ONTO the existing node when it is one element of
-    // the same kind, so echoing its `data-id` back keeps everything it carries
-    if (parsed.roots.length === 1) {
-      const holder = { id: randomUUID(), type: parent.type, content: '', children: [node] }
-      const res = applyHtml(holder, parsed.roots, { project, def, validate: contextFromProject(project) })
-      parent.children.splice(parent.children.indexOf(node), 1, ...holder.children)
-      return { ...res, refused: res.refused.map((r) => ({ ...r, path: `${where} > ${r.path}` })) }
+    // the SAME KIND, so echoing its `data-id` back keeps everything it carries.
+    //
+    // Onto `node`, not onto a holder standing in for its parent: applyHtml
+    // adopts a single root onto the root it is GIVEN when the types match, and
+    // a holder typed after the parent matched a `<div>` replacing a `<div>`
+    // just as happily. The markup's root was then absorbed into the throwaway
+    // holder and its children spliced in flat — the replaced element vanished,
+    // its id was re-seated onto whichever child the LCS paired it with, and
+    // the response said `saved: true` with nothing refused. The type test is
+    // what makes the adopt-onto case explicit instead of accidental.
+    if (parsed.roots.length === 1 && sameType(parsed.roots[0].type, node.type)) {
+      const res = applyHtml(node, parsed.roots, { project, def, validate: contextFromProject(project) })
+      return {
+        ...res,
+        kept: (res.kept ?? 0) + 1,
+        placed: [node],
+        placedRefs: parsed.refs,
+        refused: res.refused.map((r) => ({ ...r, path: `${where} > ${r.path}` })),
+      }
     }
     let gone = 0
     walkNodes([node], () => gone++)
@@ -2674,6 +2716,8 @@ function runStructureOp(project, root, op, def, where) {
     return {
       ...res,
       removed: (res.removed ?? 0) + gone,
+      placed: nodes,
+      placedRefs: parsed.refs,
       refused: res.refused.map((r) => ({ ...r, path: `${where} > ${r.path}` })),
     }
   }
@@ -2693,7 +2737,15 @@ function runStructureOp(project, root, op, def, where) {
     if (parsed.roots.length !== 1) return { error: '`html` must be exactly one element to wrap in' }
     const { nodes: made, res } = build(parsed.roots, parent.type)
     const wrapper = made[0]
-    if (!wrapper) return { error: 'could not build the wrapper' }
+    if (!wrapper) {
+      // say WHICH check rejected it: the writer refuses a class inside an
+      // instance, an attribute that belongs to the component, an unusable src
+      // and so on, and "could not build the wrapper" named none of them
+      const why = res.refused?.length
+        ? res.refused.map((r) => `${r.path}: ${r.message}`).join('; ')
+        : `'${parsed.roots[0].type}' cannot be a child of '${parent.type}'`
+      return { error: `the wrapper was refused — ${why}` }
+    }
     if (wrapper.children.length) {
       return { error: 'the wrapper must be empty — what it wraps is `targets`' }
     }
@@ -2701,7 +2753,7 @@ function runStructureOp(project, root, op, def, where) {
     for (const node of nodes) parent.children.splice(parent.children.indexOf(node), 1)
     wrapper.children = nodes
     parent.children.splice(at, 0, wrapper)
-    return { ...res, kept: nodes.length }
+    return { ...res, kept: nodes.length, placed: [wrapper, ...nodes], placedRefs: parsed.refs }
   }
 
   return { error: `unknown op "${op.op}"` }
@@ -4527,6 +4579,38 @@ const tools = [
         const outcome = runStructureOp(project, scratch, op, def, where)
         if (outcome.error) {
           return { saved: false, reason: 'invalid-op', message: `${where}: ${outcome.error}` }
+        }
+        // POST-APPLY ASSERTION. An op that reports success while the node it
+        // placed is not in the tree is the worst failure this tool has: the
+        // write reads as landed and renders nowhere (E2 — a `replace` whose
+        // markup root was absorbed into a throwaway holder, its children
+        // spliced in flat, `saved: true`, nothing refused). Checked by node
+        // IDENTITY, which is stronger than an id and costs one walk.
+        if (outcome.placed?.length || outcome.placedRefs?.length) {
+          const inTree = new Set()
+          const refsInTree = new Set()
+          walkNodes([scratch], (n) => {
+            inTree.add(n)
+            if (n.ref) refsInTree.add(n.ref)
+          })
+          const lost = (outcome.placed ?? []).filter((n) => !inTree.has(n))
+          // a ref the markup DECLARED and the tree does not carry: the element
+          // it named is not there. Every legitimate reason to drop one (a ref
+          // inside an instance, a duplicate) is a refusal, which fails the
+          // batch on its own — so a missing ref with nothing refused means the
+          // write did not land where it said it did.
+          const lostRefs = (outcome.placedRefs ?? []).filter((r) => !refsInTree.has(r))
+          if ((lost.length || lostRefs.length) && !outcome.refused?.length) {
+            const named = [...lost.map((n) => n.ref ?? n.type), ...lostRefs.map((r) => `#${r}`)]
+            return {
+              saved: false,
+              reason: 'not-applied',
+              message:
+                `${where} reported ${named.length} element(s) it did not actually place ` +
+                `(${named.join(', ')}) — nothing was saved. This is a bug in the tool, not in ` +
+                'the markup; please report the op that triggered it.',
+            }
+          }
         }
         if (outcome.refused?.length) refused.push(...outcome.refused)
         if (outcome.warnings?.length) warnings.push(...outcome.warnings)
