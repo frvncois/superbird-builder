@@ -38,8 +38,8 @@
 // baseline's 305 extracted files came from one dev store, and `check` on a
 // fresh clone diffed every one of them as missing — a failure that looks
 // exactly like the bug it exists to catch. So `build` (and `media`) snapshots
-// the referenced bytes into `.corpus/inputs/media/`, and every export points
-// GUANO_DATA_DIR at `.corpus/inputs`. An input that references an id the
+// the referenced bytes into `.corpus/media/`, and every export points
+// GUANO_DATA_DIR at `.corpus`. An input that references an id the
 // snapshot does not hold REFUSES to run rather than exporting a hole.
 
 import { createHash } from 'node:crypto'
@@ -194,7 +194,7 @@ async function referencedMediaIds() {
 }
 
 /**
- * Copy the bytes every input references into `.corpus/inputs/media/`, in the
+ * Copy the bytes every input references into `.corpus/media/`, in the
  * media-library layout `export-media.mjs` reads (`index.json` + `files/<id>`).
  *
  * `from` is a data dir — the live one by default, or a backup. Only the
@@ -204,7 +204,7 @@ async function referencedMediaIds() {
 async function snapshotMedia({ from } = {}) {
   const source = from ?? DATA_DIR_DEFAULT
   const ids = await referencedMediaIds()
-  const dest = join(INPUTS, 'media')
+  const dest = join(CORPUS, 'media')
   if (!ids.size) {
     await rm(dest, { recursive: true, force: true })
     console.log('media: no inputs reference the library — nothing to snapshot')
@@ -258,7 +258,7 @@ async function snapshotMedia({ from } = {}) {
 async function requireMedia() {
   const ids = await referencedMediaIds()
   if (!ids.size) return
-  const dest = join(INPUTS, 'media')
+  const dest = join(CORPUS, 'media')
   let index = null
   try {
     index = JSON.parse(await readFile(join(dest, 'index.json'), 'utf8'))
@@ -284,7 +284,7 @@ async function exportInto(outRoot) {
   await requireMedia()
   // the snapshot IS the data dir for the export — set before the import,
   // because server/util.mjs reads GUANO_DATA_DIR at module load
-  process.env.GUANO_DATA_DIR = INPUTS
+  process.env.GUANO_DATA_DIR = CORPUS
   const { exportSite } = await import(join(ROOT, 'server/export.mjs'))
   const rt = await import(RUNTIME)
   // the referee is the MIGRATED input's render: the saved inputs are v1 blobs
