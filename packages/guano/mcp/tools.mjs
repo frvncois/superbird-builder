@@ -6919,14 +6919,17 @@ const tools = [
               fail(item, `no page with id "${item.pageId}"`)
               continue
             }
-            node = findNode(page.elements ?? [], item.id)
+            // the SHORT 8-hex data-id a read prints is a valid address
+            // everywhere a tool takes one (resolveEditNode does the same) —
+            // raw findNode refused it, so the worklist's own ids bounced back
+            node = findNode(page.elements ?? [], fullNodeId(page.elements ?? [], item.id))
           } else {
             const comp = (project.components ?? []).find((c) => c.id === item.componentId)
             if (!comp) {
               fail(item, `no component with id "${item.componentId}"`)
               continue
             }
-            node = findNode([comp.root], item.id)
+            node = findNode([comp.root], fullNodeId([comp.root], item.id))
           }
           if (!node) {
             fail(item, `no element with id "${item.id}"`)
@@ -6958,7 +6961,7 @@ const tools = [
             fail(item, `no page with id "${item.pageId}"`)
             continue
           }
-          const node = findNode(page.elements ?? [], item.id)
+          const node = findNode(page.elements ?? [], fullNodeId(page.elements ?? [], item.id))
           if (!node) {
             fail(item, `no element with id "${item.id}"`)
             continue

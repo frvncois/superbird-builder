@@ -730,6 +730,80 @@ test.describe('number, boolean and choice fields', () => {
 // draft was a draft forever (nothing after create_page changed its status, so
 // a draft collection template kept its entry routes out of the export), and an
 // agent could reply to a comment thread but never start one.
+test.describe('set_translations', () => {
+  // F5: the three id lookups called findNode raw, so the SHORT 8-hex data-id a
+  // read prints — the one the worklist itself hands back — was refused as "no
+  // element with id", and an agent had no address that worked.
+  test('the short data-id a read prints is a usable address', async () => {
+    const s = await mcpSession()
+    await s.call('update_settings', { addLocales: ['fr'] })
+    const home = await s.home()
+    await s.call('set_page_html', {
+      pageId: home.id,
+      html: pageHtml('<h1 data-ref="title">Ridgeline</h1><input placeholder="Your email" />'),
+      version: home.version,
+    })
+    const page = await s.call('get_page', { pageId: home.id })
+    const shortId = /<h1 data-id="([0-9a-f]+)"/.exec(page.html)![1]
+    expect(shortId).toHaveLength(8)
+
+    const r = await s.call('set_translations', {
+      locale: 'fr',
+      items: [{ kind: 'element', pageId: home.id, id: shortId, content: 'Ligne de crête' }],
+    })
+    expect(r.failures ?? []).toEqual([])
+    expect(r.written).toBe(1)
+
+    // and the attribute path, which had the same raw lookup
+    const attrId = /<input data-id="([0-9a-f]+)"/.exec(page.html)![1]
+    const a = await s.call('set_translations', {
+      locale: 'fr',
+      items: [
+        {
+          kind: 'attribute',
+          pageId: home.id,
+          id: attrId,
+          attribute: 'placeholder',
+          content: 'Votre courriel',
+        },
+      ],
+    })
+    expect(a.failures ?? []).toEqual([])
+
+    const node = s
+      .stored()
+      .pages[0].elements[0].children.find((n: { type: string }) => n.type === 'h1')
+    expect(node.locales.fr.content).toBe('Ligne de crête')
+    const field = s
+      .stored()
+      .pages[0].elements[0].children.find((n: { type: string }) => n.type === 'input')
+    expect(field.locales.fr.attributes.placeholder).toBe('Votre courriel')
+  })
+
+  test('a master is addressable by its short id too', async () => {
+    const s = await mcpSession()
+    await s.call('update_settings', { addLocales: ['fr'] })
+    const made = await s.call('create_component', {
+      name: 'Hero',
+      html: '<section><h1>Ridgeline</h1></section>',
+    })
+    const def = (await s.call('list_components', {})).components.find(
+      (c: { id: string }) => c.id === made.componentId,
+    )
+    const shortId = /<h1 data-id="([0-9a-f]+)"/.exec(def.html)![1]
+    expect(shortId).toHaveLength(8)
+
+    const r = await s.call('set_translations', {
+      locale: 'fr',
+      items: [
+        { kind: 'master', componentId: made.componentId, id: shortId, content: 'Ligne de crête' },
+      ],
+    })
+    expect(r.failures ?? []).toEqual([])
+    expect(r.written).toBe(1)
+  })
+})
+
 test.describe('update_page and create_comment', () => {
   test('a draft page is published later, and the route appears', async () => {
     const s = await mcpSession()
