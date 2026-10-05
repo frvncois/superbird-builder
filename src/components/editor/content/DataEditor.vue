@@ -24,6 +24,7 @@ import { useLocale } from '@/composables/useLocale'
 import { resolveBinding, refIds, mediaUrls } from '@/lib/shared/fields.js'
 import { resolveSliderConfig, SLIDER_DEFAULTS } from '@/lib/shared/slider.js'
 import { collectFormFields, formConfigError } from '@/lib/shared/forms.js'
+import { isNodeHidden } from '@/lib/instances'
 import { useProject } from '@/composables/useProject'
 import { useSettings } from '@/composables/useSettings'
 import { useAuth } from '@/composables/useAuth'
@@ -383,8 +384,21 @@ const routeOptions = computed(() => [
 const formFields = computed(() => {
   const el = selectedElement.value
   if (!el || !isForm.value) return { fields: [], unnamed: [], duplicates: [] }
-  return collectFormFields(el, (node: ElementNode) => resolveAttributes(node))
+  return collectFormFields(el, (node: ElementNode) => resolveAttributes(node), {
+    hidden: (node: ElementNode) => isNodeHidden(node, masterFor(node.id)),
+    content: (node: ElementNode) => resolveContent(node),
+  })
 })
+
+/** an element's effective TEXT, the instance chain included — what a
+ * `<select>`'s option values are read from. An `<option>` inside a component
+ * carries no text of its own; the master's is what renders. */
+function resolveContent(node: ElementNode): string {
+  const mapping = masterFor(node.id)
+  if (node.content) return node.content
+  if (!mapping) return ''
+  return [...mapping.mirrors, mapping.master].map((n) => n.content).find(Boolean) ?? ''
+}
 
 /** a control's effective attributes, instance layers included — the reason a
  * form built out of components reports its fields at all */

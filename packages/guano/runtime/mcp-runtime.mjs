@@ -719,6 +719,9 @@ var isFormControl = (type) => Object.hasOwn(CONTROL_KINDS, type);
 * optional textarea was hidden, and put a field the page never shows into the
 * manifest's allowlist.
 *
+* `opts.content(node)` is the matching read for an element's TEXT, used for a
+* `<select>`'s option values. Omitted = the node's own.
+*
 * Returns `{fields, unnamed, duplicates}`. `fields` is what the manifest
 * stores and the endpoint allowlists against.
 */
@@ -727,6 +730,7 @@ function collectFormFields(formNode, resolve, opts) {
 	const unnamed = [];
 	const seen = /* @__PURE__ */ new Map();
 	const attrsOf = (node) => resolve ? resolve(node) ?? {} : node.attributes ?? {};
+	const contentOf = (node) => (opts && opts.content ? opts.content(node) : void 0) ?? node.content ?? "";
 	const walk = (node) => {
 		if (!node || typeof node !== "object") return;
 		if (node !== formNode && node.type === "form") return;
@@ -753,7 +757,7 @@ function collectFormFields(formNode, resolve, opts) {
 					required: attrs.required === "" || attrs.required === "required" || attrs.required === "true",
 					maxLength: capFor(kind, attrs.maxlength)
 				};
-				if (kind === "select") field.options = optionValues(node);
+				if (kind === "select") field.options = optionValues(node, attrsOf, contentOf);
 				if (kind === "radio" || kind === "checkbox") field.value = String(attrs.value ?? "on");
 				const prior = seen.get(name);
 				if (prior) {
@@ -785,13 +789,22 @@ function capFor(kind, maxlength) {
 	const own = Number(maxlength);
 	return Number.isFinite(own) && own > 0 ? Math.min(own, ceiling) : ceiling;
 }
-/** the values a `<select>` offers, from its option children */
-function optionValues(node) {
+/**
+* The values a `<select>` offers, from its option children.
+*
+* `attrsOf`/`contentOf` are the caller's resolvers, the same ones the rest of
+* this walk uses — an `<option>` inside a component INSTANCE carries no value
+* and no text of its own, both come from the master. Reading the raw node
+* recorded `options: ["", ""]` in the manifest, and the endpoint then refused
+* every value the page actually offers: a visitor picking "Designer" got a 400
+* saying "role is not one of the offered values".
+*/
+function optionValues(node, attrsOf, contentOf) {
 	const out = [];
 	for (const child of node.children ?? []) {
 		if (child.type !== "option") continue;
-		const attrs = child.attributes ?? {};
-		out.push(String(attrs.value ?? child.content ?? ""));
+		const value = attrsOf(child).value ?? contentOf(child);
+		out.push(String(value ?? ""));
 	}
 	return out;
 }
@@ -7443,6 +7456,29 @@ var SLIDER_DOT_BASE = "size-2 rounded-full bg-current transition-opacity";
 * publish warning both skip them, so "nothing left to translate" stays true.
 */
 var isTranslatableType = (t) => t === "text";
+/**
+* The two field names that collide with an entry's OWN identity.
+*
+* A value lives in `entry.values[name]`, so almost any name is fine — a
+* `status` field is both ordinary and documented (it is what a
+* `data-[status=waiting]:` class matches on). `name` and `slug` are different:
+* an entry carries each as a PROPERTY, `upsert_entries` takes both as top-level
+* keys, and the route an entry gets is built from `entry.slug`. So a field
+* called `slug` renders `values.slug` wherever it is bound while every route,
+* `@item` link and `entryRoutePath` uses the other one — two values with one
+* name, disagreeing silently (E40).
+*
+* Refused at write rather than patched over at read: the drift is invisible,
+* and the fix after the fact is renaming a field every page already binds.
+*/
+var RESERVED_FIELD_NAMES = ["name", "slug"];
+/** why this field name cannot be used, or null */
+function fieldNameError(name) {
+	const trimmed = String(name ?? "").trim();
+	if (!trimmed) return "a field needs a name";
+	if (RESERVED_FIELD_NAMES.includes(trimmed.toLowerCase())) return `"${trimmed}" is an entry's OWN property (${RESERVED_FIELD_NAMES.join(", ")}), set at the top level of an upsert_entries item — a FIELD by that name would be a second value with the same name, and every route and @item link would use the other one. Pick another name`;
+	return null;
+}
 /** a value this field can actually hold, or the reason it cannot. One
 *  implementation: the panel, `upsert_entries` and the import all ask it, so a
 *  value the editor accepts is one the agent can write and vice versa. */
@@ -7527,4 +7563,4 @@ function isSymmetricTrigger(trigger) {
 	return SYMMETRIC_TRIGGERS.has(trigger);
 }
 //#endregion
-export { APPEAR_MODES, BUILTIN_LIST_SOURCES, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, ELIDED_DATA_URL, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MAX_DEPTH, MAX_INPUT, MAX_SVG_BYTES, MOTION_PROPS, NODE_STATE_KEYS, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, SCHEMA_VERSION, SCROLL_LERP_MAX, SCROLL_LERP_MIN, SLIDER_DEFAULTS, STYLE_SECTIONS, TOKEN_NAME_RE, TRANSITION_DEFAULTS, TRANSITION_PRESET_IDS, VARIANT_NAME_RE, addVariantAxis, addVariantOption, adoptStructure, alignMirrors, alignStructure, applyClass, applyHtml, buildInstanceMap, buildScopeRoots, canNest, cloneForMaster, collectFormFields, collectionRouteBase, compileAnimation, componentReaches, componentUsage, contextFromProject, countLocaleSeo, createBody, createNode, createPage, createProject, customSchemaError, deepClone, defaultBreakpoints, defaultSettings, deleteComponent, dependencyOrder, describeMigration, detachInstance, duplicateComponent, effectiveClasses, entryRoutePath, fieldValueError, findNode, findParent, fontError, fontFormatForUrl, formConfigError, formEnabled, formName, hasAncestorOfType, hasDetailRoutes, hasNodeState, inheritedInstanceValue, interactionGroupKey, interactionStateKey, isAllowedAttribute, isComponentType, isEmittableToken, isEntryScopeRoot, isInstancePart, isInstanceWrapper, isKnownElement, isLeafElement, isLocalizableAttribute, isNodeHidden, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isTranslatableType, isValidClass, isValidToken, lucideNameOf, lucideSvg, masterToHtml, matchClass, mergeAttributeLayers, mergeClassLayers, migrateProject, nestedComponentNames, nodesByShortId, normalizeComponentName, pageToHtml, parseHtml, pickedKeys, purgeLocaleSeo, pushMasterStructure, removeVariantAxis, removeVariantOption, renameComponent, renameVariantAxis, renameVariantOption, resolveInstanceValue, resolvePicks, resolveSliderConfig, sameLayerProperty, sameProperty, sameType, sanitizeAttributes, sanitizeInlineSvg, sanitizeRich, setComponentCategory, setComponentMeta, setInstancePick, setNodeHidden, setStyleTokens, setVariantAxes, setVariantClasses, setVariantDefault, shortIds, slugify, stripExtractedInstanceState, stripNodeState, tagForType, tokenError, typeForTag, typeOptionsFor, validateAnimation, validateBinding, validateMotionSettings, validateSliderConfig, validateTree, variantKey, walkNodes };
+export { APPEAR_MODES, BUILTIN_LIST_SOURCES, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, ELIDED_DATA_URL, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MAX_DEPTH, MAX_INPUT, MAX_SVG_BYTES, MOTION_PROPS, NODE_STATE_KEYS, RESERVED_FIELD_NAMES, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, SCHEMA_VERSION, SCROLL_LERP_MAX, SCROLL_LERP_MIN, SLIDER_DEFAULTS, STYLE_SECTIONS, TOKEN_NAME_RE, TRANSITION_DEFAULTS, TRANSITION_PRESET_IDS, VARIANT_NAME_RE, addVariantAxis, addVariantOption, adoptStructure, alignMirrors, alignStructure, applyClass, applyHtml, buildInstanceMap, buildScopeRoots, canNest, cloneForMaster, collectFormFields, collectionRouteBase, compileAnimation, componentReaches, componentUsage, contextFromProject, countLocaleSeo, createBody, createNode, createPage, createProject, customSchemaError, deepClone, defaultBreakpoints, defaultSettings, deleteComponent, dependencyOrder, describeMigration, detachInstance, duplicateComponent, effectiveClasses, entryRoutePath, fieldNameError, fieldValueError, findNode, findParent, fontError, fontFormatForUrl, formConfigError, formEnabled, formName, hasAncestorOfType, hasDetailRoutes, hasNodeState, inheritedInstanceValue, interactionGroupKey, interactionStateKey, isAllowedAttribute, isComponentType, isEmittableToken, isEntryScopeRoot, isInstancePart, isInstanceWrapper, isKnownElement, isLeafElement, isLocalizableAttribute, isNodeHidden, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isTranslatableType, isValidClass, isValidToken, lucideNameOf, lucideSvg, masterToHtml, matchClass, mergeAttributeLayers, mergeClassLayers, migrateProject, nestedComponentNames, nodesByShortId, normalizeComponentName, pageToHtml, parseHtml, pickedKeys, purgeLocaleSeo, pushMasterStructure, removeVariantAxis, removeVariantOption, renameComponent, renameVariantAxis, renameVariantOption, resolveInstanceValue, resolvePicks, resolveSliderConfig, sameLayerProperty, sameProperty, sameType, sanitizeAttributes, sanitizeInlineSvg, sanitizeRich, setComponentCategory, setComponentMeta, setInstancePick, setNodeHidden, setStyleTokens, setVariantAxes, setVariantClasses, setVariantDefault, shortIds, slugify, stripExtractedInstanceState, stripNodeState, tagForType, tokenError, typeForTag, typeOptionsFor, validateAnimation, validateBinding, validateMotionSettings, validateSliderConfig, validateTree, variantKey, walkNodes };

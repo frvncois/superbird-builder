@@ -20,7 +20,7 @@ import DrawerField from './DrawerField.vue'
 import DrawerSection from './DrawerSection.vue'
 import { useCollections } from '@/composables/useCollections'
 import { useModal } from '@/composables/useModal'
-import { FIELD_TYPES, isRefType, setFieldType } from '@/lib/collectionFields'
+import { FIELD_TYPES, fieldNameError, isRefType, setFieldType } from '@/lib/collectionFields'
 import { collectionRouteBase, hasDetailRoutes } from '@/lib/shared/slug.js'
 import type { CollectionField } from '@/types/editor'
 
@@ -49,6 +49,13 @@ const collectionOptions = computed(() =>
 const onType = (field: CollectionField, type: string | undefined) => {
   if (type) setFieldType(field, type as CollectionField['type'], collections.value)
 }
+
+/** why the name in the box cannot be used, or null — a name an ENTRY already
+ *  uses for itself (`slug`, `status`, …) renders from `values` and then
+ *  disagrees with the entry's own value wherever a route is computed. Shown
+ *  rather than blocked: the box is being typed in, and a half-typed name is
+ *  not an error yet. */
+const nameIssue = (field: CollectionField) => fieldNameError(field.name)
 
 /** the options list, deduped and trimmed. Renaming an option does NOT rewrite
  *  the entries holding the old value — they simply read as unset in the picker
@@ -150,6 +157,7 @@ async function onDelete() {
               @click="removeField(collection, field.id)"
             />
           </div>
+          <p v-if="nameIssue(field)" class="text-[10px] text-danger">{{ nameIssue(field) }}</p>
           <SelectUI
             :model-value="field.type"
             :options="FIELD_TYPES"

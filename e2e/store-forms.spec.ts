@@ -52,6 +52,24 @@ const snapshot = () => ({
                   ],
                 },
                 { id: 'f4', type: 'checkbox', attributes: { name: 'optin' }, children: [] },
+                // a select inside a COMPONENT INSTANCE. Its option values live
+                // on the master, so reading the page nodes recorded
+                // `options: ["", ""]` in the manifest and the endpoint then
+                // refused every value the page actually offers (E15).
+                {
+                  id: 'f6',
+                  type: 'RoleField',
+                  children: [
+                    {
+                      id: 'p1',
+                      type: 'select',
+                      children: [
+                        { id: 'p2', type: 'option', content: '', children: [] },
+                        { id: 'p3', type: 'option', content: '', children: [] },
+                      ],
+                    },
+                  ],
+                },
                 {
                   id: 'f5',
                   type: 'form-success',
@@ -64,7 +82,31 @@ const snapshot = () => ({
       ],
     },
   ],
-  components: [], collections: [], interactions: [], animations: [], breakpoints: [], comments: [],
+  components: [
+    {
+      id: 'c1',
+      name: 'RoleField',
+      root: {
+        id: 'm0',
+        type: 'RoleField',
+        content: '',
+        children: [
+          {
+            id: 'm1',
+            type: 'select',
+            content: '',
+            classes: 'appearance-none border px-2',
+            attributes: { name: 'role' },
+            children: [
+              { id: 'm2', type: 'option', content: 'designer', children: [] },
+              { id: 'm3', type: 'option', content: 'engineer', children: [] },
+            ],
+          },
+        ],
+      },
+    },
+  ],
+  collections: [], interactions: [], animations: [], breakpoints: [], comments: [],
   locales: ['en'], defaultLocale: 'en',
   settings: {
     publishing: { method: 'server', github: { repo: '', branch: 'main' }, apiOrigin: '' },
@@ -465,6 +507,37 @@ test.describe('reading submissions', () => {
     expect(form.form).toBeUndefined()
 
     await contributor.dispose()
+    await admin.dispose()
+  })
+})
+
+test.describe('a select inside a component instance', () => {
+  // E15: an <option>'s value and text live on the MASTER when the select sits
+  // inside an instance, which is how the guide tells you to build a field. The
+  // manifest read the page nodes, recorded `options: ["", ""]`, and the
+  // endpoint then refused "designer" — the value the page itself offers — with
+  // "role is not one of the offered values". A visitor got a 400 for picking
+  // the first option in the list.
+  test('the value the page offers is accepted, and a made-up one is not', async ({ baseURL }) => {
+    const admin = await adminContext(baseURL)
+    await ensurePublished(admin)
+
+    const good = await post(await visitor(baseURL), { ...GOOD, role: 'designer' })
+    expect(good.status()).toBe(200)
+    expect(await good.json()).toMatchObject({ ok: true })
+
+    const bad = await post(await visitor(baseURL), { ...GOOD, role: 'ceo' })
+    expect(bad.status()).toBe(400)
+    expect((await bad.json()).field).toBe('role')
+
+    // the stored row carries the value, not an empty string
+    const read = await (await admin.get(`/api/forms/${FORM_ID}/submissions`)).json()
+    expect(JSON.stringify(read.submissions)).toContain('designer')
+
+    // leave the store as it was found: submissions outlive a publish, and a
+    // later spec's Forms panel lists every form that still has one — including
+    // this file's, as "(removed)"
+    expect((await admin.delete(`/api/forms/${FORM_ID}/submissions`)).ok()).toBeTruthy()
     await admin.dispose()
   })
 })

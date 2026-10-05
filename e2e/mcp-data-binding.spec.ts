@@ -264,3 +264,43 @@ test.describe('class variants', () => {
     expect(why).not.toContain('did you mean')
   })
 })
+
+// E40: an entry carries `name` and `slug` as its OWN properties — both are
+// top-level keys of an upsert_entries item, and the entry's route is built from
+// its slug — so a FIELD by either name is a second value with the same name,
+// and every route and `@item` link uses the other one.
+test.describe('reserved field names', () => {
+  test('`name` and `slug` are refused, with the reason', async () => {
+    const s = await mcpSession()
+    const col = (await s.call('create_collection', { name: 'post' })).collection
+    const r = await s.call('update_collection', {
+      collectionId: col.id,
+      addFields: [{ name: 'slug', type: 'text' }, { name: 'name', type: 'text' }],
+    })
+    // `update_collection` applies field by field, so the refusal is `partial`
+    // with the reason, not a failed call
+    expect(r.partial).toBe(true)
+    expect(JSON.stringify(r.errors)).toContain('slug')
+    expect(JSON.stringify(r.errors)).toContain("entry's OWN property")
+    // and nothing landed
+    const after = await s.call('get_collection', { collectionId: col.id })
+    expect((after.fields as { name: string }[]).map((f) => f.name)).toEqual(['title'])
+  })
+
+  test('every other name is fine, `status` included', async () => {
+    const s = await mcpSession()
+    const col = (await s.call('create_collection', { name: 'post' })).collection
+    const r = await s.call('update_collection', {
+      collectionId: col.id,
+      addFields: [
+        // a status field is what a `data-[status=…]:` class matches on — the
+        // reservation must not reach it
+        { name: 'status', type: 'select', options: ['draft', 'live'] },
+        { name: 'slug-override', type: 'text' },
+        { name: 'display-name', type: 'text' },
+      ],
+    })
+    expect(r.errors).toBeUndefined()
+    expect(r.partial).toBeUndefined()
+  })
+})

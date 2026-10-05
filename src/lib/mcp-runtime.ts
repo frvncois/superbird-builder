@@ -234,7 +234,12 @@ export { SLIDER_DEFAULTS, validateSliderConfig, resolveSliderConfig } from './sh
 // forms: the config validator (edit_elements {form}) and the field reader the
 // publish warnings use — the same functions the Data panel and the exporter run
 export { collectFormFields, formConfigError, formEnabled, formName } from './shared/forms.js'
-export { fieldValueError, isTranslatableType } from './collectionFields'
+export {
+  fieldValueError,
+  fieldNameError,
+  isTranslatableType,
+  RESERVED_FIELD_NAMES,
+} from './collectionFields'
 
 // --- interaction key identity + vocabulary (src/lib/shared/interactionKeys.js).
 // The MCP validates bindings against the SAME trigger/action lists the editor,

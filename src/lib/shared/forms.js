@@ -74,6 +74,9 @@ export const isFormControl = (type) => Object.hasOwn(CONTROL_KINDS, type)
  * optional textarea was hidden, and put a field the page never shows into the
  * manifest's allowlist.
  *
+ * `opts.content(node)` is the matching read for an element's TEXT, used for a
+ * `<select>`'s option values. Omitted = the node's own.
+ *
  * Returns `{fields, unnamed, duplicates}`. `fields` is what the manifest
  * stores and the endpoint allowlists against.
  */
@@ -83,6 +86,8 @@ export function collectFormFields(formNode, resolve, opts) {
   const seen = new Map()
 
   const attrsOf = (node) => (resolve ? resolve(node) ?? {} : node.attributes ?? {})
+  const contentOf = (node) =>
+    (opts && opts.content ? opts.content(node) : undefined) ?? node.content ?? ''
 
   const walk = (node) => {
     if (!node || typeof node !== 'object') return
@@ -109,7 +114,7 @@ export function collectFormFields(formNode, resolve, opts) {
           required: attrs.required === '' || attrs.required === 'required' || attrs.required === 'true',
           maxLength: capFor(kind, attrs.maxlength),
         }
-        if (kind === 'select') field.options = optionValues(node)
+        if (kind === 'select') field.options = optionValues(node, attrsOf, contentOf)
         if (kind === 'radio' || kind === 'checkbox') {
           field.value = String(attrs.value ?? 'on')
         }
@@ -155,13 +160,23 @@ function capFor(kind, maxlength) {
   return Number.isFinite(own) && own > 0 ? Math.min(own, ceiling) : ceiling
 }
 
-/** the values a `<select>` offers, from its option children */
-function optionValues(node) {
+/**
+ * The values a `<select>` offers, from its option children.
+ *
+ * `attrsOf`/`contentOf` are the caller's resolvers, the same ones the rest of
+ * this walk uses — an `<option>` inside a component INSTANCE carries no value
+ * and no text of its own, both come from the master. Reading the raw node
+ * recorded `options: ["", ""]` in the manifest, and the endpoint then refused
+ * every value the page actually offers: a visitor picking "Designer" got a 400
+ * saying "role is not one of the offered values".
+ */
+function optionValues(node, attrsOf, contentOf) {
   const out = []
   for (const child of node.children ?? []) {
     if (child.type !== 'option') continue
-    const attrs = child.attributes ?? {}
-    out.push(String(attrs.value ?? child.content ?? ''))
+    const attrs = attrsOf(child)
+    const value = attrs.value ?? contentOf(child)
+    out.push(String(value ?? ''))
   }
   return out
 }

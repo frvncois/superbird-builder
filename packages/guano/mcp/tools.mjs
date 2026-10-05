@@ -120,6 +120,7 @@ export function createToolSet({ api, runtime, elicit, hasElicitation = () => nul
     isLeafElement,
     isInstancePart,
     fieldValueError,
+    fieldNameError,
     isTranslatableType,
     isRich,
     sanitizeRich,
@@ -3786,10 +3787,22 @@ function designWarnings(project) {
           undefined,
         )
       },
-      // a part this instance hides is not exported, so it cannot be an unnamed
-      // control: a Field component with an optional hidden textarea reported
-      // "N control(s) have no usable name" on a form that collects correctly
-      { hidden: (child) => isNodeHidden(child, mm?.get(child.id)) },
+      {
+        // a part this instance hides is not exported, so it cannot be an
+        // unnamed control: a Field component with an optional hidden textarea
+        // reported "N control(s) have no usable name" on a form that collects
+        // correctly
+        hidden: (child) => isNodeHidden(child, mm?.get(child.id)),
+        // an <option> inside an instance takes its value/text from the master
+        content: (child) => {
+          const mapping = mm?.get(child.id)
+          return (
+            child.content ||
+            (mapping ? [...mapping.mirrors, mapping.master].map((n) => n.content).find(Boolean) : '') ||
+            ''
+          )
+        },
+      },
     )
     if (!fields.length) {
       formIssues.push(
@@ -8551,6 +8564,14 @@ const tools = [
           errors.push(`field "${name}": names are lowercase kebab-case ([a-z][a-z0-9-]*)`)
           continue
         }
+        // a name an ENTRY already uses for itself (E40): `slug` renders from
+        // values.slug and then disagrees with the entry's real slug everywhere
+        // a route or an @item link is computed
+        const reserved = fieldNameError(name)
+        if (reserved) {
+          errors.push(`field "${name}": ${reserved}`)
+          continue
+        }
         if ((c.fields ?? []).some((x) => x.name === name)) {
           errors.push(`field "${name}" already exists`)
           continue
@@ -8587,6 +8608,10 @@ const tools = [
       await saveTargetProject(project)
       return {
         saved: true,
+        // one rule everywhere: `saved` says the store was written, `partial`
+        // says not all of what was asked for landed (see GUIDE, "A partial
+        // batch is not a failed batch")
+        ...(errors.length ? { partial: true } : {}),
         fields: (c.fields ?? []).map(fieldView),
         ...(errors.length ? { errors } : {}),
         ...(warnings.length ? { warnings } : {}),

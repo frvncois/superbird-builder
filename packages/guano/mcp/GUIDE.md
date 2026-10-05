@@ -153,7 +153,10 @@ the document.
 Every write returns a `version`; pass the latest to the next write on that page. The
 version hashes exactly what `get_page` shows — the HTML plus name/slug/status — so a
 node-only edit (an interaction, a translation, a slider's config) returns the SAME
-version, which is not a lost write. A `stale-version` rejection means someone else
+version, which is not a lost write. That is by design, not a bug to report: those
+things are node state the HTML reports and does not carry, so they survive every
+structure write by construction, and a version that moved when a binding changed would
+reject the next write for no reason. A `stale-version` rejection means someone else
 edited: re-run `get_page` and retry. **Destructive operations need a fresh version
 too**: `delete_page` takes the page's version from your last `get_page`/`list_pages`, so
 a page edited since your read is never deleted on stale information. A component has its
@@ -851,6 +854,13 @@ false with existing overrides warns with their count — they turn inert but sta
 storage, so flipping back restores them),
 add entries with `upsert_entries {entries: [...]}` — one call, one or many, in one
 call (`values` maps field *names* to strings), and bind elements with `[field]` args.
+
+**`name` and `slug` cannot be field names.** An entry carries each as its own property —
+both are top-level keys of an `upsert_entries` item, and the entry's route is built from
+its `slug` — so a FIELD by either name would be a second value with the same name, and
+every route and `@item` link would use the other one. `update_collection` refuses them.
+Every other name is fine: a `status` field is ordinary (it is what a
+`data-[status=waiting]:` class matches on).
 
 **Every SCALAR value is a string**, including `number` ("12") and `boolean`
 ("true"/"false") — one storage shape, so a bound attribute, a `data-[…]:` variant and a
@@ -2010,6 +2020,14 @@ reported as unnamed and silently never reaches you. `name` starting with `_` is 
 the runtime. A `type="email"`, `tel`, `url` or `number` input is validated server-side as
 that kind, a `<select>`'s value must be one of its options, and `maxlength` tightens the
 per-kind cap (it can never raise it).
+
+**What is checked is what the markup DECLARES.** A plain `<input name="email" />` is a
+text field and accepts anything — the email check comes from `type="email"`, so write the
+type you mean. A `<select>` is checked against the options in the markup, so a select
+with no `<option>` children allows any value: the validation can only be as specific as
+the control. A hidden control is not exported and not accepted. And never collect a
+password or a card number: submissions are stored as plain text, readable by every
+editor, and `publish` warns when a form asks for one.
 
 **`form-success` and `form-error` are elements**, direct children of the form, at most one
 each. They are emitted hidden and shown after a submission, so style them like anything else

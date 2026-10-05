@@ -1481,9 +1481,21 @@ function collectManifest(manifest, forms, routePath, route) {
             undefined,
           )
         },
-        // renderNode never emits a hidden node, so its name must not reach the
-        // manifest's allowlist either
-        { hidden: (child) => isNodeHidden(child, mm?.get(child.id)) },
+        {
+          // renderNode never emits a hidden node, so its name must not reach
+          // the manifest's allowlist either
+          hidden: (child) => isNodeHidden(child, mm?.get(child.id)),
+          // and an <option>'s value/text comes from the master when it sits
+          // inside an instance — the same chain renderNode reads
+          content: (child) => {
+            const mapping = mm?.get(child.id)
+            return (
+              child.content ||
+              (mapping ? [...mapping.mirrors, mapping.master].map((n) => n.content).find(Boolean) : '') ||
+              ''
+            )
+          },
+        },
       )
       entry.fields = fields
     }
