@@ -2,7 +2,7 @@
 
 Guano is a self-hosted visual website builder. You build pages on a live canvas
 with a layers tree — insert and arrange elements, style them with Tailwind classes,
-add interactions, build reusable components (or start from the bundled library) and
+add interactions, build reusable components and
 CMS collections, translate into locales, leave comments, and work in drafts before
 applying to the live site. Publishing compiles everything to a fully static site (plain HTML +
 one CSS file + a ~1.5 KB runtime) that the built-in server hosts at `/` — or
@@ -138,5 +138,5 @@ sharing your modifications with those users.
 
 **Your exported sites are entirely yours.** The AGPL never touches the sites Guano
 produces, and the small runtime scripts embedded in them (`assets/script.js`,
-`assets/motion.js`) are deliberately MIT-licensed so no copyleft question can ever
+`assets/motion.js`, `assets/slider.js`) are deliberately MIT-licensed so no copyleft question can ever
 attach to a published site — see [LICENSE-EXCEPTIONS.md](LICENSE-EXCEPTIONS.md).
