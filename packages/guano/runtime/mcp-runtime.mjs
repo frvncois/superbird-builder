@@ -7089,6 +7089,28 @@ var SLIDER_DOT_BASE = "size-2 rounded-full bg-current transition-opacity";
 `${SLIDER_DOT_BASE}`;
 `${SLIDER_DOT_BASE}`;
 //#endregion
+//#region src/lib/collectionFields.ts
+/**
+* Never translated, whatever `localize` says: a quantity, a yes/no and a
+* stored choice key read the same in every language. The worklist and the
+* publish warning both skip them, so "nothing left to translate" stays true.
+*/
+var isTranslatableType = (t) => t === "text";
+/** a value this field can actually hold, or the reason it cannot. One
+*  implementation: the panel, `upsert_entries` and the import all ask it, so a
+*  value the editor accepts is one the agent can write and vice versa. */
+function fieldValueError(field, value) {
+	if (value === "") return null;
+	if (field.type === "number") return Number.isFinite(Number(value)) ? null : `"${value}" is not a number`;
+	if (field.type === "boolean") return value === "true" || value === "false" ? null : `"${value}" is not "true" or "false"`;
+	if (field.type === "select") {
+		const options = field.options ?? [];
+		if (!options.length) return `"${field.name}" has no options yet — add them to the field first`;
+		return options.includes(value) ? null : `"${value}" is not one of ${options.map((o) => `"${o}"`).join(", ")}`;
+	}
+	return null;
+}
+//#endregion
 //#region src/lib/shared/interactionKeys.js
 /**
 * The key interaction STATE is held under: one boolean per (interaction, target)
@@ -7158,4 +7180,4 @@ function isSymmetricTrigger(trigger) {
 	return SYMMETRIC_TRIGGERS.has(trigger);
 }
 //#endregion
-export { APPEAR_MODES, BUILTIN_LIST_SOURCES, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, ELIDED_DATA_URL, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MAX_DEPTH, MAX_INPUT, MAX_SVG_BYTES, MOTION_PROPS, NODE_STATE_KEYS, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, SCHEMA_VERSION, SCROLL_LERP_MAX, SCROLL_LERP_MIN, SLIDER_DEFAULTS, STYLE_SECTIONS, TOKEN_NAME_RE, TRANSITION_DEFAULTS, TRANSITION_PRESET_IDS, VARIANT_NAME_RE, addVariantAxis, addVariantOption, adoptStructure, alignMirrors, alignStructure, applyClass, applyHtml, buildInstanceMap, buildScopeRoots, canNest, cloneForMaster, collectFormFields, compileAnimation, componentReaches, componentUsage, contextFromProject, countLocaleSeo, createBody, createNode, createPage, createProject, customSchemaError, deepClone, defaultBreakpoints, defaultSettings, deleteComponent, dependencyOrder, describeMigration, detachInstance, duplicateComponent, effectiveClasses, findNode, findParent, fontError, fontFormatForUrl, formConfigError, formEnabled, formName, hasAncestorOfType, hasNodeState, inheritedInstanceValue, interactionGroupKey, interactionStateKey, isAllowedAttribute, isComponentType, isEmittableToken, isEntryScopeRoot, isInstancePart, isInstanceWrapper, isKnownElement, isLeafElement, isLocalizableAttribute, isNodeHidden, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isValidClass, isValidToken, lucideNameOf, lucideSvg, masterToHtml, matchClass, mergeAttributeLayers, mergeClassLayers, migrateProject, nestedComponentNames, nodesByShortId, normalizeComponentName, pageToHtml, parseHtml, pickedKeys, purgeLocaleSeo, pushMasterStructure, removeVariantAxis, removeVariantOption, renameComponent, renameVariantAxis, renameVariantOption, resolveInstanceValue, resolvePicks, resolveSliderConfig, sameLayerProperty, sameProperty, sameType, sanitizeAttributes, sanitizeInlineSvg, sanitizeRich, setComponentCategory, setComponentMeta, setInstancePick, setNodeHidden, setStyleTokens, setVariantAxes, setVariantClasses, setVariantDefault, shortIds, slugify, stripExtractedInstanceState, stripNodeState, tagForType, tokenError, typeForTag, typeOptionsFor, validateAnimation, validateBinding, validateMotionSettings, validateSliderConfig, validateTree, variantKey, walkNodes };
+export { APPEAR_MODES, BUILTIN_LIST_SOURCES, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, ELIDED_DATA_URL, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MAX_DEPTH, MAX_INPUT, MAX_SVG_BYTES, MOTION_PROPS, NODE_STATE_KEYS, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, SCHEMA_VERSION, SCROLL_LERP_MAX, SCROLL_LERP_MIN, SLIDER_DEFAULTS, STYLE_SECTIONS, TOKEN_NAME_RE, TRANSITION_DEFAULTS, TRANSITION_PRESET_IDS, VARIANT_NAME_RE, addVariantAxis, addVariantOption, adoptStructure, alignMirrors, alignStructure, applyClass, applyHtml, buildInstanceMap, buildScopeRoots, canNest, cloneForMaster, collectFormFields, compileAnimation, componentReaches, componentUsage, contextFromProject, countLocaleSeo, createBody, createNode, createPage, createProject, customSchemaError, deepClone, defaultBreakpoints, defaultSettings, deleteComponent, dependencyOrder, describeMigration, detachInstance, duplicateComponent, effectiveClasses, fieldValueError, findNode, findParent, fontError, fontFormatForUrl, formConfigError, formEnabled, formName, hasAncestorOfType, hasNodeState, inheritedInstanceValue, interactionGroupKey, interactionStateKey, isAllowedAttribute, isComponentType, isEmittableToken, isEntryScopeRoot, isInstancePart, isInstanceWrapper, isKnownElement, isLeafElement, isLocalizableAttribute, isNodeHidden, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isTranslatableType, isValidClass, isValidToken, lucideNameOf, lucideSvg, masterToHtml, matchClass, mergeAttributeLayers, mergeClassLayers, migrateProject, nestedComponentNames, nodesByShortId, normalizeComponentName, pageToHtml, parseHtml, pickedKeys, purgeLocaleSeo, pushMasterStructure, removeVariantAxis, removeVariantOption, renameComponent, renameVariantAxis, renameVariantOption, resolveInstanceValue, resolvePicks, resolveSliderConfig, sameLayerProperty, sameProperty, sameType, sanitizeAttributes, sanitizeInlineSvg, sanitizeRich, setComponentCategory, setComponentMeta, setInstancePick, setNodeHidden, setStyleTokens, setVariantAxes, setVariantClasses, setVariantDefault, shortIds, slugify, stripExtractedInstanceState, stripNodeState, tagForType, tokenError, typeForTag, typeOptionsFor, validateAnimation, validateBinding, validateMotionSettings, validateSliderConfig, validateTree, variantKey, walkNodes };

@@ -406,7 +406,9 @@ The `guano mcp` server (`packages/guano/mcp/`) shipped Phases 0–8. Known, deli
   export method; zip/github stay editor-only.
 - **M4 — comments are read/written on the target blob.** They're shared across
   drafts and never merged, so a reply added to a draft isn't visible on Main
-  until the human is on that target. No `create_comment` tool (reply only).
+  until the human is on that target. (`create_comment` now exists — the
+  reply-only half of this entry is resolved; the shared-across-drafts part is
+  the behaviour, not a gap.)
 - **M5 — RESOLVED.** Component masters *are* editable over MCP: `edit_elements`
   redirects class and interaction edits on an instance element to the mapped
   master, `onMaster: true` writes shared content/src, `update_component` replaces
@@ -415,12 +417,11 @@ The `guano mcp` server (`packages/guano/mcp/`) shipped Phases 0–8. Known, deli
 - **M7 — no truly empty leaf.** `content: ""` clears back to the element's
   placeholder, so a text leaf can't render empty; build decorative rules and
   spacers from styled `div` containers instead.
-- **M9 — interactions are class-swap only.** Hover/click/appear toggling Tailwind
-  classes. No timeline or scroll-driven animation (scroll smoothing, per-character
-  text reveals, clip-path wipes, marquees, route transitions), and no tool for
-  breakpoints, domain/smtp/publishing config, per-page script injection, media
-  folder management, asset rename/delete, collection rename, or creating comment
-  threads.
+- **M9 — OUTDATED as written.** Timelines shipped (`project.animations` +
+  `useMotion`), and so did breakpoints, design tokens, `update_page`, and
+  `create_comment`. What is still missing: smtp/publishing config, per-page
+  script injection, media folder management, asset rename/delete, collection
+  rename, and per-entry JSON-LD.
 
 Stress run #2 ("field-notes", 2026-09-13) — deferred items. Fixed in the same
 pass (not listed here): dead cross-instance binds refused, `entryId` exposed for
@@ -841,7 +842,11 @@ finding.
 
 ### Still open from this run
 
-Everything E1–E16 named is fixed. What the run surfaced and this pass did NOT do:
+Everything E1–E16 named is fixed, and a second pass added the rest of the report's
+Top 10: CMS field types `number`/`boolean`/`select` (one catalog in
+`lib/collectionFields.ts`, shared by the panel and the tools), `create_comment`, and
+`update_page {name, slug, status}` — the reference-slug filter and `update_page` were
+already in the first pass. What the run surfaced and is still NOT done:
 
 - **The renderer-drift sweep.** E1, E3 and E4 were each one half of a pair
   (`useRenderNode` vs `export.mjs`) disagreeing, and all three were invisible because
@@ -852,12 +857,13 @@ Everything E1–E16 named is fixed. What the run surfaced and this pass did NOT 
 - **`equalsCurrentField`** (E21): "entries whose `category` equals the CURRENT entry's
   `category`" — the related-items pattern. `equalsCurrent` covers the child-collection
   case only. `listQuery.filter` would need a field-to-field comparison.
-- **CMS field types `number`, `boolean`, `select`.** `update_collection` takes text,
-  image, date, reference, multi-reference, multi-image. A select field also needs an
-  options list and a value→label map, which is what the run wanted for a status shown
-  as visible text and translated per locale.
-- **`create_comment`** (M4 already records it): agents can reply to a thread and not
-  start one.
+- **A value→label map for a `select`.** The types shipped; the map did not. A status
+  renders as its VALUE unless the page draws a `<span>` per option behind a
+  `data-[…]:` variant, which is what the guide now tells you to do — it translates
+  properly and keeps the stored key stable, but it is markup the author writes rather
+  than something the field offers. A per-locale label list on the field would remove
+  that step; it would also put translatable strings on a non-translatable field, which
+  is why it was not done on the way past.
 - **Per-template JSON-LD** with `{field}` tokens, per entry.
 - **E18, `mainIsEmpty`** — unresolved either way. `projectStats` says a page with an
   empty body IS empty, which contradicts the report. Needs the blob that produced it

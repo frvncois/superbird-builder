@@ -50,6 +50,16 @@ const onType = (field: CollectionField, type: string | undefined) => {
   if (type) setFieldType(field, type as CollectionField['type'], collections.value)
 }
 
+/** the options list, deduped and trimmed. Renaming an option does NOT rewrite
+ *  the entries holding the old value — they simply read as unset in the picker
+ *  until someone picks again, which is visible, where a silent rewrite would
+ *  not be. */
+function setOptions(field: CollectionField, text: string) {
+  const next = [...new Set(text.split('\n').map((o) => o.trim()).filter(Boolean))]
+  if (next.length) field.options = next
+  else delete field.options
+}
+
 // --- URL prefix: committed on blur/Enter. Blank restores the default (the
 // collection's own name); '/' puts entries at the site root. ---
 const routed = computed(() => !!collection.value && hasDetailRoutes(collection.value))
@@ -147,6 +157,22 @@ async function onDelete() {
           />
           <DrawerField v-if="isRefType(field.type)" label="Points to">
             <SelectUI v-model="field.refCollectionId" :options="collectionOptions" />
+          </DrawerField>
+          <!-- a choice's options are the VALUES entries store and that
+               `data-[…]:` variants and list filters match on, so they are
+               edited here once rather than typed per entry -->
+          <DrawerField
+            v-if="field.type === 'select'"
+            label="Options"
+            hint="One per line. The stored value — a page renders its own label per option."
+          >
+            <textarea
+              :value="(field.options ?? []).join('\n')"
+              rows="3"
+              spellcheck="false"
+              class="w-full rounded-md border border-border bg-input px-2 py-1 text-xs"
+              @change="(e) => setOptions(field, (e.target as HTMLTextAreaElement).value)"
+            />
           </DrawerField>
           <div v-if="field.type === 'text'" class="flex items-center justify-between gap-2">
             <span class="text-[10px] font-medium text-muted-foreground">Translatable</span>

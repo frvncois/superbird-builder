@@ -20,6 +20,7 @@ import DrawerField from './DrawerField.vue'
 import RichTextInput from '@/components/editor/content/RichTextInput.vue'
 import MediaPickerControl from '@/components/editor/content/MediaPickerControl.vue'
 import { useEntryField } from '@/composables/useEntryField'
+import { fieldValueError } from '@/lib/collectionFields'
 import { useCollections } from '@/composables/useCollections'
 import { useLocale } from '@/composables/useLocale'
 import { useMedia } from '@/composables/useMedia'
@@ -52,6 +53,22 @@ const fallback = computed(() =>
 // upgrades itself the moment it becomes ISO.
 const isIso = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(v)
 const dateType = computed(() => (!text.value || isIso(text.value) ? 'date' : 'text'))
+
+// --- number / yes-no / choice ----------------------------------------------
+// All three store a STRING, like every other scalar, so they ride the same
+// locale-aware model — and all three are non-translatable by type, so that
+// model only ever writes the base value.
+const numberError = computed(() => fieldValueError(props.field, text.value))
+const boolModel = computed({
+  get: () => text.value === 'true',
+  set: (on: boolean) => (text.value = on ? 'true' : 'false'),
+})
+/** the stored VALUE is the option: a page renders its own label per option, so
+ *  the key stays stable while the words translate with the markup */
+const choiceOptions = computed(() => [
+  { label: 'None', value: '' },
+  ...(props.field.options ?? []).map((o) => ({ label: o, value: o })),
+])
 
 // --- references -------------------------------------------------------------
 const refTarget = computed(() =>
@@ -102,6 +119,28 @@ const rawSrc = computed(() => (text.value && !assetForSrc(text.value) ? text.val
       </div>
       <p v-if="rawSrc" class="truncate text-[10px] text-muted-foreground" :title="rawSrc">
         {{ rawSrc }}
+      </p>
+    </template>
+
+    <template v-else-if="field.type === 'number'">
+      <InputUI v-model="text" type="number" :disabled="locked" placeholder="0" />
+      <p v-if="numberError" class="text-[10px] text-danger">{{ numberError }}</p>
+    </template>
+
+    <label v-else-if="field.type === 'boolean'" class="flex items-center gap-2 text-xs">
+      <input v-model="boolModel" type="checkbox" :disabled="locked" class="size-3.5" />
+      {{ boolModel ? 'Yes' : 'No' }}
+    </label>
+
+    <template v-else-if="field.type === 'select'">
+      <SelectUI
+        v-if="field.options?.length"
+        v-model="text"
+        :options="choiceOptions"
+        placeholder="None"
+      />
+      <p v-else class="text-[10px] text-muted-foreground">
+        No options yet — add them to the field in the collection's settings.
       </p>
     </template>
 

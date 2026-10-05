@@ -116,6 +116,8 @@ export function createToolSet({ api, runtime, elicit, hasElicitation = () => nul
     buildScopeRoots,
     isLeafElement,
     isInstancePart,
+    fieldValueError,
+    isTranslatableType,
     isRich,
     sanitizeRich,
     isKnownElement,
@@ -2859,6 +2861,18 @@ function upsertEntryInto(project, c, spec, slugify) {
       } else if (f.type === 'text') {
         const s = String(v)
         cleaned[k] = isRich(s) ? sanitizeRich(s) : s
+      } else if (f.type === 'number' || f.type === 'boolean' || f.type === 'select') {
+        // the same check the panel runs (lib/collectionFields): a value the
+        // editor would refuse is one an agent cannot write either, and a
+        // select's unlisted value is the silent-empty-filter bug again —
+        // nothing would match it and nothing would say so
+        const s = String(v)
+        const why = fieldValueError(f, s)
+        if (why) {
+          rollback()
+          return { ok: false, reason: 'bad-value', field: f.name, message: `field "${f.name}": ${why}` }
+        }
+        cleaned[k] = s
       } else cleaned[k] = String(v)
     }
     Object.assign(entry.values, cleaned)
@@ -2868,7 +2882,13 @@ function upsertEntryInto(project, c, spec, slugify) {
     // the worklist hid it, run #3 HIGH). Refuse the write; CLEARING ("") stays
     // allowed so stale overrides can be cleaned up.
     const frozen = Object.entries(values)
-      .filter(([k, v]) => fieldByName.get(k)?.localize === false && String(v) !== '')
+      .filter(([k, v]) => {
+        const f = fieldByName.get(k)
+        // non-translatable by FLAG, or by TYPE: a quantity, a yes/no and a
+        // stored choice key read the same in every language, so an override
+        // on one is dead data the worklist never asked for
+        return (f?.localize === false || !isTranslatableType(f?.type ?? 'text')) && String(v) !== ''
+      })
       .map(([k]) => k)
     if (frozen.length) {
       rollback()
@@ -3659,6 +3679,9 @@ const fieldView = (f) => ({
   name: f.name,
   type: f.type,
   refCollectionId: f.refCollectionId,
+  // a select's allowed values: without them an agent cannot write the field
+  // at all, and would learn the list only from a refusal
+  ...(f.options?.length ? { options: f.options } : {}),
   ...(f.localize === false ? { localize: false } : {}),
 })
 // entry values and their locale overrides are user-authored copy — fenced so a
@@ -6602,15 +6625,12 @@ const tools = [
   {
     name: 'get_translation_worklist',
     description:
-      'Everything translatable in the project for one registered non-default locale: page ' +
-      'elements with own text (kind "element"), shared component-master text ("master") and ' +
-      'collection-entry fields ("entry"), each with its base text and existing override. This ' +
-      'is large on real sites, so it PAGINATES: pass `countsOnly: true` first to size the job, ' +
-      'then pull with offset/limit and the kind/pageId/componentId/collectionId filters. Header ' +
-      'counters are always project-wide — `missingTranslatable` is the one that tells "done" ' +
-      'from "half done". Items carry flags worth obeying: `looksStructural` (a number, a glyph, ' +
-      'a locale-switcher label — do NOT translate), `shadowsMaster` (translate the element, not ' +
-      'the master), `shadowedByAll` (dead work), `draftPage`. Write the results with ' +
+      'Everything translatable for one registered non-default locale — page text, component ' +
+      'masters, entry fields and attributes — each with its base text and existing override. ' +
+      'Large on real sites, so it PAGINATES: `countsOnly: true` first, then offset/limit and ' +
+      'the kind/pageId/componentId/collectionId filters. `missingTranslatable` is the counter ' +
+      'that tells "done" from "half done", and each item\'s flags (`looksStructural`, ' +
+      '`shadowsMaster`, `shadowedByAll`, `draftPage`) are worth obeying. Write with ' +
       'set_translations. Requires a target. See get_guide {section: "content"}.',
     inputSchema: {
       type: 'object',
@@ -7745,10 +7765,9 @@ const tools = [
       'Change a collection\'s schema with `addFields`, `updateFields` (flip flags on an existing ' +
       'field in place, values survive) and/or `removeFields` (entries keep orphaned values and ' +
       'bindings to the name break). Field names are lowercase kebab-case and become the [name] ' +
-      'binding args. Field types are text (default), image, date, reference, multi-reference ' +
-      'and multi-image; the reference types need refCollectionId. `localize: false` on a text ' +
-      'field marks it non-translatable, so the worklist skips it. Requires a target. See ' +
-      'get_guide {section: "content"}.',
+      'binding args. Field types: text (default), number, boolean, select, image, date, ' +
+      'reference, multi-reference, multi-image — the reference types need refCollectionId, ' +
+      'select needs `options`. Requires a target. See get_guide {section: "content"}.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -7761,9 +7780,17 @@ const tools = [
               name: { type: 'string' },
               type: {
                 type: 'string',
-                enum: ['text', 'image', 'date', 'reference', 'multi-reference', 'multi-image'],
+                enum: [
+                  'text', 'number', 'boolean', 'select',
+                  'image', 'date', 'reference', 'multi-reference', 'multi-image',
+                ],
               },
               refCollectionId: { type: 'string' },
+              options: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'select only (required): the values an entry may hold',
+              },
               localize: { type: 'boolean', description: 'text fields: false = non-translatable (worklist skips it)' },
             },
             required: ['name'],
@@ -7775,12 +7802,13 @@ const tools = [
           type: 'array',
           description:
             'change flags on EXISTING fields in place (values and bindings survive — no ' +
-            'remove/re-add dance): currently `localize` on text fields',
+            'remove/re-add dance): `localize` on text fields, `options` on a select',
           items: {
             type: 'object',
             properties: {
               name: { type: 'string' },
               localize: { type: 'boolean', description: 'text fields: false = non-translatable' },
+              options: { type: 'array', items: { type: 'string' }, description: 'select: the WHOLE list' },
             },
             required: ['name'],
             additionalProperties: false,
@@ -7800,6 +7828,33 @@ const tools = [
         if (!field) {
           errors.push(`no field named "${u.name}" to update`)
           continue
+        }
+        if (u.options !== undefined) {
+          if (field.type !== 'select') {
+            errors.push(`field "${u.name}": options only apply to a select field`)
+            continue
+          }
+          const next = [...new Set(u.options.map(String).filter(Boolean))]
+          if (!next.length) {
+            errors.push(`field "${u.name}": a select needs at least one option`)
+            continue
+          }
+          // entries holding a value that is no longer offered keep it — the
+          // value is what pages match on, so rewriting it would silently
+          // restyle them. Count it instead, so the drift is never invisible.
+          const orphaned = new Set()
+          for (const entry of c.entries ?? []) {
+            const v = entry.values?.[u.name]
+            if (typeof v === 'string' && v && !next.includes(v)) orphaned.add(v)
+          }
+          field.options = next
+          if (orphaned.size) {
+            warnings.push(
+              `field "${u.name}": entries still hold ${[...orphaned].map((o) => `"${o}"`).join(', ')}, ` +
+                'which the new options do not offer — they render as before and cannot be ' +
+                're-picked until the value is added back or the entries are updated',
+            )
+          }
         }
         if (u.localize !== undefined) {
           if (field.type !== 'text') {
@@ -7862,12 +7917,20 @@ const tools = [
             continue
           }
         }
+        // a choice with no options can hold nothing, so every write to it
+        // would be refused — say so now rather than once per entry
+        const options = type === 'select' ? [...new Set((f.options ?? []).map(String).filter(Boolean))] : null
+        if (type === 'select' && !options.length) {
+          errors.push(`field "${name}": a select needs \`options\` — the values an entry may hold`)
+          continue
+        }
         c.fields = c.fields ?? []
         c.fields.push({
           id: randomUUID(),
           name,
           type,
           ...(f.refCollectionId ? { refCollectionId: f.refCollectionId } : {}),
+          ...(options ? { options } : {}),
           ...(type === 'text' && f.localize === false ? { localize: false } : {}),
         })
       }
@@ -7988,6 +8051,71 @@ const tools = [
           })),
         })),
       })
+    },
+  },
+  {
+    name: 'create_comment',
+    description:
+      'Start a comment thread on a page, optionally anchored to an element (`ref` or `id`), ' +
+      'authored as the token owner. Use it to leave a note for the human where the work is — ' +
+      'a decision you took, something you could not build — not to narrate what you did. ' +
+      'Requires a target.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        pageId: { type: 'string' },
+        text: { type: 'string' },
+        ref: { type: 'string', description: 'anchor the pin to this element (a #ref, without the #)' },
+        id: { type: 'string', description: 'anchor the pin to this element id' },
+      },
+      required: ['pageId', 'text'],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const { project } = await loadTargetProject()
+      const page = findPage(project, args.pageId)
+      const text = String(args.text ?? '').trim()
+      if (!text) throw new Error('comment text is required')
+
+      // an anchor is optional: without one the thread belongs to the page,
+      // which is where "this page needs a decision" goes
+      let anchor
+      const key = args.id ?? (args.ref ? refNodeId(page, args.ref) : null)
+      if (args.ref && !key) {
+        throw new Error(`no element with ref "#${args.ref}" on this page (get_page elements:"refs" lists them)`)
+      }
+      if (key) {
+        const nodeId = fullNodeId(page.elements ?? [], key)
+        if (!findNode(page.elements ?? [], nodeId)) {
+          throw new Error(`no element "${key}" on this page — a comment anchored to nothing would never show`)
+        }
+        // the pin sits at the middle of the element's box; the editor
+        // reflows it from the node's live rect, so a fraction is all it needs
+        anchor = { nodeId, rx: 0.5, ry: 0.5 }
+      }
+      const user = await whoami()
+      const comment = {
+        id: randomUUID(),
+        pageId: page.id,
+        ...(anchor ? { anchor } : {}),
+        text,
+        author: user.name || user.email,
+        resolved: false,
+        createdAt: Date.now(),
+        replies: [],
+      }
+      project.comments = project.comments ?? []
+      project.comments.push(comment)
+      await saveTargetProject(project)
+      return {
+        saved: true,
+        commentId: comment.id,
+        pageId: page.id,
+        ...(anchor ? { anchoredTo: anchor.nodeId } : {}),
+        note:
+          'Comments are shared across drafts and are never merged, so the human sees this ' +
+          'wherever they are working.',
+      }
     },
   },
   {

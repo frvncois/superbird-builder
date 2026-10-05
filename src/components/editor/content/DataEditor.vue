@@ -630,6 +630,15 @@ function onFieldTypeChange(field: CollectionField, type: CollectionField['type']
   setFieldType(field, type, collections.value)
 }
 
+/** a choice's options, deduped and trimmed. Entries holding a value that is no
+ *  longer offered KEEP it — pages match on the value, so rewriting would
+ *  silently restyle them; the picker simply reads as unset until someone picks. */
+function setFieldOptions(field: CollectionField, text: string) {
+  const next = [...new Set(text.split('\n').map((o) => o.trim()).filter(Boolean))]
+  if (next.length) field.options = next
+  else delete field.options
+}
+
 // --- binding resolution (possibly through a reference hop) ---
 
 interface ResolvedBinding {
@@ -919,6 +928,16 @@ const src = computed({
         </RowUI>
         <RowUI v-if="isRefType(field.type)" label="To">
           <SelectUI v-model="field.refCollectionId" :options="collectionOptions" />
+        </RowUI>
+        <!-- kept in step with CollectionSettingsEditor's copy of this editor -->
+        <RowUI v-if="field.type === 'select'" label="Options">
+          <textarea
+            :value="(field.options ?? []).join('\n')"
+            rows="3"
+            spellcheck="false"
+            class="w-full rounded-md border border-border bg-input px-2 py-1 text-xs"
+            @change="(e) => setFieldOptions(field, (e.target as HTMLTextAreaElement).value)"
+          />
         </RowUI>
         <RowUI v-if="field.type === 'text'" label="Translatable">
           <ToggleUI

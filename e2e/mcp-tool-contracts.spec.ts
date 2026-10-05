@@ -572,3 +572,267 @@ test.describe('addressing a component instance’s parts', () => {
     expect(JSON.stringify(r)).toContain('component instance')
   })
 })
+
+// A collection could hold text, media, dates and references, and nothing else —
+// so a price, a yes/no and a status had to be typed as free text, which sorts
+// wrong, cannot be validated, and shows up in the translation worklist as if
+// "waiting" were prose. All three store a STRING like every other scalar.
+test.describe('number, boolean and choice fields', () => {
+  async function seeded() {
+    const s = await mcpSession()
+    const c = (await s.call('create_collection', { name: 'gear', detailRoutes: false }))
+      .collection
+    const r = await s.call('update_collection', {
+      collectionId: c.id,
+      addFields: [
+        { name: 'price', type: 'number' },
+        { name: 'featured', type: 'boolean' },
+        { name: 'status', type: 'select', options: ['waiting', 'active', 'archived'] },
+      ],
+    })
+    expect(r.errors).toBeUndefined()
+    return { s, c }
+  }
+
+  test('a select reports its options, so they can be written without guessing', async () => {
+    const { s, c } = await seeded()
+    const fields = (await s.call('get_collection', { collectionId: c.id })).fields
+    const status = fields.find((f: { name: string }) => f.name === 'status')
+    expect(status.options).toEqual(['waiting', 'active', 'archived'])
+    // and the scalar types carry no options key at all
+    expect(fields.find((f: { name: string }) => f.name === 'price').options).toBeUndefined()
+  })
+
+  test('a select with no options is refused — every write to it would be', async () => {
+    const s = await mcpSession()
+    const c = (await s.call('create_collection', { name: 'gear', detailRoutes: false }))
+      .collection
+    const r = await s.call('update_collection', {
+      collectionId: c.id,
+      addFields: [{ name: 'status', type: 'select' }],
+    })
+    expect(JSON.stringify(r.errors)).toContain('options')
+    expect((await s.call('get_collection', { collectionId: c.id })).fields).toHaveLength(1)
+  })
+
+  test('a value the field cannot hold is refused by name, not stored', async () => {
+    const { s, c } = await seeded()
+    const r = await s.call('upsert_entries', {
+      collectionId: c.id,
+      entries: [
+        { name: 'Kayak', values: { price: 'twelve' } },
+        { name: 'Tent', values: { featured: 'yes' } },
+        { name: 'Rope', values: { status: 'pending' } },
+        { name: 'Paddle', values: { price: '120', featured: 'true', status: 'active' } },
+      ],
+    })
+    expect(r.failures).toHaveLength(3)
+    const why = r.failures.map((f: { message: string }) => f.message).join(' | ')
+    expect(why).toContain('is not a number')
+    expect(why).toContain('is not "true" or "false"')
+    // the select names the options rather than leaving the agent to guess
+    expect(why).toContain('"waiting", "active", "archived"')
+    // a failed create leaves nothing behind; the good one landed
+    const entries = (await s.call('get_collection', { collectionId: c.id })).entries
+    expect(entries).toHaveLength(1)
+    expect(entries[0].values.price.text ?? entries[0].values.price).toBe('120')
+  })
+
+  test('none of the three enters the translation worklist', async () => {
+    const { s, c } = await seeded()
+    await s.call('update_settings', { addLocales: ['fr'] })
+    await s.call('upsert_entries', {
+      collectionId: c.id,
+      entries: [{ name: 'Kayak', values: { price: '120', featured: 'true', status: 'active' } }],
+    })
+    const work = await s.call('get_translation_worklist', { locale: 'fr' })
+    const names = JSON.stringify(work.items ?? [])
+    expect(names).not.toContain('"price"')
+    expect(names).not.toContain('"featured"')
+    expect(names).not.toContain('"status"')
+
+    // and an override on one is refused rather than stored as dead data: the
+    // value is what a data-[…] variant matches on, so translating it would
+    // break the styling it drives
+    const entry = (await s.call('get_collection', { collectionId: c.id })).entries[0]
+    const r = await s.call('upsert_entries', {
+      collectionId: c.id,
+      entries: [{ entryId: entry.id, locale: 'fr', values: { status: 'actif' } }],
+    })
+    expect(JSON.stringify(r.failures)).toContain('status')
+  })
+
+  test('all three render, and a select drives a variant class per entry', async () => {
+    const { s, c } = await seeded()
+    await s.call('upsert_entries', {
+      collectionId: c.id,
+      entries: [
+        { name: 'Kayak', values: { price: '120', featured: 'true', status: 'waiting' } },
+        { name: 'Tent', values: { price: '90', featured: 'false', status: 'active' } },
+      ],
+    })
+    const home = await s.home()
+    await s.call('set_page_html', {
+      pageId: home.id,
+      html: pageHtml(
+        [
+          '<collection-list source="gear">',
+          '  <span data-field="price" />',
+          '  <span data-field="featured" />',
+          '  <span data-ref="pill" data-field="status" />',
+          '</collection-list>',
+        ].join('\n'),
+      ),
+      version: home.version,
+    })
+    const after = await s.home()
+    await s.call('edit_elements', {
+      pageId: after.id,
+      version: after.version,
+      edits: [
+        {
+          ref: 'pill',
+          fieldAttrs: { 'data-status': 'status' },
+          addClasses: ['data-[status=waiting]:bg-yellow-200'],
+        },
+      ],
+    })
+
+    const html = await s.html()
+    // a number and a boolean are strings all the way to the page
+    expect(html).toContain('>120<')
+    expect(html).toContain('>true<')
+    // and the select's VALUE is what the variant matches on, per entry
+    expect(html).toContain('data-status="waiting"')
+    expect(html).toContain('data-status="active"')
+  })
+
+  test('options can be changed later, and an orphaned value is reported not rewritten', async () => {
+    const { s, c } = await seeded()
+    await s.call('upsert_entries', {
+      collectionId: c.id,
+      entries: [{ name: 'Kayak', values: { status: 'archived' } }],
+    })
+    const r = await s.call('update_collection', {
+      collectionId: c.id,
+      updateFields: [{ name: 'status', options: ['waiting', 'active'] }],
+    })
+    expect(r.saved).toBe(true)
+    expect(JSON.stringify(r.warnings)).toContain('archived')
+    // the entry keeps the value: pages match on it, so a silent rewrite would
+    // restyle them
+    const entry = (await s.call('get_collection', { collectionId: c.id })).entries[0]
+    expect(entry.values.status.text ?? entry.values.status).toBe('archived')
+  })
+})
+
+// Two tasks the Ridgeline brief simply could not be done: a page created as a
+// draft was a draft forever (nothing after create_page changed its status, so
+// a draft collection template kept its entry routes out of the export), and an
+// agent could reply to a comment thread but never start one.
+test.describe('update_page and create_comment', () => {
+  test('a draft page is published later, and the route appears', async () => {
+    const s = await mcpSession()
+    const made = await s.call('create_page', { name: 'About', slug: '/about', status: 'draft' })
+    await s.call('set_page_html', {
+      pageId: made.pageId,
+      html: pageHtml('<h1>About us</h1>'),
+      version: (await s.call('get_page', { pageId: made.pageId })).version,
+    })
+    // a draft is dropped from the export
+    expect(Object.keys(await s.exportAll())).not.toContain('about/index.html')
+
+    const read = await s.call('get_page', { pageId: made.pageId })
+    const up = await s.call('update_page', {
+      pageId: made.pageId,
+      version: read.version,
+      status: 'published',
+    })
+    expect(up.saved).toBe(true)
+    expect(up.changed).toEqual(['status'])
+    expect(Object.keys(await s.exportAll())).toContain('about/index.html')
+  })
+
+  test('a rename and a slug change land together, and a taken slug is refused', async () => {
+    const s = await mcpSession()
+    const made = await s.call('create_page', { name: 'About', slug: '/about' })
+    await s.call('create_page', { name: 'Contact', slug: '/contact' })
+
+    const read = await s.call('get_page', { pageId: made.pageId })
+    const taken = await s.call('update_page', {
+      pageId: made.pageId,
+      version: read.version,
+      slug: '/contact',
+    })
+    expect(taken.saved).toBe(false)
+    expect(taken.reason).toBe('slug-taken')
+
+    const ok = await s.call('update_page', {
+      pageId: made.pageId,
+      version: read.version,
+      name: 'Our story',
+      slug: '/story',
+    })
+    expect(ok.saved).toBe(true)
+    expect(ok.changed.sort()).toEqual(['name', 'slug'])
+    // a moved route is a route nothing links to any more, and it says so
+    expect(ok.note).toContain('old slug')
+    expect(Object.keys(await s.exportAll())).toContain('story/index.html')
+  })
+
+  test('the home page keeps its slug, and a stale version is refused', async () => {
+    const s = await mcpSession()
+    const home = await s.home()
+    const read = await s.call('get_page', { pageId: home.id })
+    const moved = await s.call('update_page', {
+      pageId: home.id,
+      version: read.version,
+      slug: '/start',
+    })
+    expect(moved.saved).toBe(false)
+    expect(moved.reason).toBe('home-slug')
+
+    expect(
+      (await s.call('update_page', { pageId: home.id, version: 'stale', name: 'X' })).reason,
+    ).toBe('stale-version')
+  })
+
+  test('a comment anchors to an element, and to the page without one', async () => {
+    const s = await mcpSession()
+    const home = await s.home()
+    await s.call('set_page_html', {
+      pageId: home.id,
+      html: pageHtml('<section data-ref="hero"><h1>Ridgeline</h1></section>'),
+      version: home.version,
+    })
+
+    const anchored = await s.call('create_comment', {
+      pageId: home.id,
+      ref: 'hero',
+      text: 'Guessed the headline — confirm the wording?',
+    })
+    expect(anchored.saved).toBe(true)
+    expect(anchored.anchoredTo).toBeTruthy()
+
+    const loose = await s.call('create_comment', { pageId: home.id, text: 'No pricing copy yet.' })
+    expect(loose.anchoredTo).toBeUndefined()
+
+    const threads = (await s.call('list_comments', {})).comments
+    expect(threads).toHaveLength(2)
+    // a thread an agent started takes a reply like any other
+    const back = await s.call('reply_to_comment', {
+      commentId: anchored.commentId,
+      text: 'Wording confirmed.',
+    })
+    expect(back.saved).toBe(true)
+  })
+
+  test('a comment anchored to nothing is refused rather than left invisible', async () => {
+    const s = await mcpSession()
+    const home = await s.home()
+    await expect(
+      s.call('create_comment', { pageId: home.id, ref: 'nope', text: 'hi' }),
+    ).rejects.toThrow(/nope/)
+    expect((await s.call('list_comments', {})).comments).toHaveLength(0)
+  })
+})

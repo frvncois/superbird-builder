@@ -399,12 +399,29 @@ export interface Page {
 export interface CollectionField {
   id: string
   name: string
-  type: 'text' | 'image' | 'date' | 'reference' | 'multi-reference' | 'multi-image'
+  type:
+    | 'text'
+    | 'number'
+    | 'boolean'
+    | 'select'
+    | 'image'
+    | 'date'
+    | 'reference'
+    | 'multi-reference'
+    | 'multi-image'
   /** reference/multi-reference: the collection the field points into */
   refCollectionId?: string
+  /** select only: the values an entry may hold, in the order the picker shows
+   * them. The VALUE is what is stored and what `data-[…]` variants and
+   * `listQuery.filter` match on, so it stays stable while the visible label
+   * is whatever the page's own markup says — a status renders as a `<span>`
+   * per option, not as the raw value, which is also how it gets translated. */
+  options?: string[]
   /** text fields only: false marks the field non-translatable (label names,
    * catalog numbers, proper nouns) so the translation worklist skips it.
-   * Absent/true = translatable. */
+   * Absent/true = translatable. `number`, `boolean` and `select` are never
+   * translatable by TYPE — a quantity and a stored key read the same in every
+   * language — so the worklist skips them without needing the flag. */
   localize?: boolean
 }
 
@@ -414,7 +431,11 @@ export interface CollectionEntry {
   /** entry's own slug segment; full path is /<collection>/<slug> */
   slug: string
   /** field name → value; reference = target entry id, multi-reference = ids.
-   * References live only here (base) — they are never locale-overridden. */
+   * References live only here (base) — they are never locale-overridden.
+   * Scalars are all STRINGS, including `number` ("12") and `boolean`
+   * ("true"/"false"): every consumer — the renderers, `resolveFieldAttrs`,
+   * `applyListQuery`'s numeric-aware sort, a `data-[…]` variant — already
+   * reads a string, and a second storage shape would be a branch in each. */
   values: Record<string, string | string[]>
   /** per-locale field overrides; base values is the default locale */
   locales?: Record<string, Record<string, string>>
