@@ -4,6 +4,7 @@
 //   runtime/         the bundled MCP runtime (mcp-runtime.mjs; `guano mcp`)
 //   server/          the node server (code files only — NEVER server/data),
 //                    including the built motion-runtime.js the exporter ships
+//                    and server/public/, the unauthenticated namespace
 //   src/lib/shared/  plain-JS modules the server imports as ../src/lib/shared
 // The copied layout mirrors the repo exactly, so no import rewriting is
 // needed and the packed server runs identically to the repo one.
@@ -45,8 +46,22 @@ for (const f of await readdir(join(REPO, 'server'))) {
   await cp(join(REPO, 'server', f), join(PKG, 'server', f))
 }
 
+// server/public/ is a DIRECTORY of modules index.mjs imports (the public
+// namespace: forms, store, cors, csv, deliver). The loop above reads one level
+// and filters on filename, so it shipped none of them and the packed server
+// died on its first import — copy the tree whole.
+await cp(join(REPO, 'server', 'public'), join(PKG, 'server', 'public'), {
+  recursive: true,
+})
+
 await cp(join(REPO, 'src', 'lib', 'shared'), join(PKG, 'src', 'lib', 'shared'), {
   recursive: true,
 })
 
-console.log('prepack: dist/, runtime/, server/, src/lib/shared/ staged')
+// the licence exceptions are listed in `files`, so a stale copy ships as the
+// licence — restage it from the root rather than trusting the one on disk
+for (const pkg of [PKG, join(REPO, 'packages', 'create-guano')]) {
+  await cp(join(REPO, 'LICENSE-EXCEPTIONS.md'), join(pkg, 'LICENSE-EXCEPTIONS.md'))
+}
+
+console.log('prepack: dist/, runtime/, server/, src/lib/shared/, LICENSE-EXCEPTIONS.md staged')

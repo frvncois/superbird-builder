@@ -12,16 +12,19 @@ attaches to a site you build and publish with Guano.
 
 ## The embedded runtimes are MIT
 
-Every exported site embeds two small scripts — the interaction runtime
-(`assets/script.js`) and, on pages that animate, the motion runtime
-(`assets/motion.js`). So that no copyleft question can ever touch a published
+Every exported site embeds a few small scripts — the interaction runtime
+(`assets/script.js`), on pages that animate the motion runtime
+(`assets/motion.js`), and on pages with a slider the carousel runtime
+(`assets/slider.js`). So that no copyleft question can ever touch a published
 site, these files and their sources are licensed under the **MIT License**,
 not the AGPL:
 
 - `server/site-runtime.js` (the interaction runtime, embedded as `assets/script.js`)
 - `server/motion-runtime.js` (the built motion runtime, embedded as `assets/motion.js`)
-- `src/motion/runtime.ts` (the motion runtime's source)
-- `src/lib/shared/motion.js` and `src/lib/shared/interactionClasses.js`
+- `server/slider-runtime.js` (the built carousel runtime, embedded as `assets/slider.js`)
+- `src/motion/runtime.ts` and `src/slider/runtime.ts` (those runtimes' sources)
+- `src/lib/shared/motion.js`, `src/lib/shared/scroll.js`,
+  `src/lib/shared/slider.js` and `src/lib/shared/interactionClasses.js`
   (shared logic bundled into the runtimes)
 
 MIT License — Copyright (c) 2026 Francois Lemieux
