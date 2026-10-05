@@ -240,15 +240,19 @@ export function computeMerge(base: Project, mine: Project, theirs: Project): Mer
     collections: collections.merged,
     interactions: interactions.merged,
     animations: animations.merged,
-    // omitted when neither side has any, so an untouched project stays
-    // byte-identical for the next merge's signatures
-    ...(effects.merged.length ? { effects: effects.merged } : {}),
+    // ALWAYS written, never a conditional spread: an empty merged list is a
+    // real answer (the draft deleted the last effect) and omitting the key let
+    // `...mine` put Main's back, so the deletion was silently reverted. The
+    // key is deleted below when neither side has any, which is what keeps an
+    // untouched project byte-identical for the next merge's signatures.
+    effects: effects.merged,
     breakpoints: mergedBreakpoints,
     comments: mine.comments,
     locales: mergedLocales.locales,
     defaultLocale: mergedLocales.defaultLocale,
     settings: mergedSettings,
   }
+  if (!merged.effects?.length) delete merged.effects
   return { merged, conflicts }
 }
 
