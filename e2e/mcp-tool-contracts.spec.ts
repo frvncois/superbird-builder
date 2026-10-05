@@ -913,3 +913,31 @@ test.describe('update_page and create_comment', () => {
     expect((await s.call('list_comments', {})).comments).toHaveLength(0)
   })
 })
+
+test.describe('get_guide sections', () => {
+  test('the 25 KB content section is three, and the old slug still resolves', async () => {
+    const s = await mcpSession()
+    const toc = await s.call('get_guide')
+    const slugs = (toc.sections as { section: string; bytes: number }[])
+    const by = new Map(slugs.map((x) => [x.section, x.bytes]))
+    expect([...by.keys()]).toContain('content')
+    expect([...by.keys()]).toContain('media')
+    expect([...by.keys()]).toContain('data')
+    expect([...by.keys()]).not.toContain('content-media-data')
+    // each one is a section an agent can afford to read on its own
+    for (const slug of ['content', 'media', 'data']) {
+      expect(by.get(slug)!).toBeLessThan(18_000)
+    }
+
+    // the slug it used to have is aliased, not 404
+    const old = await s.call('get_guide', { section: 'content-media-data' })
+    expect(old.guide).toContain('## Content')
+    // and a partial slug reaches the right one, which is undocumented no more
+    expect((await s.call('get_guide', { section: 'page' })).guide).toContain('## Page HTML')
+    expect((await s.call('get_guide', { section: 'html' })).guide).toContain('## Page HTML')
+    // a miss costs the slug list, not the handbook
+    const miss = await s.call('get_guide', { section: 'zzz' })
+    expect(miss.error).toContain('zzz')
+    expect(miss.sections.length).toBeGreaterThan(10)
+  })
+})

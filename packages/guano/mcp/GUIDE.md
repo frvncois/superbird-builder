@@ -11,6 +11,9 @@ golden rules plus the section list; fetch the sections the job needs
 (`get_guide {section: "page-html"}`) before your first write. `section: "all"` returns
 the whole thing, which some clients will not return in one result.
 
+`get_guide {section}` takes a PARTIAL slug — `"page"` and `"html"` both reach Page HTML —
+and a miss returns the slug list, so a wrong guess costs one small response.
+
 ## The golden rules
 
 1. **A page is HTML.** You read it with `get_page` and write it with `set_page_html`, in
@@ -246,7 +249,7 @@ Most registry types ARE their tag: `section` `div` `header` `footer` `nav` `main
 | `<a href="…">` | `link` | a container |
 | `<ul>` / `<li>` | `list` / `list-item` | containers |
 | `<img src alt />` | `image` | void |
-| `<svg data-icon="mail" />` | `icon` | void; the markup is set with `edit_elements {icon}` |
+| `<svg data-icon="mail" />` | `icon` | void; the name IS the icon (a bundled Lucide name) |
 | `<input type="checkbox" />` | `checkbox` | the `type` IS the element |
 | `<input type="radio" />` | `radio` | |
 | `<div data-type="text">…</div>` | `text` | a `<div>` of plain text promotes to this on its own |
@@ -351,9 +354,17 @@ name — the element type plus `[n]` for the nth of that type:
 `get_page {elements: "ref-parts"}` lists exactly these — only the ref'd instances, each
 with its parts — which is the small, targeted read for a page of components. A part is
 a leaf an instance fills, a form CONTROL (`<input>`, `<textarea>`, `<select>` — what a
-visitor types into, named per placement with `instanceAttributes`), a slot, or an
-instance the component holds. Structural containers are not parts: to reach one, read
-the subtree (`get_page {ref}`) and address it by `data-id`.
+visitor types into, named per placement with `instanceAttributes`), an `<a>` or a
+`<button>`, a slot, or an instance the component holds.
+
+The test is not leaf-ness, it is whether a PLACEMENT has anything of its own to say
+about the element. A `<textarea>` holds children (its value is its text) and is a part;
+an `<a>`'s destination is per placement (`link`, with the component's as the default),
+which is what lets one Button serve a dozen destinations; a `<button>`'s
+`type="submit"`/`"reset"` is per placement for the same reason. Every OTHER container —
+the `<div>`s and `<section>`s that give the component its shape — is structure, shared
+by every instance, and is not a part: to reach one, read the subtree
+(`get_page {ref}`) and address it by `data-id`, which edits it on the master.
 
 Or fill them in the markup itself: write the instance out with its parts and their text,
 and one `set_page_html` lands a page of eight filled-in Cards.
@@ -701,7 +712,7 @@ alt and title, which ARE translatable), **export weight** per route, and effects
 pages side by side for width, spacing and type. Open every sheet and menu. Resize
 to tablet and phone. Then read `publish`'s `warnings` and act on each.
 
-## Content, media, data
+## Content
 
 Element text/media attaches to the node, not the code. Write it with `edit_elements`:
 
@@ -740,9 +751,10 @@ Element text/media attaches to the node, not the code. Write it with `edit_eleme
   `rows`, `cols`, `maxlength`, `minlength`, `pattern`, `inputmode`, `accept`.
   `id`/`class`/`style`/`src`/`href` and `on*` handlers are refused (those are owned by
   htmlId/classes/src/link).
-  - **Inside a component instance, attributes land on the MASTER** (they render
-    shared, like classes) — the result says so. There are no per-instance attribute
-    overrides.
+  - **Inside a component instance, `attributes` land on the MASTER** (they render
+    shared, like classes) — the result says so. For the text a visitor reads, write
+    `instanceAttributes` instead: that layer IS per placement (see "Attribute text is
+    per placement and per locale" below).
   - **Attributes are NOT localized** — an `aria-label` or `placeholder` ships the
     same string in every locale. On a multilingual site, prefer letting the
     element's (translatable) text content supply the accessible name; setting
@@ -784,7 +796,9 @@ Element text/media attaches to the node, not the code. Write it with `edit_eleme
   interaction bindings can all ride in the same `edits[]` entry — one call covers the
   whole page.
 
-**Media library**: `list_media` gives every asset's `/media/<id>` url; `upload_media`
+## Media
+
+**The library**: `list_media` gives every asset's `/media/<id>` url; `upload_media`
 adds assets. **A single-colour SVG is refused**: as a file it is that one colour forever,
 and a library of the same mark in six shades is the result. It goes on the page as an
 inline icon (`<svg data-icon>` + `edit_elements {svg}`, see Icons), where one copy follows
@@ -814,6 +828,8 @@ project blob.
 
 **Favicon**: upload the icon, then `update_settings { favicon: "/media/<id>" }`.
 
+## Data
+
 For **repeating / structured content**, use collections instead of own content: create
 a collection (`create_collection`, starts with one text field `title`), shape its schema
 with `update_collection` (`addFields`: text | number | boolean | select | image | date |
@@ -828,11 +844,13 @@ storage, so flipping back restores them),
 add entries with `upsert_entries {entries: [...]}` — one call, one or many, in one
 call (`values` maps field *names* to strings), and bind elements with `[field]` args.
 
-**Every value is a STRING**, including `number` ("12") and `boolean` ("true"/"false") —
-one storage shape, so a bound attribute, a `data-[…]:` variant and a numeric-aware sort
-all read the same thing. A value the field cannot hold is refused by name rather than
-stored: a non-number, a boolean that is not "true"/"false", a `select` value outside its
-options.
+**Every SCALAR value is a string**, including `number` ("12") and `boolean`
+("true"/"false") — one storage shape, so a bound attribute, a `data-[…]:` variant and a
+numeric-aware sort all read the same thing. The two list types are the exception and hold
+an ARRAY: `multi-image` an array of urls, `multi-reference` an array of entry ids (a
+single `reference` is one id, so it is a string). A value the field cannot hold is
+refused by name rather than stored: a non-number, a boolean that is not "true"/"false",
+a `select` value outside its options.
 
 **`number`, `boolean` and `select` are never translated**, by type — a quantity and a
 stored key read the same in every language, so the worklist skips them and a locale
@@ -889,8 +907,10 @@ first), so they are refused by name. Use `form`, `bindInteractions`, `bindAnimat
 a value of `false` means the attribute is absent.
 
 **Attribute text is per placement and per locale.** `attributes` are shared by every
-instance of a component, which is right for `role` and `type` and wrong for the text a
-visitor reads. `instanceAttributes` overrides them for ONE placement — two `<Input />`
+instance of a component, which is right for whatever is true of the component itself
+(`role`, `autocomplete`, `maxlength`) and wrong for anything one placement decides —
+the text a visitor reads, and `type` on a `<button>` (a form's submit and its reset are
+the same Button) or on an `<input>`. `instanceAttributes` overrides them for ONE placement — two `<Input />`
 instances saying "Search contacts" and "Your email" — so reuse the component instead of
 copying its classes onto a plain `<input>`. And
 `edit_elements {locale: "fr", attributes: {placeholder: "Rechercher"}}` translates one:
@@ -1194,11 +1214,16 @@ one-off, build it on the page.
   option instead.
 - `detach_instance {pageId, version, ref|id}` — ONE instance becomes plain elements
   that look the same and no longer follow the component: for the placement whose
-  STRUCTURE has to differ.
+  STRUCTURE has to differ. Everything a renderer resolves own-first is baked to the
+  value that placement had — its text, media, background and translations, and also its
+  `link`, `listQuery`, `slider` config, `entryId`, bound attributes and its
+  per-placement `instanceAttributes`. What a detach cannot carry is the VARIANT axes
+  (the picks become plain classes, and there is no component left to pick an option
+  on), and it says so in `notes`.
 - `delete_component {componentId}` — refused (with the list of pages, or `heldBy`)
-  while it is used; `detach: true` detaches every instance first, so no page loses
-  content. A human's delete in the editor always does the latter — an instance
-  you cached may be gone.
+  while it is used; `detach: true` detaches every instance first, on every page AND in
+  every component holding one, so no page loses content. A human's delete in the editor
+  always does the latter — an instance you cached may be gone.
 - `set_component_variants` — see Variants below.
 
 ### Things to know
@@ -1390,10 +1415,13 @@ classes like any element — `size-4` for its box, `text-primary` for its colour
 </button>
 ```
 
-(the markup gives it its place and its classes; `edit_elements {icon: "arrow-right"}`
-gives it the drawing — a `data-icon` in the HTML is read-only.)
+`data-icon` is a WRITE: the name is resolved against the bundled set and the real markup
+is stored, so one `set_page_html` lands the icon with its place and its classes. A name
+no bundled icon has is refused, pointing at `list_icons` — it never lands as an empty
+`<svg>`. A read prints the canonical `lucide:<name>` spelling, and echoing that back is a
+no-op; `custom` means the markup is not a bundled icon and is left alone.
 
-Set it with `edit_elements`:
+The same thing, or a custom drawing, through `edit_elements`:
 
 - **`icon`** — the name of a bundled icon. The set is Lucide (~1700 icons); **search it
   with `list_icons {query: "arrow right"}`** rather than guessing a name — a wrong name
@@ -2122,8 +2150,34 @@ booking flow keep the controls in a styled `<div>` (or write `type="button"` on 
 Truly empty leaf elements are not expressible — build decorative rules/spacers from
 styled `<div>` containers instead. An SVG used as an `<img src>` cannot inherit
 `currentColor` — for a mark that should follow the text colour use an `<svg data-icon>`
-(see Icons). `date` fields render their raw ISO value (no formatting — use a text field
-for display dates). `href` in the markup is the supported way to set links.
+(see Icons). `href` in the markup is the supported way to set links.
+
+**No value formatting of any kind.** A `date` field renders its raw ISO value, a `number`
+renders the exact string stored ("1200", never "1,200" or "$1,200"), and there is no
+template, pattern or format argument anywhere. Store the string you want rendered (a
+text field holding "12 Mar 2026", or a second field for the display form), or render the
+parts as separate elements — do not promise a format you cannot produce.
+
+**Rendering a single `reference` field.** A `collection-list` repeats a
+`multi-reference`; a single `reference` holds ONE id, so it is not a list. Two ways to
+render it: `data-field="owner.name"` reads a field THROUGH the reference in one hop (the
+dotted path `resolveBinding` understands), which is what you want for a name or an
+avatar; or a `<collection-item source="owner">` renders the referenced entry through its
+template page, for a whole card. A `<collection-list source="owner">` on a single
+reference is refused as an unknown collection, and `get_page`'s diagnostics say so.
+
+**"The same field value as the current entry" is not expressible.**
+`filter.equalsCurrent` matches the entry ITSELF by id, which covers a child collection
+(messages whose `conversation` reference IS this conversation) and nothing else. There is
+no `equalsCurrentField` — a sibling list ("other posts in this category") cannot be built
+yet. Say so rather than approximating it with a literal filter that goes stale.
+
+**Verifying a `click` or a `change` effect needs real input events**, which no tool here
+produces: `preview` renders the page, it does not drive it. What you CAN verify without a
+browser is that the binding exists and resolves — `get_page {includeInteractions: true}`
+shows every binding with its `targetId`, and `publish`/`preview` warn when a target the
+route cannot reach (`binding-target-unreachable`). State that as the limit; ask the human
+to click it.
 
 Motion has TWO systems and most of it IS expressible — see Animations above for tween
 timelines (property values, sequencing, stagger, scroll scrub, loops, clip wipes,

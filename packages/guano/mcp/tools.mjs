@@ -4182,8 +4182,14 @@ const tools = [
               }),
         }
       }
+      // a PARTIAL slug works ("page" reaches page-html), which is both the
+      // forgiving thing and what keeps a slug that was split still resolving:
+      // "content-media-data" became Content / Media / Data, so it is aliased
+      // rather than left to 404 for anything that remembers it.
+      const ALIASES = { 'content-media-data': 'content' }
+      const key = ALIASES[q] ?? q
       const hit =
-        sections.find((s) => s.slug === q) ?? sections.find((s) => s.slug.includes(q))
+        sections.find((s) => s.slug === key) ?? sections.find((s) => s.slug.includes(key))
       if (!hit) {
         return {
           error: `no section matching "${args.section}"`,
