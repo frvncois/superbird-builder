@@ -2869,6 +2869,31 @@ function runStructureOp(project, root, op, def, where) {
     }
   }
 
+  if (op.op === 'replaceChildren') {
+    // the slot case: an instance's slot arrives holding the master's default
+    // content, and "put MY content in it" was two reads and a hand-built
+    // `replace` of the whole slot element — which also meant re-sending the
+    // slot's own classes and attributes, i.e. editing the master by accident.
+    const node = find(op.target)
+    if (!node) return { error: `no element "${op.target}"` }
+    if (isLeafElement(node.type)) {
+      return { error: `'${node.type}' is a leaf — its text is \`content\`, not children` }
+    }
+    const parsed = read(op.html)
+    if (parsed.error) return { error: parsed.error }
+    let gone = 0
+    for (const child of node.children ?? []) walkNodes([child], () => gone++)
+    const { nodes, res } = build(parsed.roots, node.type)
+    node.children = nodes
+    return {
+      ...res,
+      removed: (res.removed ?? 0) + gone,
+      placed: nodes,
+      placedRefs: parsed.refs,
+      refused: res.refused.map((r) => ({ ...r, path: `${where} > ${r.path}` })),
+    }
+  }
+
   if (op.op === 'wrap') {
     const keys = op.targets?.length ? op.targets : op.target ? [op.target] : []
     if (!keys.length) return { error: 'pass `targets` (or a single `target`)' }
@@ -4297,13 +4322,12 @@ const tools = [
     name: 'set_target',
     description:
       'Choose where writes go: Main or a draft. THE HUMAN DECIDES THIS, NOT YOU. On clients ' +
-      'with MCP elicitation this opens a dialog the human answers directly — call it early, ' +
-      'pass target/createDraft as your suggestion, and respect the outcome; a dismissed dialog ' +
-      'means STOP and ask in chat. Without elicitation, ask them one question, then pass ' +
-      'chosenByUser: true, and targeting a non-empty Main additionally needs acknowledgeMain: ' +
-      'true. Suggest Main ONLY when get_status reports mainIsEmpty: true; suggest a draft ' +
-      'whenever Main holds anything. Pass {target: "main"}, {target: "<draftId>"} or ' +
-      '{createDraft: "<name>"}.',
+      'with MCP elicitation this opens a dialog they answer directly — call it early, pass ' +
+      'target/createDraft as your suggestion, and respect the outcome; a dismissed dialog ' +
+      'means STOP and ask in chat. Without elicitation, ask one question, then pass ' +
+      'chosenByUser: true; a non-empty Main also needs acknowledgeMain: true. Suggest Main ' +
+      'ONLY when get_status reports mainIsEmpty: true. Pass {target: "main"}, ' +
+      '{target: "<draftId>"} or {createDraft: "<name>"}.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -4820,7 +4844,13 @@ const tools = [
           items: {
             type: 'object',
             properties: {
-              op: { type: 'string', enum: ['insert', 'replace', 'move', 'remove', 'wrap'] },
+              op: {
+                type: 'string',
+                enum: ['insert', 'replace', 'replaceChildren', 'move', 'remove', 'wrap'],
+                description:
+                  '`replaceChildren` swaps what is INSIDE `target` and leaves the element ' +
+                  'itself alone — for filling an instance\'s slot',
+              },
               target: { type: 'string', description: 'a #ref (without the #) or an element id' },
               targets: {
                 type: 'array',
@@ -5280,6 +5310,12 @@ const tools = [
             'only these components (by name) — with includeNodes, keeps a project holding the ' +
             'whole library from answering with every node of every component',
         },
+        brief: {
+          type: 'boolean',
+          description:
+            'id, name, category, what it holds, instance count and version — no HTML. The ' +
+            'index read: a dozen components answer in ~1 KB instead of ~22 KB',
+        },
       },
       additionalProperties: false,
     },
@@ -5308,7 +5344,10 @@ const tools = [
             ...(def.variants?.length ? { variants: def.variants } : {}),
             ...(nestedComponentNames(def).length ? { holds: nestedComponentNames(def) } : {}),
             instances,
-            html: masterToHtml(def, project),
+            // the HTML is most of the response and most of a project's
+            // components are not the one being worked on — `brief` is the
+            // index read, and `names` narrows the full one
+            ...(args.brief ? {} : { html: masterToHtml(def, project) }),
             version: componentVersion(project, def),
             ...(nodes ? { nodes } : {}),
           }
@@ -6585,6 +6624,10 @@ const tools = [
       }
 
       await saveTargetProject(project)
+      // ONLY what this call touched. The echo used to be the whole settings
+      // object — 9 KB of tokens, theme steps, fonts and SEO — for a one-key
+      // write, every time. `get_settings` is right there for the whole picture.
+      const touched = (key, value) => (args[key] !== undefined ? { [key]: value } : {})
       return {
         saved: true,
         ...(tokenWarnings.length || themeWarnings.length
@@ -6602,20 +6645,29 @@ const tools = [
             }
           : {}),
         ...(tokensChanged ? { tokensChanged } : {}),
-        tokens: (s.tokens ?? []).map((t) => ({ name: t.name, value: t.value })),
-        seo: s.seo,
-        fonts: s.fonts,
-        favicon: s.favicon ?? '',
-        faviconDark: s.faviconDark ?? '',
-        domain: s.domain ?? '',
-        customCodeHead: s.customCode?.head ?? '',
-        customCodeBody: s.customCode?.body ?? '',
-        ...(s.theme ? { theme: s.theme } : {}),
+        // tokens are echoed whenever any token key was written: the names are
+        // what a class has to spell, and a token write is the one place an
+        // agent needs the resulting SET rather than its own input back
+        ...(args.tokens !== undefined ||
+        args.addTokens !== undefined ||
+        args.removeTokens !== undefined
+          ? { tokens: (s.tokens ?? []).map((t) => ({ name: t.name, value: t.value })) }
+          : {}),
+        ...touched('seo', s.seo),
+        ...touched('fonts', s.fonts),
+        ...touched('favicon', s.favicon ?? ''),
+        ...touched('faviconDark', s.faviconDark ?? ''),
+        ...touched('domain', s.domain ?? ''),
+        ...touched('customCodeHead', s.customCode?.head ?? ''),
+        ...touched('customCodeBody', s.customCode?.body ?? ''),
+        ...touched('motion', s.motion),
+        ...(args.theme !== undefined && s.theme ? { theme: s.theme } : {}),
+        // the locale pack and the breakpoint ids are the two things a write
+        // here has to hand back whatever it touched: a binding's `breakpoints`
+        // take those ids, and `addLocales` has to say what the set became
         defaultLocale,
         locales: project.locales ?? [defaultLocale],
         ...localeResult,
-        // binding `breakpoints` take these ids — without them an agent can
-        // scope a binding but never learn what to scope it to
         breakpoints: (project.breakpoints ?? []).map((b) => ({
           id: b.id,
           name: b.name,
@@ -7115,9 +7167,13 @@ const tools = [
           ...(failures.length > hardFailures.length
             ? { partial: failures.length - hardFailures.length }
             : {}),
+          // `failures` is what an agent has to act on, so it is always the
+          // full echo. `verbose` adds `results` for everything ELSE — it used
+          // to include the failing entries too, printing each failure twice in
+          // the same response.
           ...(failures.length ? { failures } : {}),
           ...(!args.verbose && bound.length ? { bound } : {}),
-          ...(args.verbose ? { results } : {}),
+          ...(args.verbose ? { results: results.filter((r) => !r.errors?.length) } : {}),
         })
       }
 
@@ -8268,13 +8324,11 @@ const tools = [
     description:
       'Create or update collection entries — one or many in ONE call. `entries`: [{entryId?, ' +
       'name?, slug?, values?, locale?}]; omit entryId to create, pass it to update. `values` ' +
-      'maps field NAME to value, and unknown names are rejected without saving. For a ' +
-      'non-default registered `locale` the values become per-locale overrides, where sent keys ' +
-      'with "" are pruned and OMITTED keys keep their existing override, so one field can be ' +
-      'fixed alone; name and slug are default-locale only. Unknown fields, slug collisions and ' +
-      'unregistered locales are reported per item in `failures` with the input `index` — the ' +
-      'batch never aborts and a failed create leaves nothing behind. For a large import, point ' +
-      '`entriesPath` at a local JSON file. Requires a target.',
+      'maps field NAME to value. For a non-default registered `locale` they become per-locale ' +
+      'overrides: "" prunes a key, an OMITTED key keeps its override, and name/slug are ' +
+      'default-locale only. Every refusal is per item in `failures` with the input `index`; the ' +
+      'batch never aborts and a failed create leaves nothing behind. Large import: point ' +
+      '`entriesPath` at a local JSON file. Requires a target. See get_guide {section: "data"}.',
     inputSchema: {
       type: 'object',
       properties: {

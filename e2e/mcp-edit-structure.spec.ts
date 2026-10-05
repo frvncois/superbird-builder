@@ -126,3 +126,77 @@ test.describe('replace keeps the element it replaces', () => {
     expect(r.message).toContain('exactly one element')
   })
 })
+
+// 3G: a slot arrives holding the master's default content, and "put MY content
+// in it" meant two reads and a hand-built `replace` of the whole slot element —
+// which re-sends the slot's own classes and so edits the master by accident.
+test.describe('replaceChildren', () => {
+  test('fills an instance’s slot without touching the slot element', async () => {
+    const s = await mcpSession()
+    const made = await s.call('create_component', {
+      name: 'Panel',
+      html: '<section class="rounded border"><div data-ref="body" class="grid gap-2"><p>Default</p></div></section>',
+    })
+    const slotId = /<div data-id="([0-9a-f]+)" data-ref="body"/.exec(made.html)![1]
+    await s.call('edit_elements', {
+      componentId: made.componentId,
+      edits: [{ id: slotId, slot: true }],
+    })
+
+    const home = await s.home()
+    await s.call('set_page_html', {
+      pageId: home.id,
+      html: pageHtml('<Panel data-ref="p1" />\n<Panel data-ref="p2" />'),
+      version: home.version,
+    })
+    const page = await s.call('get_page', { pageId: home.id, elements: 'none' })
+    const firstSlot = /<div data-id="([0-9a-f]+)" data-slot/.exec(page.html)![1]
+
+    const r = await s.call('edit_structure', {
+      pageId: home.id,
+      version: page.version,
+      ops: [
+        {
+          op: 'replaceChildren',
+          target: firstSlot,
+          html: '<h3 data-ref="t">Mine</h3><p data-ref="d">My copy.</p>',
+        },
+      ],
+      elements: 'none',
+    })
+    expect(r.saved).toBe(true)
+    expect(r.changed.created).toBe(2)
+    expect(r.changed.removed).toBe(1) // the default <p>
+
+    const after = await s.call('get_page', { pageId: home.id, elements: 'none' })
+    // this instance holds its own content…
+    expect(after.html).toContain('data-ref="t"')
+    // …the slot element itself is untouched (same id, still a slot)
+    expect(after.html).toContain(`<div data-id="${firstSlot}" data-slot`)
+    // …and the OTHER instance still has the master's default
+    const html = await s.html()
+    expect(html).toContain('Mine')
+    expect(html).toContain('Default')
+    // the shared chrome is unchanged on both
+    expect((html.match(/class="rounded border"/g) ?? []).length).toBe(2)
+  })
+
+  test('a leaf is refused, because its text is content', async () => {
+    const s = await mcpSession()
+    const home = await s.home()
+    await s.call('set_page_html', {
+      pageId: home.id,
+      html: pageHtml('<p data-ref="p">x</p>'),
+      version: home.version,
+    })
+    const page = await s.call('get_page', { pageId: home.id, elements: 'none' })
+    const r = await s.call('edit_structure', {
+      pageId: home.id,
+      version: page.version,
+      ops: [{ op: 'replaceChildren', target: 'p', html: '<span>y</span>' }],
+      elements: 'none',
+    })
+    expect(r.saved).toBe(false)
+    expect(r.message).toContain('is a leaf')
+  })
+})

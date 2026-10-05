@@ -19,8 +19,8 @@ and a miss returns the slug list, so a wrong guess costs one small response.
 1. **A page is HTML.** You read it with `get_page` and write it with `set_page_html`, in
    a strict HTML subset. Structure, classes and text all travel in that one document, so
    a page you can describe is a page you can write in one call.
-2. **Change part of a page with `edit_structure`.** Insert, replace, move, remove or wrap,
-   addressed by `data-ref` or `data-id`. Re-sending a whole document for a local change
+2. **Change part of a page with `edit_structure`.** Insert, replace, replaceChildren,
+   move, remove or wrap, addressed by `data-ref` or `data-id`. Re-sending a whole document for a local change
    works and is wasteful. Everything that is NOT in the HTML — interactions, animations,
    translations, slider config, list filters — is attached through its own tool
    (`edit_elements`, `bind_interaction`, …), batched: one `edit_elements` call edits many
@@ -413,14 +413,22 @@ edit_structure {pageId, version, ops: [
   {op: "move",    target: "foot", parent: "wrap"},
   {op: "remove",  target: "old-cta"},
   {op: "wrap",    targets: ["hero", "foot"], html: "<main class=\"mx-auto max-w-5xl\" />"},
+  {op: "replaceChildren", target: "<slot id>", html: "<h3>Mine</h3><p>My copy.</p>"},
 ]}
 ```
 
 Ops run in order. One that cannot land refuses the **whole** batch, so a page is never
 left half-edited. `parent` lands inside, last; `before`/`after` beside. A `replace` that
-echoes the target's own `data-id` adopts it rather than replacing it. The same tool
-edits a component master with `componentId` instead of `pageId`, and its id addresses
-its root.
+echoes the target's own `data-id` adopts it rather than replacing it, keeping everything
+the markup does not carry. **`replaceChildren` swaps what is INSIDE the target and
+leaves the element alone** — which is how an instance's SLOT is filled: a `replace` of
+the slot element would have to re-send its classes and attributes, i.e. edit the master
+by accident. The same tool edits a component master with `componentId` instead of
+`pageId`, and its id addresses its root.
+
+`elements` in the response is scoped to the subtrees the ops touched, plus every `#ref`
+on the page — the addresses the next call needs. Pass `elements: "own"` for the whole
+page, `"none"` for nothing.
 
 ### What a write reports
 

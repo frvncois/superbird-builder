@@ -6091,7 +6091,8 @@ function applyHtml(root, parsed, opts) {
 	*/
 	function setClasses(node, value, path) {
 		const tokens = value.split(/\s+/).filter(Boolean);
-		for (const token of tokens) if (!isValidClass(token)) warn(path, `'${token}' is kept, but the Style panel has no control for it`);
+		const unmodelled = tokens.filter((t) => !isValidClass(t));
+		if (unmodelled.length) warn(path, `${unmodelled.map((t) => `'${t}'`).join(", ")} ${unmodelled.length === 1 ? "is" : "are"} kept, but the Style panel has no control for ${unmodelled.length === 1 ? "it" : "them"}`);
 		assign(node, "classes", tokens.join(" "));
 	}
 	function setSrc(node, value, path) {
