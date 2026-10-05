@@ -24,6 +24,7 @@ import { useLocale } from '@/composables/useLocale'
 import { resolveBinding, refIds, mediaUrls } from '@/lib/shared/fields.js'
 import { resolveSliderConfig, SLIDER_DEFAULTS } from '@/lib/shared/slider.js'
 import { collectFormFields, formConfigError } from '@/lib/shared/forms.js'
+import { useEntryField } from '@/composables/useEntryField'
 import { isNodeHidden } from '@/lib/instances'
 import { useProject } from '@/composables/useProject'
 import { useSettings } from '@/composables/useSettings'
@@ -674,26 +675,30 @@ const pickRefTarget = computed(() =>
   headField.value?.refCollectionId ? collectionById(headField.value.refCollectionId) : null,
 )
 
-// NOTE: the reference/gallery writers below are a SECOND copy of the ones in
-// useEntryField.ts (the canonical set, used by the Pages drawer's entry
-// editor). They are kept here because these are wired to the element-arg
-// binding (headField + activeEntry) rather than an explicit field. Keep the
-// two in step — especially "an emptied list deletes the key" and "clearing a
-// gallery slot splices it out" — or migrate these call sites to the composable.
+// The reference and gallery writers are `useEntryField`'s — the same ones the
+// Pages drawer's entry editor uses. They used to be a second copy here, wired
+// to the element-arg binding (`headField` + `activeEntry`) instead of an
+// explicit field, with a comment asking the next person to keep two sets of
+// rules in step. The rules are the invariants that keep a touched-then-cleared
+// entry byte-identical (an emptied list deletes its key; clearing a gallery
+// slot splices it out), so a copy that drifted would show up as a phantom
+// draft change. One implementation, called with the bound field.
+const entryField = useEntryField()
+
+/** the bound field and the loaded entry, or null — every writer below needs
+ *  both, and the panel renders its pickers only when they are there */
+const bound = computed(() =>
+  headField.value && activeEntry.value
+    ? { entry: activeEntry.value, field: headField.value }
+    : null,
+)
 
 // single reference: which entry this entry points to (base values only —
 // references are never locale-overridden)
 const refValue = computed({
-  get: () => {
-    const v = activeEntry.value?.values[headField.value?.name ?? '']
-    return typeof v === 'string' ? v : ''
-  },
+  get: () => (bound.value ? entryField.readRef(bound.value.entry, bound.value.field) : ''),
   set: (id: string) => {
-    const entry = activeEntry.value
-    const field = headField.value
-    if (!entry || !field) return
-    if (id) entry.values[field.name] = id
-    else delete entry.values[field.name]
+    if (bound.value) entryField.setRef(bound.value.entry, bound.value.field, id)
   },
 })
 const refOptions = computed(() => [
@@ -703,53 +708,30 @@ const refOptions = computed(() => [
 
 // multi-reference: toggled id list, order = toggle order
 const multiIds = computed(() =>
-  headField.value && activeEntry.value ? refIds(activeEntry.value, headField.value.name) : [],
+  bound.value ? refIds(bound.value.entry, bound.value.field.name) : [],
 )
 // multi-image ("gallery"): an ordered list of media urls on the entry. Order
-// is what the :collection-list renders, so it is editable here.
+// is what the collection-list renders, so it is editable here.
 const galleryUrls = computed(() =>
-  headField.value && activeEntry.value ? mediaUrls(activeEntry.value, headField.value.name) : [],
+  bound.value ? mediaUrls(bound.value.entry, bound.value.field.name) : [],
 )
-function writeGallery(next: string[]) {
-  const entry = activeEntry.value
-  const field = headField.value
-  if (!entry || !field) return
-  const clean = next.filter(Boolean)
-  // an emptied gallery drops the key entirely, so the entry stays
-  // byte-identical to one that never had images (keeps merge signatures quiet)
-  if (clean.length) entry.values[field.name] = clean
-  else delete entry.values[field.name]
-}
-/** clearing a slot REMOVES it — a gallery never holds empty holes, which is
- *  the whole reason this type exists instead of numbered image fields */
 function setGalleryAt(index: number, url: string) {
-  const next = [...galleryUrls.value]
-  if (url) next[index] = url
-  else next.splice(index, 1)
-  writeGallery(next)
+  if (bound.value) entryField.setListAt(bound.value.entry, bound.value.field, index, url)
 }
 function addGalleryImage(url: string) {
-  if (url) writeGallery([...galleryUrls.value, url])
+  if (url && bound.value) {
+    entryField.writeList(bound.value.entry, bound.value.field, [...galleryUrls.value, url])
+  }
 }
 function moveGalleryImage(index: number, delta: -1 | 1) {
-  const next = [...galleryUrls.value]
-  const to = index + delta
-  if (to < 0 || to >= next.length) return
-  ;[next[index], next[to]] = [next[to], next[index]]
-  writeGallery(next)
+  if (bound.value) entryField.moveInList(bound.value.entry, bound.value.field, index, delta)
 }
 const showGalleryPicker = computed(
   () => headField.value?.type === 'multi-image' && !!activeEntry.value,
 )
 
 function toggleRef(id: string) {
-  const entry = activeEntry.value
-  const field = headField.value
-  if (!entry || !field) return
-  const ids = refIds(entry, field.name)
-  const next = ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]
-  if (next.length) entry.values[field.name] = next
-  else delete entry.values[field.name]
+  if (bound.value) entryField.toggleRef(bound.value.entry, bound.value.field, id)
 }
 
 /** the ref pickers need an entry loaded in the template canvas */

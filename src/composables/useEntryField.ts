@@ -6,12 +6,13 @@ import type { CollectionEntry, CollectionField } from '@/types/editor'
 /**
  * Read/write primitives for ONE collection-entry field, per field type.
  *
- * This is the canonical implementation, used by the Pages drawer's entry
- * editor (EntryFieldControl.vue). A SECOND, not-yet-migrated copy of the
- * reference/gallery writers lives in DataEditor.vue (~:494-561), where they
- * are wired to the element-arg binding (`headField` + `activeEntry`) instead
- * of an explicit field. Keep the two in step — in particular the two
- * invariants below — or migrate DataEditor to call these.
+ * The ONE implementation. Two surfaces call it: the Pages drawer's entry
+ * editor (`EntryFieldControl.vue`), with the field it is rendering, and the
+ * Data panel (`DataEditor.vue`), with the field the selected element is bound
+ * to. The panel used to carry its own copy of the reference and gallery
+ * writers, with a comment asking the next person to keep two sets of rules in
+ * step — and the rules below are exactly the ones a drifted copy would break
+ * invisibly, as a phantom change in a draft diff.
  *
  * The invariants, which exist so an entry that was touched and cleared stays
  * byte-identical to one that never held a value (branch-merge signatures):
