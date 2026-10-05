@@ -1,65 +1,19 @@
 import { test, expect } from '@playwright/test'
-// In-process, like mcp-tools-security: the toolset and its bundled runtime are
-// plain ESM, driven against an in-memory store. No server, no browser, no
-// login — so this spec cannot disturb smoke.spec's first-run flow.
-// @ts-expect-error untyped package module
-import { createToolSet } from '../packages/guano/mcp/tools.mjs'
-// @ts-expect-error untyped server module
-import { exportSite } from '../server/export.mjs'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+// In-process, on the shared harness (e2e/fixtures/mcpSession.ts): the toolset
+// and its bundled runtime are plain ESM driven against an in-memory store. No
+// server, no browser, no login — so this spec cannot disturb smoke.spec's
+// first-run flow.
+import { mcpSession, pageHtml as page } from './fixtures/mcpSession'
 import { withComponents } from './fixtures/components'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 
 // An agent building a site WITH components: a page written with `<Name />`
 // instances, and the component itself edited as the board edits it. The
-// ready-made ones come from e2e/fixtures/components.json. The checks that matter read the published HTML — a tool
-// reporting success for a write that renders nowhere is the bug class here.
-
-const runtimePromise = import(
-  /* @vite-ignore */ '../packages/guano/runtime/mcp-runtime.mjs' as string
-).catch(() => null)
-
-const page = (body: string) => `<body>\n${body}\n</body>`
-
-async function session() {
-  const runtime = await runtimePromise
-  test.skip(!runtime, 'runtime/mcp-runtime.mjs missing — run `npm run build:mcp-runtime`')
-  const store = new Map([['guano-project:main', JSON.stringify(runtime.createProject('T'))]])
-  const api = {
-    base: 'http://localhost:4174',
-    whoami: async () => ({ id: 'u1', email: 'a@b.c', role: 'admin', name: 'A' }),
-    storeGetRaw: async (k: string) => store.get(k) ?? null,
-    storeGetJson: async (k: string) => (store.has(k) ? JSON.parse(store.get(k)!) : null),
-    storePutRaw: async (k: string, v: string) => void store.set(k, v),
-    publish: async () => ({ routes: 1, bytes: 1 }),
-    mediaIndex: async () => ({ assets: [], folders: [] }),
-    mediaUpload: async () => ({ id: 'm1' }),
-  }
-  const set = createToolSet({ api, runtime })
-  set.setTarget('main')
-  const call = (name: string, args: Record<string, unknown> = {}) =>
-    set.toolMap.get(name)!.handler(args)
-  const stored = () => JSON.parse(store.get('guano-project:main')!)
-  const seed = async (keys: string[]) => {
-    store.set('guano-project:main', JSON.stringify(withComponents(stored(), keys)))
-  }
-  const html = async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'guano-mcp-'))
-    try {
-      await exportSite(stored(), dir)
-      const out = readFileSync(join(dir, 'index.html'), 'utf8')
-      return out.slice(out.indexOf('<body'))
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
-  }
-  const home = async () => (await call('list_pages')).pages[0]
-  return { call, stored, html, home, seed }
-}
+// ready-made ones come from e2e/fixtures/components.json. The checks that
+// matter read the published HTML — a tool reporting success for a write that
+// renders nowhere is the bug class here.
 
 test('an instance written with a ref expands, and lists the parts to fill', async () => {
-  const { call, home, html, seed } = await session()
+  const { call, home, html, seed } = await mcpSession()
   await seed(['card'])
   const h = await home()
   const written = await call('set_page_html', {
@@ -99,7 +53,7 @@ test('an instance written with a ref expands, and lists the parts to fill', asyn
 })
 
 test("an instance's own line takes no classes or bindings", async () => {
-  const { call, home, stored, html, seed } = await session()
+  const { call, home, stored, html, seed } = await mcpSession()
   await seed(['card'])
   const h = await home()
   const written = await call('set_page_html', {
@@ -121,7 +75,7 @@ test("an instance's own line takes no classes or bindings", async () => {
     ],
   })
   expect(edited.failed).toBe(2)
-  expect(JSON.stringify(edited.failures)).toContain('wrap the instance in a :div')
+  expect(JSON.stringify(edited.failures)).toContain('wrap the instance in a `<div>`')
 
   const button = stored().components.find((c: { name: string }) => c.name === 'Button')
   expect(button.root.classes).toBeUndefined()
@@ -129,7 +83,7 @@ test("an instance's own line takes no classes or bindings", async () => {
 })
 
 test('a component is written from scratch, and edited as the board edits it', async () => {
-  const { call, home, stored, html, seed } = await session()
+  const { call, home, stored, html, seed } = await mcpSession()
   await seed(['button'])
 
   const made = await call('create_component', {
@@ -181,7 +135,7 @@ test('a component is written from scratch, and edited as the board edits it', as
 })
 
 test('rename, duplicate, detach and delete keep every page in step', async () => {
-  const { call, home, stored, html, seed } = await session()
+  const { call, home, stored, html, seed } = await mcpSession()
   await seed(['card'])
   const card = { componentId: stored().components.find((c: { name: string }) => c.name === 'Card').id }
   const h = await home()
@@ -226,7 +180,7 @@ test('rename, duplicate, detach and delete keep every page in step', async () =>
 })
 
 test('a list keeps its filter inside a component, and an instance can narrow it', async () => {
-  const { call, home, html } = await session()
+  const { call, home, html } = await mcpSession()
   const col = await call('create_collection', { name: 'conversation' })
   await call('update_collection', { collectionId: col.collection.id, addFields: [{ name: 'status', type: 'text' }] })
   await call('upsert_entries', {
@@ -284,7 +238,7 @@ test('a list keeps its filter inside a component, and an instance can narrow it'
 })
 
 test("an instance wears the default even when its host picked otherwise", async () => {
-  const { call, home, html, seed } = await session()
+  const { call, home, html, seed } = await mcpSession()
   await seed(['button'])
   const card = await call('create_component', { name: 'Card', html: '<div>\n  <Button />\n</div>' })
   const mirror = card.nodes.find((n: { type: string }) => n.type === 'Button')
@@ -300,7 +254,7 @@ test("an instance wears the default even when its host picked otherwise", async 
 })
 
 test('what a host cannot say about an instance is refused, not dropped', async () => {
-  const { call, home, seed } = await session()
+  const { call, home, seed } = await mcpSession()
   await seed(['button'])
   const card = await call('create_component', { name: 'Card', html: '<div>\n  <Button />\n</div>' })
 
@@ -329,7 +283,7 @@ test('what a host cannot say about an instance is refused, not dropped', async (
 })
 
 test('publish warns about what a design review would send back', async () => {
-  const { call, home, seed } = await session()
+  const { call, home, seed } = await mcpSession()
   await seed(['select', 'navbar'])
   await call('create_interactions', { items: [{ name: 'Never bound', toClasses: 'hidden' }] })
   await call('update_settings', { motion: { transitions: { enabled: true, preset: 'fade' } } })
@@ -360,7 +314,7 @@ test('publish warns about what a design review would send back', async () => {
 // is caught at publish.
 
 test('a component that is another one in other colours is refused', async () => {
-  const { call } = await session()
+  const { call } = await mcpSession()
   const card = (tone: string) =>
     `<div class="rounded-lg border p-4 ${tone}"><h3 class="text-lg font-semibold">T</h3><p class="text-sm">Body</p></div>`
 
@@ -400,7 +354,7 @@ test('a component that is another one in other colours is refused', async () => 
 })
 
 test('publish warns about components that differ only by colour', async () => {
-  const { call, stored } = await session()
+  const { call, stored } = await mcpSession()
   const made = await call('create_component', {
     name: 'Pill',
     html: '<span class="rounded-full px-3 py-1 text-xs bg-primary text-primary-foreground">A</span>',
@@ -420,7 +374,7 @@ test('publish warns about components that differ only by colour', async () => {
 })
 
 test('a single-colour SVG is refused as a file, and goes on the page as an icon', async () => {
-  const { call } = await session()
+  const { call } = await mcpSession()
   const mono = (color: string) =>
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 4h16v16H4z" fill="${color}"/></svg>`
   const dataUrl = (svg: string) => `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`
@@ -451,7 +405,7 @@ test('a single-colour SVG is refused as a file, and goes on the page as an icon'
 // different body on every page; the component's chrome stays shared.
 
 test('a slot holds per-instance structure while the rest of the component stays shared', async () => {
-  const { call, stored, html, home } = await session()
+  const { call, stored, html, home } = await mcpSession()
   const modal = await call('create_component', {
     name: 'Modal',
     html: `<div class="fixed inset-0 flex items-center justify-center bg-black/50">
@@ -548,7 +502,7 @@ test('a slot holds per-instance structure while the rest of the component stays 
 })
 
 test('a slot is refused where it cannot mean anything', async () => {
-  const { call } = await session()
+  const { call } = await mcpSession()
   const leaf = await call('create_component', { name: 'Bad', html: '<div><p data-slot>x</p></div>' })
   expect(leaf.saved).toBe(false)
   expect(JSON.stringify(leaf.refused)).toMatch(/can't be a slot/)
@@ -577,7 +531,7 @@ test('a slot is refused where it cannot mean anything', async () => {
 // A Button component therefore could not be a link, which is the first thing
 // anyone wants from a Button.
 test('each instance of one component carries its own link', async () => {
-  const { call, home, html, stored } = await session()
+  const { call, home, html, stored } = await mcpSession()
   const made = await call('create_component', {
     name: 'Cta',
     html: '<a class="rounded bg-black px-4 py-2 text-white" href="/default"><span>Go</span></a>',
@@ -624,7 +578,7 @@ test('each instance of one component carries its own link', async () => {
 })
 
 test('a link written as href in the page markup is the instance’s own', async () => {
-  const { call, home, html } = await session()
+  const { call, home, html } = await mcpSession()
   await call('create_component', {
     name: 'Cta',
     html: '<a class="underline" href="/default"><span>Go</span></a>',
@@ -649,7 +603,7 @@ test('a link written as href in the page markup is the instance’s own', async 
 // The master's link is a DEFAULT, so changing it has to reach the instances
 // that never set one — which is what the old copy-down did for free.
 test('changing the master’s link moves every instance that did not override it', async () => {
-  const { call, home, html } = await session()
+  const { call, home, html } = await mcpSession()
   const made = await call('create_component', {
     name: 'Cta',
     html: '<a class="underline" href="/old"><span>Go</span></a>',

@@ -41,7 +41,7 @@ export function cloneForMaster(source: ElementNode): {
  * of shadowing. A shadow looks identical at extraction time but bites later:
  * shared chrome gets translated once per page, and a master restructure can
  * re-seat the stale override onto the wrong node. `htmlId` stays (a per-page
- * anchor), `arg`/`link` stay (code-owned).
+ * anchor); `arg` and `link` stay — see adoptCodeOwned for why each one does.
  */
 export function stripExtractedInstanceState(source: ElementNode): void {
   // slot content stays whole: it is the holder's own, and nothing above it
@@ -219,7 +219,7 @@ export function alignStructure(instance: ElementNode, master: ElementNode): bool
 
 /**
  * The same, for a MIRROR a master holds: there the wrapper node is part of the
- * host's own tree, so its code-owned slots follow the inner master too (a
+ * host's own tree, so its `arg`/`link`/`slot` follow the inner master too (a
  * mirror that lacked them would not be structurally identical to it, which is
  * the invariant the positional pairing relies on).
  */
@@ -282,22 +282,22 @@ export function normalizeComponentName(raw: string, taken: string[]): string {
 }
 
 /** a node's SHALLOW identity: its type, its `[arg]` binding, its link.
- * Deliberately NOT recursive: matching is done one
- * level at a time (like the page reconciler matching by line), so a container
- * keeps its identity even when its children change, while its children realign
- * among themselves. Classes/content/interactions are excluded — they are the
- * off-code state we're carrying across the edit. Two `:h2:@/a` and
- * `:h2:@/b` get distinct signatures; two bare `:h2:` are genuinely
- * indistinguishable (no algorithm can tell which identical sibling was
- * removed — same irreducible case the reconciler faces). */
+ * Deliberately NOT recursive: matching is done one level at a time, so a
+ * container keeps its identity even when its children change, while its
+ * children realign among themselves. Classes, content and interactions are
+ * excluded — they are the per-node state being carried across the edit. An
+ * `<h2 href="/a">` and an `<h2 href="/b">` get distinct signatures; two bare
+ * `<h2>`s are genuinely indistinguishable, and no algorithm can tell which
+ * identical sibling was removed. */
 function nodeSignature(node: ElementNode): string {
   return `${node.type}|${node.arg ?? ''}|${node.link ?? ''}`
 }
 
 /** longest-common-subsequence alignment of two signature lists → a map from
- * b-index to the a-index it matches. Same primitive the page reconciler uses,
- * so component adoption and page edits carry identity the same way — a removed
- * sibling no longer shifts the survivors onto the wrong master nodes. */
+ * b-index to the a-index it matches. The same primitive `lib/html/apply.ts`
+ * uses for an agent's write, so component adoption and a page write carry
+ * identity the same way — a removed sibling no longer shifts the survivors
+ * onto the wrong master nodes. */
 function lcsAlign(a: string[], b: string[]): Map<number, number> {
   const n = a.length
   const m = b.length
@@ -350,7 +350,7 @@ export interface AdoptResult {
  * survivor onto a removed sibling's master node (dragging its classes and
  * interaction bindings along) whenever a same-type child was deleted.
  *
- * `arg`/`link` are code-owned, so the edited block is authoritative for them.
+ * `arg` belongs to the master, so the edited tree is authoritative for it.
  * Fills `result` with the adopt/create counts and any orphaned master nodes.
  */
 export function adoptStructure(
@@ -399,7 +399,7 @@ export function adoptStructure(
       }
       result.created++
     }
-    // arg + link are CODE-owned — the edited block is authoritative
+    // `arg` belongs to the master — the edited tree is authoritative
     if (child.arg) node.arg = child.arg
     else delete node.arg
     if (child.link) node.link = child.link

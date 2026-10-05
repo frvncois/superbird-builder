@@ -176,23 +176,18 @@ patches; each was scoped in the plan and the scoping is reproduced here.
     the line to be unchanged; an edit doing both defeats each. Rare, and the
     node's state is lost rather than misassigned, so it is safe — just not
     free.
-- **P2 — form submissions.** The form *elements* shipped; there is no backend.
-  Sketch: `node.form?: { mode: 'store'|'email'|'both'; to?; subject?; redirect?;
-  collectionId? }` on `:form`; the export emits
-  `<form method="post" action="/api/forms/<pageId>/<nodeId>">` + honeypot + a
-  per-site submission token, with a progressive-enhancement handler in
-  `site-runtime.js` that posts via `fetch` and swaps in a success state through
-  an interaction stateKey. `server/forms.mjs` would be **the most exposed
-  endpoint in the product** (unauthenticated), so: origin check, per-IP rate
-  limit (reuse the auth limiter), body cap, honeypot, and a field allowlist
-  derived from the *stored* project's declared inputs — never from posted
-  names. Append to `server/data/forms/<pageId>-<nodeId>.jsonl`. Email goes
-  through `settings.integrations.mailing` with the provider key held
-  server-side in `publish.json` (same pattern as the GitHub token) — do not add
-  nodemailer. Admin gets a Submissions panel (list + CSV), admin/editor only;
-  MCP gets a read-only `list_form_submissions`. **`/security-review` is
-  mandatory before shipping this one.** File upload (multipart) and Stripe
-  Checkout are follow-ups in the same module, not blockers.
+- ~~**P2 — form submissions.**~~ **SHIPPED** (verified 2026-10-05). The sketch
+  here is superseded by what landed; read `CLAUDE.md` → Forms and
+  `server/public/`. Differences from the plan worth knowing: the endpoint is
+  `POST /_guano/forms/:id` (outside `/api`, in the namespace the site-password
+  unlock already owns), the field allowlist comes from a manifest written **at
+  publish** rather than from the live blob, `node.form` says only *whether* a
+  form notifies — recipients and the mailer are admin-only server state — and
+  mail goes through `server/smtp.mjs`, a zero-dependency client, picked by an
+  admin through a capability (`server/capabilities.mjs`) rather than from
+  `settings.integrations`. Coverage: `e2e/store-forms.spec.ts`,
+  `e2e/export-forms.spec.ts`, `e2e/ui-forms-panel.spec.ts`. File upload
+  (multipart) and Stripe Checkout are still open follow-ups.
 - ~~**P3 — page transitions and smooth scroll.**~~ **Shipped**, as one
   `settings.motion` key (not the two the plan named) carrying `appearMode`,
   `transitions` and `scroll`; Settings → Interactions plus a summary section in
@@ -306,16 +301,8 @@ element (`src/lib/shared/svg.js`).
 
 ## Layers / structure
 
-- **RESOLVED — the e2e fixture's unclosed `:div` blocks.** The fixture had 58 opens to
-  50 closers, so the DSL parser nested the siblings that followed each one — and that
-  nesting was what rendered. The v2 migration (`src/lib/migrate.ts`) keeps the stored
-  TREE, which is exactly that nesting, so there is nothing left to disagree with: the
-  fixture was regenerated through the migration and `validateTree` reports nothing on it.
-- **RESOLVED — the element clipboard crosses a page and a component.** It held dedented
-  DSL code plus a hand-maintained list of per-node props, and a master had no code, so
-  ⌘C on the board and ⌘V on a page did nothing. It is a deep clone of the subtree now
-  (`useStructure`, module-level), which is both hosts' shape — and carries every piece
-  of node state without a key list to keep in step.
+Still open:
+
 - **Deleting or retyping a node in a component master drops any per-instance content on
   that node.** The push pairs instance children by `alignStructure`'s signature LCS,
   which cannot match a node that no longer exists or whose type changed. Undo restores
@@ -324,6 +311,19 @@ element (`src/lib/shared/svg.js`).
   the tree offers no ctrl-click across branches.
 - **`parentIndex` (`useRenderNode`) and `targetIndex` (`useInteraction`) remain
   active-page only**, so they are wrong for a node rendered on the components board.
+
+Resolved, kept for provenance:
+
+- ~~**the e2e fixture's unclosed `:div` blocks.**~~ The fixture had 58 opens to
+  50 closers, so the DSL parser nested the siblings that followed each one — and that
+  nesting was what rendered. The v2 migration (`src/lib/migrate.ts`) keeps the stored
+  TREE, which is exactly that nesting, so there is nothing left to disagree with: the
+  fixture was regenerated through the migration and `validateTree` reports nothing on it.
+- ~~**the element clipboard crosses a page and a component.**~~ It held dedented
+  DSL code plus a hand-maintained list of per-node props, and a master had no code, so
+  ⌘C on the board and ⌘V on a page did nothing. It is a deep clone of the subtree now
+  (`useStructure`, module-level), which is both hosts' shape — and carries every piece
+  of node state without a key list to keep in step.
 
 ## Components library
 
@@ -428,23 +428,39 @@ The `guano mcp` server (`packages/guano/mcp/`) shipped Phases 0–8. Known, deli
   | `list_components {includeNodes}` | 103.2 KB (~25.8k tok) | 70.4 KB |
 
   One default `get_page` therefore costs about what the WHOLE tool list costs,
-  and a session does several. `mcp/server.mjs` now sends results over
-  `PRETTY_MAX` compact, which is 19–33% off every large response for a one-line
-  change. What remains is the shape itself: the default `elements` mode repeats
-  per-element rows that a `refs` read gives in half the bytes, and
-  `list_components {includeNodes}` echoes every master node of every component.
-  Worth its own pass — a cheaper default read shape, or capping the echoed
-  content — before any further trimming of `tools/list`.
+  and a session does several. `mcp/server.mjs` sends results over `PRETTY_MAX`
+  compact, which is 19–33% off every large response for a one-line change.
+
+  **The shape pass landed 2026-10-05** (Harbour 3I). Ids print in the 8-hex form
+  the HTML already used — measured on an 83-row page, `elements: "refs"` 6,888 →
+  4,564 B and `"own"` 9,341 → 6,653 B, so ~30% off every element read;
+  `list_components {brief: true}` answers a dozen components in ~1 KB instead of
+  ~22 KB; `edit_structure`'s summary is scoped to what the ops touched;
+  `update_settings` echoes only the keys the call wrote; a bare
+  `get_translation_worklist` returns the counters; and the worklist `handle`
+  keeps item addresses out of the transcript entirely. GUIDE's **Cost
+  discipline** section is the agent-facing half.
+
+  **Still open:** `get_page`'s DEFAULT `elements` mode is still the per-element
+  `own` shape. Making `refs` the default would halve a cold read again, and the
+  argument against it is that `own` carries each instance's `parts`, which is
+  what makes a page of components fillable without a second call (see §5 of the
+  Harbour report). Needs a measurement, not an opinion.
 - **M1 — no in-server HTTP transport.** v1 is a stdio CLI (`guano mcp`) that
   talks to a running instance over the HTTP API. A streamable-HTTP `/mcp`
   endpoint on the node server is out of scope (would let remote agents connect
   without a local process).
-- **M2 — no optimistic locking on the store.** Writes are latest-wins. Page and
-  element tools take a `version` hash (sha256 of the page's canonical HTML plus
-  name/slug/status) that guards a write against a stale read, but
-  collection/comment/interaction
-  writes are id-keyed and unguarded — a concurrent human edit to the same item
-  can still be clobbered. Drafts are the mitigation (the human picks the target).
+- **M2 — no optimistic locking on the store** (re-checked 2026-10-05, narrower
+  than it reads). Writes are latest-wins at the KEY level, but
+  `saveTargetProject` re-reads the blob and refuses if it changed since the
+  handler loaded it, so a human's save landing mid-handler is not erased
+  (`e2e/mcp-tools-security.spec.ts`). Page, element and component writes take a
+  `version` hash that guards against a stale READ; `delete_collection` takes
+  `confirmEntryCount`. What is still unguarded is a stale read of an id-keyed
+  item — a collection, a comment, an interaction, a design token — where two
+  agents (or an agent and a human) edit the same item in the same window and the
+  second write wins silently. `update_settings {tokens}` is the sharpest case
+  (see "Still open from Ridgeline"). Drafts are the mitigation.
 - **M3 — no zip/github publish over MCP.** `publish` only runs the `server`
   export method; zip/github stay editor-only.
 - **M4 — comments are read/written on the target blob.** They're shared across
@@ -532,11 +548,14 @@ serialization (the textarea orphan), master-id targetId gets a real error.
 - **M17 — 404 pages are default-locale only (run #3 LOW).** One root
   404.html (lang=en) serves every locale. Fix wants a per-locale
   `<code>/404.html` in the export plus handleStatic picking by path prefix.
-- **M18 — attributes are not localizable (run #3 friction).** placeholder,
-  aria-label, alt (and SEO-adjacent strings inside attributes) ship
-  untranslated and never appear in the worklist. Needs a per-locale
-  attributes bucket (node.locales[code].attributes?) plus worklist rows —
-  a localization-model change, not a patch.
+- ~~**M18 — attributes are not localizable.**~~ **RESOLVED** (verified
+  2026-10-05). `node.locales[code].attributes` is the per-locale bucket, read by
+  `mergeAttributeLayers`; `isLocalizableAttribute` is the list (placeholder,
+  aria-label, alt, title — the rest are structural and read the same in every
+  language); the worklist emits them as `kind: "attribute"` items and
+  `set_translations` writes them, so `missingTranslatable` counts them. Page SEO
+  title/description joined the worklist in the same shape (`kind: "seo"`).
+  Coverage: `e2e/export-locale-attributes.spec.ts`.
 - **M20 — `looksStructural` misses glyph-and-number rulers (run #3).** "00h ──
   03h ──" reads as prose to the heuristic (has letters+digits). A
   mostly-non-letter ratio check could catch it; low stakes, watch for false
@@ -616,18 +635,17 @@ by name instead of landing as an ordinary DOM attribute that binds nothing —
 `data-*` is authorable, so the only previous clue was a downstream "Unknown
 collection" diagnostic on a list, and on a leaf there was none at all.
 
-- **M26 — `create_collection` cannot declare its fields.** Every collection
-  takes two calls: `create_collection {name}` then `update_collection
+- **M26 — `create_collection` cannot declare its fields** (still true, verified
+  2026-10-05). Every collection takes two calls: `create_collection {name}` then `update_collection
   {addFields}`. `addFields` already has the schema, so accepting the same array
   at create would halve it; the entries a session then writes need the field
   names anyway, so there is no ordering reason for the split.
-- **M27 — a filled page is 3 calls, and the guide has to say so.** The rhythm is
-  `get_page` (for the version) → `set_page_html` → `edit_elements` on the parts,
-  because `set_page_html` already returns the fresh `elements` list WITH each
-  instance's `parts` and the new version. GUIDE.md says it (`page-html`,
-  "Addressing elements"), but the scripted pass re-read the page first anyway —
-  11.6 KB spent on something it had just been handed. Worth stating in
-  `set_page_html`'s own description, which is what an agent reads every turn.
+- ~~**M27 — a filled page is 3 calls, and the guide has to say so.**~~ **DONE**
+  2026-10-05: `set_page_html`'s own description now says it ("The response
+  carries the fresh `elements` (each instance with its `parts`) and the new
+  `version` — fill the parts with edit_elements, no re-read"), which is what an
+  agent reads every turn. `list_pages` also returns each page's version, so the
+  rhythm is 2 calls from a cold start.
 - **M28 — `publish` reported no warnings on a page that earns one.** The landing
   page carries a `<Navbar>` on every route and an `<a>` wrapping a heading and a
   paragraph; neither tripped `designWarnings`. Expected for this page (there is

@@ -10,7 +10,7 @@ import { walkNodes } from './tree'
  *
  * v1 carried the indentation DSL beside it — `page.code`, plus a `line` and
  * `endLine` on every node — because the text was authoritative for structure.
- * Nothing reads any of it now (TREE-SOURCE-PLAN.md, Phases 1 and 3), so v2
+ * Nothing reads any of it now (docs/history/TREE-SOURCE-PLAN.md, Phases 1 and 3), so v2
  * drops it, and with it the pure alias types the DSL's registry carried.
  *
  * This runs ONCE per blob, on the server at boot, over every project blob in

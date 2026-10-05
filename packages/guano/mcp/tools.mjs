@@ -1286,7 +1286,8 @@ function resolveBindTarget(project, page, ownerNode, inComponent, rawTarget, raw
       return {
         error:
           `bind targetId "${target}" is inside an instance ${masterDef.name} holds — what is in there ` +
-          `belongs to that component. Target an element ${masterDef.name} owns (wrap the instance in a :div).`,
+          `belongs to that component. Target an element ${masterDef.name} owns (wrap the instance in a ` +
+          '`<div class="contents">` it owns).',
       }
     }
     return { targetId: target }
@@ -1439,7 +1440,8 @@ function purgeLocaleOverrides(project, code) {
 
 const HOST_BIND_REFUSED = (host, inner) =>
   `bind refused: this element is inside the ${inner} that ${host} holds, so a binding here would be ` +
-  `${inner}'s — shared by every ${inner} everywhere. Wrap the instance in a :div ${host} owns ` +
+  `${inner}'s — shared by every ${inner} everywhere. Wrap the instance in a ` +
+  `\`<div class="contents">\` ${host} owns ` +
   '(class `contents`, so it adds no box) and bind on that: the click bubbles up to it.'
 
 /**
@@ -1458,7 +1460,7 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
   const shorts = shortIdMap(scopeDef ? [scopeDef.root] : (page?.elements ?? []))
   const sid = (node) => shorts.get(node.id) ?? node.id
   // one pairing walk per batch, not one per edit: nothing an edit does here
-  // changes structure (arg/setRef reconcile with an identity map, ids kept)
+  // changes structure, so the pairing cannot go stale mid-batch
   let pageMap = null
   const boardMaps = new Map()
   const mappingFor = (node, masterDef) => {
@@ -1521,8 +1523,8 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
             `${refused.join(', ')} refused: '${node.type}' is a component instance, which has no box of ` +
               'its own — it takes `variants`, `hidden` and (on a page) `setRef`. To restyle the ' +
               `component, edit the element INSIDE it (shared by every ${node.type}) or give it a ` +
-              'variant option; to space or size ONE placement, wrap the instance in a :div and ' +
-              'style that.',
+              'variant option; to space or size ONE placement, wrap the instance in a `<div>` ' +
+              'and style that.',
           ],
         })
         continue
@@ -1796,8 +1798,8 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
       }
     }
 
-    // --- arg (the token's […] slot — CODE-owned, so patch the line and
-    //     reconcile with a same-line identity map; no line count change) ---
+    // --- arg (the element's binding: a field name, or the collection on a
+    //     collection-list/item/slider) ---
     if (edit.arg !== undefined) {
       const value = String(edit.arg)
       // an arg on a component's element is STRUCTURE: it changes the component,
@@ -8312,8 +8314,8 @@ const tools = [
           reason: 'component-instance',
           message:
             `'${node.type}' is a component instance, which has no box of its own — a binding on it ` +
-            'renders nowhere. Bind on an element inside it (shared by every instance), or wrap the ' +
-            'instance in a :div (class `contents`) and bind on that.',
+            'renders nowhere. Bind on an element inside it (shared by every instance), or wrap ' +
+            'the instance in a `<div class="contents">` and bind on that.',
         }
       }
       // in-component bindings redirect to the master (editor parity); a

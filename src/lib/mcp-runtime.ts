@@ -1,8 +1,9 @@
 // MCP runtime entry point.
 //
 // The `guano mcp` subcommand (packages/guano/mcp/) runs in plain Node and needs
-// the SAME structure/style logic the browser editor uses — parsing, reconcile,
-// document scaffolding, the element registry, and class application. Those live
+// the SAME structure/style logic the browser editor uses — the HTML reader and
+// identity-carrying writer, the tree and component ops, the element registry,
+// and class application. Those live
 // in TypeScript under src/lib/. Rather than port them (and risk drift), this
 // file re-exports exactly the functions the MCP server calls; a Vite lib build
 // (vite.mcp.config.ts) bundles this module + its transitive deps into a single

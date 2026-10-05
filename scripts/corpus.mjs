@@ -1,4 +1,4 @@
-// The render referee for the tree-source migration (TREE-SOURCE-PLAN.md, Phase 0).
+// The render referee for the tree-source migration (docs/history/TREE-SOURCE-PLAN.md, Phase 0).
 //
 // The migration retires the indentation DSL and makes the ElementNode tree the
 // only source of truth for page structure. Every phase of it is a rewrite of
