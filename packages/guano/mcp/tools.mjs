@@ -2498,6 +2498,32 @@ function linksTo(project, path) {
   return hits
 }
 
+/**
+ * Where an effect is bound, by library id. One walk for both engines.
+ *
+ * `delete_interaction` / `delete_animation` unbind from EVERYTHING and then
+ * report the count — which is the first an agent hears of it, and by then the
+ * forty bindings are gone. The same number computed first is a refusal it can
+ * act on (and `list_interactions` / `list_animations` report it, so the refusal
+ * is not the only way to find out).
+ */
+function effectUsage(project, kind, id) {
+  const key = kind === 'interaction' ? 'interactions' : 'animations'
+  const idKey = kind === 'interaction' ? 'interactionId' : 'animationId'
+  let count = 0
+  const where = []
+  const scan = (nodes, label) =>
+    walkNodes(nodes, (node) => {
+      const n = (node[key] ?? []).filter((b) => b[idKey] === id).length
+      if (!n) return
+      count += n
+      where.push(`${label}: ${node.ref ? `#${node.ref}` : node.type}`)
+    })
+  for (const page of project.pages ?? []) scan(page.elements ?? [], `page "${page.name}"`)
+  for (const c of project.components ?? []) scan([c.root], `component ${c.name}`)
+  return { count, where }
+}
+
 /** pages an operation rewrote, with the version each now has */
 function touchedVersions(project, before) {
   return (project.pages ?? [])
@@ -6563,6 +6589,28 @@ const tools = [
           }
         }
         if (shadowing.length) tokenWarnings.push(...shadowing)
+        // A REPLACE drops every token not in the list, and `removeTokens` has
+        // always refused to drop one that still styles elements. The replacing
+        // form did not run that check at all, so a write built on a stale read
+        // — the list a previous call returned, minus nothing, plus one — threw
+        // away whatever another session had added in between, and the classes
+        // naming it rendered as no colour at all. Same check, same opt-out.
+        const keeping = new Set(args.tokens.map((t) => t.name))
+        const dropping = new Set((s.tokens ?? []).map((t) => t.name).filter((n) => !keeping.has(n)))
+        const droppedInUse = dropping.size ? tokenUsage(project, dropping) : new Map()
+        if (droppedInUse.size && args.forcePurge !== true) {
+          return {
+            saved: false,
+            reason: 'tokens-in-use',
+            inUse: [...droppedInUse].map(([name, where]) => ({ token: name, where })),
+            message:
+              `${[...droppedInUse.keys()].join(', ')} are not in the list you sent, and they still ` +
+              'style elements — a replace would leave those classes pointing at nothing, which ' +
+              'renders as no colour at all. If you meant to ADD tokens, use addTokens (the ' +
+              'replacing form drops everything you leave out); if you meant to remove them, ' +
+              'restyle those elements first or retry with forcePurge: true.',
+          }
+        }
         // keep existing ids for same-name tokens so unrelated diffs stay quiet
         const byName = new Map((s.tokens ?? []).map((t) => [t.name, t.id]))
         s.tokens = args.tokens.map((t) => ({
@@ -7908,7 +7956,12 @@ const tools = [
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     handler: async () => {
       const { project } = await loadTargetProject()
-      return { interactions: (project.interactions ?? []).map(interactionView) }
+      return {
+        interactions: (project.interactions ?? []).map((it) => {
+          const { count } = effectUsage(project, 'interaction', it.id)
+          return { ...interactionView(it), ...(count ? { bindings: count } : {}) }
+        }),
+      }
     },
   },
   {
@@ -8041,12 +8094,16 @@ const tools = [
     handler: async () => {
       const { project } = await loadTargetProject()
       return {
-        animations: (project.animations ?? []).map((a) => ({
-          id: a.id,
-          name: a.name,
-          steps: a.steps,
-          durationMs: compileAnimation(a).duration,
-        })),
+        animations: (project.animations ?? []).map((a) => {
+          const { count } = effectUsage(project, 'animation', a.id)
+          return {
+            id: a.id,
+            name: a.name,
+            steps: a.steps,
+            durationMs: compileAnimation(a).duration,
+            ...(count ? { bindings: count } : {}),
+          }
+        }),
         properties: Object.keys(MOTION_PROPS),
         easings: EASING_KEYS,
       }
@@ -8156,10 +8213,13 @@ const tools = [
     name: 'delete_animation',
     description:
       'Remove an animation from the library AND unbind it from every element on every page and ' +
-      'component master. Requires a target.',
+      'component master. Refused while it is still bound, unless `force: true`. Requires a target.',
     inputSchema: {
       type: 'object',
-      properties: { animationId: { type: 'string' } },
+      properties: {
+        animationId: { type: 'string' },
+        force: { type: 'boolean', description: 'delete it even though elements still play it' },
+      },
       required: ['animationId'],
       additionalProperties: false,
     },
@@ -8169,9 +8229,26 @@ const tools = [
       if (!(project.animations ?? []).some((a) => a.id === id)) {
         return { saved: false, reason: 'not-found' }
       }
+      const usage = effectUsage(project, 'animation', id)
+      if (usage.count && args.force !== true) {
+        return {
+          saved: false,
+          reason: 'in-use',
+          bindings: usage.count,
+          where: usage.where.slice(0, 8),
+          message:
+            `this animation is bound on ${usage.count} element(s) — deleting it unbinds every ` +
+            'one, and those elements stop moving. Unbind the ones you meant to (edit_elements ' +
+            '{unbindAnimationIds}) or retry with force: true.',
+        }
+      }
       project.animations = (project.animations ?? []).filter((a) => a.id !== id)
       let unbound = 0
-      const touched = []
+      // the PAGES whose version moved, by id. This was spelled `touched` here
+      // and read back as `changed` in the response, so `delete_animation` threw
+      // a ReferenceError on every call, bound or not — the tool had never
+      // worked. Nothing covered it until now.
+      const changed = new Map()
       for (const page of project.pages ?? []) {
         walkNodes(page.elements ?? [], (node) => {
           if (!node.animations?.length) return
@@ -8180,7 +8257,7 @@ const tools = [
           unbound += node.animations.length - kept.length
           if (kept.length) node.animations = kept
           else delete node.animations
-          touched.push({ page, node })
+          changed.set(page.id, page)
         })
       }
       for (const c of project.components ?? []) {
@@ -8226,10 +8303,14 @@ const tools = [
     name: 'delete_interaction',
     description:
       'Remove a class-swap interaction from the library AND unbind it from every element on ' +
-      'every page and component master (the counterpart of delete_animation). Requires a target.',
+      'every page and component master (the counterpart of delete_animation). Refused while it ' +
+      'is still bound, unless `force: true`. Requires a target.',
     inputSchema: {
       type: 'object',
-      properties: { interactionId: { type: 'string' } },
+      properties: {
+        interactionId: { type: 'string' },
+        force: { type: 'boolean', description: 'delete it even though elements still use it' },
+      },
       required: ['interactionId'],
       additionalProperties: false,
     },
@@ -8238,6 +8319,19 @@ const tools = [
       const id = args.interactionId
       if (!(project.interactions ?? []).some((i) => i.id === id)) {
         return { saved: false, reason: 'not-found' }
+      }
+      const usage = effectUsage(project, 'interaction', id)
+      if (usage.count && args.force !== true) {
+        return {
+          saved: false,
+          reason: 'in-use',
+          bindings: usage.count,
+          where: usage.where.slice(0, 8),
+          message:
+            `this interaction is bound on ${usage.count} element(s) — deleting it unbinds every ` +
+            'one, and those elements stop reacting. Unbind the ones you meant to (edit_elements ' +
+            '{unbindInteractionIds}) or retry with force: true.',
+        }
       }
       project.interactions = (project.interactions ?? []).filter((i) => i.id !== id)
       let unbound = 0

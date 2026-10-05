@@ -941,3 +941,146 @@ test.describe('get_guide sections', () => {
     expect(miss.sections.length).toBeGreaterThan(10)
   })
 })
+
+// From BACKLOG, surfaced again by the Harbour run: three writes that could
+// destroy work an agent had not read, and said so only afterwards.
+test.describe('destructive writes are interlocked', () => {
+  test('a token replace that drops an in-use token is refused', async () => {
+    const s = await mcpSession()
+    await s.call('update_settings', {
+      addTokens: [
+        { name: 'brand', value: '#112233' },
+        { name: 'ink', value: '#000000' },
+      ],
+    })
+    const home = await s.home()
+    await s.call('set_page_html', {
+      pageId: home.id,
+      html: pageHtml('<p data-ref="t" class="text-ink bg-brand">x</p>'),
+      version: home.version,
+    })
+
+    // the stale-read shape: re-send the list you were handed, minus one
+    const r = await s.call('update_settings', { tokens: [{ name: 'brand', value: '#112233' }] })
+    expect(r.saved).toBe(false)
+    expect(r.reason).toBe('tokens-in-use')
+    expect(JSON.stringify(r.inUse)).toContain('ink')
+    // it names addTokens, which is what the caller actually wanted
+    expect(r.message).toContain('addTokens')
+    // and nothing was dropped
+    const after = await s.call('get_settings')
+    expect((after.tokens as { name: string }[]).map((t) => t.name).sort()).toEqual(['brand', 'ink'])
+
+    // forcePurge is the opt-in, same as removeTokens
+    const forced = await s.call('update_settings', {
+      tokens: [{ name: 'brand', value: '#112233' }],
+      forcePurge: true,
+    })
+    expect(forced.saved).toBe(true)
+  })
+
+  test('deleting a bound interaction is refused, and names where', async () => {
+    const s = await mcpSession()
+    const { created } = await s.call('create_interactions', {
+      items: [{ name: 'Show', toClasses: 'flex' }],
+    })
+    const id = created[0].id
+    const home = await s.home()
+    await s.call('set_page_html', {
+      pageId: home.id,
+      html: pageHtml('<div data-ref="panel" class="hidden" />'),
+      version: home.version,
+    })
+    const page = await s.home()
+    await s.call('edit_elements', {
+      pageId: page.id,
+      version: page.version,
+      edits: [{ ref: 'panel', bindInteractions: [{ interactionId: id, trigger: 'click' }] }],
+    })
+
+    // the count is readable WITHOUT risking the delete
+    const listed = (await s.call('list_interactions')).interactions as { bindings?: number }[]
+    expect(listed[0].bindings).toBe(1)
+
+    const r = await s.call('delete_interaction', { interactionId: id })
+    expect(r.saved).toBe(false)
+    expect(r.reason).toBe('in-use')
+    expect(r.bindings).toBe(1)
+    expect(JSON.stringify(r.where)).toContain('panel')
+    // still there, still bound
+    expect((await s.call('list_interactions')).interactions).toHaveLength(1)
+
+    const forced = await s.call('delete_interaction', { interactionId: id, force: true })
+    expect(forced.saved).toBe(true)
+    expect(forced.unbound).toBe(1)
+  })
+
+  test('an UNBOUND effect deletes without ceremony', async () => {
+    const s = await mcpSession()
+    const { created } = await s.call('create_interactions', {
+      items: [{ name: 'Spare', toClasses: 'flex' }],
+    })
+    const r = await s.call('delete_interaction', { interactionId: created[0].id })
+    expect(r.saved).toBe(true)
+
+    const anim = await s.call('create_animations', {
+      items: [
+        {
+          name: 'Fade',
+          steps: [
+            { duration: 200, easing: 'quart-out', tracks: [{ prop: 'opacity', from: 0, to: 1 }] },
+          ],
+        },
+      ],
+    })
+    expect(anim.created).toHaveLength(1)
+    const d = await s.call('delete_animation', { animationId: anim.created[0].id })
+    expect(d.saved).toBe(true)
+  })
+})
+
+test('delete_animation reports the pages it rewrote', async () => {
+  const s = await mcpSession()
+  const anim = await s.call('create_animations', {
+    items: [
+      {
+        name: 'Fade',
+        steps: [
+          { duration: 200, easing: 'quart-out', tracks: [{ prop: 'opacity', from: 0, to: 1 }] },
+        ],
+      },
+    ],
+  })
+  const id = anim.created[0].id
+  const home = await s.home()
+  await s.call('set_page_html', {
+    pageId: home.id,
+    html: pageHtml('<div data-ref="card" class="opacity-0" />'),
+    version: home.version,
+  })
+  const page = await s.home()
+  await s.call('edit_elements', {
+    pageId: page.id,
+    version: page.version,
+    edits: [{ ref: 'card', bindAnimations: [{ animationId: id, trigger: 'appear' }] }],
+  })
+
+  const r = await s.call('delete_animation', { animationId: id, force: true })
+  expect(r.saved).toBe(true)
+  expect(r.unbound).toBe(1)
+  // the page it rewrote is named — this is the field whose name was wrong in
+  // the handler, which made every call to this tool throw. The version itself
+  // is UNCHANGED, and deliberately so: a binding is node state the HTML
+  // reports and does not carry, so `pageVersion` excludes it (see GUIDE, "a
+  // node-only edit returns the SAME version").
+  expect(r.versions).toHaveLength(1)
+  expect(r.versions[0].pageId).toBe(home.id)
+  expect(r.versions[0].version).toBe(page.version)
+  // and the binding really is gone
+  const after = await s.call('get_page', {
+    pageId: home.id,
+    elements: 'own',
+    includeInteractions: true,
+  })
+  expect(JSON.stringify(after.elements)).not.toContain('animations')
+})

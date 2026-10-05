@@ -909,12 +909,29 @@ Top 10: CMS field types `number`/`boolean`/`select` (one catalog in
 `update_page {name, slug, status}` — the reference-slug filter and `update_page` were
 already in the first pass. What the run surfaced and is still NOT done:
 
-- **The renderer-drift sweep.** E1, E3 and E4 were each one half of a pair
-  (`useRenderNode` vs `export.mjs`) disagreeing, and all three were invisible because
-  the canvas and Play were the correct half. The three are fixed; the *class* is not.
-  `check:corpus` compares exports to exports, so it can never catch a canvas/site
-  divergence — a referee that renders the corpus through BOTH paths and diffs them is
-  the missing gate.
+- **The renderer-drift sweep** (scoped 2026-10-05, not started). E1, E3 and E4 were each
+  one half of a pair (`useRenderNode` vs `export.mjs`) disagreeing, and all three were
+  invisible because the canvas and Play were the correct half. Harbour E3 was the same
+  class again: a host's `link` on a nested instance was skipped by BOTH readers, so
+  nothing could have caught it either — but a future one-sided fix is exactly what this
+  gate is for. `check:corpus` compares exports to exports and can never see it.
+
+  The shape: a script that renders each corpus project through `useRenderNode`
+  headlessly — jsdom + `createSSRApp` with a stub for the editor-only chrome
+  (selection marks, drop targets, the camera) — and diffs the result against
+  `export.mjs`'s HTML for the same project. It cannot be byte-for-byte: the canvas
+  deliberately draws things the site does not (a list's row template with
+  placeholders, the empty block beside it, hidden parts in the Layers tree) and the
+  export deliberately draws things the canvas does not (the interaction runtime's
+  `data-int` attributes, the form manifest's hidden inputs). So the referee needs a
+  NORMALISER with a documented list of intended differences, and that list is the real
+  design work — a referee whose diff is always noisy is a referee nobody runs.
+
+  Start with the subset where both sides must agree exactly and the bugs actually were:
+  the classes an element wears (`effectiveClasses` + interaction base removal), its
+  resolved text/media/attributes, and its `href`. Those are four readers with three
+  implementations each (canvas, Play, export), and three of the four have already had a
+  one-sided bug. A day, and it would have caught E3 if the fix had gone in on one side.
 - **`equalsCurrentField`** (E21): "entries whose `category` equals the CURRENT entry's
   `category`" — the related-items pattern. `equalsCurrent` covers the child-collection
   case only. `listQuery.filter` would need a field-to-field comparison.
