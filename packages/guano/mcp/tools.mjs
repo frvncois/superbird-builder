@@ -1015,9 +1015,14 @@ function elementSummary(project, page, opts = {}) {
   // the page — which is most of what a targeted read was trying to avoid, and
   // left `elementIds` (ids you are reading the page to find) as the only way
   // to narrow it.
+  // a REF is resolved through the whole tree (refNodeId), not across the
+  // top-level array: `page.elements` is `[body]`, so `.find(n => n.ref === …)`
+  // could only ever match a ref on the body itself. Every other ref came back
+  // `elements: []` beside a correctly scoped `html` — a targeted read that
+  // returned the markup and none of the addresses.
   const root = opts.subtree
     ? (findNode(page.elements ?? [], fullNodeId(page.elements ?? [], opts.subtree)) ??
-      (page.elements ?? []).find((n) => n.ref === opts.subtree))
+      findNode(page.elements ?? [], refNodeId(page, opts.subtree) ?? ''))
     : (page.elements ?? []).find((n) => n.type === 'body')
   if (root) {
     const inInstance = opts.subtree ? !!buildInstanceMap(project, page).get(root.id) : false
@@ -2591,6 +2596,34 @@ function declaredRefs(roots) {
   }
   visit(roots)
   return out
+}
+
+/**
+ * The element summary after a structure edit, scoped to the subtrees the ops
+ * touched — plus the refs, which are the addresses the next call needs.
+ *
+ * `elements` is documented as "the ops said what changed", and the default
+ * returned every row on the page: a one-element insert into an app screen
+ * answered with thousands. An explicit `own`/`all` still means the whole page.
+ */
+function scopedStructureSummary(project, page, touched, mode) {
+  if (mode === 'own' || mode === 'all') return elementSummary(project, page, { mode })
+  const full = elementSummary(project, page, { mode: mode ?? 'refs' }) ?? []
+  if (!touched.size) return full
+  // every id under a touched node, so an inserted block comes back whole
+  const want = new Set()
+  const ids = new Set()
+  walkNodes(page.elements ?? [], (n) => ids.add(n.id))
+  for (const key of touched) {
+    const id = ids.has(key) ? key : (fullNodeId(page.elements ?? [], key) ?? key)
+    const node = findNode(page.elements ?? [], id)
+    if (node) walkNodes([node], (n) => want.add(n.id))
+    else want.add(id) // a removed node: keep the key so `applied` and this agree
+  }
+  const rows = full.filter((e) => want.has(e.id) || e.ref)
+  // nothing recognizable (every op removed something) — the refs alone are the
+  // useful answer, and they are already in `rows`
+  return rows
 }
 
 function runStructureOp(project, root, op, def, where) {
@@ -4425,10 +4458,20 @@ const tools = [
         subtree,
       }) ?? [] // mode "none" omits the summary
       const totalElements = elements.length
+      let unknownIds = []
       if (args.elementIds?.length) {
         // short `data-id`s are valid addresses everywhere else now, so they
-        // are valid here
-        const wanted = new Set(args.elementIds.map((k) => fullNodeId(page.elements ?? [], k)))
+        // are valid here — and so is a `#ref`, which used to filter the summary
+        // down to nothing and say nothing about why
+        const resolved = args.elementIds.map((k) => {
+          const key = String(k)
+          const byId = fullNodeId(page.elements ?? [], key)
+          if (byId !== key || findNode(page.elements ?? [], key)) return byId
+          return refNodeId(page, key) ?? key
+        })
+        const wanted = new Set(resolved)
+        const present = new Set(elements.map((e) => e.id))
+        unknownIds = args.elementIds.filter((k, i) => !present.has(resolved[i]))
         elements = elements.filter((e) => wanted.has(e.id))
       }
       const html = args.summaryOnly
@@ -4472,6 +4515,9 @@ const tools = [
         diagnostics: check,
         ...(html === undefined ? {} : { html }),
         ...(subtree ? { subtree } : {}),
+        // an address in `elementIds` that matched nothing: reported rather
+        // than quietly filtered out, which read as "that element has no state"
+        ...(unknownIds.length ? { unknownIds } : {}),
         ...pageInfo,
         elements,
       }
@@ -4628,7 +4674,9 @@ const tools = [
         elements: {
           type: 'string',
           enum: ['own', 'all', 'refs', 'none'],
-          description: 'shape of the returned per-element summary (default "refs" here — the ops said what changed)',
+          description:
+            'per-element summary shape. Default: the touched subtrees + every #ref; "own"/"all" ' +
+            'widen it to the whole page',
         },
       },
       required: ['version'],
@@ -4669,6 +4717,7 @@ const tools = [
       // clone, so nothing it keeps changes identity.
       const scratch = JSON.parse(JSON.stringify(root))
       const totals = { kept: 0, created: 0, removed: 0 }
+      const touched = new Set()
       const refused = []
       const warnings = []
       const applied = []
@@ -4718,6 +4767,9 @@ const tools = [
         totals.created += outcome.created ?? 0
         totals.removed += outcome.removed ?? 0
         applied.push(`${op.op} ${op.target ?? op.targets?.join(', ') ?? ''}`.trim())
+        // what this op TOUCHED, for the scoped summary below
+        for (const n of outcome.placed ?? []) touched.add(n.id)
+        if (op.op === 'remove' && op.target) touched.add(String(op.target))
       }
       if (refused.length) {
         return { saved: false, reason: 'refused', refused, message: 'nothing was saved' }
@@ -4748,8 +4800,14 @@ const tools = [
                 .map((p) => ({ pageId: p.id, version: pageVersion(project, p) })),
             }
           : {}),
+        // SCOPED to what the ops touched, which is what the parameter says it
+        // is: the default returned the whole page, so a one-element insert
+        // into a large page answered with every row on it. `elements: "all"`
+        // (or "own") still means the whole page, for the cases that want it.
         ...(page && args.elements !== 'none'
-          ? { elements: elementSummary(project, page, { mode: args.elements ?? 'refs' }) }
+          ? {
+              elements: scopedStructureSummary(project, page, touched, args.elements),
+            }
           : {}),
       }
     },
