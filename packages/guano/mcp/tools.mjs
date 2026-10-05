@@ -799,7 +799,10 @@ const componentNamesOf = (project) => (project.components ?? []).map((c) => c.na
  * One funnel for every write that takes markup, so the refusal shape is the
  * same everywhere: `line:col` diagnostics against the text the agent sent.
  */
-function readHtml(project, html) {
+async function readHtml(project, html) {
+  // a bundled icon NAME in the markup needs the table to resolve; nothing else
+  // does, so a page with no icons never imports it
+  if (String(html ?? '').includes('data-icon=')) await loadIcons()
   const parsed = parseHtml(String(html ?? ''), componentNamesOf(project))
   if (parsed.errors.length) {
     return {
@@ -810,6 +813,17 @@ function readHtml(project, html) {
   }
   return { ok: true, roots: parsed.roots, notes: parsed.notes }
 }
+
+  /**
+   * The icon resolver `applyHtml` takes, so `data-icon="mail"` is a WRITE form
+   * and not only an echo. Null until the table has been loaded — `readHtml`
+   * loads it when the markup mentions an icon at all, so a page with no icons
+   * never pays the ~330 KB import.
+   */
+  const iconResolver = () => (icons ? (name) => {
+    const inner = icons[name]
+    return inner ? lucideSvg(name, inner) : null
+  } : undefined)
 
 /** the diagnostics an agent sees — one funnel for every reporting path */
 const diagnose = (project, root) => (root ? validateTree(root, contextFromProject(project)) : [])
@@ -2384,8 +2398,8 @@ function masterNodeRows(project, def, opts = {}) {
  *
  * `html` is the master's own element (`<Card>…</Card>`) or just its children.
  */
-function applyComponentHtml(project, def, html) {
-  const read = readHtml(project, html)
+async function applyComponentHtml(project, def, html) {
+  const read = await readHtml(project, html)
   if (!read.ok) return { ok: false, reason: read.reason, diagnostics: read.diagnostics }
 
   const before = pageVersions(project)
@@ -2393,6 +2407,7 @@ function applyComponentHtml(project, def, html) {
     project,
     def,
     validate: contextFromProject(project),
+    resolveIcon: iconResolver(),
   })
   if (result.refused.length) {
     return { ok: false, reason: 'refused', refused: result.refused }
@@ -2745,6 +2760,7 @@ function runStructureOp(project, root, op, def, where) {
       def,
       validate: contextFromProject(project),
       asChildren: true,
+      resolveIcon: iconResolver(),
     })
     return { nodes: holder.children, res }
   }
@@ -2826,7 +2842,12 @@ function runStructureOp(project, root, op, def, where) {
     // the response said `saved: true` with nothing refused. The type test is
     // what makes the adopt-onto case explicit instead of accidental.
     if (parsed.roots.length === 1 && sameType(parsed.roots[0].type, node.type)) {
-      const res = applyHtml(node, parsed.roots, { project, def, validate: contextFromProject(project) })
+      const res = applyHtml(node, parsed.roots, {
+        project,
+        def,
+        validate: contextFromProject(project),
+        resolveIcon: iconResolver(),
+      })
       return {
         ...res,
         kept: (res.kept ?? 0) + 1,
@@ -4697,7 +4718,7 @@ const tools = [
       if (args.version !== current) {
         return { saved: false, reason: 'stale-version', message: staleMessage('page'), currentVersion: current }
       }
-      const read = readHtml(project, args.html)
+      const read = await readHtml(project, args.html)
       if (!read.ok) return { saved: false, reason: read.reason, diagnostics: read.diagnostics }
 
       let body = (page.elements ?? []).find((n) => n.type === 'body')
@@ -4710,7 +4731,11 @@ const tools = [
       // is what the DSL path had to do with a post-hoc strip.
       if (args.fresh) body.children = []
 
-      const result = applyHtml(body, read.roots, { project, validate: contextFromProject(project) })
+      const result = applyHtml(body, read.roots, {
+        project,
+        validate: contextFromProject(project),
+        resolveIcon: iconResolver(),
+      })
       result.diagnostics = result.diagnostics
       await saveTargetProject(project)
 
@@ -4828,6 +4853,8 @@ const tools = [
         }
       }
       if (!Array.isArray(args.ops) || !args.ops.length) throw new Error('pass at least one op')
+      // a bundled icon name in any op's markup needs the table (iconResolver)
+      if (args.ops.some((op) => String(op?.html ?? '').includes('data-icon='))) await loadIcons()
       const { project } = await loadTargetProject()
 
       // a page or a master: one tree either way, and the only difference is
@@ -5331,7 +5358,7 @@ const tools = [
         const def = { id: randomUUID(), name, root: { id: randomUUID(), type: name, content: '', children: [] } }
         setComponentMeta(def, { category: args.category })
         project.components.push(def)
-        const done = applyComponentHtml(project, def, args.html)
+        const done = await applyComponentHtml(project, def, args.html)
         if (!done.ok || !def.root.children.length) {
           project.components = project.components.filter((c) => c !== def)
           if (done.ok) return { saved: false, reason: 'empty', message: 'the markup holds no element' }
@@ -5568,7 +5595,7 @@ const tools = [
       out.name = def.name
 
       if (args.html !== undefined) {
-        const done = applyComponentHtml(project, def, args.html)
+        const done = await applyComponentHtml(project, def, args.html)
         // nothing is saved when it is refused — the rename above included
         if (!done.ok) {
           const { ok: _ok, ...why } = done

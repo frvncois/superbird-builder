@@ -74,6 +74,19 @@ export interface ApplyOptions {
    * undefined and an insert lost the element it was asked to place.
    */
   asChildren?: boolean
+  /**
+   * Resolve a bundled icon NAME to its sanitized `<svg>` markup, so
+   * `data-icon="mail"` works as a write form and not only as an echo.
+   *
+   * Injected, never imported: the Lucide table is ~330 KB and must stay out of
+   * the browser bundle and out of the MCP runtime bundle, so the caller (which
+   * already loads it lazily) supplies the lookup. Without it a changed
+   * `data-icon` is refused, which is what every writer used to do — and
+   * `set_page_html` accepted the echoed `lucide:…` form while
+   * `create_component` refused the plain one, so the guide's own example
+   * (`<svg data-icon="mail" />`) worked in one writer and not the other (E21).
+   */
+  resolveIcon?: (name: string) => string | null
 }
 
 /**
@@ -505,14 +518,7 @@ export function applyHtml(
           break
 
         case attr === 'data-icon':
-          // an icon's markup is per-instance state, but it is never IN the
-          // HTML; writing the name back can only mean "unchanged"
-          if (value && value !== iconNameOf(node)) {
-            refuse(
-              path,
-              `an icon's markup is not in the HTML — set it with edit_elements {icon: "${value}"}`,
-            )
-          }
+          setIcon(node, value, path)
           break
 
         case attr.startsWith('data-bind-'):
@@ -675,12 +681,7 @@ export function applyHtml(
           break
 
         case attr === 'data-icon':
-          if (value && value !== iconNameOf(node)) {
-            refuse(
-              path,
-              `an icon's markup is not in the HTML — set it with edit_elements {icon: "${value}"}`,
-            )
-          }
+          setIcon(node, value, path)
           break
 
         case NEAR_MISS_BINDINGS.has(attr):
@@ -915,6 +916,31 @@ export function applyHtml(
   function setHidden(node: ElementNode, value: string) {
     const next = value !== 'false'
     if (node.hidden !== next) node.hidden = next
+  }
+
+  /**
+   * `data-icon` names a bundled icon. Echoing back what the node already has
+   * is a no-op (that is the round-trip); a DIFFERENT name sets the icon, when
+   * the caller supplied a resolver for the table.
+   *
+   * `custom` is the serializer's word for "this svg is not a bundled icon", so
+   * it is never a name to resolve — writing it back means "leave the markup
+   * alone", which is exactly what an unchanged round-trip of a custom icon does.
+   */
+  function setIcon(node: ElementNode, value: string, path: string) {
+    const name = value.trim()
+    if (!name || name === iconNameOf(node) || name === 'custom') return
+    const markup = opts.resolveIcon?.(name)
+    if (markup) {
+      node.svg = markup
+      return
+    }
+    refuse(
+      path,
+      opts.resolveIcon
+        ? `no bundled icon named "${name}" — find one with list_icons, or set custom markup with edit_elements {svg}`
+        : `an icon's markup is not in the HTML here — set it with edit_elements {icon: "${name}"}`,
+    )
   }
 
   /** write only a real change, and let an empty value DELETE the key — which

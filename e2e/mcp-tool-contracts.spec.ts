@@ -849,8 +849,11 @@ test.describe('update_page and create_comment', () => {
     })
     expect(ok.saved).toBe(true)
     expect(ok.changed.sort()).toEqual(['name', 'slug'])
-    // a moved route is a route nothing links to any more, and it says so
-    expect(ok.note).toContain('old slug')
+    // nothing links to the old route, so there is nothing to report — the note
+    // and `linksToOldSlug` appear only when a link really did break (E14, see
+    // mcp-publish-warnings.spec.ts)
+    expect(ok.note).toBeUndefined()
+    expect(ok.linksToOldSlug).toBeUndefined()
     expect(Object.keys(await s.exportAll())).toContain('story/index.html')
   })
 

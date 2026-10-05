@@ -51,14 +51,17 @@ export function isLeafElement(type: string): boolean {
  *
  * The real question is whether an instance has anything of its OWN to say
  * about the element: its text or media (a leaf), its `name`/`placeholder` (a
- * form control), or where it goes (a link — per-instance with a component
- * default, which is what lets one Button serve a dozen destinations).
+ * form control), where it goes (a link — per-instance with a component
+ * default, which is what lets one Button serve a dozen destinations), or what
+ * it does when clicked (a `button`'s `type="submit"` / `"reset"`, which is per
+ * placement for the same reason: a Button serving a form's submit and its
+ * reset is the whole point of having one Button).
  */
 export function isInstancePart(type: string): boolean {
   // `isFormControl` is the one list of what a visitor types into or picks from
   // (shared/forms.js, where the export and the endpoint read it); a second
   // copy here would be the drift this codebase keeps paying for.
-  return isLeafElement(type) || isFormControl(type) || type === 'link'
+  return isLeafElement(type) || isFormControl(type) || type === 'link' || type === 'button'
 }
 
 export function createNode(type: string): ElementNode {

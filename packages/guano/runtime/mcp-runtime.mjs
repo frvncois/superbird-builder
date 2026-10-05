@@ -859,11 +859,14 @@ function isLeafElement(type) {
 *
 * The real question is whether an instance has anything of its OWN to say
 * about the element: its text or media (a leaf), its `name`/`placeholder` (a
-* form control), or where it goes (a link — per-instance with a component
-* default, which is what lets one Button serve a dozen destinations).
+* form control), where it goes (a link — per-instance with a component
+* default, which is what lets one Button serve a dozen destinations), or what
+* it does when clicked (a `button`'s `type="submit"` / `"reset"`, which is per
+* placement for the same reason: a Button serving a form's submit and its
+* reset is the whole point of having one Button).
 */
 function isInstancePart(type) {
-	return isLeafElement(type) || isFormControl(type) || type === "link";
+	return isLeafElement(type) || isFormControl(type) || type === "link" || type === "button";
 }
 function createNode(type) {
 	return {
@@ -5920,7 +5923,7 @@ function applyHtml(root, parsed, opts) {
 				break;
 			case attr === "data-slot": break;
 			case attr === "data-icon":
-				if (value && value !== iconNameOf(node)) refuse(path, `an icon's markup is not in the HTML — set it with edit_elements {icon: "${value}"}`);
+				setIcon(node, value, path);
 				break;
 			case attr.startsWith("data-bind-"):
 				setFieldAttr(node, attr.slice(10), value, path);
@@ -6003,7 +6006,7 @@ function applyHtml(root, parsed, opts) {
 				setHidden(node, value);
 				break;
 			case attr === "data-icon":
-				if (value && value !== iconNameOf(node)) refuse(path, `an icon's markup is not in the HTML — set it with edit_elements {icon: "${value}"}`);
+				setIcon(node, value, path);
 				break;
 			case NEAR_MISS_BINDINGS.has(attr):
 				refuse(path, SOURCE_TYPES.has(type) ? `'${attr}' binds nothing — <${parsed.tag}> takes a whole collection as 'source'` : `'${attr}' binds nothing — a field binding is 'data-field'`);
@@ -6157,6 +6160,25 @@ function applyHtml(root, parsed, opts) {
 	function setHidden(node, value) {
 		const next = value !== "false";
 		if (node.hidden !== next) node.hidden = next;
+	}
+	/**
+	* `data-icon` names a bundled icon. Echoing back what the node already has
+	* is a no-op (that is the round-trip); a DIFFERENT name sets the icon, when
+	* the caller supplied a resolver for the table.
+	*
+	* `custom` is the serializer's word for "this svg is not a bundled icon", so
+	* it is never a name to resolve — writing it back means "leave the markup
+	* alone", which is exactly what an unchanged round-trip of a custom icon does.
+	*/
+	function setIcon(node, value, path) {
+		const name = value.trim();
+		if (!name || name === iconNameOf(node) || name === "custom") return;
+		const markup = opts.resolveIcon?.(name);
+		if (markup) {
+			node.svg = markup;
+			return;
+		}
+		refuse(path, opts.resolveIcon ? `no bundled icon named "${name}" — find one with list_icons, or set custom markup with edit_elements {svg}` : `an icon's markup is not in the HTML here — set it with edit_elements {icon: "${name}"}`);
 	}
 	/** write only a real change, and let an empty value DELETE the key — which
 	*  is what makes a round-trip of an unchanged document byte-identical */
