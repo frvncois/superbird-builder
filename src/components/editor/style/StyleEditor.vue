@@ -22,7 +22,6 @@ import { isPaletteColor } from '@/lib/colors'
 import type { StyleProperty, Control, StyleSection, RelevanceContext } from '@/lib/styles'
 import { useElement } from '@/composables/useElement'
 import { useComponents } from '@/composables/useComponents'
-import { usePage } from '@/composables/usePage'
 import { useProject } from '@/composables/useProject'
 import { useClassField } from '@/composables/useClassField'
 import { useSettings } from '@/composables/useSettings'
@@ -52,7 +51,6 @@ import { borderWidthScheme } from '@/lib/tieredBox'
 
 const { selectedElement, elements } = useElement()
 const { masterFor, editTarget } = useComponents()
-const { activePage } = usePage()
 const { activeBreakpoint, baseBreakpoint, breakpoints } = useProject()
 
 // the width of the breakpoint being edited, or null when it's the base (widest)

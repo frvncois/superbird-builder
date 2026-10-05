@@ -1,4 +1,4 @@
-import { computed, effectScope, ref, watchEffect } from 'vue'
+import { computed, effectScope, watchEffect } from 'vue'
 import { useProject } from './useProject'
 import {
   isEmittableToken,

@@ -7,9 +7,6 @@
 // be. If those two readings of a form's subtree ever disagree, a field the
 // author can see is a field the server discards.
 
-/** names a submission may never carry: the runtime's own, and the `_` space */
-export const RESERVED_FIELD_NAMES = ['_hp', '_t', '_route', '_entry']
-
 /** per-kind caps, in characters. A textarea is the long one by design. */
 export const FIELD_CAPS = {
   text: 1000,
@@ -104,7 +101,8 @@ export function collectFormFields(formNode, resolve, opts) {
       if (!name) {
         unnamed.push({ id: node.id, type: node.type })
       } else if (name.startsWith('_')) {
-        // reserved: the runtime's own fields live in that space
+        // reserved: the WHOLE `_` space is the runtime's (`_hp`, `_t`,
+        // `_route`, `_entry`), so the prefix is the rule rather than a list
         unnamed.push({ id: node.id, type: node.type, reserved: true, name })
       } else {
         const kind = kindFor(node, attrs)

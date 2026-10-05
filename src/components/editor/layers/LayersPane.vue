@@ -25,7 +25,7 @@ const emit = defineEmits<{ back: [] }>()
 
 const { activePage } = usePage()
 const { project } = useProject()
-const { components, masterFor } = useComponents()
+const { masterFor } = useComponents()
 const { selectElement } = useElement()
 const { backend } = useStructure()
 

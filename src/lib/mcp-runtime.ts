@@ -13,15 +13,8 @@
 // components) precisely so applyClass can be bundled here. If you add a re-export
 // that drags in Vue/DOM, refactor the import graph — do not externalize it.
 
-// --- the node state a write preserves on every element it adopts. One
-// definition, shared by the HTML writer's `fresh` path and anything else that
-// wants a clean slate; it had drifted when spelled out twice.
-export {
-  hasNodeState,
-  stripNodeState,
-  NODE_STATE_KEYS,
-  BUILTIN_LIST_SOURCES,
-} from './nodeState'
+// --- list sources that are not collections (`@pages`)
+export { BUILTIN_LIST_SOURCES } from './nodeState'
 
 // --- the v2 schema migration (src/lib/migrate.ts). The SERVER runs this over
 // every project blob in the store at boot — Main, the drafts, the guano-base

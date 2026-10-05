@@ -1,55 +1,18 @@
 //#region src/lib/nodeState.ts
 /**
-* What a node carries beyond its structure.
-*
-* This is what is left of `syntax.ts` after the indentation DSL was deleted
-* (TREE-SOURCE-PLAN.md, Phase 4). The list used to mean "the state the code
-* cannot express, which `reconcile` therefore had to carry across a reparse";
-* it now means "the state a write preserves on every element it adopts", which
-* is the same list for the same reason — it is everything the agent format does
-* not put in the markup.
-*
-* One definition, shared by the HTML writer's `fresh` path and by anything else
-* that wants a clean slate. It had drifted when it was spelled out twice.
-*/
-var NODE_STATE_KEYS = [
-	"classes",
-	"content",
-	"src",
-	"svg",
-	"hidden",
-	"variants",
-	"background",
-	"htmlId",
-	"attributes",
-	"interactions",
-	"animations",
-	"locales",
-	"listQuery",
-	"entryId",
-	"fieldAttrs",
-	"instanceAttributes",
-	"slider",
-	"form"
-];
-/** true when a node carries state that would be lost (or wrongly inherited) */
-function hasNodeState(node) {
-	return NODE_STATE_KEYS.some((key) => {
-		const value = node[key];
-		if (value == null || value === "") return false;
-		if (Array.isArray(value)) return value.length > 0;
-		if (typeof value === "object") return Object.keys(value).length > 0;
-		return true;
-	});
-}
-/** drop everything a node carried, leaving its structure */
-function stripNodeState(node) {
-	for (const key of NODE_STATE_KEYS) delete node[key];
-}
-/**
 * List sources that are not collections: `@pages` iterates the site's own
 * published pages. The `@` prefix is reserved, so it can never collide with a
 * collection someone named "pages".
+*
+* This file is what is left of `syntax.ts` after the indentation DSL was
+* deleted. It also held `NODE_STATE_KEYS` / `hasNodeState` / `stripNodeState`,
+* an enumeration of "the state the code cannot express, which `reconcile` had
+* to carry across a reparse". Nothing reads it any more, and the comment that
+* claimed it was still "the state a write preserves on every element it
+* adopts" was false: `applyHtml` preserves that state by REUSING the node
+* object, so there is no list to keep in step — which is exactly why the old
+* one kept drifting. A write's `fresh` path empties the body and lets every
+* node be created clean, which needs no enumeration either.
 */
 var BUILTIN_LIST_SOURCES = ["@pages"];
 //#endregion
@@ -4538,8 +4501,7 @@ function renameComponent(project, id, rawName) {
 		if (node.type === old) node.type = name;
 	});
 	for (const page of project.pages) walkNodes(page.elements, (node) => {
-		if (node.type !== old) return;
-		node.type = name;
+		if (node.type === old) node.type = name;
 	});
 	return name;
 }
@@ -7563,4 +7525,4 @@ function isSymmetricTrigger(trigger) {
 	return SYMMETRIC_TRIGGERS.has(trigger);
 }
 //#endregion
-export { APPEAR_MODES, BUILTIN_LIST_SOURCES, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, ELIDED_DATA_URL, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MAX_DEPTH, MAX_INPUT, MAX_SVG_BYTES, MOTION_PROPS, NODE_STATE_KEYS, RESERVED_FIELD_NAMES, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, SCHEMA_VERSION, SCROLL_LERP_MAX, SCROLL_LERP_MIN, SLIDER_DEFAULTS, STYLE_SECTIONS, TOKEN_NAME_RE, TRANSITION_DEFAULTS, TRANSITION_PRESET_IDS, VARIANT_NAME_RE, addVariantAxis, addVariantOption, adoptStructure, alignMirrors, alignStructure, applyClass, applyHtml, buildInstanceMap, buildScopeRoots, canNest, cloneForMaster, collectFormFields, collectionRouteBase, compileAnimation, componentReaches, componentUsage, contextFromProject, countLocaleSeo, createBody, createNode, createPage, createProject, customSchemaError, deepClone, defaultBreakpoints, defaultSettings, deleteComponent, dependencyOrder, describeMigration, detachInstance, duplicateComponent, effectiveClasses, entryRoutePath, fieldNameError, fieldValueError, findNode, findParent, fontError, fontFormatForUrl, formConfigError, formEnabled, formName, hasAncestorOfType, hasDetailRoutes, hasNodeState, inheritedInstanceValue, interactionGroupKey, interactionStateKey, isAllowedAttribute, isComponentType, isEmittableToken, isEntryScopeRoot, isInstancePart, isInstanceWrapper, isKnownElement, isLeafElement, isLocalizableAttribute, isNodeHidden, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isTranslatableType, isValidClass, isValidToken, lucideNameOf, lucideSvg, masterToHtml, matchClass, mergeAttributeLayers, mergeClassLayers, migrateProject, nestedComponentNames, nodesByShortId, normalizeComponentName, pageToHtml, parseHtml, pickedKeys, purgeLocaleSeo, pushMasterStructure, removeVariantAxis, removeVariantOption, renameComponent, renameVariantAxis, renameVariantOption, resolveInstanceValue, resolvePicks, resolveSliderConfig, sameLayerProperty, sameProperty, sameType, sanitizeAttributes, sanitizeInlineSvg, sanitizeRich, setComponentCategory, setComponentMeta, setInstancePick, setNodeHidden, setStyleTokens, setVariantAxes, setVariantClasses, setVariantDefault, shortIds, slugify, stripExtractedInstanceState, stripNodeState, tagForType, tokenError, typeForTag, typeOptionsFor, validateAnimation, validateBinding, validateMotionSettings, validateSliderConfig, validateTree, variantKey, walkNodes };
+export { APPEAR_MODES, BUILTIN_LIST_SOURCES, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, ELIDED_DATA_URL, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MAX_DEPTH, MAX_INPUT, MAX_SVG_BYTES, MOTION_PROPS, RESERVED_FIELD_NAMES, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, SCHEMA_VERSION, SCROLL_LERP_MAX, SCROLL_LERP_MIN, SLIDER_DEFAULTS, STYLE_SECTIONS, TOKEN_NAME_RE, TRANSITION_DEFAULTS, TRANSITION_PRESET_IDS, VARIANT_NAME_RE, addVariantAxis, addVariantOption, adoptStructure, alignMirrors, alignStructure, applyClass, applyHtml, buildInstanceMap, buildScopeRoots, canNest, cloneForMaster, collectFormFields, collectionRouteBase, compileAnimation, componentReaches, componentUsage, contextFromProject, countLocaleSeo, createBody, createNode, createPage, createProject, customSchemaError, deepClone, defaultBreakpoints, defaultSettings, deleteComponent, dependencyOrder, describeMigration, detachInstance, duplicateComponent, effectiveClasses, entryRoutePath, fieldNameError, fieldValueError, findNode, findParent, fontError, fontFormatForUrl, formConfigError, formEnabled, formName, hasAncestorOfType, hasDetailRoutes, inheritedInstanceValue, interactionGroupKey, interactionStateKey, isAllowedAttribute, isComponentType, isEmittableToken, isEntryScopeRoot, isInstancePart, isInstanceWrapper, isKnownElement, isLeafElement, isLocalizableAttribute, isNodeHidden, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isTranslatableType, isValidClass, isValidToken, lucideNameOf, lucideSvg, masterToHtml, matchClass, mergeAttributeLayers, mergeClassLayers, migrateProject, nestedComponentNames, nodesByShortId, normalizeComponentName, pageToHtml, parseHtml, pickedKeys, purgeLocaleSeo, pushMasterStructure, removeVariantAxis, removeVariantOption, renameComponent, renameVariantAxis, renameVariantOption, resolveInstanceValue, resolvePicks, resolveSliderConfig, sameLayerProperty, sameProperty, sameType, sanitizeAttributes, sanitizeInlineSvg, sanitizeRich, setComponentCategory, setComponentMeta, setInstancePick, setNodeHidden, setStyleTokens, setVariantAxes, setVariantClasses, setVariantDefault, shortIds, slugify, stripExtractedInstanceState, tagForType, tokenError, typeForTag, typeOptionsFor, validateAnimation, validateBinding, validateMotionSettings, validateSliderConfig, validateTree, variantKey, walkNodes };

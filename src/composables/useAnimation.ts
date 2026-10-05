@@ -1,11 +1,10 @@
 import { computed } from 'vue'
 import { usePage } from './usePage'
 import { useProject } from './useProject'
-import { cancelPickFor, useInteraction } from './useInteraction'
+import { cancelPickFor } from './useInteraction'
 import { walkNodes } from '@/lib/tree'
 import { masterAnimationsTargeting, type OwnedBinding } from './useMasterBindings'
 import { validateAnimation } from '@/lib/motion'
-import { MOTION_PRESETS, type MotionPresetId } from '@/lib/motionPresets'
 import type { Animation, AnimationBinding, ElementNode } from '@/types/editor'
 
 // The animation library + per-element bindings — the tween counterpart of
@@ -18,7 +17,6 @@ const { activePage } = usePage()
 const { project } = useProject()
 // the target picker is shared by both motion systems and lives in useInteraction
 // (one-way edge: useInteraction takes only the AnimationBinding *type* from here)
-const { pickingFor } = useInteraction()
 
 /** animation id → the saved timeline */
 const animationIndex = computed(() => {
@@ -128,13 +126,6 @@ export function useAnimation() {
     })
   }
 
-  function createFromPreset(presetId: MotionPresetId): Animation {
-    const preset = MOTION_PRESETS.find((p) => p.id === presetId)
-    if (!preset) return createAnimation()
-    const built = preset.build()
-    return addAnimation({ id: crypto.randomUUID(), name: built.name, steps: built.steps })
-  }
-
   function updateAnimation(id: string, patch: Partial<Animation>) {
     const animation = animationFor(id)
     if (animation) Object.assign(animation, patch)
@@ -224,7 +215,6 @@ export function useAnimation() {
     animDriversIndex,
     animDriversFor,
     createAnimation,
-    createFromPreset,
     updateAnimation,
     deleteAnimation,
     usageCount,

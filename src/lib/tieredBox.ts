@@ -110,7 +110,6 @@ function mostCommon(vals: (string | null)[]): string | null {
 /** Tailwind spacing steps (padding/margin) */
 export const SPACING = ['0', '1', '2', '3', '4', '6', '8', '10', '12', '16', '20', '24']
 
-const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 /** padding / margin — base 'p' | 'm'; slot suffix concatenated (px, pt).
  * Values round-trip through the shared tail helpers so custom units

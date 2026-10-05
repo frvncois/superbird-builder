@@ -18,7 +18,6 @@ const childOfGrid: Relevance = { when: 'parentDisplay', values: GRID }
 const childOfFlexGrid: Relevance = { when: 'parentDisplay', values: FLEX_GRID }
 const positioned: Relevance = { when: 'positioned' }
 const whenTransition: Relevance = { when: 'transition' }
-const whenMedia: Relevance = { when: 'mediaElement' }
 const whenMediaOrBg: Relevance = { when: 'mediaOrBackground' }
 
 

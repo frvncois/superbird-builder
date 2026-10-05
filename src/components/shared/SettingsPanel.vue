@@ -3,7 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import {
   Archive, Check, ChevronRight, Code2, Copy, KeyRound, Languages, Palette, Pencil, Plug,
   Plus, Rocket, ScanSearch, Search, Settings, Settings2, Trash2, Type, UserRound, Users, X,
-  Inbox, Download, Mail, Webhook,
+  Inbox, Mail, Webhook,
 } from 'lucide-vue-next'
 import ModalHost from '@/components/modal/ModalHost.vue'
 import TabsUI from '@/components/tabs/TabsUI.vue'
@@ -26,7 +26,6 @@ import { useProject } from '@/composables/useProject'
 import { SCROLL_LERP_DEFAULT, SCROLL_LERP_MIN, SCROLL_LERP_MAX } from '@/lib/motion'
 import { useSettings } from '@/composables/useSettings'
 import { useLocale } from '@/composables/useLocale'
-import { usePage } from '@/composables/usePage'
 import { usePublish } from '@/composables/usePublish'
 import { useBranches } from '@/composables/useBranches'
 import { useAuth } from '@/composables/useAuth'
@@ -78,7 +77,6 @@ async function confirmDeleteLocale(loc: string) {
   })
   if (ok) deleteLocale(loc)
 }
-const { pages, activePage } = usePage()
 const { publishedInfo, unpublish } = usePublish()
 const { onMain } = useBranches()
 const { email: authEmail, name: authName, isAdmin, canBuild, updateAccount } = useAuth()

@@ -11,7 +11,6 @@ import { useInteraction } from '@/composables/useInteraction'
 import { useContextMenu } from '@/composables/useContextMenu'
 import { useRenderNode } from '@/composables/useRenderNode'
 import { useInlineEdit } from '@/composables/useInlineEdit'
-import { isLeafElement } from '@/lib/elements'
 import {
   perViewForWidth,
   sliderHostExtraClass,

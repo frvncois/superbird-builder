@@ -178,35 +178,6 @@ export function useEffects() {
     }
   }
 
-  /**
-   * Names two effects that ALREADY exist as one.
-   *
-   * The way a human repairs what the two libraries produced separately — a
-   * motion preset, an agent, or simply older work. Unlike `addHalf` nothing is
-   * spread: both halves are already bound where their author put them, and
-   * `pairsFor` folds a row only where the two agree on when and where, which is
-   * the honest reading of bindings nobody has aligned.
-   */
-  function pair(interactionId: string, animationId: string, name: string): Effect {
-    const existing = effectForHalf('interaction', interactionId) ?? effectForHalf('animation', animationId)
-    const effect = existing ?? { id: crypto.randomUUID(), name }
-    effect.name = name
-    effect.interactionId = interactionId
-    effect.animationId = animationId
-    if (!existing) list().push(effect)
-    interactions.updateInteraction(interactionId, { name })
-    animations.updateAnimation(animationId, { name })
-    return effect
-  }
-
-  /** halves of the given kind no effect has claimed — what `pair` can join */
-  function unclaimed(kind: 'interaction' | 'animation'): { id: string; name: string }[] {
-    const library = kind === 'interaction' ? interactions.library.value : animations.library.value
-    return library
-      .filter((item) => !effectForHalf(kind, item.id))
-      .map((item) => ({ id: item.id, name: item.name }))
-  }
-
   /** gives an effect the half it is missing, created empty and ready to edit */
   function addHalf(effect: Effect, kind: 'interaction' | 'animation') {
     const has = halfIds(effect)
@@ -223,22 +194,6 @@ export function useEffects() {
       effect.animationId = half.id
       if (has.interactionId) spreadHalf('interaction', has.interactionId, half.id)
     }
-  }
-
-  /**
-   * Drops one half and everything bound to it. The remaining half keeps its
-   * bindings, and an effect left with nothing goes away with them — an empty
-   * name in the library would be a row that does nothing.
-   */
-  function removeHalf(effect: Effect, kind: 'interaction' | 'animation') {
-    if (kind === 'interaction' && effect.interactionId) {
-      interactions.deleteInteraction(effect.interactionId)
-      delete effect.interactionId
-    } else if (kind === 'animation' && effect.animationId) {
-      animations.deleteAnimation(effect.animationId)
-      delete effect.animationId
-    }
-    if (!effect.interactionId && !effect.animationId) removeEffect(effect.id)
   }
 
   /** the name is the effect's; the halves follow it so the two libraries read
@@ -320,10 +275,8 @@ export function useEffects() {
     libraryItems,
     usageCount,
     wrap,
-    pair,
-    unclaimed,
+
     addHalf,
-    removeHalf,
     rename,
     removeEffect,
     deleteEffect,

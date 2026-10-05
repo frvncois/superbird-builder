@@ -5,7 +5,6 @@
 // labelled with its engine — which made choosing one a question about our
 // implementation. Here they are sorted together by name: an effect is an
 // effect, and what it does is visible the moment you select it.
-import { computed } from 'vue'
 import { CircleAlert, Trash2 } from 'lucide-vue-next'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import { useInteraction } from '@/composables/useInteraction'

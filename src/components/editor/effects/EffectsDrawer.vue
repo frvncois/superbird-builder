@@ -27,16 +27,12 @@ import TriggerEditor from '@/components/editor/effects/TriggerEditor.vue'
 import { useEffectsDrawer } from '@/composables/useEffectsDrawer'
 import { useElementEffects } from '@/composables/useElementEffects'
 import { useInteraction } from '@/composables/useInteraction'
-import { useAnimation } from '@/composables/useAnimation'
-import { useEffects } from '@/composables/useEffects'
 import { useModal } from '@/composables/useModal'
 import { isEditable } from '@/composables/useShortcut'
 import { triggerOrder, triggerSentence, uiTrigger } from '@/lib/effectTriggers'
 
-const { open, selected, trigger, view, openTrigger, done, closeDrawer } = useEffectsDrawer()
+const { open, selected, trigger, view, openTrigger, closeDrawer } = useEffectsDrawer()
 const interactions = useInteraction()
-const animations = useAnimation()
-const effects = useEffects()
 const { canEdit, elementLabel, sections } = useElementEffects()
 
 /**
@@ -52,29 +48,6 @@ const triggerRows = computed(() => {
   }
   return list.sort((a, b) => triggerOrder(a.trigger) - triggerOrder(b.trigger))
 })
-
-const wrapper = computed(() =>
-  selected.value?.kind === 'effect' ? (effects.effectById(selected.value.id) ?? null) : null,
-)
-
-
-
-// --- leaving ---
-
-/** Cancel on a brand-new effect discards it outright. The cascading delete also
- *  strips any binding it had, wherever it landed — so it works even if the
- *  element has since been deselected or deleted. */
-function cancel() {
-  const sel = selected.value
-  if (!sel) return
-  if (sel.kind === 'effect') {
-    if (wrapper.value) effects.deleteEffect(wrapper.value)
-  } else if (sel.kind === 'interaction') {
-    interactions.deleteInteraction(sel.id)
-  } else {
-    animations.deleteAnimation(sel.id)
-  }
-}
 
 // Escape closes the DRAWER and nothing else — one layer per press, like the
 // modal stack. Capture phase + stopPropagation beats SettingsEditor's
@@ -163,15 +136,6 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydownCapture, tr
         <EffectBody v-if="selected" :kind="selected.kind" :id="selected.id" />
       </div>
 
-      <footer
-        v-if="selected?.created"
-        class="flex h-10 shrink-0 items-center justify-end gap-1.5 border-t border-input px-2"
-      >
-        <ButtonUI variant="ghost" size="sm" class="text-muted-foreground" @click="cancel">
-          Cancel
-        </ButtonUI>
-        <ButtonUI variant="default" size="sm" @click="done()">Done</ButtonUI>
-      </footer>
     </div>
   </section>
 </template>

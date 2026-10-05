@@ -1,4 +1,4 @@
-import type { Collection, ElementNode, Page, Project } from '@/types/editor'
+import type { ElementNode, Page, Project } from '@/types/editor'
 import { isComponentType } from './components'
 import { BUILTIN_LIST_SOURCES } from './nodeState'
 // the SAME scope/binding resolution the three renderers run, so a field this

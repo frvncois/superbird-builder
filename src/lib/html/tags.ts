@@ -160,34 +160,6 @@ export const isRenderableType = (type: string) => isComponentType(type) || isKno
 export const SOURCE_TYPES = new Set(['collection-list', 'collection-item', 'slider', 'body'])
 
 /**
- * Attribute names this format owns. They are `data-*`, which the custom
- * attribute allowlist also accepts, so they must be claimed here or an agent
- * could write `data-ref` as a literal DOM attribute and silently lose the ref.
- */
-export const RESERVED_ATTRS = new Set([
-  'class',
-  'id',
-  'href',
-  'src',
-  'source',
-  'data-id',
-  'data-ref',
-  'data-field',
-  'data-hidden',
-  'data-slot',
-  'data-type',
-  'data-icon',
-  'data-interactions',
-  'data-animations',
-])
-
-/** reserved attribute PREFIXES, each with the node state it carries */
-export const RESERVED_PREFIXES = ['data-bind-', 'data-variant-']
-
-export const isReservedAttr = (name: string) =>
-  RESERVED_ATTRS.has(name) || RESERVED_PREFIXES.some((p) => name.startsWith(p))
-
-/**
  * The attributes an element type IMPLIES — `checkbox` is `<input type="checkbox">`.
  *
  * They are part of the element's identity, not state: the registry carries

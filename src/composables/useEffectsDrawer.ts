@@ -38,16 +38,15 @@ export type DrawerKind = EffectKind | 'effect'
 export interface DrawerSelection {
   kind: DrawerKind
   id: string
-  /** created by this visit — the footer offers Cancel (a cascading discard) */
-  created: boolean
 }
 
 const open = ref(false)
 const selected = ref<DrawerSelection | null>(null)
 /** the trigger (a stored trigger value) whose action the trigger view shows */
 const trigger = ref<string | null>(null)
-/** an effect the trigger view's picker just made — the footer offers Cancel (a
- *  cascading discard of the effect AND the binding it applied) until Done */
+/** an effect the trigger view's picker just made — the trigger view offers
+ *  Cancel (a cascading discard of the effect AND the binding it applied) until
+ *  it is kept, which walking away from the drawer also does */
 const fresh = ref<string | null>(null)
 
 /** an open effect wins; a trigger is what the drawer falls back to */
@@ -98,8 +97,8 @@ export function useEffectsDrawer() {
   startWatchers()
 
   /** open the drawer on an effect (the panel's effect names, the library) */
-  function openEffect(kind: DrawerKind, id: string, created = false) {
-    selected.value = { kind, id, created }
+  function openEffect(kind: DrawerKind, id: string) {
+    selected.value = { kind, id }
     open.value = true
   }
 
@@ -112,15 +111,8 @@ export function useEffectsDrawer() {
     open.value = true
   }
 
-  /** a new effect was accepted: back to the trigger it was made for, if any */
-  function done() {
-    keepEffect()
-    if (trigger.value) selected.value = null
-  }
-
-  /** a brand-new effect has been accepted: the footer goes back to Delete */
+  /** a brand-new effect has been accepted: it stops offering Cancel */
   function keepEffect() {
-    if (selected.value) selected.value = { ...selected.value, created: false }
     fresh.value = null
   }
 
@@ -154,7 +146,6 @@ export function useEffectsDrawer() {
     openTrigger,
     effectCreated,
     keepEffect,
-    done,
     closeDrawer,
     toggleDrawer,
   }

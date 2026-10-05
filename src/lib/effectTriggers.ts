@@ -118,11 +118,6 @@ export function triggerSentence(key: string): string {
   return BY_KEY.get(key)?.sentence ?? key
 }
 
-/** the word a row leads with */
-export function triggerWord(key: string): string {
-  return BY_KEY.get(key)?.word ?? key
-}
-
 /** can this trigger run that engine? */
 export function triggerAllows(key: string, kind: EffectKind): boolean {
   return !!BY_KEY.get(key)?.kinds.includes(kind)
@@ -145,7 +140,3 @@ export const ACTION_VERBS = [
   { label: 'Open', value: 'on' },
   { label: 'Close', value: 'off' },
 ]
-
-export function actionVerb(action: string | undefined): string {
-  return ACTION_VERBS.find((v) => v.value === (action ?? 'toggle'))?.label ?? 'Toggle'
-}

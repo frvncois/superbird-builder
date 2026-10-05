@@ -17,7 +17,7 @@ const BUNDLES: Record<
   { components: any[]; interactions: any[]; tokens: { id: string; name: string; value: string }[] }
 > = JSON.parse(readFileSync(new URL('./components.json', import.meta.url), 'utf8'))
 
-export const COMPONENT_KEYS = Object.keys(BUNDLES)
+const COMPONENT_KEYS = Object.keys(BUNDLES)
 
 /** add the bundles for `keys` to a project blob (deep-copied), by NAME: a
  *  component, effect or token the project already has is left alone */

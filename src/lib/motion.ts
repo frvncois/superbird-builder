@@ -36,7 +36,6 @@ import {
   resolveTransition as resolveTransitionRaw,
   resolveScrollLerp as resolveScrollLerpRaw,
   validateMotionSettings as validateMotionSettingsRaw,
-  TRANSITION_PRESETS,
   TRANSITION_PRESET_IDS,
   TRANSITION_DEFAULTS,
   TRANSITION_EXIT_ID,
@@ -183,11 +182,6 @@ export const validateMotionSettings = validateMotionSettingsRaw as (
   motion: unknown,
   ctx?: { animationIds?: string[] },
 ) => ValidationResult
-/** the built-in transitions as ready-made select options, in declaration order */
-export const TRANSITION_PRESET_OPTIONS: { label: string; value: string }[] = Object.entries(
-  TRANSITION_PRESETS as Record<string, { label: string }>,
-).map(([value, preset]) => ({ label: preset.label, value }))
-
 export {
   animationBindingKey,
   appearRootMargin,

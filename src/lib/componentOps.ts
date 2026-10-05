@@ -1,7 +1,6 @@
 import type { ComponentDef, ElementNode, Page, Project, VariantAxis } from '@/types/editor'
 import {
   alignHostMirrors,
-  alignMirror,
   alignStructure,
   cloneForMaster,
   isComponentType,
@@ -119,11 +118,8 @@ export function renameComponent(project: Project, id: string, rawName: string): 
   // no reparse, so every node id survives, which matters because comment
   // anchors and interaction targetIds address page nodes by id.
   for (const page of project.pages) {
-    let changed = false
     walkNodes(page.elements, (node) => {
-      if (node.type !== old) return
-      node.type = name
-      changed = true
+      if (node.type === old) node.type = name
     })
   }
   return name
