@@ -1285,7 +1285,9 @@ function resolveBindTarget(project, page, ownerNode, inComponent, rawTarget, raw
           `bind targetId "${target}" is inside a component instance — an effect from outside ` +
           'the instance can never reach it (in-instance targets are scoped to the master, per ' +
           'instance). Bind from an element INSIDE the same instance, or target an element ' +
-          'outside the component.',
+          'outside the component. If this is a row opening one shared overlay, the target ' +
+          'belongs OUTSIDE the list and the trigger is a `<div class="contents">` wrapper the ' +
+          'page owns — see get_guide {section: "design-standards"}.',
       }
     }
     return { targetId: target }
@@ -1296,7 +1298,20 @@ function resolveBindTarget(project, page, ownerNode, inComponent, rawTarget, raw
   // the target may be given as the MASTER's id (from list_components) too
   if (!targetInfo && ownerInfo && findNode([ownerInfo.def.root], target)) return { targetId: target }
   if (!targetInfo || targetInfo.instanceId !== ownerInfo?.instanceId) {
-    return { error: `bind targetId "${target}" must be another element in the same component instance` }
+    // E8, the shared-overlay pattern: a row component's button opening the ONE
+    // sheet that lives outside the list. The refusal is right — a binding on an
+    // element inside an instance is stored on the shared MASTER, and a page
+    // node id is one page's — but it said only what does not work, and the
+    // agent spent nine calls rediscovering the pattern that does.
+    return {
+      error:
+        `bind targetId "${target}" must be another element in the same component instance — a ` +
+        'binding on an element inside an instance is stored on the shared master, which every ' +
+        'instance on every page renders, so it cannot name one page\'s element. To open ONE ' +
+        'shared overlay from a row: wrap the instance in a page-owned `<div class="contents">` ' +
+        '(it renders no box) and put the binding on THAT wrapper, which is an ordinary page ' +
+        'node and can target the overlay. See get_guide {section: "design-standards"}.',
+    }
   }
   return { targetId: targetInfo.master.id }
 }

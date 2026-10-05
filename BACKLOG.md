@@ -254,6 +254,16 @@ element (`src/lib/shared/svg.js`).
   The data model, both runtimes and `bind_interaction` are untouched, so an
   agent still sets them; a human cannot. Belongs with the item above when it
   comes back: these describe the TARGET's state, not the trigger.
+- **Per-instance binding overrides on a page wrapper** (Harbour E8, decision D2
+  2026-10-05 — deferred, not rejected). A binding stored on an INSTANCE node and
+  scoped by the TARGET like every other binding, so a row component's own button
+  could open one shared sheet without a wrapper. It fits the "binding scope is
+  decided by the target" rule, but it is a feature, not a fix: every renderer
+  would need to merge an instance-side binding list over the master's, and
+  `computeMerge`, the HTML round-trip and `detach` would all need to carry it.
+  What shipped instead is the wrapper recipe (`<div class="contents">`, which
+  the agent found itself at a cost of nine calls) named in the refusal and
+  written out in GUIDE's design-standards section.
 
 ## Launch (pre-publish)
 

@@ -656,6 +656,26 @@ taste; they are the defects a review finds first.
   opens the same panel row 2 opens. An effect that must be independent per row — an
   inline expander, a per-row confirm — targets an element inside the row, and each
   row then gets its own state automatically.)
+  **When the row's trigger is a COMPONENT instance** (a `<Button />` inside a
+  `<ContactRow />`), it cannot carry that binding: a binding on an element inside an
+  instance is stored on the shared master, which every instance on every page renders,
+  so it cannot name one page's overlay. Wrap the instance in a page-owned
+  `<div class="contents">` — which renders no box of its own — and put the binding on
+  the wrapper:
+
+  ```html
+  <collection-list source="contact">
+    <div data-ref="row" class="flex items-center justify-between">
+      <span data-field="name"></span>
+      <div data-ref="row-open" class="contents"><Button /></div>
+    </div>
+  </collection-list>
+  <div data-ref="sheet" class="fixed inset-0 hidden">…</div>
+  ```
+
+  then `bind_interaction {ref: "row-open", trigger: "click", targetRef: "sheet"}`. The
+  wrapper is an ordinary page node, so it can target the overlay; the Button stays one
+  component.
 - Empty and loading states for every list. Placeholder copy reads like the product,
   not like "Lorem ipsum" or "Card title".
 - Nothing left over: no unused interactions or animations, no probe pages, no
