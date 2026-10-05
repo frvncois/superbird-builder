@@ -3944,8 +3944,62 @@ var ARBITRARY_VARIANT_RE = /^\[&[^{};]{0,80}\]$/;
 var PARAM_VARIANT_RE = /^(?:data|aria|has|not|group-has|peer-has|supports|nth|nth-last)-\[[^{};]{1,80}\]$/;
 /** `group-*` / `peer-*` with a named state (`group-focus-visible`, `peer-invalid`) */
 var GROUP_PEER_RE = /^(?:group|peer)-[a-z][a-z-]*$/;
+/** the NAMED screen variants in both directions: `md:` is in VARIANTS, and
+* `max-md:` — the one a mobile override is naturally written with — was not,
+* so a perfectly ordinary `max-sm:hidden` came back "not a known class" and
+* the hint then suggested a different BASE class. `min-md:` is the explicit
+* spelling of `md:` and reads clearer next to a `max-` sibling. */
+var NAMED_SCREEN_VARIANT_RE = /^(?:min|max)-(?:sm|md|lg|xl|2xl)$/;
+/**
+* v4 variants that are ACCEPTED but not suggested.
+*
+* `VARIANTS` is the suggestion list — what the Classes field offers while you
+* type — and padding it with two dozen rare pseudo-classes would bury the ones
+* anyone reaches for. These are real Tailwind v4 variants all the same, and
+* refusing them made the editor the thing standing between an author and valid
+* CSS.
+*/
+var ACCEPTED_VARIANTS = /* @__PURE__ */ new Set([
+	"open",
+	"enabled",
+	"read-only",
+	"read-write",
+	"optional",
+	"default",
+	"indeterminate",
+	"placeholder-shown",
+	"autofill",
+	"in-range",
+	"out-of-range",
+	"user-valid",
+	"user-invalid",
+	"inert",
+	"target",
+	"aria-busy",
+	"aria-checked",
+	"aria-disabled",
+	"aria-expanded",
+	"aria-hidden",
+	"aria-pressed",
+	"aria-readonly",
+	"aria-required",
+	"aria-selected",
+	"first-child",
+	"last-child",
+	"only-of-type",
+	"nth-child",
+	"noscript",
+	"details-content",
+	"starting",
+	"first-letter",
+	"first-line",
+	"placeholder",
+	"backdrop",
+	"*",
+	"**"
+]);
 function isKnownVariant(v) {
-	return VARIANT_SET.has(v) || /^(?:min|max)-\[[0-9.]+(?:px|rem|em)\]$/.test(v) || ARBITRARY_VARIANT_RE.test(v) || PARAM_VARIANT_RE.test(v) || GROUP_PEER_RE.test(v);
+	return VARIANT_SET.has(v) || ACCEPTED_VARIANTS.has(v) || NAMED_SCREEN_VARIANT_RE.test(v) || /^(?:min|max)-\[[0-9.]+(?:px|rem|em)\]$/.test(v) || ARBITRARY_VARIANT_RE.test(v) || PARAM_VARIANT_RE.test(v) || GROUP_PEER_RE.test(v);
 }
 /**
 * Split a class into its variant segments and base, respecting brackets.
@@ -4322,6 +4376,8 @@ function unknownClassHint(value) {
 	const { variants, base } = splitClassVariants(value);
 	const variant = variants.length ? `${variants.join(":")}:` : "";
 	const parts = [];
+	const badVariants = variants.filter((v) => !isKnownVariant(v));
+	if (badVariants.length) return ` — ${badVariants.map((v) => `"${v}:"`).join(", ")} ${badVariants.length === 1 ? "is not a" : "are not"} known variant${badVariants.length === 1 ? "" : "s"}. Responsive: a named screen ("md:", "max-md:") or an arbitrary width ("max-[767px]:"). State: "hover:", "focus-visible:", "group-hover:", "data-[open]:". Descendants: "[&>li]:".`;
 	const tokenish = /^(?:bg|text|border|outline|ring|accent|decoration|divide)-([a-z][a-z0-9-]*)$/.exec(base);
 	if (tokenish && !TOKEN_CLASSES.includes(base)) parts.push(`if "${tokenish[1]}" is meant to be a design token, no token with that name exists yet — save it in the project settings first`);
 	const dash = base.lastIndexOf("-");

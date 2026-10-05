@@ -199,3 +199,68 @@ test.describe('form warnings', () => {
     expect(JSON.stringify(forms?.issues ?? [])).toContain('plain text')
   })
 })
+
+// E7: valid Tailwind v4 variants the class validator refused, so the editor
+// stood between an author (or an agent) and working CSS — and the hint then
+// suggested a different BASE class, which cannot help when the PREFIX is what
+// was rejected.
+test.describe('class variants', () => {
+  test('a named max-width variant is accepted, stacked or alone', async () => {
+    const s = await mcpSession()
+    const home = await s.home()
+    await s.call('set_page_html', {
+      pageId: home.id,
+      html: pageHtml('<div data-ref="box" class="flex"><span>x</span></div>'),
+      version: home.version,
+    })
+    const page = await s.home()
+    const r = await s.call('edit_elements', {
+      pageId: page.id,
+      version: page.version,
+      edits: [
+        {
+          ref: 'box',
+          addClasses: [
+            'max-sm:hidden',
+            'max-md:flex-col',
+            'min-lg:gap-8',
+            'max-sm:[&>span]:sr-only',
+            'open:rotate-180',
+            'aria-expanded:bg-black',
+            '*:p-2',
+          ],
+        },
+      ],
+    })
+    expect(r.failures ?? []).toEqual([])
+    const html = await s.html()
+    expect(html).toContain('max-sm:hidden')
+    // `&` and `>` are escaped in the attribute, as they must be
+    expect(html).toContain('max-sm:[&amp;&gt;span]:sr-only')
+    expect(html).toContain('*:p-2')
+    // and they reach the stylesheet, which is the point
+    const css = await s.css()
+    expect(css).toContain('max-width')
+  })
+
+  test('an unknown variant is refused by naming the VARIANT', async () => {
+    const s = await mcpSession()
+    const home = await s.home()
+    await s.call('set_page_html', {
+      pageId: home.id,
+      html: pageHtml('<div data-ref="box" class="flex" />'),
+      version: home.version,
+    })
+    const page = await s.home()
+    const r = await s.call('edit_elements', {
+      pageId: page.id,
+      version: page.version,
+      edits: [{ ref: 'box', addClasses: ['nope:overflow-hidden'] }],
+    })
+    const why = JSON.stringify(r.failures)
+    expect(why).toContain('not a known variant')
+    expect(why).toContain('max-[767px]')
+    // never a base-class suggestion, which would carry the same broken prefix
+    expect(why).not.toContain('did you mean')
+  })
+})
