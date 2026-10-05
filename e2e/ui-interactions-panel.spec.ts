@@ -139,7 +139,7 @@ test("a trigger's effect is edited in place, and Remove takes it off the element
   const marker = 'ring-offset-4'
   await triggerView(page).getByPlaceholder('Add class').fill(marker)
   await page.keyboard.press('Enter')
-  await drawer(page).getByRole('button', { name: 'Save' }).click()
+  await drawer(page).getByRole('button', { name: 'Apply' }).click()
   await expect(drawer(page)).toBeHidden()
 
   await publish(page)
@@ -168,9 +168,9 @@ test('a click action is a state, and its dismissal is stored on the binding', as
   await drawer(page).getByPlaceholder('Effect name').fill('Panel open')
   await drawer(page).getByPlaceholder('Add class').fill('opacity-50')
   await page.keyboard.press('Enter')
-  await drawer(page).getByRole('button', { name: 'Save' }).click()
+  await drawer(page).getByRole('button', { name: 'Apply' }).click()
 
-  // Save closes the drawer; the panel's row brings the trigger back. A click
+  // Apply closes the drawer; the panel's row brings the trigger back. A click
   // drives a state: the card is where dismissal is edited
   await page.locator('[data-trigger-row]').filter({ hasText: 'On click' }).click()
   await expect(stateCards(page)).toHaveCount(1)
@@ -214,7 +214,7 @@ test('a click is aimed with a verb, never an engine', async ({ page }) => {
 
   await addTrigger(page, /^Click/)
   await drawer(page).getByPlaceholder('Effect name').fill('Panel fade')
-  await drawer(page).getByRole('button', { name: 'Save' }).click()
+  await drawer(page).getByRole('button', { name: 'Apply' }).click()
   await page.locator('[data-trigger-row]').filter({ hasText: 'On click' }).click()
 
   // the direction lives in the action's options
@@ -248,7 +248,7 @@ test('one effect wears both engines, and binds as one action', async ({ page }) 
   await drawer(page).getByPlaceholder('Add class').fill('flex')
   await page.keyboard.press('Enter')
   await expect(drawer(page).locator('[data-effect-half="animation"]')).toBeVisible()
-  await drawer(page).getByRole('button', { name: 'Save' }).click()
+  await drawer(page).getByRole('button', { name: 'Apply' }).click()
   await page.locator('[data-trigger-row]').filter({ hasText: 'On click' }).click()
 
   // ONE action, not two: the pair is recognised from the bindings themselves

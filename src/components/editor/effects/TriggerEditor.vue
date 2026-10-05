@@ -20,6 +20,7 @@ import ButtonUI from '@/components/ui/ButtonUI.vue'
 import ActionOptions from '@/components/editor/interactions/ActionOptions.vue'
 import StateCard from '@/components/editor/interactions/StateCard.vue'
 import EffectBody from '@/components/editor/effects/EffectBody.vue'
+import EffectNameField from '@/components/editor/effects/EffectNameField.vue'
 import { useElementEffects, rowId } from '@/composables/useElementEffects'
 import { useEffects, type EffectPair } from '@/composables/useEffects'
 import { useEffectsDrawer, type DrawerKind } from '@/composables/useEffectsDrawer'
@@ -27,7 +28,7 @@ import { uiTrigger } from '@/lib/effectTriggers'
 
 const props = defineProps<{ trigger: string }>()
 
-const { target, canEdit, elementLabel, states, sections, createActionFor } = useElementEffects()
+const { target, canEdit, states, sections, createActionFor } = useElementEffects()
 const effects = useEffects()
 const { fresh, effectCreated, keepEffect, closeDrawer } = useEffectsDrawer()
 
@@ -35,6 +36,8 @@ const ui = computed(() => uiTrigger(props.trigger))
 const rows = computed(
   () => sections.value.find((s) => s.trigger === props.trigger)?.rows ?? [],
 )
+/** the effect the header names — the (one) action's */
+const headEffect = computed(() => (rows.value[0] ? bodyOf(rows.value[0]) : null))
 
 /** what the effect column shows for an action: the effect, or its lone half */
 function bodyOf(pair: EffectPair): { kind: DrawerKind; id: string } {
@@ -59,7 +62,7 @@ function cancel() {
 }
 
 /** keep what is there and close */
-function save() {
+function apply() {
   keepEffect()
   closeDrawer()
 }
@@ -67,16 +70,14 @@ function save() {
 
 <template>
   <div data-trigger-editor class="flex min-h-0 flex-1 flex-col">
+    <!-- [icon] when · the effect's name · who uses it ……… Cancel / Apply -->
     <header class="flex h-9 shrink-0 items-center gap-2 border-b border-input px-3">
       <component v-if="ui" :is="ui.icon" class="size-3.5 shrink-0 text-muted-foreground" />
-      <span class="text-xs font-medium">{{ ui?.sentence ?? trigger }}</span>
-      <span v-if="canEdit" class="truncate text-xs text-muted-foreground">· {{ elementLabel }}</span>
-      <span v-if="ui" class="ml-2 hidden min-w-0 truncate text-[10px] text-muted-foreground lg:inline">
-        {{ ui.hint }}
-      </span>
+      <span class="shrink-0 text-xs font-medium">{{ ui?.sentence ?? trigger }}</span>
+      <EffectNameField v-if="headEffect" v-bind="headEffect" class="ml-1" />
       <div class="ml-auto flex shrink-0 items-center gap-1.5">
         <ButtonUI variant="outline" size="xs" @click="cancel">Cancel</ButtonUI>
-        <ButtonUI variant="default" size="xs" @click="save">Save</ButtonUI>
+        <ButtonUI variant="default" size="xs" @click="apply">Apply</ButtonUI>
       </div>
     </header>
 
@@ -118,7 +119,7 @@ function save() {
 
       <!-- the effect itself: shared by every element using it -->
       <div class="flex min-w-0 flex-col">
-        <EffectBody v-for="row in rows" :key="rowId(row)" v-bind="bodyOf(row)" />
+        <EffectBody v-for="row in rows" :key="rowId(row)" v-bind="bodyOf(row)" :name-row="false" />
       </div>
     </div>
   </div>
