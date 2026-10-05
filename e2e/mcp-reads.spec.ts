@@ -132,3 +132,46 @@ test.describe('edit_structure’s element summary', () => {
     expect(rows.some((e) => e.type === 'span' && !e.ref)).toBe(true)
   })
 })
+
+// E24: a `refused` entry beside a bare `saved: true` reads as a clean success.
+// `saved` says the store was written; `partial` says not all of it landed.
+test.describe('partial-write semantics', () => {
+  test('set_page_html says partial when something was refused', async () => {
+    const s = await mcpSession()
+    await s.seed(['card'])
+    const home = await s.home()
+    await s.call('set_page_html', {
+      pageId: home.id,
+      html: pageHtml('<Card data-ref="promo" />'),
+      version: home.version,
+    })
+    const page = await s.home()
+    // a class on an instance wrapper renders nowhere, so the writer refuses it
+    const r = await s.call('set_page_html', {
+      pageId: page.id,
+      html: pageHtml('<Card data-ref="promo" class="mt-8" />\n<p data-ref="after">x</p>'),
+      version: page.version,
+      elements: 'none',
+    })
+    expect(r.saved).toBe(true)
+    expect(r.partial).toBe(true)
+    expect(JSON.stringify(r.refused)).toContain('class')
+    // the rest of the page DID land, which is why `saved` is true
+    const after = await s.call('get_page', { pageId: page.id, elements: 'none' })
+    expect(after.html).toContain('data-ref="after"')
+  })
+
+  test('a clean write says nothing about partial', async () => {
+    const s = await mcpSession()
+    const home = await s.home()
+    const r = await s.call('set_page_html', {
+      pageId: home.id,
+      html: pageHtml('<p data-ref="p">x</p>'),
+      version: home.version,
+      elements: 'none',
+    })
+    expect(r.saved).toBe(true)
+    expect(r.partial).toBeUndefined()
+    expect(r.refused).toBeUndefined()
+  })
+})

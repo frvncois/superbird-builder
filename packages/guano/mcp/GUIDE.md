@@ -135,10 +135,11 @@ cheapest way to build a large page.
 one row per node — on a 300-node page that is 300 rows you probably already know.
 `elements: "refs"` trims it to `{path, id, type, ref?}`; `elements: "none"` omits it.
 
-**A partial batch is not a failed batch.** When a batch reports `partial: true`, some
-items landed and some did not. Retry **only** the `failures[].index` items — re-sending
-the whole array duplicates everything that already succeeded. `saved: true` with
-`failures` present means exactly this.
+**A partial batch is not a failed batch.** `saved: true` means the store was written;
+`partial: true` means not all of it landed. Fix what `refused` (or `failures[].index`)
+names and nothing else — re-sending the whole array duplicates what already succeeded.
+`edit_structure` is the one exception: it applies the ops to a COPY, so one that cannot
+land refuses the whole batch with `saved: false` and leaves the page untouched.
 
 Build the **whole page in one `set_page_html` call** — structure, classes and text
 travel together — then fill in what the markup does not carry with

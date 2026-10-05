@@ -4613,8 +4613,22 @@ const tools = [
             'and keep them.',
         )
       }
+      // `saved` means the store was written; `partial` means not everything
+      // asked for landed. Both are needed and neither can stand in for the
+      // other: this write is applied IN PLACE, so `saved: false` beside a page
+      // that really did change would invite a duplicate re-send, while
+      // `saved: true` alone beside a `refused` entry reads as a clean success
+      // (E24). `edit_elements` and the guide already use `partial` this way;
+      // `edit_structure` writes to a copy, so it stays all-or-nothing.
+      if (result.refused.length) {
+        notes.unshift(
+          `${result.refused.length} thing(s) in this markup did NOT land — see \`refused\`. The ` +
+            'rest of the page was written, so re-send only what you change.',
+        )
+      }
       return {
         saved: true,
+        ...(result.refused.length ? { partial: true } : {}),
         pageId: page.id,
         version: pageVersion(project, page),
         applied: {
