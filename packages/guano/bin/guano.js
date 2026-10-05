@@ -56,8 +56,34 @@ async function buildSite() {
     console.error(`no project found in ${join(DATA_DIR, 'store')} — run \`guano dev\`, create your site, then build.`)
     process.exit(1)
   }
+  // v2 FIRST. The server migrates every blob at boot, but `guano build` reads
+  // the store file directly, so a store written before the schema change (or
+  // one restored from a backup) reached the exporter as v1: the aliases it no
+  // longer collapses, and an instance still stored as an unexpanded `:Card:`
+  // leaf, which renders as NOTHING — the page silently missing its card.
+  // In memory only; persisting is the server's job, at boot, behind a backup.
+  const migrated = await migrateInMemory(project)
+  if (migrated) console.log(`guano build: ${migrated}`)
   const stats = await exportSite(project, outDir)
   console.log(`exported ${stats.routes} routes (${(stats.bytes / 1024).toFixed(1)} kB) to ${outDir}`)
+}
+
+/** bring one blob up to the current schema, returning a one-line summary of
+ * what changed (or null). The bundle lives at `runtime/` in both the repo and
+ * the packed layout; a missing one is a warning, never a failed build. */
+async function migrateInMemory(project) {
+  const mod = await import(
+    pathToFileURL(join(ROOT, 'runtime', 'mcp-runtime.mjs')).href
+  ).catch(() => null)
+  if (!mod?.migrateProject) {
+    console.warn(
+      'guano build: schema migration skipped — the editor-logic bundle is missing ' +
+        '(run `npm run build:mcp-runtime`). An older project may export incompletely.',
+    )
+    return null
+  }
+  const { report } = mod.migrateProject(project)
+  return mod.describeMigration('guano-project:main', report)
 }
 
 switch (cmd) {
