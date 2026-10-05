@@ -712,10 +712,17 @@ var isFormControl = (type) => Object.hasOwn(CONTROL_KINDS, type);
 * `instanceAttributes`). Without that indirection a form built from components
 * would report no fields at all.
 *
+* `opts.hidden(node)` marks a subtree that is not rendered — a part an
+* instance hides, resolved along the instance chain. Those controls are not
+* emitted on the page and cannot be submitted, so counting them produced the
+* nonsense "N control(s) have no usable name" for a Field component whose
+* optional textarea was hidden, and put a field the page never shows into the
+* manifest's allowlist.
+*
 * Returns `{fields, unnamed, duplicates}`. `fields` is what the manifest
 * stores and the endpoint allowlists against.
 */
-function collectFormFields(formNode, resolve) {
+function collectFormFields(formNode, resolve, opts) {
 	const fields = [];
 	const unnamed = [];
 	const seen = /* @__PURE__ */ new Map();
@@ -724,6 +731,7 @@ function collectFormFields(formNode, resolve) {
 		if (!node || typeof node !== "object") return;
 		if (node !== formNode && node.type === "form") return;
 		if (FORM_STATE_TYPES.includes(node.type)) return;
+		if (node !== formNode && opts && opts.hidden && opts.hidden(node)) return;
 		if (isFormControl(node.type)) {
 			const attrs = attrsOf(node);
 			const name = String(attrs.name ?? "").trim();
@@ -5227,11 +5235,202 @@ function decodeEntities(text) {
 	return text.replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16))).replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10))).replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, "\"").replace(/&apos;/g, "'").replace(/&amp;/g, "&");
 }
 //#endregion
+//#region src/lib/shared/fields.js
+/** ids stored on a reference/multi-reference field, always as an array */
+function refIds(entry, fieldName) {
+	const v = entry?.values?.[fieldName];
+	if (Array.isArray(v)) return v;
+	return typeof v === "string" && v ? [v] : [];
+}
+/**
+* Resolve a binding path against a collection + entry scope.
+* Returns the collection/field the value lives on and the entry to read it
+* from — `entry` is null when it can't be resolved yet (no scope entry, or a
+* dangling reference), so callers can still show a {field} placeholder.
+* Returns null when the path names no field at all.
+*/
+function resolveBinding(collections, collection, entry, path) {
+	if (!collection || !path) return null;
+	const dot = path.indexOf(".");
+	const head = dot === -1 ? path : path.slice(0, dot);
+	const tail = dot === -1 ? null : path.slice(dot + 1);
+	const field = collection.fields.find((f) => f.name === head);
+	if (!field) return null;
+	if (tail === null) return {
+		collection,
+		field,
+		entry: entry ?? null
+	};
+	if (field.type !== "reference" || tail.includes(".")) return null;
+	const refCollection = collections.find((c) => c.id === field.refCollectionId) ?? null;
+	const refField = refCollection?.fields.find((f) => f.name === tail) ?? null;
+	if (!refCollection || !refField) return null;
+	const id = entry?.values?.[head];
+	return {
+		collection: refCollection,
+		field: refField,
+		entry: typeof id === "string" && refCollection.entries.find((e) => e.id === id) || null
+	};
+}
+/** urls stored on a multi-image field, always as an array */
+function mediaUrls(entry, fieldName) {
+	const v = entry?.values?.[fieldName];
+	if (Array.isArray(v)) return v.filter((u) => typeof u === "string" && u);
+	return typeof v === "string" && v ? [v] : [];
+}
+/**
+* The scope a `multi-image` field presents to :collection-list: one synthetic
+* entry per stored url, in a synthetic collection carrying a single image field
+* named after the source field. So inside `:collection-list[gallery]` you bind
+* `:image[gallery]:` and get exactly as many <img> as the entry actually has —
+* the whole point of the type, versus fixed gallery-1…gallery-7 slots that ship
+* empty <img> tags for every image an entry doesn't have.
+*
+* The synthetic collection is not in project.collections, so it mints no entry
+* routes and `@item` inside the list stays inert — it exists only as a scope.
+*/
+function mediaListScope(field, scopeEntry) {
+	const urls = mediaUrls(scopeEntry, field.name);
+	return {
+		collection: {
+			id: `media:${field.id ?? field.name}`,
+			name: field.name,
+			synthetic: true,
+			fields: [{
+				id: `${field.id ?? field.name}:src`,
+				name: field.name,
+				type: "image"
+			}],
+			entries: []
+		},
+		entries: urls.map((url, i) => ({
+			id: `${field.name}:${i}`,
+			name: "",
+			slug: "",
+			values: { [field.name]: url }
+		}))
+	};
+}
+/**
+* Entries a :collection-list[arg] iterates: a collection name lists all of
+* its entries; a multi-reference field of the scoped entry lists the
+* referenced entries (dangling ids skipped, order preserved); a multi-image
+* field lists one synthetic entry per stored image url.
+* Returns { collection, entries } or null when arg names none of those.
+*/
+/**
+* The site's own published pages, as a synthetic collection.
+*
+* `:collection-list[@pages]` repeats over them, so an auto nav / footer menu is
+* DATA rather than a hand-maintained list of links — which is also what makes
+* "every page except the one you're on" expressible (`excludeCurrent`, since the
+* synthetic entry ids ARE page ids) and what lets `@item` link each row to its
+* page. The `@` prefix is reserved by the lexer, so this can never collide with
+* a collection someone actually named "pages".
+*
+* Fields: `title` (the page name), `path`, `slug` (the last path segment).
+* @param {{id: string, name: string, path: string, status?: string, collectionId?: string}[]} pages
+*/
+function pagesListScope(pages) {
+	const entries = (pages ?? []).filter((p) => p.status === "published" && !p.collectionId).map((page) => {
+		const path = page.path || "/";
+		const slug = path.split("/").filter(Boolean).pop() ?? "";
+		return {
+			id: page.id,
+			name: page.name,
+			slug,
+			routePath: path,
+			values: {
+				title: page.name,
+				path,
+				slug
+			},
+			createdAt: 0
+		};
+	});
+	return {
+		collection: {
+			id: "@pages",
+			name: "@pages",
+			fields: [
+				{
+					id: "@title",
+					name: "title",
+					type: "text"
+				},
+				{
+					id: "@path",
+					name: "path",
+					type: "text"
+				},
+				{
+					id: "@slug",
+					name: "slug",
+					type: "text"
+				}
+			],
+			entries
+		},
+		entries
+	};
+}
+function resolveListScope(collections, scopeCollection, scopeEntry, arg, pages) {
+	if (!arg) return null;
+	if (arg === "@pages") return pagesListScope(pages);
+	const named = collections.find((c) => c.name === arg);
+	if (named) return {
+		collection: named,
+		entries: named.entries
+	};
+	const field = scopeCollection?.fields.find((f) => f.name === arg);
+	if (!field) return null;
+	if (field.type === "multi-image") return mediaListScope(field, scopeEntry);
+	if (field.type !== "multi-reference") return null;
+	const target = collections.find((c) => c.id === field.refCollectionId);
+	if (!target) return null;
+	return {
+		collection: target,
+		entries: refIds(scopeEntry, arg).map((id) => target.entries.find((e) => e.id === id)).filter(Boolean)
+	};
+}
+//#endregion
 //#region src/lib/validateTree.ts
+/**
+* The context, from a project. ONE builder: the editor's issues footer and the
+* HTML writer's diagnostics have to agree about what is broken, and they were
+* two copies of the same four lines — so a check added to one reported nothing
+* in the other.
+*/
+function validateContext(project) {
+	const collections = project.collections ?? [];
+	return {
+		componentNames: (project.components ?? []).map((c) => c.name),
+		collectionNames: collections.map((c) => c.name),
+		listFieldNames: collections.flatMap((c) => c.fields.filter((f) => f.type === "multi-reference" || f.type === "multi-image").map((f) => f.name)),
+		dataOnlyCollections: collections.filter((c) => c.detailRoutes === false).map((c) => c.name),
+		collections,
+		pages: project.pages ?? []
+	};
+}
+/** the types whose `arg` names a SOURCE (and opens an entry scope) rather
+*  than a field of the scope around them */
+var SCOPE_TYPES = /* @__PURE__ */ new Set([
+	"collection-list",
+	"collection-item",
+	"slider",
+	"body"
+]);
 function validateTree(root, ctx) {
 	const diags = [];
 	/** every ref seen so far → the node that claimed it */
 	const refAt = /* @__PURE__ */ new Map();
+	const collections = ctx.collections;
+	/** the collection an arg presents, resolved the way the renderers resolve it */
+	const scopeCollectionFor = (outer, arg) => {
+		if (!collections || !arg) return null;
+		if (arg === "@pages") return pagesListScope(ctx.pages ?? []).collection;
+		return resolveListScope(collections, outer ?? null, null, arg, ctx.pages ?? [])?.collection ?? null;
+	};
 	const visit = (node, parent, scopes, instances, forms) => {
 		if (node.ref) {
 			if (refAt.has(node.ref)) diags.push({
@@ -5275,6 +5474,22 @@ function validateTree(root, ctx) {
 				message: `'@item' links to an entry's own page, but the collection '${scope.arg}' has no detail routes (detailRoutes: false). Remove the link, or give the collection a template page.`
 			});
 		}
+		const scope = scopes[scopes.length - 1];
+		const scopeCollection = scope?.collection ?? null;
+		if (collections && scopeCollection) {
+			const where = scope.type === "body" ? `the '${scopeCollection.name}' template` : `'${scope.type}${scope.arg ? `[${scope.arg}]` : ""}'`;
+			const known = (name) => !!resolveBinding(collections, scopeCollection, null, name);
+			const names = (scopeCollection.fields ?? []).map((f) => f.name);
+			const hint = names.length ? ` (fields here: ${names.join(", ")})` : "";
+			if (node.arg && !SCOPE_TYPES.has(node.type) && !known(node.arg)) diags.push({
+				nodeId: node.id,
+				message: `'${node.arg}' is not a field of ${where}, so this element renders empty${hint}`
+			});
+			for (const [attr, field] of Object.entries(node.fieldAttrs ?? {})) if (field && !known(field)) diags.push({
+				nodeId: node.id,
+				message: `the '${attr}' attribute is bound to '${field}', which is not a field of ${where} — it renders as the static value, or empty${hint}`
+			});
+		}
 		let childScopes = scopes;
 		let childInstances = instances;
 		if (node.slot) {
@@ -5308,7 +5523,8 @@ function validateTree(root, ctx) {
 			});
 			childScopes = [...scopes, {
 				type: node.type,
-				arg
+				arg,
+				collection: scopeCollectionFor(scopeCollection, arg)
 			}];
 		} else if (node.type === "slider") {
 			const arg = node.arg;
@@ -5318,11 +5534,13 @@ function validateTree(root, ctx) {
 			});
 			if (arg) childScopes = [...scopes, {
 				type: node.type,
-				arg
+				arg,
+				collection: scopeCollectionFor(scopeCollection, arg)
 			}];
 		} else if (node.type === "body" && node.arg) childScopes = [...scopes, {
 			type: node.type,
-			arg: node.arg
+			arg: node.arg,
+			collection: scopeCollectionFor(null, node.arg)
 		}];
 		const childForms = node.type === "form" ? [...forms, node] : forms;
 		for (const child of node.children) visit(child, node, childScopes, childInstances, childForms);
@@ -5905,13 +6123,7 @@ function applyHtml(root, parsed, opts) {
 var iconNameOf = (node) => node.svg?.match(/data-icon="([a-z0-9:_-]+)"/)?.[1] ?? (node.svg ? "custom" : "");
 /** the validation context a project implies */
 function contextFromProject(project) {
-	const collections = project.collections ?? [];
-	return {
-		componentNames: (project.components ?? []).map((c) => c.name),
-		collectionNames: collections.map((c) => c.name),
-		listFieldNames: collections.flatMap((c) => c.fields.filter((f) => f.type === "multi-reference" || f.type === "multi-image").map((f) => f.name)),
-		dataOnlyCollections: collections.filter((c) => c.detailRoutes === false).map((c) => c.name)
-	};
+	return validateContext(project);
 }
 //#endregion
 //#region src/lib/shared/slug.js

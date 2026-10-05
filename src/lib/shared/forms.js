@@ -67,10 +67,17 @@ export const isFormControl = (type) => Object.hasOwn(CONTROL_KINDS, type)
  * `instanceAttributes`). Without that indirection a form built from components
  * would report no fields at all.
  *
+ * `opts.hidden(node)` marks a subtree that is not rendered — a part an
+ * instance hides, resolved along the instance chain. Those controls are not
+ * emitted on the page and cannot be submitted, so counting them produced the
+ * nonsense "N control(s) have no usable name" for a Field component whose
+ * optional textarea was hidden, and put a field the page never shows into the
+ * manifest's allowlist.
+ *
  * Returns `{fields, unnamed, duplicates}`. `fields` is what the manifest
  * stores and the endpoint allowlists against.
  */
-export function collectFormFields(formNode, resolve) {
+export function collectFormFields(formNode, resolve, opts) {
   const fields = []
   const unnamed = []
   const seen = new Map()
@@ -83,6 +90,8 @@ export function collectFormFields(formNode, resolve) {
     if (node !== formNode && node.type === 'form') return
     // success/error blocks are chrome, never submitted
     if (FORM_STATE_TYPES.includes(node.type)) return
+    // a hidden part renders nowhere, so it submits nothing
+    if (node !== formNode && opts && opts.hidden && opts.hidden(node)) return
 
     if (isFormControl(node.type)) {
       const attrs = attrsOf(node)

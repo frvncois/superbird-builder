@@ -1,6 +1,9 @@
-import type { ElementNode } from '@/types/editor'
+import type { Collection, ElementNode, Page, Project } from '@/types/editor'
 import { isComponentType } from './components'
 import { BUILTIN_LIST_SOURCES } from './nodeState'
+// the SAME scope/binding resolution the three renderers run, so a field this
+// reports as unknown is a field none of them could have resolved
+import { pagesListScope, resolveBinding, resolveListScope } from './shared/fields.js'
 
 /**
  * What is wrong with a page's structure — the only place a human sees that a
@@ -22,6 +25,17 @@ export interface TreeDiagnostic {
   message: string
 }
 
+/**
+ * A collection as the field checks read one — name plus fields. Deliberately
+ * NOT `Collection`: the scope a `multi-image` field or `@pages` presents is
+ * SYNTHETIC (shared/fields.js), with no template page and no id of its own,
+ * and it is exactly the scope `data-field` resolves against inside such a list.
+ */
+export interface FieldSource {
+  name: string
+  fields: { name: string; type: string; refCollectionId?: string }[]
+}
+
 export interface ValidateContext {
   componentNames: string[]
   collectionNames: string[]
@@ -30,6 +44,35 @@ export interface ValidateContext {
   /** collections with `detailRoutes: false`: they render inside other pages and
    *  own no route, so an `@item` link inside one points nowhere */
   dataOnlyCollections: string[]
+  /** every collection, fields included — what a `data-field` or a `fieldAttrs`
+   *  entry is checked against. Omitted = that check is skipped. */
+  collections?: FieldSource[]
+  /** the site's own pages, for the `@pages` built-in list source */
+  pages?: Page[]
+}
+
+/**
+ * The context, from a project. ONE builder: the editor's issues footer and the
+ * HTML writer's diagnostics have to agree about what is broken, and they were
+ * two copies of the same four lines — so a check added to one reported nothing
+ * in the other.
+ */
+export function validateContext(
+  project: Pick<Project, 'components' | 'collections' | 'pages'>,
+): ValidateContext {
+  const collections = project.collections ?? []
+  return {
+    componentNames: (project.components ?? []).map((c) => c.name),
+    collectionNames: collections.map((c) => c.name),
+    listFieldNames: collections.flatMap((c) =>
+      c.fields
+        .filter((f) => f.type === 'multi-reference' || f.type === 'multi-image')
+        .map((f) => f.name),
+    ),
+    dataOnlyCollections: collections.filter((c) => c.detailRoutes === false).map((c) => c.name),
+    collections,
+    pages: project.pages ?? [],
+  }
 }
 
 /** an open entry scope: what a `:collection-list` / `:collection-item` / bound
@@ -37,12 +80,35 @@ export interface ValidateContext {
 interface Scope {
   type: string
   arg?: string
+  /** the collection this scope PRESENTS — the one a `data-field` inside it
+   *  reads from. Not always the collection the arg names: a `multi-image`
+   *  field presents a synthetic one-image collection, which is why
+   *  `data-bind-alt="name"` inside such a list resolved to nothing. */
+  collection?: FieldSource | null
 }
+
+/** the types whose `arg` names a SOURCE (and opens an entry scope) rather
+ *  than a field of the scope around them */
+const SCOPE_TYPES = new Set(['collection-list', 'collection-item', 'slider', 'body'])
 
 export function validateTree(root: ElementNode, ctx: ValidateContext): TreeDiagnostic[] {
   const diags: TreeDiagnostic[] = []
   /** every ref seen so far → the node that claimed it */
   const refAt = new Map<string, ElementNode>()
+  const collections = ctx.collections
+
+  /** the collection an arg presents, resolved the way the renderers resolve it */
+  const scopeCollectionFor = (
+    outer: FieldSource | null | undefined,
+    arg: string | undefined,
+  ): FieldSource | null => {
+    if (!collections || !arg) return null
+    // a synthetic scope (`@pages`, a multi-image field) is a collection only
+    // in the shape that matters here: a name and a field list
+    if (arg === '@pages') return pagesListScope(ctx.pages ?? []).collection as FieldSource
+    return (resolveListScope(collections, outer ?? null, null, arg, ctx.pages ?? [])?.collection ??
+      null) as FieldSource | null
+  }
 
   const visit = (
     node: ElementNode,
@@ -145,6 +211,47 @@ export function validateTree(root: ElementNode, ctx: ValidateContext): TreeDiagn
       }
     }
 
+    // --- a FIELD binding that names no field of the scope it is in ---
+    //
+    // `data-field` and every `fieldAttrs` entry resolve through
+    // `resolveBinding` against the innermost entry scope. A name that is not
+    // there renders EMPTY — on the canvas, in Play and on the published page —
+    // and nothing said so: an agent binding `data-field="title"` to a
+    // collection whose field is called `name` got a blank element and a
+    // response that reported success.
+    //
+    // Only reported when the scope is actually RESOLVED, so a component master
+    // (no scope of its own) and an unknown collection (already reported above)
+    // are never second-guessed.
+    const scope = scopes[scopes.length - 1]
+    const scopeCollection = scope?.collection ?? null
+    if (collections && scopeCollection) {
+      const where =
+        scope!.type === 'body'
+          ? `the '${scopeCollection.name}' template`
+          : `'${scope!.type}${scope!.arg ? `[${scope!.arg}]` : ''}'`
+      const known = (name: string) =>
+        !!resolveBinding(collections, scopeCollection, null, name)
+      const names = (scopeCollection.fields ?? []).map((f) => f.name)
+      const hint = names.length ? ` (fields here: ${names.join(', ')})` : ''
+      if (node.arg && !SCOPE_TYPES.has(node.type) && !known(node.arg)) {
+        diags.push({
+          nodeId: node.id,
+          message: `'${node.arg}' is not a field of ${where}, so this element renders empty${hint}`,
+        })
+      }
+      for (const [attr, field] of Object.entries(node.fieldAttrs ?? {})) {
+        if (field && !known(field)) {
+          diags.push({
+            nodeId: node.id,
+            message:
+              `the '${attr}' attribute is bound to '${field}', which is not a field of ` +
+              `${where} — it renders as the static value, or empty${hint}`,
+          })
+        }
+      }
+    }
+
     let childScopes = scopes
     let childInstances = instances
 
@@ -182,7 +289,7 @@ export function validateTree(root: ElementNode, ctx: ValidateContext): TreeDiagn
           message: `Unknown collection '${node.type}${arg ? `[${arg}]` : ''}'`,
         })
       }
-      childScopes = [...scopes, { type: node.type, arg }]
+      childScopes = [...scopes, { type: node.type, arg, collection: scopeCollectionFor(scopeCollection, arg) }]
     } else if (node.type === 'slider') {
       // a slider's arg is OPTIONAL: with one it repeats per entry like a
       // :collection-list, without one each direct child is a slide
@@ -195,10 +302,22 @@ export function validateTree(root: ElementNode, ctx: ValidateContext): TreeDiagn
       ) {
         diags.push({ nodeId: node.id, message: `Unknown collection 'slider[${arg}]'` })
       }
-      if (arg) childScopes = [...scopes, { type: node.type, arg }]
+      if (arg) {
+        childScopes = [
+          ...scopes,
+          { type: node.type, arg, collection: scopeCollectionFor(scopeCollection, arg) },
+        ]
+      }
     } else if (node.type === 'body' && node.arg) {
       // a collection template page: its whole body renders per entry
-      childScopes = [...scopes, { type: node.type, arg: node.arg }]
+      childScopes = [
+        ...scopes,
+        {
+          type: node.type,
+          arg: node.arg,
+          collection: scopeCollectionFor(null, node.arg),
+        },
+      ]
     }
 
     const childForms = node.type === 'form' ? [...forms, node] : forms

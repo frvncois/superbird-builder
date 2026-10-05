@@ -7,7 +7,12 @@ import { isValidClass } from '../styles'
 import { isAllowedAttribute, sanitizeAttributes } from '../shared/attributes.js'
 import { isRich, sanitizeRich } from '../shared/richtext.js'
 import { SAFE_SRC } from '../shared/urls.js'
-import { validateTree, type TreeDiagnostic, type ValidateContext } from '../validateTree'
+import {
+  validateContext,
+  validateTree,
+  type TreeDiagnostic,
+  type ValidateContext,
+} from '../validateTree'
 import { clearBindingsToIds, pageHost, masterHost, type StructureHost } from '../treeOps'
 import { decodeEntities, type ParsedNode } from './parse'
 import { nodesByShortId } from './ids'
@@ -947,15 +952,5 @@ const iconNameOf = (node: ElementNode) =>
 
 /** the validation context a project implies */
 export function contextFromProject(project: Project): ValidateContext {
-  const collections = project.collections ?? []
-  return {
-    componentNames: (project.components ?? []).map((c) => c.name),
-    collectionNames: collections.map((c) => c.name),
-    listFieldNames: collections.flatMap((c) =>
-      c.fields
-        .filter((f) => f.type === 'multi-reference' || f.type === 'multi-image')
-        .map((f) => f.name),
-    ),
-    dataOnlyCollections: collections.filter((c) => c.detailRoutes === false).map((c) => c.name),
-  }
+  return validateContext(project)
 }

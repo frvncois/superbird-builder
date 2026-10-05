@@ -11,10 +11,10 @@ import { ChevronLeft, Search, TriangleAlert, X } from 'lucide-vue-next'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import { useElement } from '@/composables/useElement'
 import { usePage } from '@/composables/usePage'
-import { useCollections } from '@/composables/useCollections'
+import { useProject } from '@/composables/useProject'
 import { useComponents } from '@/composables/useComponents'
 import { useStructure } from '@/composables/useStructure'
-import { validateTree } from '@/lib/validateTree'
+import { validateContext, validateTree } from '@/lib/validateTree'
 import LayerRow from './LayerRow.vue'
 import { useLayerSurface } from './useLayerSurface'
 import { layerLabel } from './layerLabel'
@@ -24,7 +24,7 @@ import type { ElementNode } from '@/types/editor'
 const emit = defineEmits<{ back: [] }>()
 
 const { activePage } = usePage()
-const { collections } = useCollections()
+const { project } = useProject()
 const { components, masterFor } = useComponents()
 const { selectElement } = useElement()
 const { backend } = useStructure()
@@ -89,18 +89,10 @@ const issues = computed(() => {
   const page = activePage.value
   const body = isPage.value ? page?.elements.find((n) => n.type === 'body') : null
   if (!body) return []
-  return validateTree(body, {
-    componentNames: components.value.map((c) => c.name),
-    collectionNames: collections.value.map((c) => c.name),
-    listFieldNames: collections.value.flatMap((c) =>
-      c.fields
-        .filter((f) => f.type === 'multi-reference' || f.type === 'multi-image')
-        .map((f) => f.name),
-    ),
-    dataOnlyCollections: collections.value
-      .filter((c) => c.detailRoutes === false)
-      .map((c) => c.name),
-  })
+  // ONE context builder, shared with the HTML writer's diagnostics — these
+  // were two copies of the same lines, so a check added to one reported
+  // nothing in the other
+  return validateTree(body, validateContext(project.value))
 })
 </script>
 

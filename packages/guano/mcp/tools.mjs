@@ -1863,6 +1863,22 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
               q.filter = { ...q.filter, equals: hit.id }
             }
           }
+          // `equalsCurrent` compares the field's value against the current
+          // entry's ID (shared/fields.js), so on anything but a reference it
+          // can only ever match nothing: the list rendered empty on every
+          // route while this tool reported success. The feature an agent
+          // reaching for it on a text field actually wants is
+          // `equalsCurrentField`, which does not exist yet (BACKLOG).
+          if (!bad.length && !refusedFilter && q.filter?.equalsCurrent && filterField) {
+            const kind = filterField.type
+            if (kind !== 'reference' && kind !== 'multi-reference') {
+              refusedFilter =
+                `listQuery refused: filter.equalsCurrent matches the entry in scope by its ID, so ` +
+                `it only works on a reference field — "${q.filter.field}" is a ${kind}, and the ` +
+                'list would have rendered empty on every route. Add a reference field pointing at ' +
+                'the parent collection and filter on that.'
+            }
+          }
           if (bad.length) {
             errors.push(`listQuery refused: ${bad.join(', ')} not in collection "${node.arg}"`)
           } else if (refusedFilter) {
@@ -3615,14 +3631,21 @@ function designWarnings(project) {
     // alone reported "no NAMED field" for a form built the way the guide says to
     // build one — one Input component, named per placement — in the same
     // response whose `stats.forms` listed the names.
-    const { fields, unnamed, duplicates } = collectFormFields(n, (child) => {
-      const mapping = mm?.get(child.id)
-      return mergeAttributeLayers(
-        mapping ? mapping.master.attributes : child.attributes,
-        child.instanceAttributes,
-        undefined,
-      )
-    })
+    const { fields, unnamed, duplicates } = collectFormFields(
+      n,
+      (child) => {
+        const mapping = mm?.get(child.id)
+        return mergeAttributeLayers(
+          mapping ? mapping.master.attributes : child.attributes,
+          child.instanceAttributes,
+          undefined,
+        )
+      },
+      // a part this instance hides is not exported, so it cannot be an unnamed
+      // control: a Field component with an optional hidden textarea reported
+      // "N control(s) have no usable name" on a form that collects correctly
+      { hidden: (child) => isNodeHidden(child, mm?.get(child.id)) },
+    )
     if (!fields.length) {
       formIssues.push(
         `the form in ${where} accepts submissions but has no NAMED field — only a control with ` +
@@ -3665,6 +3688,31 @@ function designWarnings(project) {
           'set a redirect, or the visitor cannot tell it worked',
       )
     }
+    // a secret in a submission store. Submissions are JSONL on disk, 0600 and
+    // no more: readable by an admin, by an editor, and by an agent token with
+    // allowFormSubmissions. A form is the wrong place to collect a password.
+    // `password` is not a kind of its own (shared/forms.js maps the input type
+    // to `text`), so the control's own `type` is read here as well as the name
+    const typedSecret = new Set()
+    walkNodes(n.children ?? [], (child) => {
+      const attrs = mergeAttributeLayers(
+        mm?.get(child.id) ? mm.get(child.id).master.attributes : child.attributes,
+        child.instanceAttributes,
+        undefined,
+      )
+      if (String(attrs?.type ?? '') === 'password' && attrs?.name) typedSecret.add(String(attrs.name))
+    })
+    const secretish = fields.filter(
+      (f) =>
+        typedSecret.has(f.name) || /pass(word|wd)?$|^pwd$|secret|ssn|card.?number/i.test(f.name),
+    )
+    if (secretish.length) {
+      formIssues.push(
+        `the form in ${where} collects ${secretish.map((f) => `"${f.name}"`).join(', ')} — ` +
+          'submissions are stored as plain text and are readable by every editor; nothing here ' +
+          'hashes or encrypts a field. Collect credentials somewhere that can',
+      )
+    }
     const publishing = project.settings?.publishing
     if (publishing?.method && publishing.method !== 'server' && !publishing.apiOrigin) {
       formIssues.push(
@@ -3683,6 +3731,47 @@ function designWarnings(project) {
         formIssues.slice(0, 3).join('; ') +
         (formIssues.length > 3 ? ` (+${formIssues.length - 3} more)` : '') +
         '. See get_guide {section: "forms"}.',
+    })
+  }
+
+  // 7. the tree diagnostics, on the routes that actually ship.
+  //
+  // `validateTree` already knew about an unknown collection, a `data-field`
+  // that names nothing, a misplaced empty state and a nested form — but only
+  // `get_page` and the HTML writer reported them, so a page written in one
+  // call and published in the next shipped broken with publish saying nothing.
+  // A publish is the last moment anyone looks.
+  const treeIssues = []
+  const ctx = contextFromProject(project)
+  const nameFor = (root, nodeId) => {
+    let out = null
+    walkNodes([root], (n) => {
+      if (!out && n.id === nodeId) out = n.ref ? `#${n.ref}` : n.type
+    })
+    return out ?? nodeId.slice(0, 8)
+  }
+  for (const page of published) {
+    const body = (page.elements ?? []).find((n) => n.type === 'body')
+    if (!body) continue
+    for (const d of validateTree(body, ctx)) {
+      treeIssues.push(`page "${page.name}" ${nameFor(body, d.nodeId)}: ${d.message}`)
+    }
+  }
+  for (const c of components) {
+    for (const d of validateTree(c.root, ctx)) {
+      treeIssues.push(`component ${c.name} ${nameFor(c.root, d.nodeId)}: ${d.message}`)
+    }
+  }
+  if (treeIssues.length) {
+    warnings.push({
+      kind: 'tree-diagnostics',
+      issues: treeIssues.slice(0, 10),
+      message:
+        `${treeIssues.length} structural problem(s) on published routes: ` +
+        treeIssues.slice(0, 3).join('; ') +
+        (treeIssues.length > 3 ? ` (+${treeIssues.length - 3} more)` : '') +
+        '. These render empty or not at all — get_page returns the same list per page, with ' +
+        'node ids.',
     })
   }
   return warnings

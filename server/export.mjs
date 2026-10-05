@@ -1471,14 +1471,20 @@ function collectManifest(manifest, forms, routePath, route) {
       // the ROUTE's master map, not one rebuilt from the form: a form can sit
       // inside a component instance, and a map built from the form alone would
       // pair nothing
-      const { fields } = collectFormFields(node, (child) => {
-        const mapping = mm?.get(child.id)
-        return mergeAttributeLayers(
-          mapping ? mapping.master.attributes : child.attributes,
-          child.instanceAttributes,
-          undefined,
-        )
-      })
+      const { fields } = collectFormFields(
+        node,
+        (child) => {
+          const mapping = mm?.get(child.id)
+          return mergeAttributeLayers(
+            mapping ? mapping.master.attributes : child.attributes,
+            child.instanceAttributes,
+            undefined,
+          )
+        },
+        // renderNode never emits a hidden node, so its name must not reach the
+        // manifest's allowlist either
+        { hidden: (child) => isNodeHidden(child, mm?.get(child.id)) },
+      )
       entry.fields = fields
     }
     manifest[id] = entry
