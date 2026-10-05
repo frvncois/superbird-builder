@@ -18,7 +18,6 @@ var NODE_STATE_KEYS = [
 	"src",
 	"svg",
 	"hidden",
-	"allowEmpty",
 	"variants",
 	"background",
 	"htmlId",

@@ -44,7 +44,7 @@ function setName(value: string) {
 
 <template>
   <div v-if="effect" class="flex min-w-0 items-center gap-2">
-    <div class="w-48 shrink-0">
+    <div class="w-48 min-w-24 shrink">
       <InputUI :model-value="effect.name" placeholder="Effect name" @update:model-value="setName" />
     </div>
     <span class="shrink-0 text-[10px] text-muted-foreground">

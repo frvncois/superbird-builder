@@ -1,6 +1,7 @@
 <script setup lang="ts">
-// The ONE action a trigger runs on the selected element: where it lands and how
-// it is aimed. The drawer's trigger view shows this beside the effect itself.
+// The ONE action a trigger runs on the selected element: WHERE it lands and how
+// it is aimed. The drawer's trigger view shows this as its left column, beside
+// the effect itself; removing the action and playing it belong to that view.
 //
 // The trigger is the view's heading, so the options only have to say WHERE the
 // effect lands and (for a click) in WHICH direction. An action may be ONE effect
@@ -9,7 +10,7 @@
 // half together — an effect whose two halves fired at different moments, or
 // landed on different elements, would simply be broken.
 import { computed } from 'vue'
-import { Crosshair, Play, Trash2, X } from 'lucide-vue-next'
+import { Crosshair, X } from 'lucide-vue-next'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import InputUI from '@/components/ui/InputUI.vue'
 import RowUI from '@/components/ui/RowUI.vue'
@@ -21,9 +22,8 @@ import { useProject } from '@/composables/useProject'
 import { useInteraction } from '@/composables/useInteraction'
 import { useAnimation } from '@/composables/useAnimation'
 import { type EffectPair } from '@/composables/useEffects'
-import { useMotion } from '@/composables/useMotion'
 import { useSettings } from '@/composables/useSettings'
-import { ACTION_VERBS, actionVerb, isDiscreteTrigger } from '@/lib/effectTriggers'
+import { ACTION_VERBS, isDiscreteTrigger } from '@/lib/effectTriggers'
 import { SCRUB_DEFAULTS } from '@/lib/motion'
 import type { AnimationBinding, ElementNode } from '@/types/editor'
 
@@ -34,7 +34,6 @@ const { findMasterNode } = useComponents()
 const { breakpoints } = useProject()
 const interactions = useInteraction()
 const animations = useAnimation()
-const motion = useMotion()
 const { settings } = useSettings()
 const { pickingFor } = interactions
 
@@ -61,7 +60,6 @@ const error = computed(() => {
  *  click the same way — a class change and a timeline are each keyed per
  *  (effect, target), so an Open button and a Close button drive one of either. */
 const isDiscrete = computed(() => isDiscreteTrigger(primary.value.trigger))
-const verb = computed(() => (isDiscrete.value ? actionVerb(primary.value.action) : null))
 
 function setAction(value: string | undefined) {
   const next = !value || value === 'toggle' ? undefined : (value as 'on' | 'off')
@@ -113,12 +111,6 @@ const APPEAR_MODES = computed(() => [
   ...Object.entries(APPEAR_MODE_LABELS).map(([value, label]) => ({ label, value })),
 ])
 
-function preview() {
-  const binding = anim.value
-  const timeline = binding && animations.animationFor(binding.animationId)
-  if (!binding || !timeline) return
-  motion.preview(timeline, binding.targetId ?? props.owner.id)
-}
 
 // --- breakpoints (all active by default) ---
 
@@ -140,36 +132,10 @@ function toggleBreakpoint(id: string) {
   for (const binding of halves.value) binding.breakpoints = next
 }
 
-function remove() {
-  if (anim.value) {
-    motion.stop(anim.value, anim.value.targetId ?? props.owner.id)
-    animations.removeBinding(props.owner, anim.value.id)
-  }
-  if (inter.value) interactions.removeBinding(props.owner, inter.value.id)
-  clearPreview()
-}
 </script>
 
 <template>
-  <div data-binding-row class="flex flex-col gap-1 rounded-xl border border-input pt-1 pb-2">
-    <div class="flex h-7 items-center gap-1.5 pr-1 pl-2.5">
-      <span class="text-[9px] font-medium tracking-wide text-muted-foreground uppercase">Options</span>
-      <span v-if="verb" class="text-[10px] text-muted-foreground">· {{ verb }}</span>
-      <div class="ml-auto flex items-center gap-0.5">
-        <ButtonUI
-          v-if="anim && resolved"
-          variant="icon" size="sm" :icon="Play" tooltip="Play on the canvas"
-          class="w-6 text-muted-foreground"
-          @click="preview"
-        />
-        <ButtonUI
-          variant="icon" size="sm" :icon="Trash2" tooltip="Remove action"
-          class="w-6 text-muted-foreground hover:!text-danger"
-          @click="remove"
-        />
-      </div>
-    </div>
-
+  <div data-binding-row class="flex flex-col gap-0.5">
     <template v-if="resolved">
       <RowUI label="On">
         <ButtonUI
@@ -244,7 +210,7 @@ function remove() {
         </template>
       </template>
 
-      <RowUI v-if="breakpoints.length > 1" label="Breakpoints">
+      <RowUI v-if="breakpoints.length > 1" label="Screens">
         <div class="flex flex-1 flex-wrap justify-end gap-1">
           <ButtonUI
             v-for="bp in breakpoints"
@@ -263,6 +229,8 @@ function remove() {
     </template>
 
     <!-- the effect was deleted from the library while bound here -->
-    <p v-else class="px-2.5 text-[10px] text-muted-foreground">This effect no longer exists.</p>
+    <p v-else class="px-2.5 text-[10px] text-muted-foreground">
+      This effect no longer exists — remove the action.
+    </p>
   </div>
 </template>

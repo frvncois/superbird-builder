@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { Copy, ClipboardPaste, CopyPlus, Trash2, Palette, Zap, Component, Unlink, Group, Eye, EyeOff, SquareDashed, type LucideIcon } from 'lucide-vue-next'
+import { Copy, ClipboardPaste, CopyPlus, Trash2, Palette, Zap, Component, Unlink, Group, Eye, EyeOff, type LucideIcon } from 'lucide-vue-next'
 import { isComponentType } from '@/lib/components'
 import { useComponents } from '@/composables/useComponents'
 import { useStructure } from '@/composables/useStructure'
@@ -8,16 +8,11 @@ import { useModal } from '@/composables/useModal'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import CreateComponentModal from '@/components/editor/canvas/CreateComponentModal.vue'
 import { useContextMenu } from '@/composables/useContextMenu'
-import { useEmptyHint } from '@/composables/useEmptyHint'
 
 const { masterFor, detachComponent, isHidden, setHidden } = useComponents()
 
 const targetHidden = computed(() => !!target.value && isHidden(target.value))
 
-// the way back from an empty container's Ignore button: offered only once a
-// hint was dismissed, so the menu stays short for everything else
-const { isDismissed, restore } = useEmptyHint()
-const targetHintDismissed = computed(() => !!target.value && isDismissed(target.value))
 const { backend } = useStructure()
 const { openModal } = useModal()
 
@@ -73,9 +68,6 @@ const items = computed<Item[]>(() => [
     run: () => target.value && setHidden(target.value, !targetHidden.value),
     disabled: targetIsBody.value,
   },
-  ...(targetHintDismissed.value
-    ? [{ label: 'Show drop hint', icon: SquareDashed, run: () => target.value && restore(target.value) }]
-    : []),
   { label: 'Copy style classes', icon: Palette, run: copyClasses, divider: true },
   { label: 'Paste style classes', icon: Palette, run: pasteClasses, disabled: copiedClasses.value === null },
   { label: 'Copy interactions', icon: Zap, run: copyInteractions, divider: true },

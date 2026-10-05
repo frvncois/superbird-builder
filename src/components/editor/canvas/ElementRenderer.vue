@@ -11,7 +11,6 @@ import { useInteraction } from '@/composables/useInteraction'
 import { useContextMenu } from '@/composables/useContextMenu'
 import { useRenderNode } from '@/composables/useRenderNode'
 import { useInlineEdit } from '@/composables/useInlineEdit'
-import { useEmptyHint } from '@/composables/useEmptyHint'
 import { isLeafElement } from '@/lib/elements'
 import {
   perViewForWidth,
@@ -204,32 +203,6 @@ function stateBlockVisible(child: ElementNode): boolean {
   const hit = (n: ElementNode): boolean =>
     isSelected(n.id) || (n.children ?? []).some(hit)
   return hit(child)
-}
-
-/**
- * A childless container with no text renders at zero height, so a Section,
- * Div, Grid or Container just dropped on the canvas would be invisible and
- * untargetable. The hint gives it a floor and says what to do; Ignore is for
- * the box that is meant to stay empty (a spacer, a decorative block), and is
- * remembered on the node (`allowEmpty`). Edit canvas only — Preview and the
- * export render the element as it is.
- */
-const { isDismissed, dismiss } = useEmptyHint()
-const showEmptyHint = computed(
-  () =>
-    !editing.value &&
-    !props.node.children.length &&
-    !mapping.value &&
-    !!def.value &&
-    !def.value.void &&
-    !isLeafElement(props.node.type) &&
-    !displayContent.value &&
-    !isDismissed(props.node),
-)
-function ignoreEmptyHint(e: MouseEvent) {
-  e.stopPropagation()
-  e.preventDefault()
-  dismiss(props.node)
 }
 
 const handlers = {
@@ -553,25 +526,6 @@ const handlers = {
       <span v-if="richContent !== null" v-html="richContent"></span>
       <template v-else>{{ displayContent }}</template>
     </template>
-    <!-- empty-container hint: editor chrome, not a node (no data-node-id, so
-         a drop through it resolves to this container and nothing animates it).
-         col-span-full keeps it to one row inside a Grid preset. -->
-    <div
-      v-if="showEmptyHint"
-      data-empty-hint
-      class="col-span-full flex min-h-24 w-full items-center justify-center gap-3 border border-dashed border-input p-3 text-xs text-muted-foreground select-none"
-    >
-      <span>Drop elements here</span>
-      <button
-        type="button"
-        class="rounded border border-input px-1.5 py-0.5 text-[10px] uppercase tracking-wide hover:bg-accent hover:text-accent-foreground"
-        @click="ignoreEmptyHint"
-        @mousedown.stop
-        @dblclick.stop
-      >
-        Ignore
-      </button>
-    </div>
     <span
       v-if="editing"
       ref="editEl"

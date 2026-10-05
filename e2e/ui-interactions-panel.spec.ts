@@ -65,7 +65,6 @@ const drawer = (page: Page) => page.locator('[data-effects-drawer]')
 /** the drawer's trigger view — where an element's action lives */
 const triggerView = (page: Page) => page.locator('[data-trigger-editor]')
 const actionRows = (page: Page) => page.locator('[data-binding-row]')
-const stateCards = (page: Page) => page.locator('[data-state-card]')
 const libraryRows = (page: Page) => page.locator('[data-effect-row]')
 
 /** a publish is rate-limited to 12/min server-side and this suite exceeds it
@@ -132,8 +131,6 @@ test("a trigger's effect is edited in place, and Remove takes it off the element
 
   await addTrigger(page, /^Hover/)
   await expect(triggerView(page).getByText('On hover')).toBeVisible()
-  // a symmetric effect on itself has no state to manage, so there is no card
-  await expect(stateCards(page)).toHaveCount(0)
 
   // the SHARED effect is right there beside the options — nothing to open
   const marker = 'ring-offset-4'
@@ -150,42 +147,16 @@ test("a trigger's effect is edited in place, and Remove takes it off the element
   await page.goto('/admin/')
   await openPanel(page)
   await page.locator('[data-trigger-row]').filter({ hasText: 'On hover' }).click()
-  await actionRows(page).getByRole('button', { name: 'Remove action' }).click()
-  await expect(actionRows(page)).toHaveCount(0)
+  await triggerView(page).getByRole('button', { name: 'Remove', exact: true }).click()
+  // …which closes the drawer and takes the trigger out of the panel
+  await expect(drawer(page)).toBeHidden()
+  await expect(page.locator('[data-trigger-row]')).toHaveCount(0)
 
   // …so the class it carried no longer ships, while the effect stays in the
   // library for the next element
   await publish(page)
   await page.goto('/')
   expect(await page.content()).not.toContain(marker)
-})
-
-test('a click action is a state, and its dismissal is stored on the binding', async ({ page }) => {
-  await openEditor(page)
-  await openPanel(page)
-
-  await addTrigger(page, /^Click/)
-  await drawer(page).getByPlaceholder('Effect name').fill('Panel open')
-  await drawer(page).getByPlaceholder('Add class').fill('opacity-50')
-  await page.keyboard.press('Enter')
-  await drawer(page).getByRole('button', { name: 'Apply' }).click()
-
-  // Apply closes the drawer; the panel's row brings the trigger back. A click
-  // drives a state: the card is where dismissal is edited
-  await page.locator('[data-trigger-row]').filter({ hasText: 'On click' }).click()
-  await expect(stateCards(page)).toHaveCount(1)
-  await stateCards(page).getByRole('button', { name: 'Escape' }).click()
-
-  await publish(page)
-  await page.goto('/')
-
-  // the export is the referee: the binding rides on the body and carries the
-  // dismissal
-  const metas = await page.evaluate(() =>
-    JSON.parse(document.body.getAttribute('data-int') || '[]'),
-  )
-  expect(metas).toHaveLength(1)
-  expect(metas[0].c).toEqual(['escape'])
 })
 
 test('the drawer opens with ⌘⇧E and Escape closes it without closing the panel', async ({

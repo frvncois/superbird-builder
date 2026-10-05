@@ -314,9 +314,8 @@ name** rather than kept — a `data-*` attribute is otherwise authorable, so a n
 would land as an ordinary DOM attribute and bind nothing.
 
 **Not in the HTML**, and preserved on every element a write adopts: interactions,
-animations, translations, slider config, `listQuery`, the picked `entryId`,
-per-placement attribute overrides, and the editor's `allowEmpty` mark on a
-container left empty on purpose. Those have their own tools.
+animations, translations, slider config, `listQuery`, the picked `entryId` and
+per-placement attribute overrides. Those have their own tools.
 
 ### `data-ref` and `data-id`
 

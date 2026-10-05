@@ -212,11 +212,6 @@ export interface ElementNode {
    * component: an instance hides a part for itself, or — with an explicit
    * `false` — shows one its component hides by default. Omitted = inherit. */
   hidden?: boolean
-  /** empty ON PURPOSE (a spacer, a decorative box): the Edit canvas draws a
-   * drop hint inside a childless container, and this is the Ignore button's
-   * answer. Node-only state, never rendered, not in the HTML — it rides on
-   * adoption like `listQuery`. Only ever `true`; restoring deletes the key. */
-  allowEmpty?: boolean
   /** MASTER container only: a SLOT. The element itself is the component's
    * (classes, attributes, bindings, hidden — shared like any other master
    * node) but its CHILDREN belong to whoever placed the instance: on a page

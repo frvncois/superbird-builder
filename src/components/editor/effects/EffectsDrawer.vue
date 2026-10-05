@@ -19,7 +19,7 @@
 // and a drawer that opens itself would shrink the canvas unasked. ⌘⇧E, an
 // effect name in the panel, a trigger in the panel, or "All effects" opens it.
 import { computed, onBeforeUnmount, onMounted } from 'vue'
-import { Play, X, Zap } from 'lucide-vue-next'
+import { X, Zap } from 'lucide-vue-next'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import EffectBody from '@/components/editor/effects/EffectBody.vue'
 import EffectLibrary from '@/components/editor/effects/EffectLibrary.vue'
@@ -29,8 +29,6 @@ import { useElementEffects } from '@/composables/useElementEffects'
 import { useInteraction } from '@/composables/useInteraction'
 import { useAnimation } from '@/composables/useAnimation'
 import { useEffects } from '@/composables/useEffects'
-import { useComponents } from '@/composables/useComponents'
-import { useMotion } from '@/composables/useMotion'
 import { useModal } from '@/composables/useModal'
 import { isEditable } from '@/composables/useShortcut'
 import { triggerOrder, triggerSentence, uiTrigger } from '@/lib/effectTriggers'
@@ -39,8 +37,6 @@ const { open, selected, trigger, view, openTrigger, done, closeDrawer } = useEff
 const interactions = useInteraction()
 const animations = useAnimation()
 const effects = useEffects()
-const { editTarget } = useComponents()
-const motion = useMotion()
 const { canEdit, elementLabel, sections } = useElementEffects()
 
 /**
@@ -61,28 +57,7 @@ const wrapper = computed(() =>
   selected.value?.kind === 'effect' ? (effects.effectById(selected.value.id) ?? null) : null,
 )
 
-/** the timeline to play, whichever shape the selection is */
-const playable = computed(() => {
-  const sel = selected.value
-  if (!sel) return null
-  if (sel.kind === 'animation') return sel.id
-  return wrapper.value?.animationId ?? null
-})
 
-// --- ▶ plays on the selected element ---
-//
-// A timeline has no element of its own, so the canvas needs one to play on.
-// Inside a component instance that is the MASTER node, which is what every
-// renderer maps the instance's elements to — the same resolution the trigger
-// view's options use.
-
-const playTarget = computed(() => editTarget.value?.id ?? null)
-
-function play() {
-  if (!playable.value || !playTarget.value) return
-  const animation = animations.animationFor(playable.value)
-  if (animation) motion.preview(animation, playTarget.value)
-}
 
 // --- leaving ---
 
@@ -174,17 +149,6 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydownCapture, tr
 
         <div class="ml-auto flex shrink-0 items-center gap-1">
           <ButtonUI
-            v-if="playable"
-            variant="outline"
-            size="xs"
-            :icon="Play"
-            :disabled="!playTarget"
-            :tooltip="playTarget ? 'Play on the selected element' : 'Select an element to play it'"
-            @click="play"
-          >
-            Play
-          </ButtonUI>
-          <ButtonUI
             variant="icon"
             size="sm"
             :icon="X"
@@ -195,7 +159,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydownCapture, tr
         </div>
       </header>
 
-      <div class="custom-scrollbar min-h-0 flex-1 overflow-y-auto">
+      <div class="custom-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
         <EffectBody v-if="selected" :kind="selected.kind" :id="selected.id" />
       </div>
 

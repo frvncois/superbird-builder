@@ -1,35 +1,43 @@
 <script setup lang="ts">
 // The drawer's TRIGGER view: what the selected element does when one trigger
-// fires, in one panel.
+// fires, in one panel — WHERE on the left, WHAT on the right.
 //
 // ONE action per trigger. A click runs one effect; an author who wants more
-// adds another trigger, not a second action — so there is no list to open a
-// row from. The Interactions panel names the element's triggers; picking one
-// lands here, where the action's OPTIONS (where it lands, how it is aimed) and
-// the EFFECT itself (its classes and its timeline) sit side by side, with the
-// element's STATES under the options. Adding a trigger creates its action, so
-// an empty trigger is only ever one whose action was removed: it offers to make
-// one again, and nothing else.
+// adds another trigger, not a second action — so there is no list and nothing
+// to open. The Interactions panel names the element's triggers; adding one
+// creates its action (a new effect) and lands here. The left column answers
+// where the effect lands and how it is aimed (`ActionOptions`); the right is the
+// effect itself, its classes and its motion (`EffectBody`), shared by every
+// element using it. The header names the trigger and the effect, and holds the
+// three verbs: Remove the action, Cancel, Apply.
 //
 // A trigger that already holds several actions — an agent's write, an older
 // project — shows them all, stacked, so nothing is hidden; the UI just never
-// adds a second one.
+// adds a second one. Dismissal, exclusive groups and remembered dismissal are
+// not edited here (agent-only for now; see BACKLOG.md).
 import { computed } from 'vue'
 import { Plus } from 'lucide-vue-next'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import ActionOptions from '@/components/editor/interactions/ActionOptions.vue'
-import StateCard from '@/components/editor/interactions/StateCard.vue'
 import EffectBody from '@/components/editor/effects/EffectBody.vue'
 import EffectNameField from '@/components/editor/effects/EffectNameField.vue'
 import { useElementEffects, rowId } from '@/composables/useElementEffects'
 import { useEffects, type EffectPair } from '@/composables/useEffects'
 import { useEffectsDrawer, type DrawerKind } from '@/composables/useEffectsDrawer'
+import { useInteraction } from '@/composables/useInteraction'
+import { useAnimation } from '@/composables/useAnimation'
+import { useMotion } from '@/composables/useMotion'
+import { useElement } from '@/composables/useElement'
 import { uiTrigger } from '@/lib/effectTriggers'
 
 const props = defineProps<{ trigger: string }>()
 
-const { target, canEdit, states, sections, createActionFor } = useElementEffects()
+const { target, canEdit, sections, createActionFor } = useElementEffects()
 const effects = useEffects()
+const interactions = useInteraction()
+const animations = useAnimation()
+const motion = useMotion()
+const { highlightElement } = useElement()
 const { fresh, effectCreated, keepEffect, closeDrawer } = useEffectsDrawer()
 
 const ui = computed(() => uiTrigger(props.trigger))
@@ -52,6 +60,22 @@ function addAction() {
   if (effect) effectCreated(effect.id)
 }
 
+/** take the action off this element — the effect stays in the library for the
+ *  next one — and close: the trigger is gone from the panel with it */
+function removeAction() {
+  const owner = target.value
+  if (!owner) return
+  for (const pair of rows.value) {
+    if (pair.animation) {
+      motion.stop(pair.animation, pair.animation.targetId ?? owner.id)
+      animations.removeBinding(owner, pair.animation.id)
+    }
+    if (pair.interaction) interactions.removeBinding(owner, pair.interaction.id)
+  }
+  highlightElement(null)
+  closeDrawer()
+}
+
 /** Cancel on a brand-new effect discards it outright — the cascading delete
  *  also strips the binding, wherever it landed — and closes. On an effect the
  *  author has already kept, every edit is live, so it only closes. */
@@ -69,13 +93,22 @@ function apply() {
 </script>
 
 <template>
-  <div data-trigger-editor class="flex min-h-0 flex-1 flex-col">
-    <!-- [icon] when · the effect's name · who uses it ……… Cancel / Apply -->
+  <div data-trigger-editor class="flex min-h-0 min-w-0 flex-1 flex-col">
+    <!-- [icon] when · the effect's name · who uses it ……… Remove / Cancel / Apply -->
     <header class="flex h-9 shrink-0 items-center gap-2 border-b border-input px-3">
       <component v-if="ui" :is="ui.icon" class="size-3.5 shrink-0 text-muted-foreground" />
       <span class="shrink-0 text-xs font-medium">{{ ui?.sentence ?? trigger }}</span>
       <EffectNameField v-if="headEffect" v-bind="headEffect" class="ml-1" />
       <div class="ml-auto flex shrink-0 items-center gap-1.5">
+        <ButtonUI
+          v-if="rows.length"
+          variant="ghost"
+          size="xs"
+          class="text-muted-foreground hover:!text-danger"
+          @click="removeAction"
+        >
+          Remove
+        </ButtonUI>
         <ButtonUI variant="outline" size="xs" @click="cancel">Cancel</ButtonUI>
         <ButtonUI variant="default" size="xs" @click="apply">Apply</ButtonUI>
       </div>
@@ -93,31 +126,17 @@ function apply() {
 
     <div
       v-else
-      class="custom-scrollbar grid min-h-0 flex-1 grid-cols-1 overflow-y-auto xl:grid-cols-[19rem_minmax(0,1fr)]"
+      class="custom-scrollbar grid min-h-0 flex-1 grid-cols-1 overflow-x-hidden overflow-y-auto xl:grid-cols-[17rem_minmax(0,1fr)]"
     >
-      <!-- the action's options, then the element's states -->
-      <div class="flex flex-col gap-2 border-b border-input p-3 xl:border-r xl:border-b-0">
+      <!-- WHERE: the element it lands on, its direction, which screens -->
+      <div class="flex flex-col border-b border-input pb-2 xl:border-r xl:border-b-0">
+        <p class="flex h-7 items-center px-2.5 text-[9px] font-medium tracking-wide text-muted-foreground uppercase">
+          Where
+        </p>
         <ActionOptions v-for="row in rows" :key="rowId(row)" :pair="row" :owner="target!" />
-
-        <template v-if="states.length">
-          <p class="pt-1 text-[9px] font-medium tracking-wide text-muted-foreground uppercase">
-            States
-          </p>
-          <StateCard
-            v-for="state in states"
-            :key="state.key"
-            :node-id="target!.id"
-            :drawer-kind="state.drawerKind"
-            :drawer-id="state.drawerId"
-            :name="state.name"
-            :summary="state.summary"
-            :class-drivers="state.classDrivers"
-            :driver-owner-ids="state.driverOwnerIds"
-          />
-        </template>
       </div>
 
-      <!-- the effect itself: shared by every element using it -->
+      <!-- WHAT: the effect itself, shared by every element using it -->
       <div class="flex min-w-0 flex-col">
         <EffectBody v-for="row in rows" :key="rowId(row)" v-bind="bodyOf(row)" :name-row="false" />
       </div>

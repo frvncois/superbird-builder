@@ -29,7 +29,7 @@ import type { AnimProp, AnimationStep } from '@/types/editor'
 
 const props = defineProps<{ id: string }>()
 
-const { animationFor, usageCount, animationError } = useAnimation()
+const { animationFor, animationError } = useAnimation()
 const { validTokens } = useSettings()
 
 const animation = computed(() => animationFor(props.id))
@@ -212,10 +212,14 @@ function setNum<T, K extends keyof T>(obj: T, key: K, text: string, fallback = 0
              tick sits at the right edge and the two would collide there -->
         <span class="w-20 shrink-0 text-right text-[9px] text-muted-foreground">ms</span>
         <div class="relative h-3 flex-1">
+          <!-- the last tick sits AT the right edge, so it is drawn leftwards:
+               hanging past the ruler, it was what gave the drawer a horizontal
+               scrollbar -->
           <span
             v-for="t in ticks"
             :key="t"
             class="absolute top-0 text-[9px] text-muted-foreground tabular-nums"
+            :class="pct(t) >= 99 && '-translate-x-full'"
             :style="{ left: `${pct(t)}%` }"
           >
             {{ t }}
@@ -447,13 +451,8 @@ function setNum<T, K extends keyof T>(obj: T, key: K, text: string, fallback = 0
       </div>
     </div>
 
-    <div class="flex items-center gap-2 px-2.5 pb-2">
-      <p v-if="animationError(animation)" class="text-[10px] text-danger">
-        {{ animationError(animation) }}
-      </p>
-      <p class="text-[10px] text-muted-foreground">
-        Shared — played by {{ usageCount(id) }} element{{ usageCount(id) === 1 ? '' : 's' }}.
-      </p>
-    </div>
+    <p v-if="animationError(animation)" class="px-2.5 pb-2 text-[10px] text-danger">
+      {{ animationError(animation) }}
+    </p>
   </div>
 </template>
