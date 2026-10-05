@@ -431,7 +431,10 @@ function classFor(node, ctx) {
  */
 function resolveHref(node, ctx) {
   const mapping = ctx.mm.get(node.id)
-  let raw = node.link ?? mapping?.master.link
+  // along the CHAIN (own → each mirror → master), mirroring useRenderNode's
+  // linkRaw: `?? master.link` skipped the mirror layer, so a host's link on a
+  // nested instance was stored and rendered by nobody
+  let raw = resolveInstanceValue(node, mapping, 'link')
   if (raw === '@item') {
     // null for a data-only collection: there is no page to link to, so the
     // element renders unlinked rather than pointing at a route that 404s

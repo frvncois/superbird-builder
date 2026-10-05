@@ -2207,6 +2207,23 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
 /** a master's elements in tree order, as addresses: what `edit_elements
  * {componentId}` takes. A row inside an instance the component HOLDS says so —
  * its look is that component's, and only its text/variants/hidden are said here */
+/**
+ * What a detach cannot carry across, named. Everything a renderer resolves
+ * own-first with a component default IS carried now (link, listQuery, slider,
+ * form, entryId, fieldAttrs, the per-placement attributes — see
+ * lib/componentOps.bakeMasterState); the variant axes are what genuinely stop
+ * existing, because the picks are resolved into plain classes and there is no
+ * component left to pick an option on.
+ */
+function detachNotes(def) {
+  if (!def?.variants?.length) return []
+  return [
+    `the look each instance wore is baked into its classes; the ${def.variants
+      .map((a) => a.name)
+      .join(', ')} axis${def.variants.length === 1 ? '' : 'es'} no longer exist for it`,
+  ]
+}
+
 function masterNodeRows(project, def, opts = {}) {
   const held = sharedInstanceMap(def.root.children ?? [], project.components ?? [])
   const rows = []
@@ -2483,15 +2500,31 @@ function makeComponentFrom(project, page, elementId, rawName, category) {
   if (!parent) return { ok: false, reason: 'not-found', message: 'that element has no parent' }
   const wrapper = { id: randomUUID(), type: name, content: '', children: [source] }
   // refs further in are dropped: they are inside a component now, where one
-  // would be duplicated across every instance on every page
+  // would be duplicated across every instance on every page. SAID rather than
+  // done quietly — those were the agent's own addresses, and the next
+  // edit_elements by one of them would otherwise just fail.
   if (source.ref) wrapper.ref = source.ref
-  walkNodes([source], (n) => delete n.ref)
+  const droppedRefs = []
+  walkNodes([source], (n) => {
+    if (n !== source && n.ref) droppedRefs.push(n.ref)
+    delete n.ref
+  })
   parent.children.splice(parent.children.indexOf(source), 1, wrapper)
   // a nested instance inside the extracted block came across as plain nodes:
   // what the master holds has to be a MIRROR of its component, and the page
   // copy has to match that mirror — both are the push's job
   pushMasterStructure(project, def)
   const result = { ok: true, componentId, name }
+  if (droppedRefs.length) {
+    result.droppedRefs = droppedRefs
+    result.notes = [
+      `${droppedRefs.length} ref(s) inside the block were dropped (${droppedRefs.join(', ')}): a ref ` +
+        'inside a component would be duplicated on every instance. Address those elements with ' +
+        '{componentId, id} for the shared state, or {ref: "' +
+        (wrapper.ref ?? name) +
+        '", part} for this placement.',
+    ]
+  }
   if (brokenOutsideBindings.length) {
     result.warnings = [
       `${brokenOutsideBindings.length} binding(s) OUTSIDE the new component target elements ` +
@@ -4941,6 +4974,8 @@ const tools = [
         ...(def ? { nodes: masterNodeRows(project, def) } : {}),
         usage: `write '<${made.name} />' on any page to add an instance`,
         version: pageVersion(project, page),
+        ...(made.notes ? { notes: made.notes } : {}),
+        ...(made.droppedRefs ? { droppedRefs: made.droppedRefs } : {}),
         ...(made.warnings ? { warnings: made.warnings } : {}),
       }
     },
@@ -5046,6 +5081,8 @@ const tools = [
             componentId: made.componentId,
             name: made.name,
             pageId: item.pageId,
+            ...(made.notes ? { notes: made.notes } : {}),
+            ...(made.droppedRefs ? { droppedRefs: made.droppedRefs } : {}),
             ...(made.warnings ? { warnings: made.warnings } : {}),
           })
       }
@@ -5228,11 +5265,13 @@ const tools = [
         deleteComponentDetaching(project, def.id)
         await saveTargetProject(project)
         const versions = touchedVersions(project, codeBefore)
+        const notes = detachNotes(def)
         return {
           saved: true,
           deleted: def.id,
           detached: usage.count,
           ...(usage.hosts.length ? { detachedIn: usage.hosts } : {}),
+          ...(notes.length ? { notes } : {}),
           ...(versions.length ? { versions } : {}),
         }
       }
@@ -5258,9 +5297,12 @@ const tools = [
           saved: false,
           reason: 'in-use',
           message:
-            `":${def.name}:" still has instances — pass detach: true to turn them into plain elements and delete it` +
+            `<${def.name}> still has instances — pass detach: true to turn them into plain elements ` +
+            'that look the same, and delete it' +
             (heldBy.length
-              ? `. It is also held by ${heldBy.map((c) => c.name).join(', ')}, which is where its instances come from`
+              ? `. It is also held by ${heldBy.map((c) => c.name).join(', ')}, which is where those ` +
+                'instances come from: detach: true takes it out of those masters too, so their own ' +
+                'instances turn plain in the same place'
               : ''),
           usedOn,
           ...(heldBy.length ? { heldBy } : {}),
@@ -5270,7 +5312,10 @@ const tools = [
         return {
           saved: false,
           reason: 'in-use',
-          message: `":${def.name}:" is held by ${heldBy.map((c) => c.name).join(', ')} — remove it from there first (update_component), or pass detach: true`,
+          message:
+            `<${def.name}> is held by ${heldBy.map((c) => c.name).join(', ')} — remove it from there ` +
+            'first (update_component), or pass detach: true, which bakes it into those masters and ' +
+            'pushes the result out to every instance of them',
           heldBy,
         }
       }
@@ -5360,14 +5405,17 @@ const tools = [
             'instance first to change just this page.',
         }
       }
+      const detachedDef = (project.components ?? []).find((c) => c.name === node.type)
       if (!detachInstance(project, page, node.id)) {
         return { saved: false, reason: 'not-detached', message: 'the instance block could not be detached (is it closed?)' }
       }
       await saveTargetProject(project)
+      const notes = detachNotes(detachedDef)
       return {
         saved: true,
         pageId: page.id,
         detached: node.type,
+        ...(notes.length ? { notes } : {}),
         version: pageVersion(project, page),
         ...(args.elements === 'none'
           ? {}

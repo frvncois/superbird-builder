@@ -459,7 +459,10 @@ export function useRenderNode(
   })
 
   const linkRaw = computed(() => {
-    let raw = node.value.link ?? mapping.value?.master.link
+    // along the CHAIN (own → each mirror → master), not `?? master.link`: a
+    // host's say about a nested instance lives on its mirror, which the two-step
+    // read skipped entirely
+    let raw = resolveInstanceValue(node.value, mapping.value, 'link')
     if (raw === '@item') {
       if (!scope?.entry) return null
       // null for a data-only collection (no detail routes) — render unlinked

@@ -11,6 +11,7 @@ import {
 import { deepClone, findNode, findParent, walkNodes } from './tree'
 import { buildInstanceMap, dependencyOrder, nestedComponentNames } from './instances'
 import { resolvePicks } from './shared/instances.js'
+import { mergeAttributeLayers } from './shared/attributes.js'
 import { effectiveClasses } from './variants'
 
 /**
@@ -168,7 +169,21 @@ interface Pair {
 }
 
 /** what a host says about a nested instance — the state a mirror carries */
-const MIRROR_KEYS = ['content', 'src', 'svg', 'background', 'locales', 'hidden', 'variants'] as const
+const MIRROR_KEYS = [
+  'content',
+  'src',
+  'svg',
+  'background',
+  'locales',
+  'hidden',
+  'variants',
+  // `link` is per-instance with a component default (see adoptCodeOwned), so
+  // what a HOST says about the instance it holds is a mirror value like any
+  // other. Without it the key was stored by the write and skipped by every
+  // renderer — a Row whose Button points at `@item` shipped with no href at
+  // all, and both edit_elements and publish reported success.
+  'link',
+] as const
 
 /** `node` takes, for each key it does not set itself, the first mirror's value */
 function inheritFromMirrors(node: ElementNode, mirrors: ElementNode[]): void {
@@ -253,6 +268,25 @@ function bakeMasterState(pairs: Pair[], masterToInstance: Map<string, string>): 
     else if (node.hidden === false) delete node.hidden
     if (!node.background && master.background) node.background = master.background
     if (!node.locales && master.locales) node.locales = deepClone(master.locales)
+    // every OTHER value `resolveInstanceValue` resolves own-first with a
+    // component default. Each of these was simply dropped: a detached sidebar
+    // of nine links lost all nine destinations, a list extracted into a
+    // component lost its filter, and a detached slider lost its config — all
+    // of it silently, because the key lived on the master and nothing read it
+    // once the mapping was gone.
+    if (node.link === undefined && master.link !== undefined) node.link = master.link
+    if (!node.listQuery && master.listQuery) node.listQuery = deepClone(master.listQuery)
+    if (!node.slider && master.slider) node.slider = deepClone(master.slider)
+    if (!node.form && master.form) node.form = deepClone(master.form)
+    if (!node.entryId && master.entryId) node.entryId = master.entryId
+    if (!node.fieldAttrs && master.fieldAttrs) node.fieldAttrs = deepClone(master.fieldAttrs)
+    // the per-PLACEMENT attribute layer folds into the shared set: after a
+    // detach there is only one placement, so keeping two layers would leave a
+    // key that reads as an override of nothing
+    if (node.instanceAttributes) {
+      node.attributes = mergeAttributeLayers(node.attributes, node.instanceAttributes)
+      delete node.instanceAttributes
+    }
   }
 }
 

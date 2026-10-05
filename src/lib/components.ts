@@ -92,10 +92,12 @@ export function createMirror(master: ElementNode): ElementNode {
     content: '',
     children: master.slot ? cloneSlotContent(master.children) : master.children.map(createMirror),
   }
-  // arg + link are code-owned: a mirror that lacked them would serialize a
-  // different block from the master's
+  // `arg` is the master's by definition and is copied down (adoptCodeOwned).
+  // `link` is NOT: it resolves along the chain (own → mirrors → master), so a
+  // fresh mirror INHERITS the inner component's destination and the key means
+  // "this placement differs" — which is also what adoptCodeOwned would delete
+  // it back down to on the first push.
   if (master.arg) node.arg = master.arg
-  if (master.link) node.link = master.link
   if (master.slot) node.slot = true
   return node
 }

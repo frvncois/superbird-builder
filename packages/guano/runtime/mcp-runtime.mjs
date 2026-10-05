@@ -160,7 +160,6 @@ function createMirror(master) {
 		children: master.slot ? cloneSlotContent(master.children) : master.children.map(createMirror)
 	};
 	if (master.arg) node.arg = master.arg;
-	if (master.link) node.link = master.link;
 	if (master.slot) node.slot = true;
 	return node;
 }
@@ -1709,6 +1708,160 @@ var nestedComponentNames$1 = nestedComponentNames;
 var canNest$1 = canNest;
 /** each component after everything it holds */
 var dependencyOrder$1 = dependencyOrder;
+//#endregion
+//#region src/lib/shared/attributes.js
+/** attribute names allowed verbatim */
+var ATTR_ALLOW = /* @__PURE__ */ new Set([
+	"target",
+	"rel",
+	"download",
+	"title",
+	"role",
+	"type",
+	"name",
+	"value",
+	"placeholder",
+	"alt",
+	"loading",
+	"tabindex",
+	"lang",
+	"dir",
+	"hidden",
+	"disabled",
+	"open",
+	"for",
+	"required",
+	"readonly",
+	"checked",
+	"selected",
+	"multiple",
+	"autofocus",
+	"autocomplete",
+	"min",
+	"max",
+	"step",
+	"rows",
+	"cols",
+	"maxlength",
+	"minlength",
+	"pattern",
+	"inputmode",
+	"accept",
+	"translate"
+]);
+/** allowed name prefixes (data-*, aria-*) */
+var ATTR_PREFIXES = ["data-", "aria-"];
+/**
+* `data-*` names the RENDERERS own, refused as custom attributes.
+*
+* `data-` is an open prefix, so without this an authored attribute can collide
+* with the wiring a renderer emits — and because a duplicate attribute in HTML
+* resolves to the FIRST occurrence, the authored one SHADOWS the renderer's.
+*
+* That was a real hole: `data-form-redirect` carries the post-submission
+* navigation, validated at write AND at export as an internal route
+* (`isInternalRoute`), and the published runtime calls `location.assign` on it.
+* Set as a custom attribute it bypassed both checks, which bought an
+* unconditional open redirect and — because `location.assign` honours a
+* `javascript:` URL — script execution on the published origin. Under the
+* `server` publish method that origin is the one serving `/admin` and `/api`,
+* and setting an attribute is not gated by the agent policy's
+* `allowCustomCode`, so a prompt-injected agent with publish rights could ship
+* it.
+*
+* Matched by exact name or by prefix for the families (`data-sl-*`). Nothing an
+* author could usefully want is in here: every one of these is a channel
+* between the exporter and its own runtime.
+*/
+var RESERVED_DATA_ATTRS = /* @__PURE__ */ new Set([
+	"data-form",
+	"data-form-redirect",
+	"data-form-success",
+	"data-form-error",
+	"data-form-fallback",
+	"data-int",
+	"data-anim",
+	"data-tgt",
+	"data-atgt",
+	"data-slider",
+	"data-node-id",
+	"data-id",
+	"data-ref",
+	"data-type",
+	"data-source"
+]);
+/** reserved FAMILIES — a prefix the renderer owns outright */
+var RESERVED_DATA_PREFIXES = ["data-sl-", "data-form-"];
+/** a syntactically valid attribute name (lowercase, no colons/uppercase) */
+var NAME_RE = /^[a-z][a-z0-9-]*$/;
+/** does the renderer own this `data-*` name? (see RESERVED_DATA_ATTRS) */
+function isReservedAttribute(name) {
+	const n = String(name).toLowerCase().trim();
+	return RESERVED_DATA_ATTRS.has(n) || RESERVED_DATA_PREFIXES.some((p) => n.startsWith(p));
+}
+/** is `name` an allowed custom attribute? */
+function isAllowedAttribute(name) {
+	const n = String(name).toLowerCase().trim();
+	if (!NAME_RE.test(n)) return false;
+	if (isReservedAttribute(n)) return false;
+	if (ATTR_ALLOW.has(n)) return true;
+	return ATTR_PREFIXES.some((p) => n.startsWith(p) && n.length > p.length);
+}
+/**
+* Keep only allowed attributes, lowercased names with string values. Returns a
+* fresh object (never mutates the input).
+*
+* EMPTY VALUES ARE KEPT. They used to be dropped, which made `alt=""` (the
+* correct markup for a decorative image) and every boolean attribute
+* (`download`, `hidden`, `required`) unexpressible — and because callers infer
+* the rejection reason by diffing key names, the loss was reported as
+* "attribute not allowed", pointing at the wrong thing entirely.
+*
+* `true` coerces to the empty string (so an agent can pass a real boolean) and
+* `false` drops the attribute (absence IS false for booleans).
+*/
+function sanitizeAttributes(record) {
+	/** @type {Record<string, string>} */
+	const out = {};
+	if (!record || typeof record !== "object" || Array.isArray(record)) return out;
+	for (const [rawName, rawValue] of Object.entries(record)) {
+		const name = String(rawName).toLowerCase().trim();
+		if (!isAllowedAttribute(name)) continue;
+		if (rawValue === false) continue;
+		out[name] = rawValue == null || rawValue === true ? "" : String(rawValue);
+	}
+	return out;
+}
+/**
+* Attributes whose value is TEXT A VISITOR READS, and so can be translated.
+* `type`, `role` and `name` are structural and never localized; these four are
+* copy, and on a multilingual site they used to render in the default language
+* on every locale route with no way to change it.
+*/
+var LOCALIZABLE_ATTRS = [
+	"placeholder",
+	"aria-label",
+	"alt",
+	"title"
+];
+/** true when `name` carries text worth translating */
+function isLocalizableAttribute(name) {
+	return LOCALIZABLE_ATTRS.includes(String(name).toLowerCase().trim());
+}
+/**
+* The attributes an element renders: the component master's, with this
+* placement's own overrides on top, then the active locale's text overrides.
+*
+* Shared by both Vue renderers and the exporter so the canvas, Preview and the
+* published page agree. `localeAttrs` is already narrowed to the locale being
+* rendered (absent on the default locale).
+*/
+function mergeAttributeLayers(shared, instance, localeAttrs) {
+	const out = { ...shared ?? {} };
+	for (const [name, value] of Object.entries(instance ?? {})) out[name] = value;
+	for (const [name, value] of Object.entries(localeAttrs ?? {})) if (isLocalizableAttribute(name) && String(value) !== "") out[name] = value;
+	return out;
+}
 //#endregion
 //#region src/lib/colors.ts
 var TAILWIND_SHADES = [
@@ -4346,7 +4499,8 @@ var MIRROR_KEYS = [
 	"background",
 	"locales",
 	"hidden",
-	"variants"
+	"variants",
+	"link"
 ];
 /** `node` takes, for each key it does not set itself, the first mirror's value */
 function inheritFromMirrors(node, mirrors) {
@@ -4414,6 +4568,16 @@ function bakeMasterState(pairs, masterToInstance) {
 		else if (node.hidden === false) delete node.hidden;
 		if (!node.background && master.background) node.background = master.background;
 		if (!node.locales && master.locales) node.locales = deepClone(master.locales);
+		if (node.link === void 0 && master.link !== void 0) node.link = master.link;
+		if (!node.listQuery && master.listQuery) node.listQuery = deepClone(master.listQuery);
+		if (!node.slider && master.slider) node.slider = deepClone(master.slider);
+		if (!node.form && master.form) node.form = deepClone(master.form);
+		if (!node.entryId && master.entryId) node.entryId = master.entryId;
+		if (!node.fieldAttrs && master.fieldAttrs) node.fieldAttrs = deepClone(master.fieldAttrs);
+		if (node.instanceAttributes) {
+			node.attributes = mergeAttributeLayers(node.attributes, node.instanceAttributes);
+			delete node.instanceAttributes;
+		}
 	}
 }
 /**
@@ -5061,160 +5225,6 @@ function parseHtml(input, components = []) {
 *  format promises to understand */
 function decodeEntities(text) {
 	return text.replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16))).replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10))).replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, "\"").replace(/&apos;/g, "'").replace(/&amp;/g, "&");
-}
-//#endregion
-//#region src/lib/shared/attributes.js
-/** attribute names allowed verbatim */
-var ATTR_ALLOW = /* @__PURE__ */ new Set([
-	"target",
-	"rel",
-	"download",
-	"title",
-	"role",
-	"type",
-	"name",
-	"value",
-	"placeholder",
-	"alt",
-	"loading",
-	"tabindex",
-	"lang",
-	"dir",
-	"hidden",
-	"disabled",
-	"open",
-	"for",
-	"required",
-	"readonly",
-	"checked",
-	"selected",
-	"multiple",
-	"autofocus",
-	"autocomplete",
-	"min",
-	"max",
-	"step",
-	"rows",
-	"cols",
-	"maxlength",
-	"minlength",
-	"pattern",
-	"inputmode",
-	"accept",
-	"translate"
-]);
-/** allowed name prefixes (data-*, aria-*) */
-var ATTR_PREFIXES = ["data-", "aria-"];
-/**
-* `data-*` names the RENDERERS own, refused as custom attributes.
-*
-* `data-` is an open prefix, so without this an authored attribute can collide
-* with the wiring a renderer emits — and because a duplicate attribute in HTML
-* resolves to the FIRST occurrence, the authored one SHADOWS the renderer's.
-*
-* That was a real hole: `data-form-redirect` carries the post-submission
-* navigation, validated at write AND at export as an internal route
-* (`isInternalRoute`), and the published runtime calls `location.assign` on it.
-* Set as a custom attribute it bypassed both checks, which bought an
-* unconditional open redirect and — because `location.assign` honours a
-* `javascript:` URL — script execution on the published origin. Under the
-* `server` publish method that origin is the one serving `/admin` and `/api`,
-* and setting an attribute is not gated by the agent policy's
-* `allowCustomCode`, so a prompt-injected agent with publish rights could ship
-* it.
-*
-* Matched by exact name or by prefix for the families (`data-sl-*`). Nothing an
-* author could usefully want is in here: every one of these is a channel
-* between the exporter and its own runtime.
-*/
-var RESERVED_DATA_ATTRS = /* @__PURE__ */ new Set([
-	"data-form",
-	"data-form-redirect",
-	"data-form-success",
-	"data-form-error",
-	"data-form-fallback",
-	"data-int",
-	"data-anim",
-	"data-tgt",
-	"data-atgt",
-	"data-slider",
-	"data-node-id",
-	"data-id",
-	"data-ref",
-	"data-type",
-	"data-source"
-]);
-/** reserved FAMILIES — a prefix the renderer owns outright */
-var RESERVED_DATA_PREFIXES = ["data-sl-", "data-form-"];
-/** a syntactically valid attribute name (lowercase, no colons/uppercase) */
-var NAME_RE = /^[a-z][a-z0-9-]*$/;
-/** does the renderer own this `data-*` name? (see RESERVED_DATA_ATTRS) */
-function isReservedAttribute(name) {
-	const n = String(name).toLowerCase().trim();
-	return RESERVED_DATA_ATTRS.has(n) || RESERVED_DATA_PREFIXES.some((p) => n.startsWith(p));
-}
-/** is `name` an allowed custom attribute? */
-function isAllowedAttribute(name) {
-	const n = String(name).toLowerCase().trim();
-	if (!NAME_RE.test(n)) return false;
-	if (isReservedAttribute(n)) return false;
-	if (ATTR_ALLOW.has(n)) return true;
-	return ATTR_PREFIXES.some((p) => n.startsWith(p) && n.length > p.length);
-}
-/**
-* Keep only allowed attributes, lowercased names with string values. Returns a
-* fresh object (never mutates the input).
-*
-* EMPTY VALUES ARE KEPT. They used to be dropped, which made `alt=""` (the
-* correct markup for a decorative image) and every boolean attribute
-* (`download`, `hidden`, `required`) unexpressible — and because callers infer
-* the rejection reason by diffing key names, the loss was reported as
-* "attribute not allowed", pointing at the wrong thing entirely.
-*
-* `true` coerces to the empty string (so an agent can pass a real boolean) and
-* `false` drops the attribute (absence IS false for booleans).
-*/
-function sanitizeAttributes(record) {
-	/** @type {Record<string, string>} */
-	const out = {};
-	if (!record || typeof record !== "object" || Array.isArray(record)) return out;
-	for (const [rawName, rawValue] of Object.entries(record)) {
-		const name = String(rawName).toLowerCase().trim();
-		if (!isAllowedAttribute(name)) continue;
-		if (rawValue === false) continue;
-		out[name] = rawValue == null || rawValue === true ? "" : String(rawValue);
-	}
-	return out;
-}
-/**
-* Attributes whose value is TEXT A VISITOR READS, and so can be translated.
-* `type`, `role` and `name` are structural and never localized; these four are
-* copy, and on a multilingual site they used to render in the default language
-* on every locale route with no way to change it.
-*/
-var LOCALIZABLE_ATTRS = [
-	"placeholder",
-	"aria-label",
-	"alt",
-	"title"
-];
-/** true when `name` carries text worth translating */
-function isLocalizableAttribute(name) {
-	return LOCALIZABLE_ATTRS.includes(String(name).toLowerCase().trim());
-}
-/**
-* The attributes an element renders: the component master's, with this
-* placement's own overrides on top, then the active locale's text overrides.
-*
-* Shared by both Vue renderers and the exporter so the canvas, Preview and the
-* published page agree. `localeAttrs` is already narrowed to the locale being
-* rendered (absent on the default locale).
-*/
-function mergeAttributeLayers(shared, instance, localeAttrs) {
-	const out = { ...shared ?? {} };
-	for (const [name, value] of Object.entries(instance ?? {})) out[name] = value;
-	for (const [name, value] of Object.entries(localeAttrs ?? {})) if (isLocalizableAttribute(name) && String(value) !== "") out[name] = value;
-	return out;
 }
 //#endregion
 //#region src/lib/validateTree.ts
