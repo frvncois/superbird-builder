@@ -175,3 +175,72 @@ test.describe('partial-write semantics', () => {
     expect(r.refused).toBeUndefined()
   })
 })
+
+// 3I: the HTML has always printed the 8-hex `data-id`, and every tool accepts
+// it, but the element summaries printed full uuids — 36 bytes a row against 8,
+// carried in every later turn of the session.
+test.describe('ids print in the short form', () => {
+  test('every row, and it is a working address', async () => {
+    const { s, pageId } = await built()
+    const page = await s.call('get_page', { pageId, elements: 'own' })
+    const rows = page.elements as { id: string; ref?: string }[]
+    for (const row of rows) expect(row.id).toHaveLength(8)
+
+    // the printed id addresses the element everywhere an `id` is taken
+    const hero = rows.find((e) => e.ref === 'hero')!
+    expect((await s.call('get_page', { pageId, id: hero.id })).elements[0].ref).toBe('hero')
+    const e = await s.call('edit_elements', {
+      pageId,
+      version: page.version,
+      edits: [{ id: hero.id, addClasses: ['mt-8'] }],
+    })
+    expect(e.failed).toBe(0)
+    // the echo is short too
+    expect((e.bound ?? []).length + 0).toBeGreaterThanOrEqual(0)
+
+    // and it matches the `data-id` in the HTML, which is the point
+    expect(page.html).toContain(`data-id="${hero.id}"`)
+  })
+
+  test('a component’s node rows print short ids against its own tree', async () => {
+    const s = await mcpSession()
+    const made = await s.call('create_component', {
+      name: 'Card',
+      html: '<div class="p-4"><h3>T</h3><p>B</p></div>',
+    })
+    const rows = (await s.call('list_components', { includeNodes: true })).components[0]
+      .nodes as { id: string; type: string }[]
+    for (const row of rows) expect(row.id).toHaveLength(8)
+    // and each resolves on the master
+    const h3 = rows.find((r) => r.type === 'h3')!
+    const r = await s.call('edit_elements', {
+      componentId: made.componentId,
+      edits: [{ id: h3.id, content: 'Title' }],
+    })
+    expect(r.failed).toBe(0)
+    expect(r.saved).toBe(true)
+  })
+})
+
+// 3I: `applied: ["insert"]` said that SOMETHING landed and nothing about what,
+// so the next call was a confirming read.
+test('a structural write says what it did, by name', async () => {
+  const { s, pageId } = await built()
+  const page = await s.call('get_page', { pageId, elements: 'none' })
+  const r = await s.call('edit_structure', {
+    pageId,
+    version: page.version,
+    ops: [
+      { op: 'insert', parent: 'hero', html: '<div data-ref="box"><p data-ref="line">x</p></div>' },
+      { op: 'wrap', target: 'box', html: '<div data-ref="shell" class="rounded" />' },
+      { op: 'remove', target: 'line' },
+    ],
+    elements: 'none',
+  })
+  expect(r.saved).toBe(true)
+  const applied = r.applied as string[]
+  expect(applied[0]).toContain('inserted div#box under #hero')
+  expect(applied[0]).toContain('2 new')
+  expect(applied[1]).toContain('wrapped box in div#shell')
+  expect(applied[2]).toContain('removed line')
+})

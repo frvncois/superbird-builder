@@ -380,6 +380,32 @@ element (`src/lib/shared/svg.js`).
 
 The `guano mcp` server (`packages/guano/mcp/`) shipped Phases 0–8. Known, deliberately-deferred limits:
 
+- **`inspect_route {path, select, attrs?}` — deferred 2026-10-05 (Harbour 3I.4, decision D4).**
+  A CSS selector over the exported HTML, so an agent can check `a[href]` or
+  `[data-status]` without curl, a browser, or reading a whole page. The value is
+  real — the Harbour run spent ~40 calls on verification it would have answered
+  in one each — and the description cost is small (~450 B, affordable).
+  What is NOT settled is where the HTML comes from, and the two answers have
+  different costs:
+  1. **HTTP-GET the preview URL.** No new server code and no file access
+     (the MCP server talks to the instance over HTTP by design), but the tool
+     then only works after `preview`, and it cannot be driven by the in-process
+     `e2e/fixtures/mcpSession.ts` harness at all — so the one spec shape that
+     catches "reports success for a write that renders nowhere" would not cover
+     it.
+  2. **A read endpoint on the server** (`GET /api/preview-html?path=…`). Testable
+     in-process, but a new authed route on the surface the agent-policy guards.
+  And either way `select` needs a matcher. There is no HTML parser available to
+  the MCP server (`src/lib/html/parse.ts` reads the AGENT format, not rendered
+  output, and the repo carries no parse5/cheerio), so a full selector engine is
+  new code with its own correctness surface — and a half-working one that
+  silently matches nothing is exactly the failure class the rest of this work
+  removed. A restricted grammar (`tag`, `.class`, `[attr]`, `[attr="v"]` and
+  pairs of those, no combinators) covers both of the plan's own examples and is
+  honestly implementable; it should be stated as the grammar, not sold as CSS.
+  Pick (1) or (2) and the restricted grammar, and this is a day's work with a
+  real spec.
+
 - **M0 — the singular create/upsert tools were removed (2026-10-01).**
   `create_interaction`, `create_animation` and `upsert_entry` are gone; their
   batch forms `create_interactions {items}`, `create_animations {items}` and

@@ -213,6 +213,26 @@ full in the chat. Same headings as before, plus §0:
    be able to; anything you were blocked from that was legitimate.
 10. **Top 10 changes**, ranked, one sentence each, each pointing at its evidence row.
 
+## Working practices (follow these, and report where they cost you)
+
+These came out of the Harbour run's own follow-up on its transcript. They are the
+session-side habits — the product's half is in GUIDE's **Cost discipline** section, which
+you should read before the first write.
+
+- **Read `get_guide {section: "cost-discipline"}` early.** Every tool response is carried
+  for the rest of the session, so a page dump costs far more than the one call. If any
+  rule there turns out to be wrong or impossible, that is a finding worth more than the
+  feature you were building.
+- **Verify in a subagent.** When you need to check something that takes a big read, hand
+  it to a subagent and ask for a pass/fail plus the one line of evidence. The bytes stay
+  out of your own context; the answer comes back the size it should be.
+- **One ops file per screen.** Build each page's `edit_structure` ops or `edit_elements`
+  edits as a JSON file on disk and pass `opsPath`/`editsPath`. It keeps the payload out of
+  the transcript, and it leaves you something to re-run after a refusal.
+- **Phase boundaries with notes on disk.** At the end of each phase write what you did,
+  what is still open and the ids you will need next into a file. A session that loses its
+  place re-reads the site to find it.
+
 Finally, one short section: **what you would tell the next agent** — the three things
 you wish you had known before the first call.
 

@@ -72,8 +72,10 @@ test.describe('attribute text per placement and per locale', () => {
       ],
     })
 
-    const wl = await s.call('get_translation_worklist', { locale: 'fr' })
-    const attrs = wl.items.filter((i: { kind: string }) => i.kind === 'attribute')
+    // a bare call returns the COUNTERS only (cost discipline) — a filter is how
+    // you ask for items
+    const wl = await s.call('get_translation_worklist', { locale: 'fr', kind: 'attribute' })
+    const attrs = wl.items as { kind: string; attribute: string; key: string }[]
     expect(attrs.map((a: { attribute: string }) => a.attribute).sort()).toEqual([
       'aria-label',
       'placeholder',
@@ -82,17 +84,16 @@ test.describe('attribute text per placement and per locale', () => {
     // `type` is not offered — it is structural
     expect(JSON.stringify(attrs)).not.toContain('"type":"text"')
 
-    // and translating one through set_translations lands
-    const one = attrs.find((a: { attribute: string }) => a.attribute === 'placeholder')
+    // and translating one through set_translations lands — by HANDLE, which is
+    // what a keyed item is for
+    const one = attrs.find((a) => a.attribute === 'placeholder')!
     const w = await s.call('set_translations', {
       locale: 'fr',
+      handle: wl.handle,
       items: [
         {
-          kind: 'attribute',
-          pageId: one.pageId,
-          id: one.id,
-          attribute: 'placeholder',
-          content: 'Rechercher',
+          key: one.key,
+          text: 'Rechercher',
         },
       ],
     })

@@ -193,6 +193,7 @@ export function createToolSet({ api, runtime, elicit, hasElicitation = () => nul
     detachInstance,
     deleteComponent: deleteComponentDetaching,
     nodesByShortId,
+    shortIds,
   } = runtime
 
   // ---------- the bundled icon table ----------
@@ -585,6 +586,23 @@ let target = null
 let loadedRaw = null
 let loadedKey = null
 
+/**
+ * The last translation worklist, by handle.
+ *
+ * A worklist item's ADDRESS (kind + pageId/componentId/collectionId + id or
+ * entryId + field) is most of its bytes, and it travels twice: out in the
+ * worklist and back in the write. The handle keeps the addresses in this
+ * process — one per session, like `target` — so `set_translations {handle,
+ * items: [{key, text}]}` carries only the key and the translation.
+ *
+ * Process-local on purpose: it is a cache of a read this process just did, not
+ * state the project owns. A stale or unknown handle is refused by name, and
+ * the full addressing form never goes away.
+ */
+let worklistHandle = null
+let worklistItems = null
+let worklistLocale = null
+
 async function readBranchesMeta() {
   const meta = await storeGetJson(BRANCHES_KEY)
   if (!meta || !Array.isArray(meta.branches) || !meta.branches.some((b) => b.id === MAIN_ID)) {
@@ -841,6 +859,10 @@ function elementSummary(project, page, opts = {}) {
   if (opts.mode === 'none') return undefined
   const mode = ['all', 'refs', 'ref-parts'].includes(opts.mode) ? opts.mode : 'own'
   const instMap = buildInstanceMap(project, page)
+  // ids are printed in the 8-hex form the HTML uses — the form every tool
+  // already takes as an address. One map for the whole page.
+  const shorts = shortIdMap(page.elements ?? [])
+  const sid = (n) => shorts.get(n.id) ?? n.id
   const out = []
   const countDescendants = (nodes) => {
     let n = 0
@@ -848,7 +870,7 @@ function elementSummary(project, page, opts = {}) {
     return n
   }
   const summarize = (n, path) => {
-    if (mode === 'refs') return { path, id: n.id, type: n.type, ...(n.ref ? { ref: n.ref } : {}) }
+    if (mode === 'refs') return { path, id: sid(n), type: n.type, ...(n.ref ? { ref: n.ref } : {}) }
     const mapping = instMap.get(n.id)
     const master = mapping?.master
     // what the node shows when it says nothing itself: the first host that
@@ -878,7 +900,10 @@ function elementSummary(project, page, opts = {}) {
         bindingId: b.id,
         interactionId: b.interactionId,
         trigger: b.trigger,
-        ...(b.targetId ? { targetId: b.targetId } : {}),
+        // a page target prints short; a MASTER target (an in-component
+        // binding) is not in this tree, so it keeps its full id — which is
+        // what `edit_elements {componentId}` resolves against anyway
+        ...(b.targetId ? { targetId: shorts.get(b.targetId) ?? b.targetId } : {}),
         ...(b.action ? { action: b.action } : {}),
         ...(b.closeOn?.length ? { closeOn: b.closeOn } : {}),
         ...(b.group ? { group: b.group } : {}),
@@ -892,7 +917,7 @@ function elementSummary(project, page, opts = {}) {
         bindingId: b.id,
         animationId: b.animationId,
         trigger: b.trigger,
-        ...(b.targetId ? { targetId: b.targetId } : {}),
+        ...(b.targetId ? { targetId: shorts.get(b.targetId) ?? b.targetId } : {}),
         ...(b.appearMode ? { appearMode: b.appearMode } : {}),
         ...(b.appearAt ? { appearAt: b.appearAt } : {}),
         ...(b.scrub ? { scrub: b.scrub } : {}),
@@ -917,7 +942,7 @@ function elementSummary(project, page, opts = {}) {
       // element are findable from each other without counting anything.
       path,
       // the node's stable id — what bind_interaction's targetId refers to
-      id: n.id,
+      id: sid(n),
       type: n.type,
       // the '#ref' its code line carries, when it has one — a human-readable
       // address you can use instead of `id` in edits and bind targets
@@ -980,14 +1005,14 @@ function elementSummary(project, page, opts = {}) {
           parts.push({
             // what edit_elements {ref, part} takes — no id, no line arithmetic
             part: nameFor(n.type),
-            id: n.id,
+            id: sid(n),
             type: n.type,
             ...(holds ? { component: n.type } : {}),
             // this instance's own structure lives under it: insert there with
             // edit_structure, or write it out inside the instance's HTML
             ...(n.slot ? { slot: true, childCount: countDescendants(n.children ?? []) } : {}),
             ...(n.variants ? { variants: n.variants } : {}),
-            ...(by ? { hidden: true, ...(by !== n.id ? { hiddenBy: by } : {}) } : {}),
+            ...(by ? { hidden: true, ...(by !== n.id ? { hiddenBy: shorts.get(by) ?? by } : {}) } : {}),
             ...text,
           })
         }
@@ -1010,7 +1035,7 @@ function elementSummary(project, page, opts = {}) {
         if (!inComponent && isComponentType(n.type) && n.ref) {
           out.push({
             path,
-            id: n.id,
+            id: sid(n),
             type: n.type,
             ref: n.ref,
             component: n.type,
@@ -1025,7 +1050,7 @@ function elementSummary(project, page, opts = {}) {
       if ((mode === 'own' || mode === 'refs') && !inComponent && isComponentType(n.type)) {
         out.push({
           path,
-          id: n.id,
+          id: sid(n),
           type: n.type,
           // a ref on the instance's own wrapper is legal (that node is a real
           // page node) and is the only ref an instance can carry
@@ -1426,6 +1451,12 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
   const localized = locale !== defaultLocale
   let changed = false
   const results = []
+  // the echoed id is the 8-hex form a read prints, resolved against the tree
+  // the caller addresses: a 140-edit batch echoed 140 full uuids. A master
+  // node reached through a page job is not in the page tree, so it keeps its
+  // full id — which is the form `edit_elements {componentId}` takes.
+  const shorts = shortIdMap(scopeDef ? [scopeDef.root] : (page?.elements ?? []))
+  const sid = (node) => shorts.get(node.id) ?? node.id
   // one pairing walk per batch, not one per edit: nothing an edit does here
   // changes structure (arg/setRef reconcile with an identity map, ids kept)
   let pageMap = null
@@ -1483,7 +1514,7 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
       if (refused.length) {
         results.push({
           line: node.line,
-          id: node.id,
+          id: sid(node),
           type: node.type,
           applied: [],
           errors: [
@@ -1500,7 +1531,7 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
     if (edit.expectType && node.type !== edit.expectType) {
       results.push({
         line: node.line,
-        id: node.id,
+        id: sid(node),
         type: node.type,
         errors: [`expectType mismatch: element here is '${node.type}', not '${edit.expectType}' — re-read get_page`],
       })
@@ -2276,7 +2307,7 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
     // echo the element's identity so a misaddressed edit is visible
     results.push({
       ...(masterDef ? { component: masterDef.name } : {}),
-      id: node.id,
+      id: sid(node),
       type: node.type,
       applied,
       ...(bindingIds.length ? { bindingIds } : {}),
@@ -2309,13 +2340,17 @@ function detachNotes(def) {
 
 function masterNodeRows(project, def, opts = {}) {
   const held = sharedInstanceMap(def.root.children ?? [], project.components ?? [])
+  // the same 8-hex form the component's HTML prints, and the one
+  // `edit_elements {componentId, id}` resolves against this tree
+  const shorts = shortIdMap([def.root])
+  const sid = (n) => shorts.get(n.id) ?? n.id
   const rows = []
   // master-tree order, so a row lines up with the same line of `structure`;
   // empty fields omitted like the page summary
   walkNodes([def.root], (n) => {
     const mapping = held.get(n.id)
     rows.push({
-      id: n.id,
+      id: sid(n),
       type: n.type,
       ...(n === def.root ? { root: true } : {}),
       ...(mapping ? { in: mapping.def.name } : {}),
@@ -2349,7 +2384,7 @@ function masterNodeRows(project, def, opts = {}) {
                     bindingId: b.id,
                     interactionId: b.interactionId,
                     trigger: b.trigger,
-                    ...(b.targetId ? { targetId: b.targetId } : {}),
+                    ...(b.targetId ? { targetId: shorts.get(b.targetId) ?? b.targetId } : {}),
                     ...(b.action ? { action: b.action } : {}),
                     ...(b.closeOn?.length ? { closeOn: b.closeOn } : {}),
                     ...(b.group ? { group: b.group } : {}),
@@ -2365,7 +2400,7 @@ function masterNodeRows(project, def, opts = {}) {
                     bindingId: b.id,
                     animationId: b.animationId,
                     trigger: b.trigger,
-                    ...(b.targetId ? { targetId: b.targetId } : {}),
+                    ...(b.targetId ? { targetId: shorts.get(b.targetId) ?? b.targetId } : {}),
                     ...(b.appearMode ? { appearMode: b.appearMode } : {}),
                     ...(b.appearAt ? { appearAt: b.appearAt } : {}),
                     ...(b.scrub ? { scrub: b.scrub } : {}),
@@ -2542,6 +2577,28 @@ function breakpointUsage(project, id) {
  * Returns the key unchanged when nothing matches, so the caller's own
  * not-found message is still the one the agent sees.
  */
+/**
+ * The 8-hex form of a node id, as a read PRINTS it.
+ *
+ * Every tool already accepts it as an address (`fullNodeId` resolves it), and
+ * the HTML has always used it — the element summaries were the one place still
+ * printing full uuids, at 36 bytes a row against 8. On a 300-row read that is
+ * ~8 KB of pure transcription, carried in every later turn of the session.
+ *
+ * `shortIds` lengthens on collision exactly as the serializer does, so a
+ * printed id is unique within the tree it was read from. A node it cannot
+ * shorten (two ids identical to the last character) keeps its full id, which
+ * still resolves.
+ */
+function shortIdOf(roots, id) {
+  return shortIds(roots).get(id) ?? id
+}
+
+/** the short-id map for one tree, built once per read */
+function shortIdMap(roots) {
+  return shortIds(roots)
+}
+
 function fullNodeId(roots, key) {
   if (!key || typeof key !== 'string') return key
   return nodesByShortId(roots).get(key)?.id ?? key
@@ -2665,6 +2722,49 @@ function makeComponentFrom(project, page, elementId, rawName, category) {
  * identity-carrying write as `set_page_html`, so an inserted subtree is held to
  * the same rules and a `replace` that echoes back `data-id`s keeps those nodes.
  */
+/**
+ * One line saying what an op actually did, naming the elements.
+ *
+ * `applied: ["insert"]` beside `changed: {created: 1}` told an agent that
+ * SOMETHING landed and nothing about what, so the next call was a confirming
+ * read. `inserted div#box, p#line under #hero` costs a few dozen bytes and
+ * replaces a 9 KB one.
+ */
+function describeOp(op, outcome, root) {
+  const name = (n) => `${n.type}${n.ref ? `#${n.ref}` : ''}`
+  const placed = (outcome.placed ?? []).map(name).join(', ')
+  const where = op.parent
+    ? ` under #${op.parent}`
+    : op.before
+      ? ` before #${op.before}`
+      : op.after
+        ? ` after #${op.after}`
+        : ''
+  const counts = []
+  if (outcome.created) counts.push(`${outcome.created} new`)
+  if (outcome.kept) counts.push(`${outcome.kept} kept`)
+  if (outcome.removed) counts.push(`${outcome.removed} gone`)
+  const tail = counts.length ? ` (${counts.join(', ')})` : ''
+  switch (op.op) {
+    case 'insert':
+      return `inserted ${placed}${where}${tail}`
+    case 'replace':
+      return `replaced ${op.target} with ${placed}${tail}`
+    case 'replaceChildren':
+      return `replaced the children of ${op.target} with ${placed}${tail}`
+    case 'move':
+      return `moved ${op.target}${where}`
+    case 'remove':
+      return `removed ${op.target}${tail}`
+    case 'wrap':
+      return `wrapped ${(op.targets ?? [op.target]).join(', ')} in ${
+        outcome.placed?.[0] ? name(outcome.placed[0]) : 'a wrapper'
+      }`
+    default:
+      return `${op.op} ${op.target ?? ''}`.trim()
+  }
+}
+
 /** every `data-ref` a piece of markup declares, at any depth — what the
  *  post-apply assertion in edit_structure checks really landed */
 function declaredRefs(roots) {
@@ -4654,10 +4754,15 @@ const tools = [
           if (byId !== key || findNode(page.elements ?? [], key)) return byId
           return refNodeId(page, key) ?? key
         })
+        // the rows print SHORT ids, so compare in one space: resolve each row's
+        // id back to the full one. (`fullNodeId` returns its input unchanged
+        // for an id that is already full, so a row that could not be shortened
+        // matches too.)
         const wanted = new Set(resolved)
-        const present = new Set(elements.map((e) => e.id))
+        const fullOf = (row) => fullNodeId(page.elements ?? [], row.id)
+        const present = new Set(elements.map(fullOf))
         unknownIds = args.elementIds.filter((k, i) => !present.has(resolved[i]))
-        elements = elements.filter((e) => wanted.has(e.id))
+        elements = elements.filter((e) => wanted.has(fullOf(e)))
       }
       const html = args.summaryOnly
         ? undefined
@@ -4712,14 +4817,13 @@ const tools = [
     name: 'set_page_html',
     description:
       "Replace a page's body with HTML. Invalid markup comes back as line:col diagnostics " +
-      'WITHOUT saving. Structure, classes and text all land in this ONE call. Node identity is ' +
-      'carried by the `data-id` you read back, then by `data-ref`, then by a tree match — so ' +
-      'interactions, animations, translations, slider config and list filters survive on every ' +
-      'element you did not replace. `refused` lists what could not land and why; nothing is ' +
-      'ever dropped silently. The response carries the fresh `elements` (each instance with ' +
-      'its `parts`) and the new `version`: fill the parts with edit_elements, no re-read. ' +
-      'Prefer edit_structure for a local change. Requires a target; pass the `version` from ' +
-      'get_page. See get_guide {section: "page-html"}.',
+      'WITHOUT saving. Structure, classes and text all land in this ONE call. Identity is ' +
+      'carried by the `data-id` you echo back, then `data-ref`, then a tree match, so ' +
+      'interactions, translations, slider config and list filters survive every element you ' +
+      'did not replace; `refused` names what could not land. The response carries the fresh ' +
+      '`elements` (each instance with its `parts`) and the new `version` — fill the parts with ' +
+      'edit_elements, no re-read. Prefer edit_structure for a local change. Requires a target; ' +
+      'pass the `version` from get_page. See get_guide {section: "page-html"}.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -4977,7 +5081,7 @@ const tools = [
         totals.kept += outcome.kept ?? 0
         totals.created += outcome.created ?? 0
         totals.removed += outcome.removed ?? 0
-        applied.push(`${op.op} ${op.target ?? op.targets?.join(', ') ?? ''}`.trim())
+        applied.push(describeOp(op, outcome, scratch))
         // what this op TOUCHED, for the scoped summary below
         for (const n of outcome.placed ?? []) touched.add(n.id)
         if (op.op === 'remove' && op.target) touched.add(String(op.target))
@@ -5971,7 +6075,7 @@ const tools = [
       'Update project settings — any subset of design tokens, the type/spacing `theme`, ' +
       'breakpoints, site-wide `motion`, `seo`, `domain`, `fonts`, `favicon`, `customCodeHead` ' +
       'and the registered locales. Prefer the additive forms (addTokens/removeTokens, ' +
-      'addLocales/removeLocales) — the plain `tokens`, `locales`, `breakpoints` and ' +
+      'addLocales/removeLocales): the plain `tokens`, `locales`, `breakpoints` and ' +
       '`fonts.custom` arrays REPLACE their lists. Custom code runs as raw script on every ' +
       'published page, so the server refuses it from an agent unless an admin has enabled ' +
       'that — expect a 403 naming the field, and relay the request rather than routing around ' +
@@ -6027,10 +6131,9 @@ const tools = [
         theme: {
           type: 'object',
           description:
-            "the project's own type/spacing scale, compiled into the same @theme block as the " +
-            'colour tokens — set it when porting a design that is not on Tailwind defaults. ' +
-            'Values are CSS lengths/numbers (or clamp()/calc()); anything else is dropped and ' +
-            'named in `warnings`. Merges; null clears.',
+            "the project's own type/spacing scale, in the same @theme block as the colour " +
+            'tokens — for porting a design off Tailwind defaults. CSS lengths/numbers (or ' +
+            'clamp()/calc()); anything else is dropped and named. Merges; null clears.',
           properties: {
             rootFontSize: { type: 'string', description: "document root size, e.g. '15px' — rescales every rem" },
             spacing: { type: 'string', description: "the whole spacing scale in one value, e.g. '0.25rem'" },
@@ -6044,10 +6147,9 @@ const tools = [
         motion: {
           type: 'object',
           description:
-            'site-wide motion, applied on the published site and the editor Preview, never the ' +
-            'Build canvas, and always yielding to prefers-reduced-motion. These change how ' +
-            'EVERY page behaves — turn them on because the human asked for that feel, not to ' +
-            'decorate a page. Merges per sub-object; null clears the lot.',
+            'site-wide motion, on the published site and Preview, never the Build canvas, ' +
+            'always yielding to prefers-reduced-motion. These change EVERY page — turn them on ' +
+            'because the human asked for that feel. Merges per sub-object; null clears.',
           properties: {
             appearMode: {
               type: 'string',
@@ -6693,14 +6795,13 @@ const tools = [
     name: 'edit_elements',
     description:
       'Batch-edit elements — classes, content, media src, attributes, variants, hidden, the ' +
-      "'#ref', and interaction/animation bindings — for MANY elements in ONE call (one save; " +
-      'always prefer this over a call per element). Address each edit by `ref` or by `id`, and ' +
-      'add `part` to reach inside a component instance. Pass pageId+version+edits for one ' +
-      "page, `pages: [...]` for several, or `componentId`+edits for a component itself. An " +
-      "instance's own element takes only `variants`, `hidden` and `setRef`; inside an instance, " +
-      'classes and bindings land on the shared component. Per-edit failures never abort the ' +
-      'batch — `failures` echoes them in full. Requires a target; pass the `version` from ' +
-      'get_page. See get_guide {section: "styling"} and {section: "components"}.',
+      "'#ref', and interaction/animation bindings — for MANY elements in ONE call (always " +
+      'prefer this over a call per element). Address each edit by `ref` or `id`, plus `part` to ' +
+      'reach inside a component instance. pageId+version+edits for one page, `pages: [...]` ' +
+      "for several, `componentId`+edits for a component itself. An instance's own element takes " +
+      'only `variants`, `hidden` and `setRef`; inside one, classes and bindings land on the ' +
+      'shared component. Failures never abort the batch. Requires a target; pass the `version` ' +
+      'from get_page. See get_guide {section: "styling"} and {section: "components"}.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -6795,28 +6896,26 @@ const tools = [
               attributes: {
                 type: ['object', 'null'],
                 description:
-                  'custom HTML attributes — data-*, aria-* and an allowlist of standard names ' +
-                  '(see get_guide {section: "content"}); id/class/style/src/href and on* are ' +
-                  'refused, and a refusal names what was dropped. Replaces the whole set; {} or ' +
-                  'null clears. Inside a component instance the set lands on the MASTER ' +
-                  '(attributes render shared, like classes).',
+                  'custom HTML attributes — data-*, aria-* and an allowlist (see get_guide ' +
+                  '{section: "content"}); id/class/style/src/href and on* are refused by name. ' +
+                  'Replaces the whole set; {} or null clears. Inside an instance it lands on ' +
+                  'the MASTER, shared like classes.',
                 additionalProperties: { type: 'string' },
               },
               instanceAttributes: {
                 type: ['object', 'null'],
                 description:
-                  'attribute overrides for THIS placement, merged over the component master\'s ' +
-                  'shared `attributes` — the per-instance text a visitor reads, where `role` and ' +
-                  '`type` stay shared. Same allowlist; {} or null clears.',
+                  "overrides for THIS placement, merged over the master's shared " +
+                  '`attributes` — the text a visitor reads, a `<button>`\'s `type`. Same ' +
+                  'allowlist; {} or null clears.',
                 additionalProperties: { type: 'string' },
               },
               fieldAttrs: {
                 type: ['object', 'null'],
                 description:
-                  'bind ATTRIBUTE VALUES to collection fields: {"<attribute>": "<field name>"}, ' +
-                  'resolved against the surrounding entry scope, with the static `attributes` ' +
-                  'value as the fallback. Per instance, not shared with the master. Replaces ' +
-                  'the whole set; {} or null clears.',
+                  'bind ATTRIBUTE VALUES to collection fields: {"<attribute>": "<field>"}, ' +
+                  'resolved against the surrounding entry scope, falling back to the static ' +
+                  '`attributes` value. Per instance. Replaces the whole set; {} or null clears.',
                 additionalProperties: { type: 'string' },
               },
               arg: {
@@ -7260,6 +7359,9 @@ const tools = [
       let translateNo = 0
       for (const page of project.pages ?? []) {
         const instMap = buildInstanceMap(project, page)
+        // ids print in the 8-hex form, which is what `set_translations` takes:
+        // a 275-item worklist carried 275 full uuids
+        const pageShorts = shortIdMap(page.elements ?? [])
         // unpublished pages never export, so their strings are optional work —
         // flagged instead of silently inflating `missing` (run #2, F7)
         const draftPage = page.status !== 'published'
@@ -7272,7 +7374,7 @@ const tools = [
                 kind: 'element',
                 pageId: page.id,
                 page: page.name,
-                id: n.id,
+                id: pageShorts.get(n.id) ?? n.id,
                 line: n.line,
                 type: n.type,
                 base: fence(n.content),
@@ -7301,7 +7403,7 @@ const tools = [
                   kind: 'attribute',
                   pageId: page.id,
                   page: page.name,
-                  id: n.id,
+                  id: pageShorts.get(n.id) ?? n.id,
                   line: n.line,
                   type: n.type,
                   attribute: name,
@@ -7318,6 +7420,7 @@ const tools = [
         visit(page.elements ?? [], false)
       }
       for (const comp of project.components ?? []) {
+        const compShorts = shortIdMap([comp.root])
         const visit = (nodes, skipping) => {
           for (const n of nodes) {
             const skip = skipping || n.attributes?.translate === 'no'
@@ -7327,7 +7430,7 @@ const tools = [
                 kind: 'master',
                 componentId: comp.id,
                 component: comp.name,
-                id: n.id,
+                id: compShorts.get(n.id) ?? n.id,
                 type: n.type,
                 base: fence(n.content),
                 override: fence(n.locales?.[locale]?.content),
@@ -7412,7 +7515,34 @@ const tools = [
         ...(onDraftPages ? { onDraftPages } : {}),
         ...(translateNo ? { excludedTranslateNo: translateNo } : {}),
       }
-      if (args.countsOnly) return counters
+      // COUNTS FIRST when nothing was asked for. A bare call on a real site
+      // returned tens of kilobytes, which an agent then carried for the rest of
+      // the session — and the guide already said to size the job first. Any
+      // filter, any paging, or an outputPath means "I know what I want".
+      const asked =
+        args.countsOnly ||
+        args.missingOnly ||
+        args.kind ||
+        args.pageId ||
+        args.pageIds?.length ||
+        args.componentId ||
+        args.collectionId ||
+        args.offset !== undefined ||
+        args.limit !== undefined ||
+        args.outputPath
+      if (!asked || args.countsOnly) {
+        return {
+          ...counters,
+          ...(args.countsOnly
+            ? {}
+            : {
+                next:
+                  'the items are not included by default — add a filter (kind/pageId/' +
+                  'componentId/collectionId/missingOnly) or offset/limit to get them, or ' +
+                  'outputPath to write them to a file',
+              }),
+        }
+      }
 
       // filter → window
       let filtered = all
@@ -7427,17 +7557,42 @@ const tools = [
       const limit = args.limit ?? 200
       const window = filtered.slice(offset, offset + limit)
       // strip undefined `override` so absent-override items stay compact
-      const items = window.map((i) => (i.override ? i : (({ override, ...rest }) => rest)(i)))
+      const full = window.map((i) => (i.override ? i : (({ override, ...rest }) => rest)(i)))
+
+      // the HANDLE: the addresses stay in this process, so each item carries a
+      // `key` and its text instead of kind + pageId + id + field. Written back
+      // with set_translations {handle, items: [{key, text}]}.
+      worklistHandle = `wl-${randomUUID().slice(0, 8)}`
+      worklistLocale = locale
+      worklistItems = new Map()
+      const items = full.map((item, i) => {
+        const key = String(offset + i)
+        worklistItems.set(key, item)
+        // what is left is what a TRANSLATOR needs: where it is, what it says,
+        // and what it says already
+        const { kind, pageId, componentId, collectionId, id, entryId, field, attribute, line, ...rest } =
+          item
+        return {
+          key,
+          kind,
+          ...(rest.page ? {} : {}),
+          ...rest,
+          ...(field ? { field } : {}),
+          ...(attribute ? { attribute } : {}),
+        }
+      })
       // the items to DISK instead of to the transcript: a 45 KB worklist costs
       // the same either way, and the file is the input set_translations takes
       if (args.outputPath) {
-        const written = await writeJsonFile(args.outputPath, 'outputPath', { locale, items })
+        // the FILE gets the full addressing form: it outlives this process, so
+        // it cannot lean on the handle
+        const written = await writeJsonFile(args.outputPath, 'outputPath', { locale, items: full })
         return {
           ...counters,
           matched,
-          returned: items.length,
+          returned: full.length,
           offset,
-          nextOffset: offset + items.length < matched ? offset + items.length : null,
+          nextOffset: offset + full.length < matched ? offset + full.length : null,
           outputPath: written,
           next: `set_translations {locale: "${locale}", itemsPath: "${written}"} once each item carries a translation`,
         }
@@ -7458,6 +7613,8 @@ const tools = [
         returned: items.length,
         offset,
         nextOffset: offset + items.length < matched ? offset + items.length : null,
+        handle: worklistHandle,
+        next: `set_translations {locale: "${locale}", handle: "${worklistHandle}", items: [{key, text}]}`,
         items,
       }
     },
@@ -7476,12 +7633,20 @@ const tools = [
       type: 'object',
       properties: {
         locale: { type: 'string', description: 'a registered non-default locale' },
+        handle: {
+          type: 'string',
+          description:
+            "from this session's last get_translation_worklist: each item is then just " +
+            '{key, text}, so no address travels twice',
+        },
         items: {
           type: 'array',
           minItems: 1,
           items: {
             type: 'object',
             properties: {
+              key: { type: 'string', description: 'with `handle`: the item\'s key from the worklist' },
+              text: { type: 'string', description: 'with `handle`: the translation' },
               kind: { type: 'string', enum: ['element', 'master', 'entry', 'attribute', 'seo'] },
               field: { type: 'string', description: 'kind "seo" only: "title" or "description"' },
               pageId: { type: 'string' },
@@ -7519,6 +7684,47 @@ const tools = [
       }
       if (!Array.isArray(args.items) || !args.items.length) {
         throw new Error('pass `items` (or `itemsPath` pointing at a JSON array of items)')
+      }
+      // a HANDLE resolves each item's `key` back to the address this process
+      // handed out, so the ids and the base strings never cross the wire twice
+      if (args.handle !== undefined) {
+        if (args.handle !== worklistHandle || !worklistItems) {
+          throw new Error(
+            `handle "${args.handle}" is not the one this session last handed out` +
+              (worklistHandle ? ` ("${worklistHandle}")` : '') +
+              '. Call get_translation_worklist again, or pass the items in full.',
+          )
+        }
+        if (worklistLocale !== String(args.locale)) {
+          throw new Error(
+            `that handle is for locale "${worklistLocale}", not "${args.locale}" — one handle per locale`,
+          )
+        }
+        const unknown = []
+        args = {
+          ...args,
+          items: args.items.map((item) => {
+            const key = String(item.key ?? '')
+            const found = worklistItems.get(key)
+            if (!found) {
+              unknown.push(key)
+              return item
+            }
+            // `text` is the spelling a keyed item uses; `content`/`values` are
+            // still accepted, so one shape of item works either way
+            const text = item.text ?? item.content
+            const { base: _base, override: _override, page: _page, component: _c, collection: _col, entry: _e, ...address } = found
+            return found.kind === 'entry'
+              ? { ...address, values: item.values ?? (found.field ? { [found.field]: text } : {}) }
+              : { ...address, content: text }
+          }),
+        }
+        if (unknown.length) {
+          throw new Error(
+            `no item with key ${unknown.map((k) => `"${k}"`).join(', ')} in handle "${worklistHandle}" ` +
+              '— the keys are the ones that worklist returned',
+          )
+        }
       }
       const { project } = await loadTargetProject()
       const defaultLocale = project.defaultLocale || 'en'
@@ -7848,11 +8054,10 @@ const tools = [
     name: 'create_animations',
     description:
       'Add reusable tween animations to the project library — one or many in a single call. ' +
-      'Each item is {name, steps}, where `steps` is an ordered timeline and each step tweens ' +
-      'one or more property tracks over a duration with an easing. Every item is validated ' +
-      'first: valid ones are saved in ONE write and invalid ones are reported individually, ' +
-      'with nothing half-written. Returns the new ids for edit_elements.bindAnimations. ' +
-      'Requires a target. See get_guide {section: "animations"}.',
+      'Each item is {name, steps}: an ordered timeline, each step tweening property tracks ' +
+      'over a duration with an easing. Every item is validated first, the valid ones saved in ' +
+      'ONE write and the invalid ones reported individually. Returns the new ids for ' +
+      'edit_elements.bindAnimations. Requires a target. See get_guide {section: "animations"}.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -8129,7 +8334,12 @@ const tools = [
       bindNode.interactions = bindNode.interactions ?? []
       bindNode.interactions.push(binding)
       await saveTargetProject(project)
-      return { saved: true, id: node.id, binding, version: pageVersion(project, page) }
+      return {
+        saved: true,
+        id: shortIdOf(page.elements ?? [], node.id),
+        binding,
+        version: pageVersion(project, page),
+      }
     },
   },
   {
@@ -8163,7 +8373,7 @@ const tools = [
       }
       if (!node.interactions.length) delete node.interactions
       await saveTargetProject(project)
-      return { saved: true, id: node.id, version: pageVersion(project, page) }
+      return { saved: true, id: shortIdOf(page.elements ?? [], node.id), version: pageVersion(project, page) }
     },
   },
   {
@@ -8865,12 +9075,11 @@ const tools = [
     description:
       'Upload asset(s) to the media library. Each comes from ONE of `path` (a local file — ' +
       'BEST, the bytes never touch your context), a public https `url`, or a base64 `dataUrl` ' +
-      '(LAST RESORT: a 250 KB font costs ~80k tokens). Upload many at once with `items: [...]`, ' +
-      'or point `manifestPath` at a local JSON file holding that array. A batch that hits the ' +
-      'rate limit waits and continues on its own, so send the whole list. Partial success is ' +
-      'reported honestly: retry ONLY the items named in `failures[].index`, never the whole ' +
-      'batch. Returns each asset\'s /media/… url for use as an element `src` or `background`. ' +
-      'Library-wide, not per-target.',
+      '(LAST RESORT: a 250 KB font costs ~80k tokens). Many at once with `items: [...]`, or ' +
+      'point `manifestPath` at a local JSON file holding that array; a batch that hits the rate ' +
+      'limit waits and continues, so send the whole list. Retry ONLY the items in ' +
+      '`failures[].index`. Returns each asset\'s /media/… url for an element `src` or ' +
+      '`background`. Library-wide, not per-target.',
     inputSchema: {
       type: 'object',
       properties: {
