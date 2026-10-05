@@ -358,3 +358,106 @@ test.describe('what a review sends back', () => {
     expect(await cocoapp.kinds()).not.toContain('route-size')
   })
 })
+
+// E14: a slug change leaves every link to the old route pointing at a 404, and
+// a 404 on a static host is the last thing anyone discovers. `update_page`
+// names them (and moves them on request); `publish` warns about any that are
+// left, from any cause — a changed slug, a page turned draft.
+test.describe('dead internal links', () => {
+  test('update_page names the links to the old slug, and can move them', async () => {
+    const s = await mcpSession()
+    const made = await s.call('create_page', { name: 'Pricing', slug: '/pricing' })
+    const home = await s.home()
+    await s.call('set_page_html', {
+      pageId: home.id,
+      html: pageHtml(
+        '<a data-ref="nav-pricing" href="/pricing"><span>Pricing</span></a>' +
+          '<a data-ref="nav-home" href="/"><span>Home</span></a>',
+      ),
+      version: home.version,
+    })
+    await s.call('create_component', {
+      name: 'Footer',
+      html: '<footer class="p-4"><a href="/pricing"><span>Plans</span></a></footer>',
+    })
+
+    const page = (await s.call('list_pages')).pages.find((p: { id: string }) => p.id === made.pageId)
+    const moved = await s.call('update_page', {
+      pageId: made.pageId,
+      slug: '/plans',
+      version: page.version,
+    })
+    expect(moved.saved).toBe(true)
+    // both of them, named, with the page or component they are on
+    const hits = moved.linksToOldSlug as { link: string; ref?: string; component?: string }[]
+    expect(hits).toHaveLength(2)
+    expect(hits.every((h) => h.link === '/pricing')).toBe(true)
+    expect(hits.some((h) => h.ref === 'nav-pricing')).toBe(true)
+    expect(hits.some((h) => h.component === 'Footer')).toBe(true)
+    // and publish says so, because they really are 404s now
+    expect(await s.kinds()).toContain('dead-internal-link')
+
+    // rewriteLinks moves them with the page
+    const again = (await s.call('list_pages')).pages.find(
+      (p: { id: string }) => p.id === made.pageId,
+    )
+    const back = await s.call('update_page', {
+      pageId: made.pageId,
+      slug: '/pricing',
+      version: again.version,
+      rewriteLinks: true,
+    })
+    // nothing pointed at /plans, so there is nothing to rewrite and no key
+    expect(back.saved).toBe(true)
+    expect(back.rewroteLinks).toBeUndefined()
+    expect(back.linksToOldSlug).toBeUndefined()
+    const third = (await s.call('list_pages')).pages.find(
+      (p: { id: string }) => p.id === made.pageId,
+    )
+    const fwd = await s.call('update_page', {
+      pageId: made.pageId,
+      slug: '/plans',
+      version: third.version,
+      rewriteLinks: true,
+    })
+    expect(fwd.rewroteLinks).toBe(2)
+    expect(fwd.linksToOldSlug).toBeUndefined()
+    const html = await s.html()
+    expect(html).toContain('href="/plans"')
+    expect(html).not.toContain('href="/pricing"')
+    expect(await s.kinds()).not.toContain('dead-internal-link')
+  })
+
+  test('a link to a draft page is a dead link too', async () => {
+    const s = await mcpSession()
+    const made = await s.call('create_page', { name: 'Soon', slug: '/soon' })
+    const home = await s.home()
+    await s.call('set_page_html', {
+      pageId: home.id,
+      html: pageHtml('<a data-ref="l" href="/soon"><span>Soon</span></a>'),
+      version: home.version,
+    })
+    expect(await s.kinds()).not.toContain('dead-internal-link')
+
+    const page = (await s.call('list_pages')).pages.find((p: { id: string }) => p.id === made.pageId)
+    await s.call('update_page', { pageId: made.pageId, status: 'draft', version: page.version })
+    expect(await s.kinds()).toContain('dead-internal-link')
+  })
+
+  test('an entry route and an external URL are not flagged', async () => {
+    const s = await mcpSession()
+    const col = (await s.call('create_collection', { name: 'post' })).collection
+    await s.call('upsert_entries', { collectionId: col.id, entries: [{ name: 'One' }] })
+    const home = await s.home()
+    await s.call('set_page_html', {
+      pageId: home.id,
+      html: pageHtml(
+        '<a data-ref="a" href="/post/one"><span>One</span></a>' +
+          '<a data-ref="b" href="https://example.com/"><span>Out</span></a>' +
+          '<a data-ref="c" href="/#faq"><span>FAQ</span></a>',
+      ),
+      version: home.version,
+    })
+    expect(await s.kinds()).not.toContain('dead-internal-link')
+  })
+})

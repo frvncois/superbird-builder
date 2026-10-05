@@ -91,7 +91,14 @@ export { validateTree } from './validateTree'
 export type { TreeDiagnostic, ValidateContext } from './validateTree'
 
 // --- url slug normalization, shared with the exporter's route paths
-export { slugify } from './shared/slug.js'
+export {
+  slugify,
+  // the route table a publish warning needs: every internal link has to land
+  // on a route the export actually emits
+  entryRoutePath,
+  collectionRouteBase,
+  hasDetailRoutes,
+} from './shared/slug.js'
 
 // --- element registry + node factory (src/lib/elements.ts)
 export {

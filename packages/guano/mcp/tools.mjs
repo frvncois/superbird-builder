@@ -106,6 +106,8 @@ export function createToolSet({ api, runtime, elicit, hasElicitation = () => nul
     tagForType,
     sameType,
     slugify,
+    entryRoutePath,
+    hasDetailRoutes,
     createBody,
     createNode,
     BUILTIN_LIST_SOURCES,
@@ -2412,6 +2414,37 @@ function applyComponentHtml(project, def, html) {
   }
 }
 
+/**
+ * Every node whose `link` points at `path` — on a page or in a component
+ * master — plus the locale-prefixed spellings, which is what an author writing
+ * a link inside a translated route produces.
+ *
+ * E14: changing a slug left every link to the old one pointing at a route that
+ * no longer exists, and `update_page`'s note said only "check anything pointing
+ * at it" — on a site of forty pages that is a full-text search an agent cannot
+ * run. Both halves are cheap to compute here.
+ */
+function linksTo(project, path) {
+  const want = new Set([path])
+  for (const code of project.locales ?? []) {
+    if (code === (project.defaultLocale || 'en')) continue
+    want.add(`/${code}${path === '/' ? '' : path}`)
+  }
+  const hits = []
+  const scan = (nodes, where) => {
+    walkNodes(nodes, (n) => {
+      if (n.link && want.has(n.link)) hits.push({ ...where, id: n.id, ...(n.ref ? { ref: n.ref } : {}), link: n.link })
+    })
+  }
+  for (const page of project.pages ?? []) {
+    scan(page.elements ?? [], { pageId: page.id, page: page.name })
+  }
+  for (const def of project.components ?? []) {
+    scan([def.root], { componentId: def.id, component: def.name })
+  }
+  return hits
+}
+
 /** pages an operation rewrote, with the version each now has */
 function touchedVersions(project, before) {
   return (project.pages ?? [])
@@ -3800,7 +3833,62 @@ function designWarnings(project) {
     })
   }
 
-  // 7. the tree diagnostics, on the routes that actually ship.
+  // 7. internal links that land on no exported route.
+  //
+  // E14: a slug change (or a page turned draft, or a collection deleted) leaves
+  // every link to the old path pointing at a 404 — and a 404 on a static host
+  // is the last thing anyone discovers. The route table is the same one the
+  // exporter builds.
+  const routes = new Set(['/'])
+  for (const page of published) {
+    if (page.collectionId) continue
+    routes.add(page.path || '/')
+  }
+  for (const c of project.collections ?? []) {
+    if (!hasDetailRoutes(c)) continue
+    const template = (project.pages ?? []).find((p) => p.id === c.templatePageId)
+    if (!template || template.status !== 'published') continue
+    for (const entry of c.entries ?? []) {
+      const path = entryRoutePath(c, entry)
+      if (path) routes.add(path)
+    }
+  }
+  const deadLinks = []
+  const checkLink = (n, where) => {
+    const raw = n.link
+    // only INTERNAL paths: an external URL, '@item' and '@locale:' are
+    // resolved elsewhere and by design
+    if (!raw || !raw.startsWith('/') || raw.startsWith('//')) return
+    const bare = raw.split('#')[0].split('?')[0] || '/'
+    // a locale prefix is added by the renderer, so strip one before comparing
+    const first = bare.split('/')[1] ?? ''
+    const path = (project.locales ?? []).includes(first)
+      ? bare.slice(first.length + 1) || '/'
+      : bare
+    if (routes.has(path)) return
+    deadLinks.push(`${where}: ${n.ref ? `#${n.ref}` : n.type} → "${raw}"`)
+  }
+  for (const page of published) {
+    walkNodes(page.elements ?? [], (n) => checkLink(n, `page "${page.name}"`))
+  }
+  for (const c of components) {
+    walkNodes([c.root], (n) => checkLink(n, `component ${c.name}`))
+  }
+  if (deadLinks.length) {
+    warnings.push({
+      kind: 'dead-internal-link',
+      where: deadLinks.slice(0, 8),
+      message:
+        `${deadLinks.length} internal link(s) point at a path this publish does not export, so ` +
+        'they 404 for a visitor: ' +
+        deadLinks.slice(0, 3).join('; ') +
+        (deadLinks.length > 3 ? ` (+${deadLinks.length - 3} more)` : '') +
+        '. The usual causes are a slug that changed (update_page {rewriteLinks: true} moves ' +
+        'them) and a page still in draft.',
+    })
+  }
+
+  // 8. the tree diagnostics, on the routes that actually ship.
   //
   // `validateTree` already knew about an unknown collection, a `data-field`
   // that names nothing, a misplaced empty state and a nested form — but only
@@ -4908,6 +4996,12 @@ const tools = [
         name: { type: 'string' },
         slug: { type: 'string', description: 'route path, e.g. /about' },
         status: { type: 'string', enum: ['published', 'draft'] },
+        rewriteLinks: {
+          type: 'boolean',
+          description:
+            'with `slug`: move every link that pointed at the old path (locale spellings too) ' +
+            'onto the new one. Without it they are returned as `linksToOldSlug`',
+        },
       },
       required: ['pageId', 'version'],
       additionalProperties: false,
@@ -4928,6 +5022,7 @@ const tools = [
           changed.push('name')
         }
       }
+      let movedFrom = null
       if (args.slug !== undefined && String(args.slug) !== page.path) {
         const path = String(args.slug)
         if (!path.startsWith('/')) throw new Error('slug must start with "/"')
@@ -4956,6 +5051,7 @@ const tools = [
             message: `a page with slug "${path}" already exists`,
           }
         }
+        movedFrom = page.path
         page.path = path
         changed.push('slug')
       }
@@ -4966,6 +5062,23 @@ const tools = [
       if (!changed.length) {
         return { saved: true, pageId: page.id, changed: [], version: current, note: 'nothing to change' }
       }
+      // every link to the route that just moved, NAMED — and rewritten when
+      // asked. "check anything pointing at it" was a full-text search over
+      // forty pages that an agent cannot run.
+      const stale = movedFrom ? linksTo(project, movedFrom) : []
+      let rewritten = 0
+      if (stale.length && args.rewriteLinks) {
+        const prefixOf = (link) => link.slice(0, link.length - (movedFrom === '/' ? 0 : movedFrom.length))
+        const touch = (nodes) =>
+          walkNodes(nodes, (n) => {
+            if (!stale.some((h) => h.id === n.id)) return
+            n.link = `${prefixOf(n.link)}${page.path === '/' ? '' : page.path}` || '/'
+            rewritten++
+          })
+        for (const p of project.pages ?? []) touch(p.elements ?? [])
+        for (const def of project.components ?? []) touch([def.root])
+      }
+      const touchedBefore = pageVersions(project)
       await saveTargetProject(project)
       return {
         saved: true,
@@ -4975,10 +5088,20 @@ const tools = [
         status: page.status,
         changed,
         version: pageVersion(project, page),
-        // a renamed route is a route nothing links to any more
-        ...(changed.includes('slug')
-          ? { note: 'links to the old slug are now dead — check anything pointing at it' }
+        ...(stale.length
+          ? rewritten
+            ? {
+                rewroteLinks: rewritten,
+                note: `${rewritten} link(s) that pointed at "${movedFrom}" now point at "${page.path}"`,
+              }
+            : {
+                linksToOldSlug: stale,
+                note:
+                  `${stale.length} link(s) still point at "${movedFrom}", which is no longer a ` +
+                  'route. Pass rewriteLinks: true to move them with the page, or edit each one.',
+              }
           : {}),
+        ...(touchedBefore && rewritten ? { versions: touchedVersions(project, touchedBefore) } : {}),
       }
     },
   },

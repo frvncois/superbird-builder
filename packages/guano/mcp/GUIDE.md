@@ -681,6 +681,13 @@ taste; they are the defects a review finds first.
 - Nothing left over: no unused interactions or animations, no probe pages, no
   test components. `publish` reports these — clear them before handing over.
 
+**A slug change moves the page, not the links to it.** `update_page {slug}` returns
+`linksToOldSlug` — every node, on every page and in every component master, still
+pointing at the old path (locale spellings included) — and `rewriteLinks: true` moves
+them with the page in the same call. `publish` warns about any internal link that lands
+on no exported route (`dead-internal-link`), whatever the cause: a changed slug, a page
+turned draft, a deleted collection.
+
 **What `publish` checks for you** — act on each, they are the review you would otherwise
 get back: a browser-styled `<select>`, a form control with no classes, a body transition
 under an app shell, an unstaggered `load` animation on a large container, an overlay
