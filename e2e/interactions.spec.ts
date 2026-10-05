@@ -22,6 +22,7 @@ const SHOW = 'i-show'
 const OPEN = 'i-open'
 const HIDE = 'i-hide'
 const FADE = 'a-fade'
+const PIN = 'i-pin'
 
 const node = (id: string, type: string, extra: Record<string, unknown> = {}) => ({
   id,
@@ -166,6 +167,22 @@ function fixture() {
                 attributes: { target: '_blank', 'aria-label': 'Example', title: 'Ex' },
                 children: [node('cardText', 'text', { content: 'go' })],
               }),
+              // --- E6: a base `sticky` and a fired `fixed` are both `position` ---
+              // The conflict table grouped `display` and `visibility` and
+              // nothing else, so a header pinned `sticky` that an interaction
+              // switched to `fixed` kept both classes and the winner came down
+              // to which rule Tailwind happened to emit last.
+              node('pinBtn', 'button', {
+                children: [node('pinText', 'span', { content: 'Pin' })],
+                htmlId: 'pin-btn',
+                interactions: [
+                  { id: 'b10', interactionId: PIN, trigger: 'click', targetId: 'header' },
+                ],
+              }),
+              node('header', 'div', {
+                htmlId: 'header',
+                classes: 'sticky top-0 flex flex-row items-start overflow-visible',
+              }),
               // --- §2.1: decorative alt + boolean download ---
               node('img', 'image', { src: 'https://example.com/a.png', attributes: { alt: '' } }),
               node('pdf', 'link', {
@@ -184,6 +201,13 @@ function fixture() {
       { id: SHOW, name: 'Show', toClasses: 'flex', duration: 'duration-300', easing: 'ease-out' },
       { id: OPEN, name: 'Open', toClasses: 'block', duration: 'duration-200', easing: 'ease-out' },
       { id: HIDE, name: 'Hide', toClasses: 'hidden', duration: 'duration-200', easing: 'ease-out' },
+      {
+        id: PIN,
+        name: 'Pin',
+        toClasses: 'fixed flex-col items-center overflow-hidden',
+        duration: 'duration-200',
+        easing: 'ease-out',
+      },
     ],
     animations: [
       {
@@ -410,6 +434,37 @@ test.describe('interactions', () => {
     await page.locator('#open').click()
     expect(await classesOf(page, 'modal')).not.toContain('hidden')
     expect(errors).toEqual([])
+  })
+
+  test('a fired class evicts the base class on the SAME property (E6)', async ({ page }) => {
+    await page.goto('/')
+    const before = await classesOf(page, 'header')
+    expect(before).toContain('sticky')
+    expect(before).toContain('flex-row')
+    expect(before).toContain('items-start')
+    expect(before).toContain('overflow-visible')
+
+    await page.locator('#pin-btn').click()
+    const after = await classesOf(page, 'header')
+    // the fired half is on…
+    expect(after).toContain('fixed')
+    expect(after).toContain('flex-col')
+    expect(after).toContain('items-center')
+    expect(after).toContain('overflow-hidden')
+    // …and the base half is GONE, not merely outweighed: two classes on one
+    // property resolve by stylesheet order, which the author cannot see
+    expect(after).not.toContain('sticky')
+    expect(after).not.toContain('flex-row')
+    expect(after).not.toContain('items-start')
+    expect(after).not.toContain('overflow-visible')
+    // a base class on a DIFFERENT property is untouched
+    expect(after).toContain('top-0')
+    expect(after).toContain('flex')
+
+    // and it really is `position: fixed` in the browser
+    expect(
+      await page.locator('#header').evaluate((el) => getComputedStyle(el).position),
+    ).toBe('fixed')
   })
 
   test('link attributes land on the generated anchor, not the inner element', async () => {

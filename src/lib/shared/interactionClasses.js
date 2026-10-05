@@ -16,19 +16,53 @@
 // group, or same property head — the class minus its trailing value
 // segment). False negatives just fall back to today's cascade behavior.
 
-const DISPLAY = new Set([
-  'block', 'inline-block', 'inline', 'flex', 'inline-flex', 'grid',
-  'inline-grid', 'table', 'contents', 'flow-root', 'hidden',
-])
-
-// Visibility is its own property, NOT part of the display group: grouping them
-// would make `invisible` evict `flex` and silently change the layout it was
-// meant to keep. It needs a group of its own all the same — `visible` did not
-// evict a base `invisible`, so an overlay built the animatable way (base
-// `invisible opacity-0`, fired `visible opacity-100`) came down to which rule
-// Tailwind happened to emit last. That is the recipe for any overlay that
-// fades or slides, since `hidden` → `block` cannot transition.
-const VISIBILITY = new Set(['visible', 'invisible', 'collapse'])
+// KEYWORD FAMILIES: the utilities whose value is a bare keyword rather than a
+// `head-value` pair, so the head heuristic below cannot see that two of them
+// style the same property. Each entry maps the whole base class to the ONE CSS
+// property it sets.
+//
+// This is the shape of E6: an interaction firing `fixed` sat beside a base
+// `sticky` and lost by stylesheet order, because `fixed` and `sticky` read as
+// two unrelated heads. The same was true of `flex-col` vs `flex-row`,
+// `items-center` vs `items-start`, `overflow-hidden` vs `overflow-auto` and
+// `text-center` vs `text-left` — every one of them a toggle an author would
+// expect to work.
+//
+// Deliberately NOT here: anything whose two values are different CSS
+// properties (`overflow-x-*` vs `overflow-y-*`, `font-sans` vs `font-bold`,
+// `inset-x-0` vs `left-0`). A false group is worse than a false negative: it
+// REMOVES a base class that was styling something else.
+const KEYWORD_PROPERTY = new Map(
+  Object.entries({
+    // display. Visibility is deliberately separate: grouping them would make
+    // `invisible` evict `flex` and silently change the layout it was meant to
+    // keep. It needs a group of its own all the same — `visible` did not evict
+    // a base `invisible`, so an overlay built the animatable way (base
+    // `invisible opacity-0`, fired `visible opacity-100`) came down to which
+    // rule Tailwind happened to emit last. That is the recipe for any overlay
+    // that fades or slides, since `hidden` → `block` cannot transition.
+    display:
+      'block inline-block inline flex inline-flex grid inline-grid table contents flow-root hidden',
+    visibility: 'visible invisible collapse',
+    position: 'static relative absolute fixed sticky',
+    overflow: 'overflow-auto overflow-hidden overflow-clip overflow-visible overflow-scroll',
+    'overflow-x':
+      'overflow-x-auto overflow-x-hidden overflow-x-clip overflow-x-visible overflow-x-scroll',
+    'overflow-y':
+      'overflow-y-auto overflow-y-hidden overflow-y-clip overflow-y-visible overflow-y-scroll',
+    'flex-direction': 'flex-row flex-row-reverse flex-col flex-col-reverse',
+    'flex-wrap': 'flex-wrap flex-wrap-reverse flex-nowrap',
+    'align-items': 'items-start items-end items-center items-baseline items-stretch',
+    'justify-content':
+      'justify-normal justify-start justify-end justify-center justify-between justify-around justify-evenly justify-stretch',
+    'text-align': 'text-left text-center text-right text-justify text-start text-end',
+    'font-style': 'italic not-italic',
+    'text-transform': 'uppercase lowercase capitalize normal-case',
+    'text-decoration-line': 'underline overline line-through no-underline',
+    'white-space':
+      'whitespace-normal whitespace-nowrap whitespace-pre whitespace-pre-line whitespace-pre-wrap whitespace-break-spaces',
+  }).flatMap(([prop, list]) => list.split(' ').map((cls) => [cls, prop])),
+)
 
 // Color-bearing families: any bg-/text-/border- value that is not one of the
 // known non-color utilities is a color (palette shade, project token, or
@@ -75,8 +109,8 @@ function splitVariant(cls) {
 function headOf(base) {
   const color = colorHead(base)
   if (color) return color
-  if (DISPLAY.has(base)) return 'display'
-  if (VISIBILITY.has(base)) return 'visibility'
+  const keyword = KEYWORD_PROPERTY.get(base)
+  if (keyword) return keyword
   // the transition setup is one property each: `transition-transform` and the
   // appended `transition-all` style the same transition-property, and every
   // ease-* keyword is one timing-function — without grouping these, an
