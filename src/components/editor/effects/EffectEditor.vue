@@ -52,7 +52,7 @@ function play() {
   <div v-if="effect" class="flex flex-col">
     <!-- the classes worn while it is on -->
     <section data-effect-half="interaction" class="border-b border-input">
-      <p class="flex h-7 items-center px-2.5 text-[9px] font-medium tracking-wide text-muted-foreground uppercase">
+      <p class="flex h-7 items-center px-2.5 section-label">
         Classes
       </p>
       <StyleEffectEditor v-if="halves.interactionId" :id="halves.interactionId!" />
@@ -66,7 +66,7 @@ function play() {
     <!-- the timeline -->
     <section data-effect-half="animation">
       <div class="flex h-7 items-center gap-2 px-2.5">
-        <p class="text-[9px] font-medium tracking-wide text-muted-foreground uppercase">Motion</p>
+        <p class="section-label">Motion</p>
         <ButtonUI
           v-if="halves.animationId"
           variant="ghost"

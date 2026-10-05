@@ -164,7 +164,7 @@ useDrawerEscape(panel, {
     >
       <template v-for="(section, i) in sections" :key="section.title">
         <div class="flex items-center gap-1 px-2.5 pb-1" :class="i ? 'pt-4' : 'pt-2'">
-          <span class="flex-1 text-[9px] font-medium tracking-wide text-muted-foreground uppercase">
+          <span class="flex-1 section-label">
             {{ section.title }}
           </span>
         </div>

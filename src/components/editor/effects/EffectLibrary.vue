@@ -77,7 +77,7 @@ async function remove(item: LibraryItem) {
 <template>
   <div class="flex min-h-0 flex-col">
     <p
-      class="flex h-9 shrink-0 items-center px-3 text-[9px] font-medium tracking-wide text-muted-foreground uppercase"
+      class="flex h-9 shrink-0 items-center px-3 section-label"
     >
       Effects
     </p>

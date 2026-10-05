@@ -257,7 +257,7 @@ function copyUrl() {
 
     <!-- where it's used: one row per place, not a comma-joined string -->
     <div class="flex flex-col gap-1">
-      <span class="px-0.5 text-[9px] font-medium tracking-wide text-muted-foreground uppercase">
+      <span class="px-0.5 section-label">
         Used on
       </span>
       <template v-if="usedOn.length">

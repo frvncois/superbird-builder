@@ -407,8 +407,6 @@ async function requestFolderDelete(folder: MediaFolder) {
   if (currentFolderId.value === folder.id) currentFolderId.value = up
 }
 
-const MENU_ITEM =
-  'flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs outline-none hover:bg-accent/30 focus-visible:bg-accent/30'
 </script>
 
 <template>
@@ -476,7 +474,7 @@ const MENU_ITEM =
           <template #default>
             <div class="flex flex-col gap-2 p-2" @click.stop>
               <div class="flex flex-col gap-1">
-                <span class="text-[9px] font-medium tracking-wide text-muted-foreground uppercase">Sort by</span>
+                <span class="section-label">Sort by</span>
                 <div class="flex items-center gap-1">
                   <div class="min-w-0 flex-1"><SelectUI v-model="sortKey" :options="SORT_OPTIONS" /></div>
                   <ButtonUI
@@ -490,11 +488,11 @@ const MENU_ITEM =
                 </div>
               </div>
               <div class="flex flex-col gap-1">
-                <span class="text-[9px] font-medium tracking-wide text-muted-foreground uppercase">File size</span>
+                <span class="section-label">File size</span>
                 <SelectUI v-model="sizeFilter" :options="SIZE_OPTIONS" />
               </div>
               <div class="flex flex-col gap-1">
-                <span class="text-[9px] font-medium tracking-wide text-muted-foreground uppercase">Uploaded</span>
+                <span class="section-label">Uploaded</span>
                 <SelectUI v-model="dateFilter" :options="DATE_OPTIONS" />
               </div>
               <template v-if="filtersDirty">
@@ -654,14 +652,14 @@ const MENU_ITEM =
               </template>
               <template #default="{ close }">
                 <div class="custom-scrollbar flex max-h-64 flex-col overflow-y-auto">
-                  <button type="button" :class="MENU_ITEM" @click="(batchMove(null), close())">
+                  <button type="button" class="menu-item" @click="(batchMove(null), close())">
                     <FolderInput class="size-3.5" /> Library (root)
                   </button>
                   <button
                     v-for="t in folderTargets"
                     :key="t.id"
                     type="button"
-                    :class="MENU_ITEM"
+                    class="menu-item"
                     @click="(batchMove(t.id), close())"
                   >
                     <FolderIcon class="size-3.5 shrink-0" />

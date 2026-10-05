@@ -130,7 +130,7 @@ function apply() {
     >
       <!-- WHERE: the element it lands on, its direction, which screens -->
       <div class="flex flex-col border-b border-input pb-2 xl:border-r xl:border-b-0">
-        <p class="flex h-7 items-center px-2.5 text-[9px] font-medium tracking-wide text-muted-foreground uppercase">
+        <p class="flex h-7 items-center px-2.5 section-label">
           Where
         </p>
         <ActionOptions v-for="row in rows" :key="rowId(row)" :pair="row" :owner="target!" />

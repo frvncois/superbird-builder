@@ -337,7 +337,7 @@ function onKeydown(e: KeyboardEvent) {
           @wheel.stop
         >
           <div v-for="group in results.groups" :key="group.title" class="flex flex-col gap-2">
-            <p class="px-0.5 text-[9px] font-medium tracking-wide text-muted-foreground uppercase">
+            <p class="px-0.5 section-label">
               {{ group.title }}
             </p>
             <div class="flex flex-wrap gap-1.5">

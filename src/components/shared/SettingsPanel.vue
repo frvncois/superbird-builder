@@ -1065,7 +1065,7 @@ async function onImportFile(e: Event) {
             No matching settings.
           </p>
           <div v-for="group in filteredNav" :key="group.label" class="flex flex-col gap-0.5">
-            <p class="px-2 pb-1 text-[9px] font-medium tracking-wide text-muted-foreground uppercase">
+            <p class="px-2 pb-1 section-label">
               {{ group.label }}
             </p>
             <TabUI

@@ -15,7 +15,7 @@ defineProps<{ title: string }>()
 <template>
   <section class="flex flex-col gap-2">
     <div class="flex items-center gap-1">
-      <h3 class="min-w-0 flex-1 truncate text-[9px] font-medium tracking-wide text-muted-foreground uppercase">
+      <h3 class="min-w-0 flex-1 truncate section-label">
         {{ title }}
       </h3>
       <slot name="action" />

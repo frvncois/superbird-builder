@@ -67,8 +67,6 @@ const KEBAB_TRIGGER =
   'flex size-6 items-center justify-center rounded-lg text-muted-foreground outline-none hover:bg-accent/30 focus-visible:ring-2 focus-visible:ring-accent'
 const KEBAB_ON_TILE =
   'flex size-6 items-center justify-center rounded-md bg-background/90 text-muted-foreground shadow-sm outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-accent'
-const MENU_ITEM =
-  'flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs outline-none hover:bg-accent/30 focus-visible:bg-accent/30'
 
 /** drag the whole card (not just the grabbed thumbnail) as the drag image */
 function setCardImage(e: DragEvent) {
@@ -153,11 +151,11 @@ watch(
             :trigger-class="KEBAB_ON_TILE"
           >
             <template #default="{ close }">
-              <button type="button" :class="MENU_ITEM" @click="(startRename(folder), close())">
+              <button type="button" class="menu-item" @click="(startRename(folder), close())">
                 <Pencil class="size-3.5" /> Rename
               </button>
               <div class="mx-1 my-1 h-px bg-input" />
-              <button type="button" :class="[MENU_ITEM, 'text-danger']" @click="(emit('remove', folder), close())">
+              <button type="button" class="menu-item text-danger" @click="(emit('remove', folder), close())">
                 <Trash2 class="size-3.5" /> Delete
               </button>
             </template>
@@ -209,25 +207,25 @@ watch(
           :trigger-class="KEBAB_ON_TILE"
         >
           <template #default="{ close }">
-            <button type="button" :class="MENU_ITEM" @click="(startRenameAsset(asset), close())">
+            <button type="button" class="menu-item" @click="(startRenameAsset(asset), close())">
               <Pencil class="size-3.5" /> Rename
             </button>
-            <button type="button" :class="MENU_ITEM" @click="(emit('download', asset), close())">
+            <button type="button" class="menu-item" @click="(emit('download', asset), close())">
               <Download class="size-3.5" /> Download
             </button>
             <div class="mx-1 my-1 h-px bg-input" />
-            <p class="px-2 py-1 text-[9px] font-medium tracking-wide text-muted-foreground uppercase">
+            <p class="px-2 py-1 section-label">
               Move to
             </p>
             <div class="custom-scrollbar flex max-h-48 flex-col overflow-y-auto">
-              <button type="button" :class="MENU_ITEM" @click="(emit('moveAsset', asset.id, null), close())">
+              <button type="button" class="menu-item" @click="(emit('moveAsset', asset.id, null), close())">
                 <FolderInput class="size-3.5" /> Library (root)
               </button>
               <button
                 v-for="t in folderTargets"
                 :key="t.id"
                 type="button"
-                :class="MENU_ITEM"
+                class="menu-item"
                 @click="(emit('moveAsset', asset.id, t.id), close())"
               >
                 <FolderIcon class="size-3.5 shrink-0" />
@@ -235,7 +233,7 @@ watch(
               </button>
             </div>
             <div class="mx-1 my-1 h-px bg-input" />
-            <button type="button" :class="[MENU_ITEM, 'text-danger']" @click="(emit('removeAsset', asset), close())">
+            <button type="button" class="menu-item text-danger" @click="(emit('removeAsset', asset), close())">
               <Trash2 class="size-3.5" /> Delete
             </button>
           </template>
@@ -308,11 +306,11 @@ watch(
         :trigger-class="KEBAB_TRIGGER"
       >
         <template #default="{ close }">
-          <button type="button" :class="MENU_ITEM" @click="(startRename(folder), close())">
+          <button type="button" class="menu-item" @click="(startRename(folder), close())">
             <Pencil class="size-3.5" /> Rename
           </button>
           <div class="mx-1 my-1 h-px bg-input" />
-          <button type="button" :class="[MENU_ITEM, 'text-danger']" @click="(emit('remove', folder), close())">
+          <button type="button" class="menu-item text-danger" @click="(emit('remove', folder), close())">
             <Trash2 class="size-3.5" /> Delete
           </button>
         </template>
@@ -356,25 +354,25 @@ watch(
         :trigger-class="KEBAB_TRIGGER"
       >
         <template #default="{ close }">
-          <button type="button" :class="MENU_ITEM" @click="(startRenameAsset(asset), close())">
+          <button type="button" class="menu-item" @click="(startRenameAsset(asset), close())">
             <Pencil class="size-3.5" /> Rename
           </button>
-          <button type="button" :class="MENU_ITEM" @click="(emit('download', asset), close())">
+          <button type="button" class="menu-item" @click="(emit('download', asset), close())">
             <Download class="size-3.5" /> Download
           </button>
           <div class="mx-1 my-1 h-px bg-input" />
-          <p class="px-2 py-1 text-[9px] font-medium tracking-wide text-muted-foreground uppercase">
+          <p class="px-2 py-1 section-label">
             Move to
           </p>
           <div class="custom-scrollbar flex max-h-48 flex-col overflow-y-auto">
-            <button type="button" :class="MENU_ITEM" @click="(emit('moveAsset', asset.id, null), close())">
+            <button type="button" class="menu-item" @click="(emit('moveAsset', asset.id, null), close())">
               <FolderInput class="size-3.5" /> Library (root)
             </button>
             <button
               v-for="t in folderTargets"
               :key="t.id"
               type="button"
-              :class="MENU_ITEM"
+              class="menu-item"
               @click="(emit('moveAsset', asset.id, t.id), close())"
             >
               <FolderIcon class="size-3.5 shrink-0" />
@@ -382,7 +380,7 @@ watch(
             </button>
           </div>
           <div class="mx-1 my-1 h-px bg-input" />
-          <button type="button" :class="[MENU_ITEM, 'text-danger']" @click="(emit('removeAsset', asset), close())">
+          <button type="button" class="menu-item text-danger" @click="(emit('removeAsset', asset), close())">
             <Trash2 class="size-3.5" /> Delete
           </button>
         </template>

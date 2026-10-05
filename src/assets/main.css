@@ -158,6 +158,24 @@ input:autofill {
   transition: background-color 9999999s step-end;
 }
 
+/* The chrome's section heading — "ELEMENT", "FIELDS", "EFFECTS". Seventeen
+   copies of the same five utilities across twelve files, which is how one of
+   them ends up a shade off. `@apply` rather than hand-written declarations so
+   the output is byte-identical to the class list it replaces, and so a `px-3`
+   or a `flex` beside it still wins by layer order — several call sites rely on
+   that. */
+@utility section-label {
+  @apply text-[9px] font-medium tracking-wide text-muted-foreground uppercase;
+}
+
+/* A menu row inside MenuUI's panel: a `<button>` the caller owns (its own
+   handler, its own icon), wearing the one look every menu row has. It was a
+   `MENU_ITEM` const copied into two files. */
+@utility menu-item {
+  @apply flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs outline-none;
+  @apply hover:bg-accent/30 focus-visible:bg-accent/30;
+}
+
 /* thin muted scrollbar shared across scrollable app chrome (popovers,
    panels) */
 .custom-scrollbar {

@@ -76,7 +76,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydownCapture, tr
       <!-- the selected element's triggers — what the panel hands here -->
       <div v-if="triggerRows.length" class="flex shrink-0 flex-col border-b border-input">
         <p
-          class="flex h-9 shrink-0 items-center gap-1 px-3 text-[9px] font-medium tracking-wide text-muted-foreground uppercase"
+          class="flex h-9 shrink-0 items-center gap-1 px-3 section-label"
         >
           <span class="shrink-0">Element</span>
           <span class="min-w-0 truncate normal-case tracking-normal">· {{ elementLabel }}</span>

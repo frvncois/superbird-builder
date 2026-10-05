@@ -300,7 +300,7 @@ useDrawerEscape(panel, {
     <!-- pb leaves room for a row kebab opened near the bottom -->
     <div class="custom-scrollbar flex-1 space-y-0.5 overflow-y-auto pb-10">
       <div v-if="visiblePages.length || !searching" class="flex items-center gap-1 px-2.5 pt-2 pb-1">
-        <span class="flex-1 text-[9px] font-medium tracking-wide text-muted-foreground uppercase">
+        <span class="flex-1 section-label">
           Pages
         </span>
         <ButtonUI
@@ -361,7 +361,7 @@ useDrawerEscape(panel, {
       </div>
 
       <div v-if="visibleCollections.length || !searching" class="flex items-center gap-1 px-2.5 pt-4 pb-1">
-        <span class="flex-1 text-[9px] font-medium tracking-wide text-muted-foreground uppercase">
+        <span class="flex-1 section-label">
           Collections
         </span>
         <ButtonUI
