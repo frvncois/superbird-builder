@@ -1201,10 +1201,21 @@ function resolveBindTarget(project, page, ownerNode, inComponent, rawTarget, raw
     if (rawRef) {
       return { error: `targetRef "#${rawRef}" refused: refs are page-scope — inside a component, target by \`targetId\`` }
     }
-    const target = rawTarget === 'null' || rawTarget === '' ? null : (rawTarget ?? null)
-    if (target === null) return { targetId: null }
+    const raw = rawTarget === 'null' || rawTarget === '' ? null : (rawTarget ?? null)
+    if (raw === null) return { targetId: null }
+    // the short 8-hex `data-id` a component read prints is a valid address
+    // here too — resolved everywhere else, and raw on this one path, so the
+    // refusal below fired on the agent's own id and claimed it was not an
+    // element of the component at all
+    const target = fullNodeId([masterDef.root], raw)
     if (!findNode([masterDef.root], target)) {
-      return { error: `bind targetId "${target}" must be another element of ${masterDef.name} (list_components {includeNodes: true})` }
+      return {
+        error:
+          `bind targetId "${raw}" is not an element of ${masterDef.name}. Its elements are ` +
+          'listed by list_components {includeNodes: true} — the id or the 8-hex `data-id` from ' +
+          'its HTML both work. A target on a PAGE cannot be reached from a master: effects ' +
+          'inside an instance are scoped to the master, per instance.',
+      }
     }
     if (sharedInstanceMap(masterDef.root.children ?? [], project.components ?? []).has(target)) {
       return {
@@ -5259,8 +5270,10 @@ const tools = [
         }
         // ids of the new shape — what edit_elements {componentId} addresses
         out.nodes = masterNodeRows(project, def)
-        out.version = componentVersion(project, def)
       }
+      // ALWAYS, not only after an html write: a rename changes the master's
+      // root type, so the version moves and the stored one is stale either way
+      out.version = componentVersion(project, def)
       await saveTargetProject(project)
       // instances were realigned on their pages, so each touched page has a new
       // version — return them so a cached one is not carried into the next write
@@ -5312,7 +5325,13 @@ const tools = [
       const result = setVariantAxes(project, def, axes)
       if (!result.ok) return { saved: false, reason: 'invalid-axes', message: result.error }
       await saveTargetProject(project)
-      return { saved: true, componentId: def.id, name: def.name, variants: def.variants ?? [] }
+      return {
+        saved: true,
+        componentId: def.id,
+        name: def.name,
+        variants: def.variants ?? [],
+        version: componentVersion(project, def),
+      }
     },
   },
   {
@@ -6733,7 +6752,13 @@ const tools = [
         pageResults.push({
           ...where,
           saved: changed,
-          ...(scopeDef ? {} : { version: pageVersion(project, page) }),
+          // a component job returns the COMPONENT's version, not nothing: a
+          // master write is version-guarded like a page write, and with no
+          // version in the response the next write had to call
+          // list_components (22 KB for a dozen components) just to get it
+          ...(scopeDef
+            ? { version: componentVersion(project, scopeDef) }
+            : { version: pageVersion(project, page) }),
           edited: results.length - failures.length,
           failed: hardFailures.length,
           opsApplied,
