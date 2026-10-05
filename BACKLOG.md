@@ -247,6 +247,13 @@ element (`src/lib/shared/svg.js`).
   by hand-editing the blob. Needed back somewhere that is not a picker: likely a
   "use an existing effect" switch in the effect body's name row, or a target
   pick on a State card that binds the picked element to it.
+- **Dismissal, exclusive group and remembered dismissal have no UI.** The
+  State cards (`closeOn` / `group` / `once`, read as the union over a state's
+  drivers and written to one canonical binding) were dropped from the trigger
+  view in the same pass — the view is for developers and had too many boxes.
+  The data model, both runtimes and `bind_interaction` are untouched, so an
+  agent still sets them; a human cannot. Belongs with the item above when it
+  comes back: these describe the TARGET's state, not the trigger.
 
 ## Launch (pre-publish)
 
@@ -865,10 +872,14 @@ already in the first pass. What the run surfaced and is still NOT done:
   that step; it would also put translatable strings on a non-translatable field, which
   is why it was not done on the way past.
 - **Per-template JSON-LD** with `{field}` tokens, per entry.
-- **E18, `mainIsEmpty`** — unresolved either way. `projectStats` says a page with an
-  empty body IS empty, which contradicts the report. Needs the blob that produced it
-  before anything is changed; the report's suggested fix (count settings and media)
-  contradicts the documented intent and should not be taken on its own.
+- **E18, `mainIsEmpty` — RESOLVED, no change needed.** Checked against a genuinely
+  fresh seed (`createProject`, 2026-10-04, after the Ridgeline data was cleared): one
+  page, a body with NO children, and `isEmpty` computes `true`. So the code is right
+  and the report's Main was not fresh — it held at least one non-body element, which
+  is exactly what the flag is for. The report's suggested fix (count settings and
+  media too) would break the documented intent at `tools.mjs:687`: the flag survives a
+  rename, a token palette and a media library on purpose, because none of those is
+  somebody's site. Nothing to do.
 - **`update_settings {tokens}` has no version**, so a stale list silently drops
   tokens. Same shape as M2, and the page tools' `version` is the pattern to copy.
 - **`delete_interaction` has no interlock**, and in-editor undo is in-memory only, so
