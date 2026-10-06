@@ -21,6 +21,8 @@ import {
   sampleValues as sampleValuesRaw,
   composeMotionStyle as composeMotionStyleRaw,
   sampleText as sampleTextRaw,
+  parseCountText as parseCountTextRaw,
+  countToFor as countToForRaw,
   countTargetError as countTargetErrorRaw,
   splitByStagger as splitByStaggerRaw,
   initialStyle as initialStyleRaw,
@@ -107,6 +109,10 @@ export interface SampleOptions {
   childIndex?: number
   /** measured current values for tracks that omit `from` */
   current?: Partial<Record<AnimProp, number | string>>
+  /** per-ELEMENT destinations. `to` lives on the shared Animation, so a `count`
+   *  — which ends on the number each element already says — has nowhere else to
+   *  come from. Built by countToFor. */
+  to?: Partial<Record<AnimProp, number>>
 }
 
 export type ValidationResult = { ok: true } | { ok: false; error: string }
@@ -141,10 +147,19 @@ export const endStyle = endStyleRaw as (
   opts?: SampleOptions,
 ) => MotionStyle
 export const validateAnimation = validateAnimationRaw as (a: unknown) => ValidationResult
-/** where a `count` track may land: a text leaf that is not field-bound */
+/** where a `count` track may land: a text leaf that is not field-bound, whose
+ *  own text the track's `to`/`format` can read back (that text IS the end state) */
 export const countTargetError = countTargetErrorRaw as (
   animation: Animation | undefined,
-  target: { type?: string; isLeaf?: boolean; isBound?: boolean } | null,
+  target: {
+    type?: string
+    isLeaf?: boolean
+    isBound?: boolean
+    /** the element's authored text, when it has one */
+    text?: string
+    /** BCP-47, for the separators the end state is compared in */
+    locale?: string
+  } | null,
 ) => string | null
 export const validateBinding = validateBindingRaw as (
   b: unknown,
@@ -173,6 +188,16 @@ export const sampleText = sampleTextRaw as (
   values: MotionValues,
   locale?: string,
 ) => string | undefined
+/** the number an authored text says — the inverse of sampleText */
+export const parseCountText = parseCountTextRaw as (
+  text: string,
+  format?: AnimationTrack['format'],
+) => number | null
+/** the per-element `to` override for a timeline landing on this text */
+export const countToFor = countToForRaw as (
+  compiled: CompiledAnimation,
+  text: string,
+) => Partial<Record<AnimProp, number>> | undefined
 export const splitByStagger = splitByStaggerRaw as (c: CompiledAnimation) => StaggerSplit
 export const initialStyle = initialStyleRaw as (c: CompiledAnimation) => MotionStyle
 export const foldReverseTime = foldReverseTimeRaw as (c: CompiledAnimation, t: number) => number

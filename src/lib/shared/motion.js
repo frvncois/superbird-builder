@@ -182,6 +182,83 @@ export function parseTrackValue(value, prop) {
   return meta.units.indexOf(unit) === -1 ? null : { n, unit }
 }
 
+/**
+ * The number an element's authored TEXT says — a `count` track's REAL
+ * destination. The inverse of sampleText, so `format` decides how it reads:
+ * with `decimals`, the LAST separator is the decimal point and every earlier
+ * one is grouping; without, every separator is grouping.
+ *
+ * Why this exists: `to` lives on the shared Animation in project.animations,
+ * so ONE compiled track serves every binding and every component instance. A
+ * count bound on a component master therefore ended all four stat cards on the
+ * master's number (12 / 12 / 12 / 12 instead of 12 / 99 / 11 / 140) while the
+ * exported HTML held the right numbers — initialStyle never bakes a count, so
+ * the markup was correct and the first frame overwrote it. The element's own
+ * text is the only per-instance value there is.
+ *
+ * DELIBERATELY STRICT: anything that is not part of a formatted number makes
+ * this return null, and the authored `track.to` stands. Stripping stray words
+ * would silently reinterpret "12 months" as 12 and a container's concatenated
+ * text as whatever digit came first; falling back keeps today's behaviour for
+ * every text this cannot read with certainty. A text that holds a number the
+ * track disagrees with is reported instead — see countTargetError.
+ *
+ * @param {string} text the element's authored content
+ * @param {{decimals?: number, group?: boolean, prefix?: string, suffix?: string}} [format]
+ * @returns {number|null} null when the text holds no readable number
+ */
+export function parseCountText(text, format) {
+  if (typeof text !== 'string') return null
+  const f = format || {}
+  let s = text.trim()
+  const prefix = typeof f.prefix === 'string' ? f.prefix : ''
+  const suffix = typeof f.suffix === 'string' ? f.suffix : ''
+  if (prefix && s.slice(0, prefix.length) === prefix) s = s.slice(prefix.length)
+  if (suffix && suffix.length <= s.length && s.slice(s.length - suffix.length) === suffix) {
+    s = s.slice(0, s.length - suffix.length)
+  }
+  // Intl writes U+2212 for a minus and groups with a space in several locales
+  // (U+00A0 in fr-FR, U+202F in fr-CA, U+2009 in some others) — all noise here
+  s = s.replace(/−/g, '-').replace(/[\s   ']/g, '')
+  if (!s || /[^\d.,-]/.test(s)) return null
+  const decimals = typeof f.decimals === 'number' && f.decimals > 0 ? Math.min(20, f.decimals) : 0
+  const cut = decimals > 0 ? Math.max(s.lastIndexOf('.'), s.lastIndexOf(',')) : -1
+  s =
+    cut === -1
+      ? s.replace(/[.,]/g, '')
+      : `${s.slice(0, cut).replace(/[.,]/g, '')}.${s.slice(cut + 1).replace(/[.,]/g, '')}`
+  if (!/^-?(?:\d+|\d*\.\d+)$/.test(s)) return null
+  const n = parseFloat(s)
+  return isFinite(n) ? n : null
+}
+
+/**
+ * The per-element `to` override a compiled timeline needs on an element whose
+ * text reads `text`: `{count: n}`, or undefined when the timeline holds no
+ * count or the text holds no number (then the authored `to` stands).
+ *
+ * Pass the result as `sampleValues(..., {to})`. Every surface does: the
+ * published runtime reads the element's textContent once, the canvas and Play
+ * use the per-instance resolved content they already hold.
+ *
+ * @param {{tracks: any[]}} compiled
+ * @param {string} text
+ * @returns {Record<string, number>|undefined}
+ */
+export function countToFor(compiled, text) {
+  if (!compiled || !compiled.tracks) return undefined
+  let out
+  for (const track of compiled.tracks) {
+    const meta = MOTION_PROPS[track.prop]
+    if (!meta || meta.kind !== 'text') continue
+    const n = parseCountText(text, track.format)
+    if (n === null) continue
+    out = out || {}
+    out[track.prop] = n
+  }
+  return out
+}
+
 const round = (n) => Math.round(n * 1000) / 1000
 
 // ---------- color ----------
@@ -349,14 +426,20 @@ function trackProgress(track, t, childIndex) {
  *
  * `current` supplies measured values for tracks that omit `from`.
  *
+ * `to` supplies per-ELEMENT destinations, which is what `current` is for the
+ * other end of the tween. One compiled timeline serves every binding and every
+ * component instance, so a `count` — whose destination is the number each
+ * element already says — has nowhere else to come from (see countToFor).
+ *
  * @param {{tracks: any[], duration: number}} compiled
  * @param {number} t
- * @param {{childIndex?: number, current?: Record<string, any>}} [opts]
+ * @param {{childIndex?: number, current?: Record<string, any>, to?: Record<string, number>}} [opts]
  * @returns {Record<string, {n?: number, unit?: string, color?: string}>}
  */
 export function sampleValues(compiled, t, opts) {
   const childIndex = (opts && opts.childIndex) || 0
   const current = (opts && opts.current) || {}
+  const override = (opts && opts.to) || {}
   const values = {}
   for (const track of compiled.tracks) {
     const p = trackProgress(track, t, childIndex)
@@ -373,8 +456,10 @@ export function sampleValues(compiled, t, opts) {
       values[track.prop] = { color: lerpColor(from, track.to, eased) }
       continue
     }
-    // the destination decides the unit; `from` is read in the same unit
-    const to = parseTrackValue(track.to, track.prop) || { n: meta.def, unit: meta.unit }
+    // the destination decides the unit; `from` is read in the same unit. A
+    // per-element override (a count's own text) wins over the shared track.
+    const rawTo = override[track.prop] !== undefined ? override[track.prop] : track.to
+    const to = parseTrackValue(rawTo, track.prop) || { n: meta.def, unit: meta.unit }
     let fromVal
     if (track.from !== undefined && track.from !== null) {
       fromVal = parseTrackValue(track.from, track.prop)
@@ -662,8 +747,9 @@ export function animationWritesText(animation) {
 }
 
 /**
- * Where a `count` may land: a LEAF that carries text, and not one whose text
- * comes from a collection field.
+ * Where a `count` may land: a LEAF that carries text, not one whose text comes
+ * from a collection field, and — when it already says something — a text the
+ * track can actually read back.
  *
  * A container has no text of its own to replace — the write would wipe its
  * children — and a field-bound element re-renders from the entry, so the two
@@ -671,9 +757,19 @@ export function animationWritesText(animation) {
  * binding that quietly does nothing is the bug class this whole layer exists
  * to stop.
  *
+ * The third check is the `format` one. The element's own text is the
+ * destination (parseCountText → sampleValues `to`), so a `format` that cannot
+ * read that text back silently falls through to the authored `track.to` and the
+ * number lands on something the author never wrote. Comparing the rendered END
+ * STATE with the authored text catches both halves of that in one go: a format
+ * that does not round-trip, and a text that holds no number at all. Skipped
+ * when the element has no text yet, because binding before writing the copy is
+ * an ordinary order of work.
+ *
  * @param {any} animation the library timeline being bound
- * @param {{type?: string, isLeaf?: boolean, isBound?: boolean}|null} target the
- *   element the animation MOVES (the binding's target, not its trigger)
+ * @param {{type?: string, isLeaf?: boolean, isBound?: boolean, text?: string,
+ *   locale?: string}|null} target the element the animation MOVES (the
+ *   binding's target, not its trigger)
  * @returns {string|null} the refusal, or null
  */
 export function countTargetError(animation, target) {
@@ -690,6 +786,26 @@ export function countTargetError(animation, target) {
       "a 'count' track writes the element's TEXT, but this element's text comes from a " +
       'collection field — the two would fight. Count a plain element beside it.'
     )
+  }
+  const text = typeof target.text === 'string' ? target.text.trim() : ''
+  if (text) {
+    const compiled = compileAnimation(animation)
+    const end = sampleText(
+      sampleValues(compiled, compiled.duration, { to: countToFor(compiled, text) }),
+      target.locale || undefined,
+    )
+    // Compared with the separators normalized, exactly as parseCountText reads
+    // them: Intl groups with U+202F/U+00A0 and writes U+2212 for a minus, and
+    // nobody types those. A space-for-space difference is not a bug worth
+    // refusing a bind over — a different NUMBER is.
+    const norm = (s) => s.replace(/−/g, '-').replace(/[\s   ]/g, '')
+    if (end !== undefined && norm(end) !== norm(text)) {
+      return (
+        `a 'count' track would end on "${end}", but this element says "${text}" — the element's ` +
+        'own text is what it counts up to, so make the track\'s "to" and "format" ' +
+        `(decimals, group, prefix, suffix) read "${text}" back, or fix the text`
+      )
+    }
   }
   return null
 }

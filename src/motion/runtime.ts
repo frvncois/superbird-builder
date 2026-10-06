@@ -18,6 +18,7 @@
 // every card owns its own play and its own "already appeared" state.
 import {
   compileAnimation,
+  countToFor,
   sampleText,
   sampleValues,
   composeMotionStyle,
@@ -32,6 +33,7 @@ import {
   type CompiledAnimation,
   type MotionValues,
   type MotionStyle,
+  type SampleOptions,
   type StaggerSplit,
 } from '@/lib/motion'
 import { createLerpScroller, wheelDeltaPx, insideNestedScroller } from '@/lib/shared/scroll.js'
@@ -73,6 +75,10 @@ interface Play {
    * the element-level tracks (the compiler can't know the child count), so a
    * cascade clamped to it froze mid-flight with late children part-faded */
   total: number
+  /** per-element destinations: a `count` ends on the number THIS element's
+   * authored text says, not the one number the shared compiled track carries.
+   * Undefined for every timeline that does not count. */
+  to?: SampleOptions['to']
 }
 
 const json = <T,>(id: string, fallback: T): T => {
@@ -138,6 +144,20 @@ if (Object.keys(lib).length || siteFx) {
     }
   })
 
+  /**
+   * Each element's AUTHORED text, read once and kept. A `count` ends on the
+   * number the element itself says — `to` lives on the shared Animation, so
+   * four stat cards driven by one master binding would otherwise all land on
+   * one number. Cached because write() replaces textContent every frame: a
+   * replay (appearMode 'replay', a second click, a reverse) must not read a
+   * mid-tween number back as its destination.
+   */
+  const authored = new WeakMap<HTMLElement, string>()
+  const countTo = (el: HTMLElement, c: Compiled): SampleOptions['to'] => {
+    if (!authored.has(el)) authored.set(el, el.textContent || '')
+    return countToFor(c, authored.get(el)!)
+  }
+
   /** the elements a staggered part cascades over */
   const staggerTargets = (el: HTMLElement, selector: string): HTMLElement[] =>
     selector
@@ -174,7 +194,7 @@ if (Object.keys(lib).length || siteFx) {
    * composing, so a marquee's x and an entrance's y coexist in one transform.
    */
   function write(play: Play) {
-    const elementValues = sampleValues(play.split.element, play.time)
+    const elementValues = sampleValues(play.split.element, play.time, { to: play.to })
     applyStyle(play.el, composeMotionStyle(mergeForElement(play.el, elementValues, play)))
     // a `count` track writes TEXT, not style. NEVER in `still` mode: the end
     // state of a count IS the authored text, and the exporter deliberately
@@ -199,7 +219,7 @@ if (Object.keys(lib).length || siteFx) {
     plays.forEach((other) => {
       if (other === self || other.el !== el) return
       found = true
-      merged = { ...merged, ...sampleValues(other.split.element, other.time) }
+      merged = { ...merged, ...sampleValues(other.split.element, other.time, { to: other.to }) }
     })
     return found ? { ...merged, ...own } : own
   }
@@ -271,6 +291,8 @@ if (Object.keys(lib).length || siteFx) {
         direction: reverse ? -1 : 1,
         running: !jump,
         total,
+        // read before the first write(), which replaces textContent
+        to: existing ? existing.to : countTo(el, split.element),
       }
       plays.set(key, play)
       if (jump) {
@@ -313,7 +335,16 @@ if (Object.keys(lib).length || siteFx) {
     const split = splits[animId]
     if (!c || !split) return 0
     const total = playTotal(el, c, split)
-    const play: Play = { el, compiled: c, split, time: 0, direction: 1, running: !still, total }
+    const play: Play = {
+      el,
+      compiled: c,
+      split,
+      time: 0,
+      direction: 1,
+      running: !still,
+      total,
+      to: countTo(el, split.element),
+    }
     plays.set(key, play)
     if (still) play.time = total
     write(play)
@@ -625,6 +656,9 @@ if (Object.keys(lib).length || siteFx) {
             direction: 1,
             running: false,
             total,
+            // the WeakMap is load-bearing here: this Play is rebuilt every
+            // scroll frame, and write() has already replaced the text
+            to: countTo(node, split.element),
           }
           plays.set(playKey(meta.k, index), play)
           write(play)

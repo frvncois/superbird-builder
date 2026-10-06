@@ -627,12 +627,19 @@ export function useRenderNode(
 
   /** the node's own animated values (element-moving tracks only) */
   const ownMotionValues = computed(() => {
+    // The AUTHORED text, not the rendered one: a `count` track's destination is
+    // the number this node says, and `to` lives on the shared Animation, so
+    // four instances of one StatCounter would otherwise all land on the
+    // master's number. contentInfo is already resolved per instance and per
+    // locale, which is why the canvas needs no equivalent of the runtime's
+    // read-the-DOM-once cache — this value does not move while the play runs.
+    const text = contentInfo.value.value
     const own = animTargets.value.length
-      ? motion.valuesForNode(node.value.id, animTargetScopes.value)
+      ? motion.valuesForNode(node.value.id, animTargetScopes.value, text)
       : undefined
     if (!channelAnimTargets.value.length) return own
     // a channel play is keyed by the CHANNEL and is always unscoped
-    const viaChannel = motion.valuesForNode(channelTargetId(listensOn.value!), undefined)
+    const viaChannel = motion.valuesForNode(channelTargetId(listensOn.value!), undefined, text)
     if (!viaChannel) return own
     return own ? { ...own, ...viaChannel } : viaChannel
   })

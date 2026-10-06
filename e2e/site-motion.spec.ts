@@ -357,3 +357,155 @@ test.describe('a count track', () => {
     expect(writes).toEqual([])
   })
 })
+
+// ONE timeline, FOUR destinations. `to` lives on the shared Animation in
+// project.animations, so a count bound on a component MASTER reaches every
+// instance through one compiled track — and every instance used to end on the
+// master's number while the exported HTML held the right ones (initialStyle
+// bakes no count, so the markup was correct and the first frame overwrote it:
+// 12 / 99 / 11 / 140 all read 12). The element's own text is the only
+// per-instance value there is, so that is what a count counts up to; the
+// track's `to` is the fallback for text holding no number.
+//
+// The single-span fixture above cannot catch this — it passes either way,
+// because its authored text happens to equal sampleText(to).
+
+const SHARED_COUNT = 'a-shared-count'
+const FIGURES = ['12', '99', '11', '140']
+
+function sharedMasterCountFixture() {
+  // one master: a span carrying the count binding, no text of its own
+  const master = {
+    id: 'm-stat-root',
+    type: 'StatCounter',
+    children: [
+      node('m-stat-num', 'span', {
+        animations: [{ id: 'cb-shared', animationId: SHARED_COUNT, trigger: 'load' }],
+      }),
+    ],
+  }
+  // four instances, each overriding the figure on its own positional part
+  const instances = FIGURES.map((figure, i) => ({
+    id: `inst-${i}`,
+    type: 'StatCounter',
+    children: [node(`inst-${i}-num`, 'span', { htmlId: `fig${i}`, content: figure })],
+  }))
+  return {
+    pages: [
+      {
+        id: 'p1',
+        name: 'Home',
+        path: '/',
+        status: 'published',
+        elements: [node('body', 'body', { children: instances })],
+      },
+    ],
+    components: [{ id: 'c-stat', name: 'StatCounter', root: master }],
+    collections: [],
+    interactions: [],
+    animations: [
+      {
+        id: SHARED_COUNT,
+        name: 'Count up',
+        steps: [
+          { id: 'cs1', tracks: [{ prop: 'count', from: 0, to: 12 }], duration: 700, easing: 'linear' },
+        ],
+      },
+    ],
+    breakpoints: [],
+    comments: [],
+    locales: ['en'],
+    defaultLocale: 'en',
+    settings: {
+      publishing: { method: 'server', github: { repo: '', branch: '' } },
+      seo: { siteName: 'T', titleTemplate: '%s', description: '' },
+      domain: '',
+      smtp: {},
+      integrations: { stripe: {}, mailing: {} },
+      tokens: [],
+      customCode: { head: '' },
+      fonts: { family: 'sans' },
+    },
+  }
+}
+
+test.describe('a count on a shared component master', () => {
+  test.beforeAll(async () => {
+    await exportSite(sharedMasterCountFixture(), SITE)
+  })
+
+  test('every instance ships its own figure, and none is baked over', async () => {
+    const html = await readFile(join(SITE, 'index.html'), 'utf8')
+    for (const [i, figure] of FIGURES.entries()) {
+      const tag = new RegExp(`<span[^>]*id="fig${i}"[^>]*>([^<]*)<`).exec(html)
+      expect(tag?.[1], `fig${i} in the markup`).toBe(figure)
+    }
+    expect(/<span[^>]*id="fig\d"[^>]*style=/.test(html)).toBe(false)
+  })
+
+  test('each counts up to ITS OWN number, from one timeline', async ({ page }) => {
+    await page.goto('/')
+    // every one lands on its own figure — not all four on the master's 12
+    for (const [i, figure] of FIGURES.entries()) {
+      await expect
+        .poll(() => page.locator(`#fig${i}`).textContent(), { timeout: 5000 })
+        .toBe(figure)
+    }
+  })
+
+  test('the figures move while the timeline runs', async ({ page }) => {
+    const seen: Record<string, Set<string>> = {}
+    await page.exposeFunction('record', (id: string, t: string) => {
+      ;(seen[id] ??= new Set()).add(t)
+    })
+    await page.addInitScript(() => {
+      document.addEventListener('DOMContentLoaded', () => {
+        for (const el of document.querySelectorAll('[id^="fig"]')) {
+          new MutationObserver(() => {
+            ;(window as unknown as { record: (i: string, t: string) => void }).record(
+              el.id,
+              el.textContent ?? '',
+            )
+          }).observe(el, { childList: true, characterData: true, subtree: true })
+        }
+      })
+    })
+    await page.goto('/')
+    await expect.poll(() => page.locator('#fig3').textContent(), { timeout: 5000 }).toBe('140')
+    await page.waitForTimeout(100)
+    // the 140 card must have been through three-digit values the 12 card never
+    // sees — proof the destinations really are per element and not one shared
+    // number dressed up
+    expect([...(seen.fig3 ?? [])].some((t) => Number(t) > 12)).toBe(true)
+    expect([...(seen.fig0 ?? [])].every((t) => Number(t) <= 12)).toBe(true)
+  })
+
+  test('reduced motion and ?noanim leave all four figures alone', async ({ browser }) => {
+    for (const [label, ctxOpts, url] of [
+      ['reduced motion', { reducedMotion: 'reduce' as const }, '/'],
+      ['noanim', {}, '/?noanim'],
+    ] as const) {
+      const ctx = await browser.newContext(ctxOpts)
+      const page = await ctx.newPage()
+      const writes: string[] = []
+      await page.exposeFunction('record', (t: string) => void writes.push(t))
+      await page.addInitScript(() => {
+        document.addEventListener('DOMContentLoaded', () => {
+          for (const el of document.querySelectorAll('[id^="fig"]')) {
+            new MutationObserver(() => {
+              ;(window as unknown as { record: (t: string) => void }).record(el.textContent ?? '')
+            }).observe(el, { childList: true, characterData: true, subtree: true })
+          }
+        })
+      })
+      await page.goto(url)
+      await page.waitForTimeout(600)
+      for (const [i, figure] of FIGURES.entries()) {
+        expect(await page.locator(`#fig${i}`).textContent(), `${label} fig${i}`).toBe(figure)
+      }
+      // `still` mode never writes a count: the end state is already in the markup
+      expect(writes, label).toEqual([])
+      await ctx.close()
+    }
+  })
+})

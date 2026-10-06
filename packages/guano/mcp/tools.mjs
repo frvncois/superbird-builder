@@ -435,10 +435,16 @@ export function createToolSet({ api, runtime, elicit, hasElicitation = () => nul
           properties: {
             prop: { type: 'string', description: 'see list_animations.properties' },
             from: { description: "start value; omit to start from the element's current value" },
-            to: { description: 'end value (number, or #hex for colors)' },
+            to: {
+              description:
+                "end value (number, or #hex for colors). A 'count' ends on the number the ELEMENT " +
+                'says, so this is only the fallback for text holding no number.',
+            },
             format: {
               type: 'object',
-              description: "'count' only: how the number reads. Must match the authored text.",
+              description:
+                "'count' only: how the number reads. It must spell the element's own text exactly — " +
+                'that text is the destination, and this is how it is read back.',
               properties: {
                 decimals: { type: 'integer', minimum: 0, maximum: 20 },
                 group: { type: 'boolean', description: 'thousands separators' },
@@ -1475,7 +1481,15 @@ function bindTargetArg(bind) {
  */
 /**
  * The element an animation binding MOVES, described for `countTargetError`:
- * is it a leaf that carries text, and is its text a collection field's?
+ * is it a leaf that carries text, is its text a collection field's, and can a
+ * `count` track read its own words back?
+ *
+ * `text` is the node's OWN content. A count ends on the number the element
+ * says, so a `to`/`format` that cannot read it is a number landing somewhere
+ * the author never wrote. Compared in the project's default locale, which is
+ * the one base content is written in. A node that inherits its text from a
+ * master contributes nothing here — see the count-on-shared-master publish
+ * warning for the per-instance half of this.
  *
  * Null for a channel target — the listener may be any element anywhere, so
  * there is no one node to check.
@@ -1499,7 +1513,13 @@ function animTargetShape(project, page, masterDef, ownerNode, targetId) {
     }
   }
   if (!node) return null
-  return { type: node.type, isLeaf: isLeafElement(node.type), isBound: !!node.arg }
+  return {
+    type: node.type,
+    isLeaf: isLeafElement(node.type),
+    isBound: !!node.arg,
+    text: typeof node.content === 'string' ? node.content : '',
+    locale: project?.defaultLocale || undefined,
+  }
 }
 
 function channelAnimationError(trigger, targetId) {
@@ -4027,6 +4047,78 @@ function designWarnings(project) {
         'sheet or modal inside. Fade containers (opacity only), or set `stagger` on the step so the ' +
         'CHILDREN move and the container stays put — neither a staggered step nor an infinite ' +
         'loop (`repeat: -1`, a marquee) is flagged.',
+    })
+  }
+
+  // 3a-bis. a `count` whose rendered text it cannot read back.
+  //
+  // A count's destination is the number the ELEMENT says, not the shared
+  // track's `to` — that is what lets ONE timeline on a StatCounter master
+  // drive 12 / 99 / 11 / 140 across four instances. The per-element read is
+  // parseCountText, which is deliberately strict: a text it cannot read
+  // (words, or a `format` that does not round-trip its separators, prefix or
+  // suffix) falls back to the authored `to`, so that instance silently lands
+  // on a number nobody wrote. countTargetError checks a node's OWN text at
+  // bind time; only here are the INSTANCES' texts known, which is the half
+  // that bites — the master's own content can read back perfectly while every
+  // instance overriding it does not.
+  const writesText = (a) =>
+    (a?.steps ?? []).some((st) => (st.tracks ?? []).some((t) => MOTION_PROPS[t.prop]?.kind === 'text'))
+  /** nodeId → the text-writing timelines landing on it, bindings in `roots` */
+  const countBindingsIn = (roots) => {
+    const index = new Map()
+    walkNodes(roots, (owner) => {
+      for (const b of owner.animations ?? []) {
+        const a = lib.get(b.animationId)
+        if (!a || !writesText(a)) continue
+        const id = b.targetId || owner.id
+        if (!index.has(id)) index.set(id, [])
+        index.get(id).push(a)
+      }
+    })
+    return index
+  }
+  // node ids are unique project-wide, so one index covers every master
+  const masterCounts = countBindingsIn(components.map((c) => c.root))
+  const stuckCounts = []
+  if (masterCounts.size || (project.animations ?? []).some(writesText)) {
+    for (const page of published) {
+      const pageCounts = countBindingsIn(page.elements ?? [])
+      const mm = buildInstanceMap(project, page)
+      walkNodes(page.elements ?? [], (n) => {
+        const mapping = mm.get(n.id)
+        const master = mapping?.master
+        const anims = master && master !== n ? masterCounts.get(master.id) : pageCounts.get(n.id)
+        if (!anims?.length) return
+        const own = typeof n.content === 'string' ? n.content : ''
+        const text = own || (master && master !== n ? inheritedInstanceValue(mapping, 'content') : '')
+        if (!text) return
+        for (const a of anims) {
+          const bad = countTargetError(a, {
+            type: n.type,
+            isLeaf: isLeafElement(n.type),
+            isBound: !!n.arg,
+            text,
+            locale: project.defaultLocale || undefined,
+          })
+          if (bad) {
+            stuckCounts.push(`"${a.name}" on :${n.type} saying "${String(text).trim().slice(0, 24)}" in page "${page.name}"`)
+            break
+          }
+        }
+      })
+    }
+  }
+  if (stuckCounts.length) {
+    warnings.push({
+      kind: 'count-text-unreadable',
+      where: [...new Set(stuckCounts)].slice(0, 6),
+      message:
+        `${stuckCounts.length} element(s) carry a 'count' track whose own text it cannot read back, so ` +
+        "each one lands on the track's `to` instead of its own number. A count counts up to the number " +
+        'the ELEMENT says — that is how one timeline serves every instance of a component with a ' +
+        "different figure — so the track's `format` (decimals, group, prefix, suffix) has to spell the " +
+        'text exactly: "18,000+" needs `{group: true, suffix: "+"}`. Fix the format, or the text.',
     })
   }
 

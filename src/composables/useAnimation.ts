@@ -163,19 +163,30 @@ export function useAnimation() {
     }
   }
 
+  /**
+   * The element a timeline MOVES, as countTargetError wants it. `text` is the
+   * node's OWN content — a `count` ends on the number the element says, so the
+   * track's `to`/`format` have to read it back. Left empty when the node
+   * inherits its text from a master (nothing of its own to disagree with), and
+   * compared in the project's DEFAULT locale, which is the one the base content
+   * is written in.
+   */
+  function countShape(node: ElementNode) {
+    return {
+      type: node.type,
+      isLeaf: isLeafElement(node.type),
+      isBound: !!node.arg,
+      text: typeof node.content === 'string' ? node.content : '',
+      locale: project.value.defaultLocale || undefined,
+    }
+  }
+
   /** binds an animation to a node; appear is the sane default trigger.
    *  Returns null when the timeline cannot land here — a `count` track writes
    *  the element's TEXT, so a container has nothing for it to write into. */
   function applyTo(node: ElementNode, animationId: string): AnimationBinding | null {
     const timeline = animationIndex.value.get(animationId)
-    if (
-      timeline &&
-      countTargetError(timeline, {
-        type: node.type,
-        isLeaf: isLeafElement(node.type),
-        isBound: !!node.arg,
-      })
-    ) {
+    if (timeline && countTargetError(timeline, countShape(node))) {
       return null
     }
     node.animations ??= []
@@ -220,13 +231,7 @@ export function useAnimation() {
   ): string | null {
     const result = validateAnimation(animation)
     if (!result.ok) return result.error
-    return target
-      ? countTargetError(animation, {
-          type: target.type,
-          isLeaf: isLeafElement(target.type),
-          isBound: !!target.arg,
-        })
-      : null
+    return target ? countTargetError(animation, countShape(target)) : null
   }
 
   /** every binding whose timeline lands on this node (see animDriversIndex) */

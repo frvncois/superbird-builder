@@ -1156,6 +1156,66 @@ test.describe('a count track only lands where it can write', () => {
     expect(JSON.stringify(bad.failures)).toMatch(/comes from a collection field/)
   })
 
+  // The element's own text IS the destination — that is what lets one timeline
+  // on a StatCounter master drive 12 / 99 / 11 / 140. So a `format` that cannot
+  // read that text back is not a cosmetic mismatch: the number silently falls
+  // through to the track's `to` and lands on something nobody wrote.
+  test("a format that cannot read the element's own text back is refused", async () => {
+    const { s, animationId } = await seeded()
+    const home = await s.home()
+    const written = await s.call('set_page_html', {
+      pageId: home.id,
+      version: home.version,
+      html: pageHtml(
+        '<span data-ref="ok">18,000+</span>\n' +
+          '<span data-ref="nosuffix">18,000</span>\n' +
+          '<span data-ref="words">eighteen thousand</span>\n' +
+          '<span data-ref="blank" />',
+      ),
+    })
+
+    // the text the format spells exactly: allowed
+    expect(
+      (
+        await s.call('edit_elements', {
+          pageId: home.id,
+          version: written.version,
+          edits: [{ ref: 'ok', bindAnimations: [{ animationId, trigger: 'load' }] }],
+        })
+      ).failed,
+    ).toBe(0)
+
+    // the suffix is in the format but not in the text — the end state would
+    // read "18,000+" over an element that says "18,000"
+    const noSuffix = await s.call('edit_elements', {
+      pageId: home.id,
+      version: written.version,
+      edits: [{ ref: 'nosuffix', bindAnimations: [{ animationId, trigger: 'load' }] }],
+    })
+    expect(noSuffix.failed).toBe(1)
+    expect(JSON.stringify(noSuffix.failures)).toMatch(/would end on .*18,000\+.*but this element says/)
+
+    // no number in the text at all: the count would replace the words
+    const words = await s.call('edit_elements', {
+      pageId: home.id,
+      version: written.version,
+      edits: [{ ref: 'words', bindAnimations: [{ animationId, trigger: 'load' }] }],
+    })
+    expect(words.failed).toBe(1)
+    expect(JSON.stringify(words.failures)).toMatch(/but this element says .*eighteen thousand/)
+
+    // binding BEFORE the copy exists is an ordinary order of work, never refused
+    expect(
+      (
+        await s.call('edit_elements', {
+          pageId: home.id,
+          version: written.version,
+          edits: [{ ref: 'blank', bindAnimations: [{ animationId, trigger: 'load' }] }],
+        })
+      ).failed,
+    ).toBe(0)
+  })
+
   test('a staggered step and a yoyo are refused at the library', async () => {
     const s = await mcpSession()
     const track = { prop: 'count', from: 0, to: 100 }

@@ -2049,8 +2049,25 @@ Notes that matter:
 {"prop": "count", "from": 0, "to": 18000, "format": {"group": true, "suffix": "+"}}
 ```
 
-`format` is `{decimals?, group?, prefix?, suffix?}` and has to AGREE with what you
-wrote — it is how the counting frames read, and the authored text is the last one.
+`format` is `{decimals?, group?, prefix?, suffix?}` and must spell the element's text
+EXACTLY. That is not a style preference: the element's own text is read back as the
+destination, so a `format` that cannot read it silently falls through to `to` and the
+number lands on something you never wrote. `"18,000+"` needs
+`{"group": true, "suffix": "+"}`; with `{"group": true}` alone the `+` makes the text
+unreadable, and with no `group` the comma does.
+
+**One timeline serves any number of figures.** Because the destination is per element,
+bind the count ONCE on a component master and let each instance carry its own number —
+the usual way to build a row of stats:
+
+```html
+<StatCounter data-ref="s1"><div><span>12</span></div></StatCounter>
+<StatCounter data-ref="s2"><div><span>99</span></div></StatCounter>
+<StatCounter data-ref="s3"><div><span>140</span></div></StatCounter>
+```
+
+Each counts 0 → its own number. `to` is only the fallback for an element whose text
+holds no number at all.
 
 Why the text and not the track decides the final value: the export bakes an entrance's
 first frame into the markup so nothing flashes its end state before the runtime boots.
@@ -2059,10 +2076,13 @@ without JavaScript — and every visitor with reduced motion — reads forever. 
 writes the first frame instead, and never writes anything at all under `?noanim` or
 `prefers-reduced-motion`.
 
-Three refusals: it binds only to a LEAF that carries words (a container has no text of
+Four refusals: it binds only to a LEAF that carries words (a container has no text of
 its own, and the write would wipe its children); not to a field-bound element (the entry
-re-renders over it); and not in a staggered step or beside `yoyo` — the children have no
-number to count, and a number that counts back down ends on the one it started from.
+re-renders over it); not in a staggered step or beside `yoyo` — the children have no
+number to count, and a number that counts back down ends on the one it started from; and
+not where the element already says something the track's `to`/`format` cannot read back.
+`publish` warns `count-text-unreadable` for the same disagreement on an INSTANCE, which
+is the half a bind-time check cannot see.
 
 ## Sliders (carousels)
 

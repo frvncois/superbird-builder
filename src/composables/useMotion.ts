@@ -2,6 +2,7 @@ import { computed, ref } from 'vue'
 import {
   compileAnimation,
   composeMotionStyle,
+  countToFor,
   endStyle,
   foldReverseTime,
   hasInfinite,
@@ -304,7 +305,11 @@ export function useMotion() {
   /** the element-moving values of every active play targeting this node,
    * later plays winning per PROPERTY — so a marquee's x and an entrance's y
    * compose into one transform instead of overwriting each other */
-  function valuesForNode(nodeId: string, scope?: MotionScope): MotionValues | undefined {
+  function valuesForNode(
+    nodeId: string,
+    scope?: MotionScope,
+    text?: string,
+  ): MotionValues | undefined {
     void tick.value // re-evaluate every frame while something is running
     // farthest-from-range first so the scrub nearest (or inside) its active
     // range wins shared properties — the published runtime orders its frame
@@ -317,7 +322,13 @@ export function useMotion() {
     matching.sort((a, b) => (b.dist ?? 0) - (a.dist ?? 0))
     let merged: MotionValues | undefined
     for (const play of matching) {
-      const values = sampleValues(play.split.element, play.time)
+      // A `count` ends on the number THIS node's own text says, while the
+      // compiled timeline is shared by every binding and every component
+      // instance — so the destination is per element (see countToFor). The
+      // caller passes its resolved per-instance, per-locale content; the
+      // published runtime does the same from the DOM.
+      const to = text === undefined ? undefined : countToFor(play.split.element, text)
+      const values = sampleValues(play.split.element, play.time, { to })
       merged = merged ? { ...merged, ...values } : values
     }
     return merged

@@ -487,3 +487,66 @@ test.describe('dead internal links', () => {
     expect(await s.kinds()).not.toContain('dead-internal-link')
   })
 })
+
+test.describe('a count on a shared master', () => {
+  // A count counts up to the number the ELEMENT says, which is what lets one
+  // timeline on a component master drive a different figure per instance.
+  // countTargetError checks a node's OWN text at bind time; only publish knows
+  // what every INSTANCE says, and that is the half that bites — a master whose
+  // own text reads back perfectly can be overridden on every page by one that
+  // does not, and that instance silently lands on the track's `to`.
+  test("a count whose instance text it cannot read back is flagged", async () => {
+    const s = await mcpSession()
+    const made = await s.call('create_animations', {
+      items: [
+        {
+          name: 'Count up',
+          steps: [{ duration: 700, easing: 'linear', tracks: [{ prop: 'count', from: 0, to: 12 }] }],
+        },
+      ],
+    })
+    const animationId = made.created[0].id as string
+
+    // a master with no text of its own, carrying the binding
+    const comp = await s.call('create_component', {
+      name: 'StatCounter',
+      html: '<div>\n  <span />\n</div>',
+    })
+    const num = comp.nodes.find((n: { type: string }) => n.type === 'span')
+    expect(
+      (
+        await s.call('edit_elements', {
+          componentId: comp.componentId,
+          edits: [{ id: num.id, bindAnimations: [{ animationId, trigger: 'load' }] }],
+        })
+      ).failed,
+    ).toBe(0)
+
+    // two instances whose figures read back cleanly: nothing to say
+    const home = await s.home()
+    await s.call('set_page_html', {
+      pageId: home.id,
+      version: home.version,
+      html: pageHtml(
+        '<StatCounter data-ref="a"><div><span>12</span></div></StatCounter>' +
+          '<StatCounter data-ref="b"><div><span>140</span></div></StatCounter>',
+      ),
+    })
+    expect(await s.kinds()).not.toContain('count-text-unreadable')
+
+    // one instance says something the track cannot read: flagged, by instance
+    const again = await s.home()
+    await s.call('set_page_html', {
+      pageId: again.id,
+      version: again.version,
+      html: pageHtml(
+        '<StatCounter data-ref="a"><div><span>12</span></div></StatCounter>' +
+          '<StatCounter data-ref="b"><div><span>a few</span></div></StatCounter>',
+      ),
+    })
+    const warnings = (await s.call('publish')).warnings ?? []
+    const hit = warnings.find((w: { kind: string }) => w.kind === 'count-text-unreadable')
+    expect(hit, JSON.stringify(warnings.map((w: { kind: string }) => w.kind))).toBeTruthy()
+    expect(JSON.stringify(hit.where)).toContain('a few')
+  })
+})
