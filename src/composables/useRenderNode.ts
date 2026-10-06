@@ -14,6 +14,7 @@ import { resolveFieldAttrs } from '@/lib/shared/fields.js'
 import { useMotion } from './useMotion'
 import { appearRootMargin, composeMotionStyle, effectiveAppearMode } from '@/lib/motion'
 import { useProject } from './useProject'
+import { useViewMode } from './useViewMode'
 import { FRAME_BREAKPOINT } from '@/components/editor/canvas/frameScope'
 import { VARIANT_PICKS } from '@/components/editor/canvas/variantScope'
 import { entryKey } from '@/components/shared/EntryScope.vue'
@@ -99,6 +100,8 @@ export function useRenderNode(
     scopeRoots,
     registerInteractionEl,
     unregisterInteractionEl,
+    animationFor: interactionFor,
+    isAnyFired,
   } = useInteraction()
   const { masterFor } = useComponents()
   const { pages, activePage } = usePage()
@@ -767,6 +770,67 @@ export function useRenderNode(
       : targetStateKeys(node.value.id, scopeOfTarget, listensOn.value)
     return [...new Set([...triggered, ...targeted])]
   })
+
+  // --- modal behaviour on the editing surfaces ---
+  //
+  // The published runtime (server/site-runtime.js) locks page scroll, traps
+  // focus and sets aria-modal while a `modal` effect is on. Here only the
+  // FOCUS half and the aria attributes are mirrored, deliberately: the
+  // preview pane is not `window`, and locking the admin shell's scroll while
+  // an author opens their dialog would be wrong. What the author gets is the
+  // focus ring landing where a visitor's will.
+  //
+  // Play only. On the Build canvas a click fires interactions too, and
+  // stealing focus there would pull it out of whatever the author is typing in.
+  const { isPreview } = useViewMode()
+  /** the state keys landing on this node whose effect is a modal */
+  const modalKeys = computed(() => {
+    const targeted = mapping.value
+      ? scopedTargetStateKeys(
+          mapping.value.master.id,
+          mapping.value.root,
+          scopeOfTarget,
+          listensOn.value,
+        )
+      : targetStateKeys(node.value.id, scopeOfTarget, listensOn.value)
+    return targeted.filter((key) => interactionFor(key.slice(0, key.indexOf(':')))?.modal)
+  })
+  /** the attributes WE set, so closing gives back exactly what was there */
+  let modalAria: string[] = []
+  let modalOpener: HTMLElement | null = null
+  watch(
+    () => isPreview.value && modalKeys.value.length > 0 && isAnyFired(modalKeys.value),
+    (on) => {
+      const host = el.value
+      if (!host) return
+      if (on) {
+        modalOpener = document.activeElement as HTMLElement | null
+        modalAria = []
+        for (const [name, value] of [
+          ['role', 'dialog'],
+          ['aria-modal', 'true'],
+          ['tabindex', '-1'],
+        ] as const) {
+          if (host.hasAttribute(name)) continue
+          host.setAttribute(name, value)
+          modalAria.push(name)
+        }
+        // the open classes land in the same tick; focus after the paint, or
+        // the panel is still `display: none` and focus() silently does nothing
+        requestAnimationFrame(() => {
+          const first = host.querySelector<HTMLElement>(
+            'a[href],button:not([disabled]),input:not([disabled]),select,textarea,[tabindex]:not([tabindex="-1"])',
+          )
+          ;(first ?? host).focus()
+        })
+      } else {
+        for (const name of modalAria) host.removeAttribute(name)
+        modalAria = []
+        if (modalOpener && document.contains(modalOpener)) modalOpener.focus()
+        modalOpener = null
+      }
+    },
+  )
 
   /** 'scrolled' bindings: on while the page is scrolled past their threshold.
    * A window listener, so it reflects real page scroll in Preview and on the

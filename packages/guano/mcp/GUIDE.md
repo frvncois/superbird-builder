@@ -1662,6 +1662,21 @@ shows the element so you can still select and style it.
 
 with `{ref: "other", trigger: "change", targetRef: "amount"}`.
 
+### A dialog
+
+An interaction may carry `modal: true` (`create_interactions` / `update_interaction`).
+While that effect is ON, its target is a real dialog: page scroll is locked, focus moves
+into the panel and is trapped there, `role="dialog"` and `aria-modal="true"` are set, and
+all of it is given back on off — including focus to whatever opened it.
+
+Pair it with a dismissal, because the flag does not add one:
+`closeOn: ["escape", "outside"]` on the binding. Nothing else changes — it is still the
+same overlay built from classes (`hidden` → `flex`), still opened by `action: "on"` and
+closed by `action: "off"`, still joinable by as many triggers as you like.
+
+`html[data-guano-modal]` is set while any modal is open, so a backdrop blur or a
+`filter` on the page behind it is one CSS rule away.
+
 ### Site-wide overlays: channels
 
 A `targetId` names ONE element in ONE tree, so an effect inside a component can never

@@ -7,6 +7,13 @@ export interface Interaction {
   toClasses: string
   duration: string // e.g. 'duration-300'
   easing: string // e.g. 'ease-out'
+  /** while this effect is ON its target is a MODAL: page scroll locked, focus
+   * moved in and trapped, `role="dialog"` + `aria-modal="true"` set, and all of
+   * it reversed on OFF including focus back to whatever opened it. Pair it with
+   * `closeOn: ['escape', 'outside']` — the flag adds the behaviours a native
+   * <dialog> would give, to the overlay-built-from-classes model every project
+   * already uses. */
+  modal?: boolean
 }
 
 /** an element applying a saved interaction — the "when/where" (trigger +

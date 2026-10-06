@@ -761,6 +761,9 @@ function attrsFor(node, ctx, bg, { wrapLink = true, extraClass = '' } = {}) {
       // arbitrary winner (hidden beats flex, so menu toggles never opened)
       const rm = conflictingBaseClasses(baseTokens, to)
       if (rm.length) ctx.fxrm[key] = rm.join(' ')
+      // the modal flag belongs to the EFFECT, like closeOn and the group, so
+      // it is recorded per state key whichever binding declares it
+      if (ctx.anim.get(i.interactionId)?.modal) ctx.fxModal[key] = 1
     }
     attrs.push(`data-tgt="${escapeHtml(targetKeys.join(' '))}"`)
   }
@@ -1353,6 +1356,9 @@ function renderPage(route, project, media, channels) {
     fxbpAll: new Set(),
     // state key → base classes removed from its target while fired
     fxrm: {},
+    // state keys whose effect is a MODAL: while one is on, the runtime locks
+    // page scroll, traps focus in the target and sets aria-modal
+    fxModal: {},
     // sliders rendered on this route — a Set so it survives the `{...ctx}`
     // spread every nested scope makes (same reason fx/animUsed are objects)
     sliderIds: new Set(),
@@ -1432,6 +1438,9 @@ function renderPage(route, project, media, channels) {
     ? jsonTag('int-bp', (project.breakpoints ?? []).map((b) => ({ id: b.id, w: b.width })))
     : ''
   const fxbpTag = Object.keys(ctx.fxbp).length ? jsonTag('int-fxbp', ctx.fxbp) : ''
+  const modalTag = Object.keys(ctx.fxModal).length
+    ? jsonTag('int-modal', Object.keys(ctx.fxModal))
+    : ''
   // only the timelines this route actually plays — an unused library entry
   // never reaches the wire
   // smooth scroll alone carries no timelines, and still needs the runtime
@@ -1447,7 +1456,7 @@ function renderPage(route, project, media, channels) {
   // the slider runtime ships only on routes that actually carry one
   const sliderTag = ctx.sliderIds.size ? '<script src="/assets/slider.js" defer></script>' : ''
   const tail =
-    (needsRuntime || hasAnimations ? `${fxTag}${rmTag}${bpTag}${fxbpTag}` : '') +
+    (needsRuntime || hasAnimations ? `${fxTag}${rmTag}${bpTag}${fxbpTag}${modalTag}` : '') +
     (needsRuntime ? '<script src="/assets/script.js" defer></script>' : '') +
     animTag +
     sliderTag

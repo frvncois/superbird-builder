@@ -40,6 +40,20 @@
   var rmEl = document.getElementById('int-fxrm')
   var fxrm = rmEl ? JSON.parse(rmEl.textContent || '{}') : {}
 
+  // state keys whose effect is a MODAL: while one is on, page scroll is locked,
+  // focus is moved into the target and trapped there, and aria-modal is set.
+  // Built from classes like every other overlay — a native <dialog> renders
+  // nothing until opened, centres itself against the `fixed inset-0 flex`
+  // classes every existing overlay is made of, and would need the exclusive
+  // group / closeOn model all over again.
+  var modalEl = document.getElementById('int-modal')
+  var modalKeys = {}
+  if (modalEl) {
+    JSON.parse(modalEl.textContent || '[]').forEach(function (k) {
+      modalKeys[k] = 1
+    })
+  }
+
   // current breakpoint id for the viewport (mirrors breakpointIdForWidth in
   // src/lib/responsive.ts): tightest bp still covering this width, else widest
   var curBp = ''
@@ -172,6 +186,133 @@
     }
   }
 
+  // ---------- modal behaviour ----------
+
+  var FOCUSABLE =
+    'a[href],area[href],button:not([disabled]),input:not([disabled]):not([type=hidden]),' +
+    'select:not([disabled]),textarea:not([disabled]),iframe,object,embed,' +
+    '[contenteditable],[tabindex]:not([tabindex="-1"])'
+  var openModals = []            // state keys, most recent LAST
+  var openerFor = {}             // state key → the element focus returns to
+  var addedAria = {}             // state key → the attributes WE set, to undo
+  var htmlStyle = null           // the inline overflow/paddingRight we replaced
+  var trapInstalled = false
+
+  var modalTargets = function (key) {
+    var els = []
+    targets.forEach(function (t) {
+      if (t.keys.indexOf(key) !== -1) els.push(t.el)
+    })
+    return els
+  }
+  var focusablesIn = function (el) {
+    var out = []
+    el.querySelectorAll(FOCUSABLE).forEach(function (n) {
+      if (n.offsetWidth || n.offsetHeight || n.getClientRects().length) out.push(n)
+    })
+    return out
+  }
+  var installTrap = function () {
+    if (trapInstalled) return
+    trapInstalled = true
+    // ONE capture-phase listener for every modal: Tab cycles inside the
+    // topmost open one, so a background link can never be reached
+    document.addEventListener(
+      'keydown',
+      function (e) {
+        if (e.key !== 'Tab' || !openModals.length) return
+        var el = modalTargets(openModals[openModals.length - 1])[0]
+        if (!el) return
+        var items = focusablesIn(el)
+        if (!items.length) {
+          e.preventDefault()
+          return
+        }
+        var first = items[0]
+        var last = items[items.length - 1]
+        if (!el.contains(document.activeElement)) {
+          e.preventDefault()
+          first.focus()
+        } else if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault()
+          last.focus()
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault()
+          first.focus()
+        }
+      },
+      true,
+    )
+  }
+  var lockScroll = function () {
+    var h = document.documentElement
+    if (htmlStyle === null) {
+      htmlStyle = { overflow: h.style.overflow, paddingRight: h.style.paddingRight }
+      // the scrollbar's width, paid back as padding so the layout does not jump
+      var gap = window.innerWidth - h.clientWidth
+      h.style.overflow = 'hidden'
+      if (gap > 0) h.style.paddingRight = gap + 'px'
+    }
+    // the attribute is both the state the motion runtime's wheel handler reads
+    // (its inertia scroller writes window.scrollTo, so overflow:hidden alone
+    // leaves the page moving under the panel) and a CSS hook for authors
+    h.setAttribute('data-guano-modal', '')
+  }
+  var unlockScroll = function () {
+    var h = document.documentElement
+    if (htmlStyle) {
+      h.style.overflow = htmlStyle.overflow
+      h.style.paddingRight = htmlStyle.paddingRight
+      htmlStyle = null
+    }
+    h.removeAttribute('data-guano-modal')
+  }
+  var openModal = function (key) {
+    if (openModals.indexOf(key) !== -1) return
+    openModals.push(key)
+    openerFor[key] = document.activeElement
+    lockScroll()
+    installTrap()
+    var el = modalTargets(key)[0]
+    if (!el) return
+    var added = []
+    if (!el.getAttribute('role')) {
+      el.setAttribute('role', 'dialog')
+      added.push('role')
+    }
+    if (!el.getAttribute('aria-modal')) {
+      el.setAttribute('aria-modal', 'true')
+      added.push('aria-modal')
+    }
+    if (!el.hasAttribute('tabindex')) {
+      el.setAttribute('tabindex', '-1')
+      added.push('tabindex')
+    }
+    addedAria[key] = added
+    // the classes land in the same frame; focus after it so the panel is
+    // laid out and its first control is really focusable
+    requestAnimationFrame(function () {
+      var items = focusablesIn(el)
+      ;(items[0] || el).focus()
+    })
+  }
+  var closeModal = function (key) {
+    var at = openModals.indexOf(key)
+    if (at === -1) return
+    openModals.splice(at, 1)
+    var el = modalTargets(key)[0]
+    if (el && addedAria[key]) {
+      addedAria[key].forEach(function (name) {
+        el.removeAttribute(name)
+      })
+    }
+    delete addedAria[key]
+    var opener = openerFor[key]
+    delete openerFor[key]
+    if (!openModals.length) unlockScroll()
+    if (opener && document.contains(opener) && typeof opener.focus === 'function') opener.focus()
+  }
+
   var set = function (key, on) {
     // bookkeeping runs even when the state is unchanged (a second trigger
     // pointing at an already-open effect still has to register its dismissal
@@ -188,6 +329,7 @@
           // exclusive group: close whatever else is open in it
           fired.delete(open)
           delete dismissable[open]
+          if (modalKeys[open]) closeModal(open)
         }
         openGroups[group] = key
       } else if (openGroups[group] === key) {
@@ -207,6 +349,12 @@
 
     if (onceFor[key] && changed) remember(onceFor[key], key, on)
     if (changed) apply()
+    // AFTER apply(), so the panel already wears its open classes when focus
+    // moves into it — focusing a `display: none` element silently does nothing
+    if (modalKeys[key]) {
+      if (on) openModal(key)
+      else closeModal(key)
+    }
   }
 
   // --- outside-click / Escape dismissal: one pair of capture-phase listeners,
@@ -219,6 +367,9 @@
     if (group && openGroups[group] === key) delete openGroups[group]
     if (onceFor[key]) remember(onceFor[key], key, false)
     apply()
+    // a dismissal is a close: Escape and an outside click have to give the
+    // scroll lock, the aria attributes and the focus back too
+    if (modalKeys[key]) closeModal(key)
   }
   var installDismiss = function () {
     if (dismissInstalled) return

@@ -675,6 +675,12 @@ if (Object.keys(lib).length || siteFx) {
       'wheel',
       (event) => {
         if (event.ctrlKey) return // pinch-zoom
+        // A MODAL is open (site-runtime.js set the flag on <html>): stand down
+        // and let the browser handle the wheel. `overflow: hidden` on <html>
+        // does not stop this scroller — it writes window.scrollTo directly, so
+        // the page kept moving under the panel. Standing down means the lock
+        // really locks and the panel's own scroller scrolls natively.
+        if (document.documentElement.hasAttribute('data-guano-modal')) return
         if (insideNestedScroller(event.target as Element | null, document.body, event.deltaY)) return
         event.preventDefault()
         scroller.wheel(wheelDeltaPx(event.deltaY, event.deltaMode, window.innerHeight))

@@ -584,3 +584,161 @@ test.describe('interactions', () => {
     expect(/<a[^>]*a\.pdf[^>]*\sdownload[ >]/.test(html)).toBe(true)
   })
 })
+
+// ---------------------------------------------------------------------------
+// The `modal` flag on an interaction: while the effect is on, its target IS a
+// dialog — page scroll locked, focus moved in and trapped, aria-modal set, all
+// of it given back on off.
+//
+// Not a native <dialog>: that renders nothing until opened, its user-agent
+// centring fights the `fixed inset-0 flex items-center` classes every existing
+// overlay is built from, the Build canvas would have to force it open, and the
+// exclusive-group / closeOn model would exist twice. The flag adds the missing
+// behaviours to the model every project already uses.
+//
+// The load-bearing half is the HANDSHAKE with the motion runtime: its inertia
+// scroller hijacks the wheel and writes window.scrollTo, so `overflow: hidden`
+// alone left the page moving under the panel. Smooth scroll is ON in this
+// fixture precisely so that path is exercised.
+
+const DIALOG = 'i-dialog'
+
+function modalFixture() {
+  return {
+    pages: [
+      {
+        id: 'p1',
+        name: 'Home',
+        path: '/',
+        status: 'published',
+        elements: [
+          node('body', 'body', {
+            children: [
+              node('mdOpen', 'button', {
+                htmlId: 'md-open',
+                children: [node('mdOpenTxt', 'span', { content: 'Open' })],
+                interactions: [
+                  { id: 'mb1', interactionId: DIALOG, trigger: 'click', targetId: 'mdPanel', action: 'on' },
+                ],
+              }),
+              node('mdPanel', 'div', {
+                htmlId: 'md-panel',
+                classes: 'fixed top-0 left-0 w-64 h-64 hidden flex-col',
+                children: [
+                  node('mdFirst', 'button', {
+                    htmlId: 'md-first',
+                    children: [node('mdFirstTxt', 'span', { content: 'First' })],
+                  }),
+                  node('mdClose', 'button', {
+                    htmlId: 'md-close',
+                    children: [node('mdCloseTxt', 'span', { content: 'Close' })],
+                    interactions: [
+                      {
+                        id: 'mb2',
+                        interactionId: DIALOG,
+                        trigger: 'click',
+                        targetId: 'mdPanel',
+                        action: 'off',
+                        closeOn: ['escape'],
+                      },
+                    ],
+                  }),
+                ],
+              }),
+              node('mdTall', 'div', { htmlId: 'md-tall', classes: 'h-[300vh]' }),
+            ],
+          }),
+        ],
+      },
+    ],
+    components: [],
+    collections: [],
+    interactions: [
+      {
+        id: DIALOG,
+        name: 'Dialog',
+        toClasses: 'flex',
+        duration: 'duration-200',
+        easing: 'ease-out',
+        modal: true,
+      },
+    ],
+    animations: [],
+    breakpoints: [],
+    comments: [],
+    locales: ['en'],
+    defaultLocale: 'en',
+    settings: {
+      publishing: { method: 'server', github: { repo: '', branch: '' } },
+      seo: { siteName: 'T', titleTemplate: '%s', description: '' },
+      domain: '',
+      smtp: {},
+      integrations: { stripe: {}, mailing: {} },
+      tokens: [],
+      customCode: { head: '' },
+      fonts: { family: 'sans' },
+      // the inertia scroller, so the wheel handshake is under test
+      motion: { scroll: { enabled: true, lerp: 0.12 } },
+    },
+  }
+}
+
+test.describe('a modal interaction', () => {
+  test.beforeAll(async () => {
+    await exportSite(modalFixture(), SITE)
+  })
+
+  test('the flag reaches the wire as its own tag', async () => {
+    const html = await readFile(join(SITE, 'index.html'), 'utf8')
+    const keys = JSON.parse(/id="int-modal"[^>]*>([^<]*)</.exec(html)![1]!)
+    expect(keys).toEqual([`${DIALOG}:mdPanel`])
+    // and the inertia scroller really is on this route
+    expect(html).toContain('/assets/motion.js')
+  })
+
+  test('opening locks the page, traps focus, and closing gives all of it back', async ({ page }) => {
+    await page.goto('/')
+    const htmlAttr = () => page.evaluate(() => document.documentElement.hasAttribute('data-guano-modal'))
+    const scrollY = () => page.evaluate(() => window.scrollY)
+
+    expect(await htmlAttr()).toBe(false)
+    await page.click('#md-open')
+    expect(await htmlAttr()).toBe(true)
+    expect(await classesOf(page, 'md-panel')).toContain('flex')
+
+    // aria, set by the runtime because the author did not
+    expect(await page.locator('#md-panel').getAttribute('role')).toBe('dialog')
+    expect(await page.locator('#md-panel').getAttribute('aria-modal')).toBe('true')
+
+    // focus landed on the first control inside the panel (after a frame)
+    await expect.poll(() => page.evaluate(() => document.activeElement?.id)).toBe('md-first')
+
+    // THE handshake: the wheel reaches the inertia scroller, which stands down
+    // because the lock is on, and `overflow: hidden` then stops the browser's
+    // own scroll. Without it the scroller wrote window.scrollTo and the page
+    // moved under the panel. A WHEEL, not scrollBy: `overflow: hidden` hides
+    // the scrollbars and blocks user input, while programmatic scrolling still
+    // works by design — so scrollBy would prove nothing either way.
+    await page.mouse.move(200, 200)
+    await page.mouse.wheel(0, 400)
+    await page.waitForTimeout(300)
+    expect(await scrollY()).toBe(0)
+
+    // Tab from the last focusable wraps to the first
+    await page.locator('#md-close').focus()
+    await page.keyboard.press('Tab')
+    await expect.poll(() => page.evaluate(() => document.activeElement?.id)).toBe('md-first')
+
+    // Escape: the dismissal is a close, so everything is given back
+    await page.keyboard.press('Escape')
+    expect(await htmlAttr()).toBe(false)
+    expect(await classesOf(page, 'md-panel')).toContain('hidden')
+    expect(await page.locator('#md-panel').getAttribute('aria-modal')).toBe(null)
+    expect(await page.locator('#md-panel').getAttribute('role')).toBe(null)
+    await expect.poll(() => page.evaluate(() => document.activeElement?.id)).toBe('md-open')
+
+    // …and the wheel scrolls the page again, through the inertia scroller
+    await page.mouse.wheel(0, 400)
+    await expect.poll(scrollY).toBeGreaterThan(0)
+  })
+})

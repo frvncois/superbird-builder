@@ -3368,6 +3368,7 @@ const interactionView = (it) => ({
   toClasses: it.toClasses,
   duration: it.duration,
   easing: it.easing,
+  ...(it.modal ? { modal: true } : {}),
 })
 
 /** the parent of a page node, or null for the body */
@@ -8506,6 +8507,11 @@ const tools = [
               toClasses: { type: 'string', description: 'space-separated Tailwind classes' },
               duration: { type: 'string', description: "e.g. 'duration-300' (default)" },
               easing: { type: 'string', description: "e.g. 'ease-out' (default)" },
+              modal: {
+                type: 'boolean',
+                description:
+                  'while on, the target is a dialog: scroll locked, focus trapped, aria-modal set',
+              },
             },
             required: ['name', 'toClasses'],
             additionalProperties: false,
@@ -8540,6 +8546,9 @@ const tools = [
           toClasses: String(item.toClasses ?? '').trim(),
           duration: String(item.duration ?? '').trim() || 'duration-300',
           easing: String(item.easing ?? '').trim() || 'ease-out',
+          // omitted when false, so an ordinary effect stays byte-identical
+          // for the merge signature
+          ...(item.modal ? { modal: true } : {}),
         }
         pending.push(interaction)
         created.push(interactionView(interaction))
@@ -8572,6 +8581,11 @@ const tools = [
         toClasses: { type: 'string', description: 'space-separated Tailwind classes (replaces the set)' },
         duration: { type: 'string', description: "e.g. 'duration-300'" },
         easing: { type: 'string', description: "e.g. 'ease-out'" },
+        modal: {
+          type: 'boolean',
+          description:
+            'while on, the target is a dialog: scroll locked, focus trapped, aria-modal set',
+        },
       },
       required: ['interactionId'],
       additionalProperties: false,
@@ -8599,6 +8613,10 @@ const tools = [
         interaction.duration = String(args.duration).trim() || 'duration-300'
       }
       if (args.easing !== undefined) interaction.easing = String(args.easing).trim() || 'ease-out'
+      if (args.modal !== undefined) {
+        if (args.modal) interaction.modal = true
+        else delete interaction.modal
+      }
       await saveTargetProject(project)
       return { saved: true, interaction: interactionView(interaction) }
     },

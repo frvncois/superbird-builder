@@ -423,6 +423,12 @@ export function useInteraction() {
     )
   }
 
+  /** is any of these state keys currently on? Reactive — reads the shared
+   *  `fired` set, so a watcher on it sees every open and close. */
+  function isAnyFired(keys: string[]): boolean {
+    return keys.some((key) => fired.value.has(key))
+  }
+
   /** true when a binding's effect is currently on */
   function isBindingOn(binding: InteractionBinding, ownerId: string, scope?: string): boolean {
     return fired.value.has(bindingStateKey(binding, ownerId, scope))
@@ -615,6 +621,7 @@ export function useInteraction() {
     scopeRoots,
     bindingStateKey,
     isBindingOn,
+    isAnyFired,
     applyBinding,
     registerInteractionEl,
     unregisterInteractionEl,

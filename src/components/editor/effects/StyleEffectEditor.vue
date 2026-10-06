@@ -6,6 +6,7 @@
 // the whole project graph, so a held object would detach silently.
 import { computed } from 'vue'
 import SelectUI from '@/components/ui/SelectUI.vue'
+import ButtonUI from '@/components/ui/ButtonUI.vue'
 import ClassFieldInput from '@/components/editor/style/ClassFieldInput.vue'
 import { useInteraction } from '@/composables/useInteraction'
 
@@ -66,5 +67,18 @@ const durationOptions = computed(() => {
         @update:model-value="(v) => v && (effect!.easing = v)"
       />
     </div>
+    <!-- while this effect is on, its target is a dialog: page scroll locked,
+         focus moved in and trapped, aria-modal set, all of it given back on
+         off. Pair it with a dismissal (Escape / click outside). -->
+    <ButtonUI
+      variant="outline"
+      size="sm"
+      class="shrink-0"
+      tooltip="Lock scroll and trap focus while this is on"
+      :class="effect.modal && 'bg-accent text-accent-foreground'"
+      @click="effect!.modal = effect!.modal ? undefined : true"
+    >
+      Modal
+    </ButtonUI>
   </div>
 </template>
