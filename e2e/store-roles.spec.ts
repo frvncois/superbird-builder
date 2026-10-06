@@ -77,11 +77,123 @@ test('contributor store permissions: PUT unchanged ok, sensitive PUT and DELETE 
     string
   >
   expect(after[PROJECT_KEY]).toBeTruthy()
-  res = await admin.put('/api/store/scratch-role-spec', { data: '{"x":1}' })
+  // a draft key, because the store now refuses a key outside the product's
+  // own set — see 'the draft index is not a way to take over someone's draft'
+  res = await admin.put('/api/store/guano-project:scratch-role-spec', { data: '{"pages":[]}' })
   expect(res.ok()).toBeTruthy()
-  res = await admin.delete('/api/store/scratch-role-spec')
+  res = await admin.delete('/api/store/guano-project:scratch-role-spec')
   expect(res.status()).toBe(200)
 
+  // and an invented key is refused for an admin too
+  expect((await admin.put('/api/store/scratch-role-spec', { data: '{"x":1}' })).status()).toBe(400)
+
+  await admin.dispose()
+  await contribCtx.dispose()
+})
+
+/**
+ * The draft index is not a way to take over someone else's draft.
+ *
+ * `ownsDraft` — the gate on DELETE — reads `createdBy` out of the
+ * `guano-branches` blob. That blob was not a project key, so the store's
+ * server-authoritative content merge did not apply to it and a contributor's
+ * PUT was written verbatim. So the sequence below used to work end to end:
+ * rewrite the index with your own id stamped on an admin's draft, then delete
+ * the draft. The refusal is named rather than silently reverted, because a
+ * silent revert reads as success and nobody learns something tried.
+ */
+test("the draft index is not a way to take over someone's draft", async ({ baseURL }) => {
+  const admin = await pwRequest.newContext({ baseURL })
+  let res = await login(admin, ADMIN)
+  if (!res.ok()) {
+    res = await admin.post('/api/auth/setup', { data: { ...ADMIN, name: 'Smoke Co' } })
+    expect(res.ok()).toBeTruthy()
+  }
+
+  const contribCtx = await pwRequest.newContext({ baseURL })
+  if (!(await login(contribCtx, CONTRIB)).ok()) {
+    const invite = await admin.post('/api/users/invite', {
+      data: { email: CONTRIB.email, role: 'contributor' },
+    })
+    expect(invite.ok()).toBeTruthy()
+    const { token } = (await invite.json()) as { token: string }
+    expect(
+      (
+        await contribCtx.post(`/api/invite/${token}/accept`, {
+          data: { name: 'Contrib', password: CONTRIB.password },
+        })
+      ).ok(),
+    ).toBeTruthy()
+  }
+
+  const me = (await (await admin.get('/api/auth/me')).json()) as { id: string }
+  const KEY = 'guano-branches'
+  const DRAFT = 'guano-project:admins-draft'
+
+  // an admin's draft, stamped with the admin's id, and a real blob behind it
+  expect((await admin.put(`/api/store/${DRAFT}`, { data: '{"pages":[]}' })).ok()).toBeTruthy()
+  const index = {
+    activeId: 'main',
+    branches: [
+      { id: 'admins-draft', name: "Admin's draft", createdAt: Date.now(), createdBy: me.id },
+    ],
+  }
+  expect((await admin.put(`/api/store/${KEY}`, { data: JSON.stringify(index) })).ok()).toBeTruthy()
+
+  // the contributor cannot restamp it...
+  const stolen = {
+    activeId: 'main',
+    branches: [{ ...index.branches[0]!, createdBy: 'me-now' }],
+  }
+  let bad = await contribCtx.put(`/api/store/${KEY}`, { data: JSON.stringify(stolen) })
+  expect(bad.status()).toBe(403)
+  expect(await bad.text()).toContain("do not own")
+
+  // ...nor drop it from the index
+  bad = await contribCtx.put(`/api/store/${KEY}`, {
+    data: JSON.stringify({ activeId: 'main', branches: [] }),
+  })
+  expect(bad.status()).toBe(403)
+
+  // ...nor rename it
+  bad = await contribCtx.put(`/api/store/${KEY}`, {
+    data: JSON.stringify({ activeId: 'main', branches: [{ ...index.branches[0]!, name: 'Mine' }] }),
+  })
+  expect(bad.status()).toBe(403)
+
+  // so the draft is still the admin's, and still undeletable by them
+  expect((await contribCtx.delete(`/api/store/${DRAFT}`)).status()).toBe(403)
+
+  // what they CAN do: add their own draft, which is stamped as theirs
+  // whatever the body claims
+  const own = {
+    activeId: 'main',
+    branches: [
+      index.branches[0]!,
+      { id: 'contrib-draft', name: 'Mine', createdAt: Date.now(), createdBy: 'not-me' },
+    ],
+  }
+  expect((await contribCtx.put(`/api/store/${KEY}`, { data: JSON.stringify(own) })).ok()).toBeTruthy()
+  const back = JSON.parse(
+    ((await (await admin.get(`/api/store?keys=${KEY}`)).json()) as Record<string, string>)[KEY]!,
+  )
+  const mine = back.branches.find((b: any) => b.id === 'contrib-draft')
+  expect(mine.createdBy).not.toBe('not-me')
+  expect(back.branches.find((b: any) => b.id === 'admins-draft').createdBy).toBe(me.id)
+
+  // and discard the one they own. The draft blob is a snapshot of Main, which
+  // is what createBranch sends — a contributor's project write goes through
+  // the content merge, so an empty blob is not a draft they could have made.
+  const main = ((await (await admin.get(`/api/store?keys=${PROJECT_KEY}`)).json()) as Record<
+    string,
+    string
+  >)[PROJECT_KEY]!
+  expect(
+    (await contribCtx.put('/api/store/guano-project:contrib-draft', { data: main })).ok(),
+  ).toBeTruthy()
+  expect((await contribCtx.delete('/api/store/guano-project:contrib-draft')).status()).toBe(200)
+
+  await admin.delete(`/api/store/${DRAFT}`)
   await admin.dispose()
   await contribCtx.dispose()
 })

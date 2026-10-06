@@ -42,7 +42,11 @@ import {
 } from './media.mjs'
 import { pushSiteToGitHub } from './github.mjs'
 import { createZip, readZip } from './zip.mjs'
-import { mergeContributorProject, redactSecretsForContributor } from './contributor-merge.mjs'
+import {
+  mergeBranchesMeta,
+  mergeContributorProject,
+  redactSecretsForContributor,
+} from './contributor-merge.mjs'
 import { protectedFieldDelta, readAgentPolicy, writeAgentPolicy } from './agent-policy.mjs'
 import {
   createIntegration,
@@ -875,6 +879,28 @@ async function readFileOrNull(path) {
 
 const isProjectKey = (key) => key.startsWith('guano-project:')
 const MAIN_PROJECT_KEY = 'guano-project:main'
+const BRANCHES_META_KEY = 'guano-branches'
+
+/**
+ * The keys the product actually uses — an allowlist for WRITES.
+ *
+ * STORE_KEY_RE constrains the characters, not the name, so any well-formed
+ * name could be created and written verbatim. That is how a contributor
+ * reached `guano-branches`: the content merge ran only for project blob keys,
+ * and everything else went straight to disk. Unknown keys are now refused for
+ * every role, so there is no corner of the store outside the schema left for a
+ * writer to park authorization data in.
+ *
+ * Reads are deliberately NOT restricted: a GET of a key that does not exist
+ * already answers with nothing.
+ */
+const KNOWN_STORE_KEYS = new Set([
+  BRANCHES_META_KEY,
+  'guano-published-baseline',
+  'guano-published-info',
+])
+const isKnownStoreKey = (key) =>
+  KNOWN_STORE_KEYS.has(key) || isProjectKey(key) || key.startsWith('guano-base:')
 // A `guano-base:<id>` merge-base snapshot is a FULL project copy — same
 // settings, same secrets, and the structural truth the 3-way merge diffs
 // against. So it needs the same two guards as a project key: redact secrets on
@@ -1099,6 +1125,7 @@ async function handleStore(req, res, path, query) {
 
   const key = decodeURIComponent(path.slice('/api/store/'.length))
   if (!STORE_KEY_RE.test(key)) return fail(res, 400, 'invalid key')
+  if (!isKnownStoreKey(key)) return fail(res, 400, 'unknown key')
 
   if (req.method === 'PUT') {
     const limit = storeWriteAllowed(user.id)
@@ -1151,7 +1178,14 @@ async function handleStore(req, res, path, query) {
       }
 
       let toWrite = body
-      if (user.role === 'contributor' && isProjectBlobKey(key)) {
+      if (user.role === 'contributor' && key === BRANCHES_META_KEY) {
+        // the draft index carries the ownership stamp that gates DELETE, so a
+        // contributor's write to it goes through the same kind of
+        // server-authoritative merge their project writes do
+        const r = mergeBranchesMeta(existing, body, user.id)
+        if (r.error) return fail(res, 403, r.error)
+        toWrite = r.merged
+      } else if (user.role === 'contributor' && isProjectBlobKey(key)) {
         // server-authoritative merge: structure/settings come from the stored
         // copy (or Main for a new draft), only the content allowlist from the
         // contributor's blob — a hand-crafted structural edit is silently dropped
@@ -1167,30 +1201,37 @@ async function handleStore(req, res, path, query) {
     })
   }
   if (req.method === 'DELETE') {
-    // contributors may discard their own drafts — the branch project copy and
-    // its merge-base snapshot — but never the live project (Main) or any other
-    // stored blob (that would be destruction, not editing).
-    if (user.role === 'contributor') {
-      const isDraftKey =
-        (isProjectKey(key) && key !== MAIN_PROJECT_KEY) ||
-        (key.startsWith('guano-base:') && key !== 'guano-base:main')
-      if (!isDraftKey) return fail(res, 403, 'contributors cannot delete stored data')
-      if (!(await ownsDraft(user, key))) {
-        return fail(res, 403, 'contributors can only discard their own drafts')
-      }
-    }
-    // Main is the live project and its history is in-memory client-side only,
-    // so an agent deleting it is unrecoverable — hold it to the same switch
-    // that gates agent writes to Main.
-    if (isAgentRequest(req) && (key === MAIN_PROJECT_KEY || key === 'guano-base:main')) {
-      const policy = await readAgentPolicy()
-      if (!policy.allowMainWrites) return fail(res, 403, AGENT_MAIN_DENIED)
-    }
-    await rm(storeFile(key), { force: true })
-    storeSize.at = 0 // force a recount rather than tracking the freed bytes
-    return send(res, 200, JSON.stringify({ ok: true }))
+    // Inside the same per-key lock as the PUT: this reads the ownership stamp
+    // and then removes a file, and a write landing in that window would be
+    // decided against bytes that are about to go.
+    return withStoreKeyLock(key, () => deleteStoreKey(req, res, user, key))
   }
   return fail(res, 404, 'not found')
+}
+
+async function deleteStoreKey(req, res, user, key) {
+  // contributors may discard their own drafts — the branch project copy and
+  // its merge-base snapshot — but never the live project (Main) or any other
+  // stored blob (that would be destruction, not editing).
+  if (user.role === 'contributor') {
+    const isDraftKey =
+      (isProjectKey(key) && key !== MAIN_PROJECT_KEY) ||
+      (key.startsWith('guano-base:') && key !== 'guano-base:main')
+    if (!isDraftKey) return fail(res, 403, 'contributors cannot delete stored data')
+    if (!(await ownsDraft(user, key))) {
+      return fail(res, 403, 'contributors can only discard their own drafts')
+    }
+  }
+  // Main is the live project and its history is in-memory client-side only,
+  // so an agent deleting it is unrecoverable — hold it to the same switch
+  // that gates agent writes to Main.
+  if (isAgentRequest(req) && (key === MAIN_PROJECT_KEY || key === 'guano-base:main')) {
+    const policy = await readAgentPolicy()
+    if (!policy.allowMainWrites) return fail(res, 403, AGENT_MAIN_DENIED)
+  }
+  await rm(storeFile(key), { force: true })
+  storeSize.at = 0 // force a recount rather than tracking the freed bytes
+  return send(res, 200, JSON.stringify({ ok: true }))
 }
 
 /**

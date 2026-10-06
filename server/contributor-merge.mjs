@@ -290,3 +290,59 @@ export function redactSecretsForContributor(str) {
   }
   return JSON.stringify(project)
 }
+
+/**
+ * Server-authoritative merge for the DRAFT INDEX (`guano-branches`) on a
+ * contributor write.
+ *
+ * Why this exists. The store's PUT path ran the content merge only for project
+ * blob keys; every other key was written verbatim. `guano-branches` is the
+ * blob that records who created each draft, and `ownsDraft` — the gate on
+ * DELETE — trusts it. So a contributor could PUT that index with their own id
+ * stamped on somebody else's draft and then delete it. The index is UI state
+ * with an authorization field inside it, which is the whole problem.
+ *
+ * The rule here mirrors `ownsDraft` exactly, including its legacy case: an
+ * entry with no `createdBy` predates ownership tracking and stays shared, so
+ * an upgrade does not strand anyone's work. An entry owned by someone else is
+ * protected — it must come back unchanged, and an attempt to alter or drop it
+ * is REFUSED BY NAME rather than quietly reverted, because a silent revert
+ * reads as success and nobody learns something tried.
+ *
+ * `createdBy` on anything incoming is forced to the writer, so a contributor
+ * cannot plant another person's id on a draft they are creating.
+ *
+ * Returns `{ merged }` or `{ error }`.
+ */
+export function mergeBranchesMeta(storedStr, incomingStr, userId) {
+  const incoming = parseOrNull(incomingStr)
+  if (!incoming || typeof incoming !== 'object' || !Array.isArray(incoming.branches)) {
+    return { error: 'invalid draft index' }
+  }
+  const stored = parseOrNull(storedStr)
+  const storedBranches = Array.isArray(stored?.branches) ? stored.branches : []
+
+  // owned by someone else = protected. No createdBy = legacy, shared.
+  const guarded = new Map(
+    storedBranches
+      .filter((b) => b?.id && b.createdBy && b.createdBy !== userId)
+      .map((b) => [b.id, b]),
+  )
+  const incomingById = new Map(incoming.branches.filter((b) => b?.id).map((b) => [b.id, b]))
+
+  for (const [id, mine] of guarded) {
+    const theirs = incomingById.get(id)
+    if (!theirs) {
+      return { error: `cannot discard a draft you do not own (${mine.name || id})` }
+    }
+    if (JSON.stringify(theirs) !== JSON.stringify(mine)) {
+      return { error: `cannot change a draft you do not own (${mine.name || id})` }
+    }
+  }
+
+  const branches = incoming.branches
+    .filter((b) => b?.id)
+    .map((b) => (guarded.has(b.id) ? guarded.get(b.id) : { ...b, createdBy: userId }))
+
+  return { merged: JSON.stringify({ activeId: incoming.activeId ?? 'main', branches }) }
+}
