@@ -24,7 +24,7 @@ import {
   resolveFieldAttrs,
 } from '../src/lib/shared/fields.js'
 import {
-  mergeAttributeLayers,
+  resolveNodeAttributes,
   sanitizeAttributes,
   serializeAttribute,
   splitLinkAttributes,
@@ -165,12 +165,13 @@ const nodeContent = (node, locale, def) =>
 const nodeSrc = (node, locale, def) => (locale !== def && node.locales?.[locale]?.src) || node.src
 
 /** the ATTRIBUTES a node renders on this route: the master's (shared, like
- * classes), this placement's own overrides, then the locale's text overrides.
- * Mirrors useRenderNode's customAttrs through the same shared helper. */
+ * classes), each host mirror's say about the instance it holds, this
+ * placement's own overrides, then the locale's text overrides. Mirrors
+ * useRenderNode's customAttrs through the same shared helper. */
 const nodeAttributes = (node, mapping, locale, def) =>
-  mergeAttributeLayers(
-    (mapping ? mapping.master : node).attributes,
-    node.instanceAttributes,
+  resolveNodeAttributes(
+    node,
+    mapping,
     locale !== def ? node.locales?.[locale]?.attributes : undefined,
   )
 
@@ -983,6 +984,24 @@ function renderNode(node, ctx) {
       // without passing any writer, and an unchecked `action` is a `javascript:`
       // URL away from script on the published origin.
       formAttrs = ` method="post" action="${escapeHtml(config.externalAction)}"`
+    } else {
+      // A form that is neither enabled nor pointed at a third party sends
+      // NOWHERE — and nowhere has to be made true, not merely left unwired.
+      // A bare <form> still submits natively: Enter in a text field, or any
+      // <button> without a type, makes the browser GET the CURRENT url with
+      // every named control in the query string. On the questionnaire this was
+      // written for, that is the answers in the address bar, in history and in
+      // the host's access logs, which for a health intake is the one outcome
+      // nobody asked for. The handbook called this shape safe.
+      //
+      // `method="dialog"` is the fix that needs no script: per the HTML
+      // standard, submitting a dialog-method form with no <dialog> ancestor
+      // abandons the submission — after constraint validation, so the browser
+      // still shows "please fill in this field". `data-form-inert` is the
+      // runtime's own mark (a reserved name, so an author cannot set it), and
+      // it is deliberately NOT a reason to ship the runtime: the attribute
+      // pair above already holds on its own.
+      formAttrs = ' method="dialog" data-form-inert'
     }
     const attrs = attrsFor(node, ctx)
     // formAttrs FIRST: a duplicate attribute resolves to the first occurrence,
@@ -1473,14 +1492,7 @@ function collectManifest(manifest, forms, routePath, route) {
       // pair nothing
       const { fields } = collectFormFields(
         node,
-        (child) => {
-          const mapping = mm?.get(child.id)
-          return mergeAttributeLayers(
-            mapping ? mapping.master.attributes : child.attributes,
-            child.instanceAttributes,
-            undefined,
-          )
-        },
+        (child) => resolveNodeAttributes(child, mm?.get(child.id), undefined),
         {
           // renderNode never emits a hidden node, so its name must not reach
           // the manifest's allowlist either

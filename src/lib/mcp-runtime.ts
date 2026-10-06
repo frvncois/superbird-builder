@@ -175,6 +175,7 @@ export {
   isAllowedAttribute,
   isLocalizableAttribute,
   mergeAttributeLayers,
+  resolveNodeAttributes,
 } from './shared/attributes.js'
 
 // which nodes a route renders under an entry scope — the publish check for a

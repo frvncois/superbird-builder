@@ -304,8 +304,12 @@ elements of this format.
 
 Forms: a `<form>` is a plain form until it is ENABLED, and then it really submits —
 `edit_elements {form: {enabled: true}}` exports an `action` at this instance and stores
-every submission (see `get_guide {section: "forms"}`). Left alone it carries no
-action/method and nothing is sent, which is the right shape for a visual mock.
+every submission (see `get_guide {section: "forms"}`). Left alone it is exported
+`method="dialog"`, which the browser refuses to submit, so nothing is sent and nothing
+reaches the url — native validation still runs. A questionnaire built as a mock is
+better off without a `<form>` at all, though: `<div>`/`<label>` groups and a link for
+"Continue" say what they are, and `publish` warns when a form that is not enabled holds
+NAMED controls, because that shape reads to everyone else as "this collects".
 The controls are complete: `<input>` honours
 its own `type` (`email`, `tel`, `date`, …), checkbox/radio bake theirs in (the `change`
 interaction trigger reads their checked state), `<select>` takes `<option>` children,
@@ -2015,6 +2019,15 @@ Animations write inline styles, so never bind an animation that tweens `transfor
 A `<form>` is a plain form until you turn it on. With `form: {enabled: true}` it posts to
 the instance, which validates the submission against what was **published**, stores it, and
 can email or forward it.
+
+**Not enabled means not submittable.** The export gives such a form `method="dialog"`,
+which the browser abandons on submit — because a bare `<form>` does NOT sit still:
+Enter in a text field, or any `<button>` with no `type`, makes it GET the current url
+with every named control in the query string, which on a questionnaire puts the answers
+in the address bar, in history and in the host's logs. Nothing of that ships now. What
+still deserves a decision is whether a form belongs there at all: `publish` warns when
+one that is not enabled holds named controls, and a mock reads better as
+`<div>`/`<label>` groups with a link for "Continue".
 
 ```html
 <form data-ref="contact">

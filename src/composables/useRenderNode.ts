@@ -21,7 +21,7 @@ import { resolveSliderConfig, sliderTrackClasses, sliderWireData } from '@/lib/s
 import { FORM_STATE_TYPES } from '@/lib/shared/forms.js'
 import { useMedia, kindOfMime } from './useMedia'
 import {
-  mergeAttributeLayers,
+  resolveNodeAttributes,
   sanitizeAttributes,
   withSafeRel,
 } from '@/lib/shared/attributes.js'
@@ -256,17 +256,13 @@ export function useRenderNode(
   // withSafeRel mirrors the exporter: target="_blank" always carries a rel, so
   // the Data panel shows the same attribute set the published page will have
   const customAttrs = computed(() => {
-    // three layers: the component master's (shared, like classes), then THIS
-    // placement's overrides, then the active locale's text. Only the last two are
-    // the node's own, which is why they survive being inside an instance.
-    const shared = (mapping.value ? mapping.value.master : node.value).attributes ?? {}
+    // every layer: the component master's (shared, like classes), then each
+    // host mirror's say about the instance it holds, then THIS placement's
+    // overrides, then the active locale's text. The last two are the node's
+    // own, which is why they survive being inside an instance.
     const own = withSafeRel(
       sanitizeAttributes(
-        mergeAttributeLayers(
-          shared,
-          node.value.instanceAttributes,
-          localeAttributes(node.value),
-        ),
+        resolveNodeAttributes(node.value, mapping.value, localeAttributes(node.value)),
       ),
     )
     // attributes the element TYPE implies (:checkbox → type="checkbox"); the

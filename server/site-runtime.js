@@ -367,6 +367,20 @@
 // `?form=sent`. This block upgrades that to a fetch, so the page does not
 // reload and the values survive an error.
 ;(function () {
+  // A form the author never enabled posts NOWHERE, and the export marks it
+  // `data-form-inert` with method="dialog" so the browser abandons the submit
+  // with no script at all. This is the belt to those braces, for wherever the
+  // runtime ships anyway: an inert form's submit is cancelled outright, so a
+  // questionnaire built as a visual mock can never put its answers in the
+  // address bar. Before the window's own listener, and before the early
+  // return below, which only looks at ENABLED forms.
+  var inert = document.querySelectorAll('form[data-form-inert]')
+  for (var n = 0; n < inert.length; n++) {
+    inert[n].addEventListener('submit', function (e) {
+      e.preventDefault()
+    })
+  }
+
   var forms = document.querySelectorAll('form[data-form]')
   var landed = /[?&]form=sent\b/.test(location.search)
   if (!forms.length) return

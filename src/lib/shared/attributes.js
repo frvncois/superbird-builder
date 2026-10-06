@@ -226,3 +226,40 @@ export function mergeAttributeLayers(shared, instance, localeAttrs) {
   }
   return out
 }
+
+/**
+ * The attributes a node renders, resolved along the WHOLE instance chain.
+ *
+ * `mergeAttributeLayers` knows two layers, which is right for a node placed
+ * directly on a page: the master's shared set, then this placement's own. It is
+ * not enough once components NEST. A host holds a mirror of the component it
+ * nests, and that mirror is where the host says what it has to say about that
+ * placement — a Card's two `OptionCard` radios each needing their own `name`,
+ * which is the only way they form separate radio groups.
+ *
+ * Every reader took `node.instanceAttributes` and the master's and stopped, so
+ * a write to a mirror was stored, read back, and rendered NOWHERE: the tool
+ * answered `{saved: true, edited: 4}` and every radio on the published page
+ * still carried the component's default name, which quietly made four
+ * questions one radio group. Same bug class as a class on an instance wrapper,
+ * and the same fix: resolve where the renderers resolve everything else.
+ *
+ * Weakest first: the master's shared set, each host mirror from least to most
+ * specific (`mapping.mirrors` runs most-specific first), this node's own
+ * placement layer, then the locale's text overrides.
+ *
+ * @param {object} node the page (or master) node being rendered
+ * @param {{master: object, mirrors: object[]}|null|undefined} mapping
+ * @param {Record<string,string>|undefined} localeAttrs already narrowed to the
+ *        locale being rendered (absent on the default locale)
+ */
+export function resolveNodeAttributes(node, mapping, localeAttrs) {
+  if (!mapping) return mergeAttributeLayers(node?.attributes, node?.instanceAttributes, localeAttrs)
+  const out = { ...(mapping.master?.attributes ?? {}) }
+  for (let i = (mapping.mirrors?.length ?? 0) - 1; i >= 0; i--) {
+    for (const [name, value] of Object.entries(mapping.mirrors[i]?.instanceAttributes ?? {})) {
+      out[name] = value
+    }
+  }
+  return mergeAttributeLayers(out, node?.instanceAttributes, localeAttrs)
+}

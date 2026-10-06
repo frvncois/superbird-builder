@@ -65,6 +65,36 @@ test.describe('a form in the export', () => {
     expect(html).toContain('/assets/script.js')
   })
 
+  test('a form that is not enabled cannot be submitted at all', async () => {
+    const s = await session()
+    const html = await s.html()
+
+    // Vezaro, MAJOR: the handbook said a form left alone "sends nothing", and
+    // a bare <form> does not sit still — Enter in a text field, or any
+    // <button> with no type, GETs the current url with every named control in
+    // the query string. On a health questionnaire that is the answers in the
+    // address bar, in history and in the host's access logs.
+    //
+    // method="dialog" is the no-script fix: the browser abandons the
+    // submission of a dialog-method form with no <dialog> ancestor.
+    expect(html).toMatch(/<form[^>]*method="dialog"/)
+    expect(html).toMatch(/<form[^>]*data-form-inert/)
+    // still no endpoint, no honeypot, nothing stored anywhere
+    expect(html).not.toMatch(/<form[^>]*action=/)
+    expect(html).not.toContain('name="_hp"')
+
+    // and an enabled form is NOT marked inert — the two are exclusive
+    const after = await s.home()
+    await s.call('edit_elements', {
+      pageId: after.id,
+      version: after.version,
+      edits: [{ ref: 'contact', form: { enabled: true, name: 'Contact' } }],
+    })
+    const live = await s.html()
+    expect(live).not.toContain('data-form-inert')
+    expect(live).toMatch(/<form[^>]*method="post"/)
+  })
+
   test('the honeypot rule ships only for a site that has a form', async () => {
     const plain = await mcpSession()
     const home = await plain.home()
@@ -252,6 +282,29 @@ test.describe('publish warnings for forms', () => {
   test('a plain form is never reported — it is a legitimate thing to build', async () => {
     const s = await session()
     expect(await s.kinds()).not.toContain('form-setup')
+  })
+
+  test('a form that is not enabled but holds named controls is reported', async () => {
+    const s = await session()
+    // it cannot leak (method="dialog"), but it reads to everyone else as "this
+    // collects", so the decision belongs to a human: enable it, or drop the
+    // <form> and build the mock from <div>/<label> groups
+    expect(await s.kinds()).toContain('form-not-enabled-has-fields')
+
+    // enabling it answers the question, so the warning goes
+    const home = await s.home()
+    await s.call('edit_elements', {
+      pageId: home.id,
+      version: home.version,
+      edits: [{ ref: 'contact', form: { enabled: true, name: 'Contact' } }],
+    })
+    expect(await s.kinds()).not.toContain('form-not-enabled-has-fields')
+  })
+
+  test('a form with no named control is not reported', async () => {
+    // a search box that links, or a shell waiting for its fields
+    const s = await session('<form data-ref="shell"><button><span>Go</span></button></form>')
+    expect(await s.kinds()).not.toContain('form-not-enabled-has-fields')
   })
 })
 

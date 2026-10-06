@@ -253,6 +253,58 @@ test("an instance wears the default even when its host picked otherwise", async 
   expect(looks).toEqual(['outline', 'default'])
 })
 
+test("a host's say about the instance it holds reaches the page", async () => {
+  const { call, home, html, seed } = await mcpSession()
+  await seed(['input'])
+
+  // Vezaro, MAJOR: `edit_elements {componentId, instanceAttributes}` on the
+  // radios a StartFlow component held answered `{saved: true, edited: 4}` and
+  // every one of them still exported the OptionCard default name — so four
+  // questions were one radio group, and answering a later one cleared the
+  // earlier answer. Nothing in the response said so.
+  //
+  // `name` per placement is the whole reason the per-placement layer exists,
+  // and a host IS a placement. Every renderer read the node's own layer and
+  // the master's and stopped, so the layer in between — the host's mirror —
+  // rendered nowhere.
+  const host = await call('create_component', {
+    name: 'Field',
+    html: '<div>\n  <Input />\n  <Input />\n</div>',
+  })
+  const mirrors = host.nodes.filter((n: { type: string }) => n.type === 'input')
+  const ed = await call('edit_elements', {
+    componentId: host.componentId,
+    edits: [
+      { id: mirrors[0].id, instanceAttributes: { name: 'treatment' } },
+      { id: mirrors[1].id, instanceAttributes: { name: 'goal' } },
+    ],
+  })
+  expect(ed.failed).toBe(0)
+
+  const h = await home()
+  const w = await call('set_page_html', {
+    pageId: h.id,
+    version: h.version,
+    html: page('<Field data-ref="f1" />'),
+  })
+  const names = (out: string) => [...out.matchAll(/<input[^>]*name="([^"]*)"/g)].map((m) => m[1])
+  expect(names(await html())).toEqual(['treatment', 'goal'])
+
+  // and THIS placement still wins over what its host said — the chain is
+  // own → each host mirror → master, as it is for every other per-instance value
+  const read = await call('get_page', { pageId: h.id, elements: 'ref-parts' })
+  const first = read.elements
+    .find((e: { ref?: string }) => e.ref === 'f1')
+    .parts.find((p: { part: string }) => p.part === 'input')
+  const own = await call('edit_elements', {
+    pageId: h.id,
+    version: read.version,
+    edits: [{ id: first.id, instanceAttributes: { name: 'this-one-only' } }],
+  })
+  expect(own.failed).toBe(0)
+  expect(names(await html())).toEqual(['this-one-only', 'goal'])
+})
+
 test('what a host cannot say about an instance is refused, not dropped', async () => {
   const { call, home, seed } = await mcpSession()
   await seed(['button'])

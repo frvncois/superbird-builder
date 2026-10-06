@@ -132,7 +132,7 @@ export function createToolSet({ api, runtime, elicit, hasElicitation = () => nul
     sanitizeAttributes,
     isAllowedAttribute,
     isLocalizableAttribute,
-    mergeAttributeLayers,
+    resolveNodeAttributes,
     setStyleTokens,
     isEmittableToken,
     isReservedToken,
@@ -3947,11 +3947,7 @@ function designWarnings(project) {
     for (const page of published) {
       const mm = buildInstanceMap(project, page)
       walkNodes(page.elements ?? [], (n) => {
-        const attrs = mergeAttributeLayers(
-          (mm.get(n.id)?.master ?? n).attributes,
-          n.instanceAttributes,
-          undefined,
-        )
+        const attrs = resolveNodeAttributes(n, mm.get(n.id), undefined)
         for (const [name, value] of Object.entries(attrs)) {
           if (!isLocalizableAttribute(name) || !String(value).trim()) continue
           // the same gate the worklist applies: a bare number, a glyph or a
@@ -4025,8 +4021,10 @@ function designWarnings(project) {
         'delete_component {detach: true} the other. See get_guide {section: "variants"}.',
     })
   }
-  // 6. forms — the ways an enabled form silently collects nothing
+  // 6. forms — the ways an enabled form silently collects nothing, and the one
+  // way a form that was never enabled still looks like it collects
   const formIssues = []
+  const inertForms = []
   const seenForm = new Set()
   eachRendered((n, where, mm) => {
     if (n.type !== 'form') return
@@ -4042,8 +4040,21 @@ function designWarnings(project) {
       return
     }
     // a PLAIN form is a legitimate thing to build (a search box that links, a
-    // form wired by custom code), so an absent config is never a warning
-    if (!formEnabled(config)) return
+    // form wired by custom code), so an absent config is never a warning —
+    // EXCEPT when it holds named controls, which is a form that looks like it
+    // collects and does not. The export makes it unsubmittable rather than
+    // leaving it to post its fields into the address bar, so this is a design
+    // note, not a leak: either enable it, or build the mock out of
+    // <div>/<label> groups and make the intent plain.
+    if (!formEnabled(config)) {
+      const named = collectFormFields(n, (child) =>
+        resolveNodeAttributes(child, mm?.get(child.id), undefined),
+      ).fields
+      if (named.length) {
+        inertForms.push(`${where}: ${named.map((f) => f.name).slice(0, 6).join(', ')}`)
+      }
+      return
+    }
 
     // read each control the way the EXPORT reads it (export.mjs, buildFormManifest):
     // the shared layer from the master when the control is a component part,
@@ -4053,14 +4064,7 @@ function designWarnings(project) {
     // response whose `stats.forms` listed the names.
     const { fields, unnamed, duplicates } = collectFormFields(
       n,
-      (child) => {
-        const mapping = mm?.get(child.id)
-        return mergeAttributeLayers(
-          mapping ? mapping.master.attributes : child.attributes,
-          child.instanceAttributes,
-          undefined,
-        )
-      },
+      (child) => resolveNodeAttributes(child, mm?.get(child.id), undefined),
       {
         // a part this instance hides is not exported, so it cannot be an
         // unnamed control: a Field component with an optional hidden textarea
@@ -4102,11 +4106,7 @@ function designWarnings(project) {
       // that is a component part carries its `type` on the master
       const type =
         c.type === 'input'
-          ? mergeAttributeLayers(
-              mm?.get(c.id)?.master.attributes ?? c.attributes,
-              c.instanceAttributes,
-              undefined,
-            ).type
+          ? resolveNodeAttributes(c, mm?.get(c.id), undefined).type
           : null
       if (c.type === 'button' || type === 'submit') hasSubmit = true
     })
@@ -4127,11 +4127,7 @@ function designWarnings(project) {
     // to `text`), so the control's own `type` is read here as well as the name
     const typedSecret = new Set()
     walkNodes(n.children ?? [], (child) => {
-      const attrs = mergeAttributeLayers(
-        mm?.get(child.id) ? mm.get(child.id).master.attributes : child.attributes,
-        child.instanceAttributes,
-        undefined,
-      )
+      const attrs = resolveNodeAttributes(child, mm?.get(child.id), undefined)
       if (String(attrs?.type ?? '') === 'password' && attrs?.name) typedSecret.add(String(attrs.name))
     })
     const secretish = fields.filter(
@@ -4163,6 +4159,20 @@ function designWarnings(project) {
         formIssues.slice(0, 3).join('; ') +
         (formIssues.length > 3 ? ` (+${formIssues.length - 3} more)` : '') +
         '. See get_guide {section: "forms"}.',
+    })
+  }
+  if (inertForms.length) {
+    warnings.push({
+      kind: 'form-not-enabled-has-fields',
+      where: inertForms.slice(0, 6),
+      message:
+        `${inertForms.length} form(s) are not enabled but hold NAMED controls, so they look ` +
+        'like they collect and do not: ' +
+        inertForms.slice(0, 3).join('; ') +
+        (inertForms.length > 3 ? ` (+${inertForms.length - 3} more)` : '') +
+        '. The export makes such a form unsubmittable (method="dialog"), so nothing leaks — ' +
+        'but decide which it is: enable it (set_form), or drop the <form> and build the mock ' +
+        'from <div>/<label> groups so nobody expects an answer to arrive.',
     })
   }
 
@@ -7671,8 +7681,12 @@ const tools = [
         const draftPage = page.status !== 'published'
         const visit = (nodes, skipping) => {
           for (const n of nodes) {
-            const mapped = instMap.get(n.id)?.master
-            const skip = skipping || (mapped ?? n).attributes?.translate === 'no'
+            const mapping = instMap.get(n.id)
+            const mapped = mapping?.master
+            // the whole chain, so a `translate="no"` a HOST set on the instance
+            // it holds excludes that subtree too
+            const nodeAttrs = resolveNodeAttributes(n, mapping, undefined)
+            const skip = skipping || nodeAttrs.translate === 'no'
             if (!skip && isLeafElement(n.type) && n.content && n.arg === undefined) {
               all.push({
                 kind: 'element',
@@ -7696,12 +7710,7 @@ const tools = [
             // and the worklist reaching `missingTranslatable: 0` while they sat
             // in English is exactly the false "job done" worth fixing.
             if (!skip) {
-              const attrs = mergeAttributeLayers(
-                (mapped ?? n).attributes,
-                n.instanceAttributes,
-                undefined,
-              )
-              for (const [name, value] of Object.entries(attrs)) {
+              for (const [name, value] of Object.entries(nodeAttrs)) {
                 if (!isLocalizableAttribute(name) || !String(value).trim()) continue
                 all.push({
                   kind: 'attribute',
