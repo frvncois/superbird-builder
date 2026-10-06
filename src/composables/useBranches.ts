@@ -13,6 +13,7 @@ import { readStoredProject } from '@/lib/storage'
 import { hydrateStore, storeGet, storeRemove, storeSet } from '@/lib/store'
 import type { ChangeSummary, MergeResult, Resolution } from '@/lib/merge'
 import type { Project } from '@/types/editor'
+import { uid } from '@/lib/shared/ids.js'
 
 export interface BranchMeta {
   id: string
@@ -80,7 +81,7 @@ export function useBranches() {
   /** snapshot the current project as a new draft (branch) and switch to it */
   function createBranch(name: string, description?: string) {
     saveNow()
-    const id = crypto.randomUUID()
+    const id = uid()
     const snapshot = JSON.stringify(project.value)
     storeSet(projectStorageKey(id), snapshot)
     storeSet(baseStorageKey(id), snapshot) // three-way merge base

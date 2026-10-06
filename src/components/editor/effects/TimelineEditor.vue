@@ -26,6 +26,7 @@ import { useAnimation } from '@/composables/useAnimation'
 import { useSettings } from '@/composables/useSettings'
 import { compileAnimation, EASING_NAMES, MOTION_PROPS } from '@/lib/motion'
 import type { AnimProp, AnimationStep, AnimationTrack } from '@/types/editor'
+import { uid } from '@/lib/shared/ids.js'
 
 const props = defineProps<{ id: string }>()
 
@@ -156,7 +157,7 @@ function addStep() {
   const steps = animation.value?.steps
   if (!steps) return
   steps.push({
-    id: crypto.randomUUID(),
+    id: uid(),
     tracks: [{ prop: 'opacity', from: 0, to: 1 }],
     duration: 400,
     easing: 'ease-out',
@@ -167,7 +168,7 @@ function duplicateStep(index: number) {
   const steps = animation.value?.steps
   const item = steps?.[index]
   if (!steps || !item) return
-  steps.splice(index + 1, 0, { ...structuredClone(item), id: crypto.randomUUID() })
+  steps.splice(index + 1, 0, { ...structuredClone(item), id: uid() })
   selectedStep.value = index + 1
 }
 function removeStep(index: number) {

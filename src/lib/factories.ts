@@ -2,12 +2,13 @@ import type { Breakpoint, ElementNode, Page, Project } from '@/types/editor'
 import { createNode } from './elements'
 import { SCHEMA_VERSION } from './migrate'
 import { defaultSettings } from './settings'
+import { uid } from './shared/ids.js'
 
 export function defaultBreakpoints(): Breakpoint[] {
   return [
-    { id: crypto.randomUUID(), name: 'Desktop', width: 1440, height: 900 },
-    { id: crypto.randomUUID(), name: 'Tablet', width: 768, height: 1024 },
-    { id: crypto.randomUUID(), name: 'Mobile', width: 390, height: 844 },
+    { id: uid(), name: 'Desktop', width: 1440, height: 900 },
+    { id: uid(), name: 'Tablet', width: 768, height: 1024 },
+    { id: uid(), name: 'Mobile', width: 390, height: 844 },
   ]
 }
 
@@ -21,7 +22,7 @@ export function createBody(arg?: string): ElementNode {
 export function createPage(name: string, path: string, _locale = 'en'): Page {
   const now = Date.now()
   return {
-    id: crypto.randomUUID(),
+    id: uid(),
     name,
     path,
     status: 'published',
@@ -34,7 +35,7 @@ export function createPage(name: string, path: string, _locale = 'en'): Page {
 // A project always has at least its home page
 export function createProject(name: string): Project {
   return {
-    id: crypto.randomUUID(),
+    id: uid(),
     name,
     schemaVersion: SCHEMA_VERSION,
     pages: [createPage('Home', '/')],

@@ -7,6 +7,7 @@ import { createPage } from '@/lib/factories'
 import { slugify } from '@/lib/shared/slug.js'
 import { deepClone, walkNodes } from '@/lib/tree'
 import type { Page } from '@/types/editor'
+import { uid } from '@/lib/shared/ids.js'
 
 const activePageId = ref<string | null>(null)
 
@@ -37,8 +38,8 @@ export function usePage() {
     const page = pages.value.find((p) => p.id === id)
     if (!page) return null
     const clone = deepClone(page) as Page
-    clone.id = crypto.randomUUID()
-    walkNodes(clone.elements, (n) => (n.id = crypto.randomUUID()))
+    clone.id = uid()
+    walkNodes(clone.elements, (n) => (n.id = uid()))
     delete clone.collectionId // a duplicated collection template is handled separately
     clone.name = `${page.name} copy`
     let path = `${page.path}-copy`

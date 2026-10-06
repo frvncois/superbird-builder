@@ -203,3 +203,53 @@ test('switching drafts mid-edit writes each branch to its own key', async ({ pag
   const draftBlob = JSON.stringify(await stored(page, draft!))
   expect(draftBlob, 'the draft kept its own edit').toContain(IN_DRAFT)
 })
+
+/**
+ * A refusal the server took care to name reaches the user.
+ *
+ * The store threw on `!res.ok` without reading the body, so every refusal —
+ * 'project storage is full', the contributor structural rejection, the 412
+ * re-read instruction — arrived as "save failed (403)". And there was no
+ * surface to show it on: a failed save was a colour on a pill inside a
+ * popover, and an uncaught render error was nothing at all.
+ */
+test('a rejected save says what the server said, and offers no pointless retry', async ({
+  page,
+}) => {
+  await openEditor(page)
+
+  // a refusal with a message, in the shape the server sends
+  await page.route('**/api/store/guano-project%3Amain', async (route) => {
+    if (route.request().method() !== 'PUT') return route.fallback()
+    await route.fulfill({
+      status: 403,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: 'custom code is not yours to change' }),
+    })
+  })
+
+  await retitle(page, `Refused ${Date.now()}`)
+
+  const alert = page.getByRole('alert')
+  await expect(alert).toBeVisible({ timeout: 15_000 })
+  await expect(alert).toContainText('custom code is not yours to change')
+  // terminal: the same request will be refused forever, so there is no Retry
+  await expect(alert.getByRole('button', { name: 'Retry' })).toHaveCount(0)
+
+  // and it is announced, not just drawn
+  await expect(page.getByRole('region', { name: 'Notifications' })).toHaveAttribute(
+    'aria-live',
+    'assertive',
+  )
+
+  // a 5xx is the other half: worth trying again, so it offers to
+  await page.unroute('**/api/store/guano-project%3Amain')
+  await page.route('**/api/store/guano-project%3Amain', async (route) => {
+    if (route.request().method() !== 'PUT') return route.fallback()
+    await route.fulfill({ status: 503, contentType: 'application/json', body: '{"error":"busy"}' })
+  })
+  await retitle(page, `Retryable ${Date.now()}`)
+  await expect(page.getByRole('alert').getByRole('button', { name: 'Retry' })).toBeVisible({
+    timeout: 15_000,
+  })
+})

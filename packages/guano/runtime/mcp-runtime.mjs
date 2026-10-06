@@ -265,6 +265,37 @@ var canNest$1 = canNest;
 /** each component after everything it holds */
 var dependencyOrder$1 = dependencyOrder;
 //#endregion
+//#region src/lib/shared/ids.js
+/**
+* A v4-shaped unique id.
+*
+* `crypto.randomUUID` requires a SECURE CONTEXT. An editor served over plain
+* http on a LAN address — `http://192.168.1.20:4174/admin`, the ordinary way a
+* self-hosted instance is reached from a second machine — has none, and there
+* every id-minting path throws: insert an element, create a component, add an
+* entry. With no global error handler that was a white screen on first use.
+*
+* `crypto.getRandomValues` IS available in a non-secure context, which is why
+* the fallback is that and not something weaker. There is deliberately no
+* Math.random tier below it: an id collision inside a project tree is silent
+* structural corruption, and if neither Web Crypto primitive exists the honest
+* answer is to throw.
+*
+* The 36-character shape is kept so nothing that assumes the format breaks.
+*
+* @returns {string}
+*/
+function uid() {
+	const c = globalThis.crypto;
+	if (typeof c?.randomUUID === "function") return c.randomUUID();
+	const b = /* @__PURE__ */ new Uint8Array(16);
+	c.getRandomValues(b);
+	b[6] = b[6] & 15 | 64;
+	b[8] = b[8] & 63 | 128;
+	const h = Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+	return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+//#endregion
 //#region src/lib/components.ts
 function effectiveLinkChain(components) {
 	const chain = /* @__PURE__ */ new Map();
@@ -289,7 +320,7 @@ function cloneForMaster(source) {
 	const cloned = JSON.parse(JSON.stringify(source));
 	const idMap = /* @__PURE__ */ new Map();
 	walkNodes([cloned], (n) => {
-		const next = crypto.randomUUID();
+		const next = uid();
 		idMap.set(n.id, next);
 		n.id = next;
 		delete n.ref;
@@ -337,7 +368,7 @@ function isComponentType(type) {
 *  the holder starts from, copied whole (they are its own from then on) */
 function createMirror(master) {
 	const node = {
-		id: crypto.randomUUID(),
+		id: uid(),
 		type: master.type,
 		content: "",
 		children: master.slot ? cloneSlotContent(master.children) : master.children.map(createMirror)
@@ -352,7 +383,7 @@ function cloneSlotContent(nodes) {
 	const cloned = JSON.parse(JSON.stringify(nodes));
 	const idMap = /* @__PURE__ */ new Map();
 	walkNodes(cloned, (n) => {
-		const next = crypto.randomUUID();
+		const next = uid();
 		idMap.set(n.id, next);
 		n.id = next;
 		delete n.ref;
@@ -639,7 +670,7 @@ function adoptStructure(master, edited, selfName, result = {
 			result.adopted++;
 		} else {
 			node = {
-				id: crypto.randomUUID(),
+				id: uid(),
 				type: child.type,
 				content: child.content,
 				locales: child.locales ? JSON.parse(JSON.stringify(child.locales)) : void 0,
@@ -1138,7 +1169,7 @@ function isInstancePart(type) {
 }
 function createNode(type) {
 	return {
-		id: crypto.randomUUID(),
+		id: uid(),
 		type,
 		content: "",
 		children: []
@@ -1341,19 +1372,19 @@ function defaultSettings() {
 function defaultBreakpoints() {
 	return [
 		{
-			id: crypto.randomUUID(),
+			id: uid(),
 			name: "Desktop",
 			width: 1440,
 			height: 900
 		},
 		{
-			id: crypto.randomUUID(),
+			id: uid(),
 			name: "Tablet",
 			width: 768,
 			height: 1024
 		},
 		{
-			id: crypto.randomUUID(),
+			id: uid(),
 			name: "Mobile",
 			width: 390,
 			height: 844
@@ -1369,7 +1400,7 @@ function createBody(arg) {
 function createPage(name, path, _locale = "en") {
 	const now = Date.now();
 	return {
-		id: crypto.randomUUID(),
+		id: uid(),
 		name,
 		path,
 		status: "published",
@@ -1380,7 +1411,7 @@ function createPage(name, path, _locale = "en") {
 }
 function createProject(name) {
 	return {
-		id: crypto.randomUUID(),
+		id: uid(),
 		name,
 		schemaVersion: 2,
 		pages: [createPage("Home", "/")],
@@ -4754,7 +4785,7 @@ function duplicateComponent(project, id) {
 	const { cloned } = cloneForMaster(def.root);
 	cloned.type = name;
 	const copy = {
-		id: crypto.randomUUID(),
+		id: uid(),
 		name,
 		root: cloned
 	};
@@ -4836,12 +4867,12 @@ function bakeMasterState(pairs, masterToInstance) {
 		if (master.attributes) node.attributes = deepClone(master.attributes);
 		if (master.interactions?.length) node.interactions = master.interactions.map((b) => ({
 			...deepClone(b),
-			id: crypto.randomUUID(),
+			id: uid(),
 			targetId: retarget(b.targetId)
 		}));
 		if (master.animations?.length) node.animations = master.animations.map((b) => ({
 			...deepClone(b),
-			id: crypto.randomUUID(),
+			id: uid(),
 			targetId: retarget(b.targetId)
 		}));
 		if (!node.content && master.content) node.content = master.content;

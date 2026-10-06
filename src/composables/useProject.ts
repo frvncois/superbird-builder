@@ -2,6 +2,7 @@ import { computed, effectScope, ref, watch } from 'vue'
 import { createProject } from '@/lib/factories'
 import { breakpointVariant, breakpointIdForWidth } from '@/lib/responsive'
 import type { Breakpoint } from '@/types/editor'
+import { uid } from '@/lib/shared/ids.js'
 
 const project = ref(createProject('Untitled project'))
 
@@ -99,7 +100,7 @@ export function useProject() {
     if (!width || !parent) return null
 
     const breakpoint: Breakpoint = {
-      id: crypto.randomUUID(),
+      id: uid(),
       name: nameFor(width),
       width,
       height: parent.height,

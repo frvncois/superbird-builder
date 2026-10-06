@@ -8,6 +8,7 @@ import { createNode } from '@/lib/elements'
 import { entrySlug, entryRoutePath } from '@/lib/shared/slug.js'
 import { deepClone, walkNodes } from '@/lib/tree'
 import type { Collection, CollectionEntry, CollectionField, Page } from '@/types/editor'
+import { uid } from '@/lib/shared/ids.js'
 
 /** entry loaded into the template canvas for editing */
 const activeEntryId = ref<string | null>(null)
@@ -55,7 +56,7 @@ export function useCollections() {
     body.children.push(section)
     const now = Date.now()
     const page: Page = {
-      id: crypto.randomUUID(),
+      id: uid(),
       name: label,
       path: `/${name}`,
       status: 'published',
@@ -67,9 +68,9 @@ export function useCollections() {
       updatedBy: actor(),
     }
     const collection: Collection = {
-      id: crypto.randomUUID(),
+      id: uid(),
       name,
-      fields: [{ id: crypto.randomUUID(), name: 'title', type: 'text' }],
+      fields: [{ id: uid(), name: 'title', type: 'text' }],
       templatePageId: page.id,
       entries: [],
     }
@@ -84,7 +85,7 @@ export function useCollections() {
     let unique = name
     let n = 2
     while (collection.fields.some((f) => f.name === unique)) unique = `${name}${n++}`
-    collection.fields.push({ id: crypto.randomUUID(), name: unique, type: 'text' })
+    collection.fields.push({ id: uid(), name: unique, type: 'text' })
   }
 
   function removeField(collection: Collection, fieldId: string) {
@@ -99,7 +100,7 @@ export function useCollections() {
     while (collection.entries.some((e) => e.slug === slug)) slug = `${slugify(collection.name)}-${++i}`
     const now = Date.now()
     const entry: CollectionEntry = {
-      id: crypto.randomUUID(),
+      id: uid(),
       name,
       slug,
       values: {},
@@ -128,7 +129,7 @@ export function useCollections() {
     while (collection.entries.some((e) => e.slug === slug)) slug = `${source.slug}-copy-${n++}`
     const now = Date.now()
     const entry: CollectionEntry = {
-      id: crypto.randomUUID(),
+      id: uid(),
       name: `${source.name} copy`,
       slug,
       values: { ...source.values },
@@ -160,9 +161,9 @@ export function useCollections() {
     const label = name.charAt(0).toUpperCase() + name.slice(1)
 
     const page = deepClone(template) as Page
-    page.id = crypto.randomUUID()
+    page.id = uid()
     walkNodes(page.elements, (node) => {
-      node.id = crypto.randomUUID()
+      node.id = uid()
       if (node.type === 'body') node.arg = name // rebind :body[name] to the copy
     })
     page.name = `${label} template`
@@ -172,8 +173,8 @@ export function useCollections() {
 
     // entries get fresh ids, so self-references must follow them (fields
     // pointing at OTHER collections keep targeting the originals)
-    const entryIdMap = new Map(collection.entries.map((e) => [e.id, crypto.randomUUID()]))
-    const copyId = crypto.randomUUID()
+    const entryIdMap = new Map(collection.entries.map((e) => [e.id, uid()]))
+    const copyId = uid()
     const selfRefFields = collection.fields.filter(
       (f) =>
         (f.type === 'reference' || f.type === 'multi-reference') &&
@@ -184,7 +185,7 @@ export function useCollections() {
       name,
       fields: collection.fields.map((f) => ({
         ...f,
-        id: crypto.randomUUID(),
+        id: uid(),
         refCollectionId: f.refCollectionId === collection.id ? copyId : f.refCollectionId,
       })),
       templatePageId: page.id,
