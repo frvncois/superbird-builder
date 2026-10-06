@@ -102,6 +102,7 @@ function stripExtractedInstanceState(source) {
 		delete n.src;
 		delete n.svg;
 		delete n.hidden;
+		delete n.channel;
 		delete n.background;
 		delete n.locales;
 		delete n.content;
@@ -7229,6 +7230,13 @@ var MOTION_PROPS = {
 		units: ["%", "px"],
 		def: 0,
 		label: "Clip left"
+	},
+	count: {
+		kind: "text",
+		unit: "",
+		units: [],
+		def: 0,
+		label: "Count"
 	}
 };
 var c1 = 1.70158;
@@ -7342,6 +7350,7 @@ function compileAnimation(animation) {
 				prop: track.prop,
 				from: track.from,
 				to: track.to,
+				format: track.format,
 				start,
 				duration,
 				easing,
@@ -7411,6 +7420,23 @@ function validateAnimation(animation) {
 				if (track.from !== void 0 && !parseColor(track.from)) return fail$1(`${at} property "${track.prop}" "from" must be a hex color`);
 				continue;
 			}
+			if (meta.kind === "text") {
+				if (step.stagger) return fail$1(`${at} cannot stagger "${track.prop}" — a staggered step moves the children, which have no number to count`);
+				if (step.yoyo) return fail$1(`${at} cannot yoyo "${track.prop}" — it would count back down and end on the starting number`);
+				if (track.format !== void 0) {
+					const f = track.format;
+					if (typeof f !== "object" || f === null || Array.isArray(f)) return fail$1(`${at} property "${track.prop}" format must be an object`);
+					if (f.decimals !== void 0 && (typeof f.decimals !== "number" || f.decimals < 0 || f.decimals > 20)) return fail$1(`${at} property "${track.prop}" format.decimals must be 0–20`);
+					if (f.group !== void 0 && typeof f.group !== "boolean") return fail$1(`${at} property "${track.prop}" format.group must be true or false`);
+					for (const k of ["prefix", "suffix"]) if (f[k] !== void 0 && (typeof f[k] !== "string" || f[k].length > 16)) return fail$1(`${at} property "${track.prop}" format.${k} must be a string of at most 16 characters`);
+					for (const k of Object.keys(f)) if ([
+						"decimals",
+						"group",
+						"prefix",
+						"suffix"
+					].indexOf(k) === -1) return fail$1(`${at} property "${track.prop}" format has an unknown key "${k}"`);
+				}
+			}
 			const units = meta.units.length ? ` (units: ${meta.units.join(", ")})` : " (no unit)";
 			const to = parseTrackValue(track.to, track.prop);
 			if (!to) return fail$1(`${at} property "${track.prop}" has an invalid "to" value${units}`);
@@ -7422,6 +7448,36 @@ function validateAnimation(animation) {
 		}
 	}
 	return { ok: true };
+}
+/** does this animation write TEXT — i.e. hold a `count` track? */
+function animationWritesText(animation) {
+	for (const step of animation && animation.steps || []) for (const track of step.tracks || []) {
+		const meta = MOTION_PROPS[track && track.prop];
+		if (meta && meta.kind === "text") return true;
+	}
+	return false;
+}
+/**
+* Where a `count` may land: a LEAF that carries text, and not one whose text
+* comes from a collection field.
+*
+* A container has no text of its own to replace — the write would wipe its
+* children — and a field-bound element re-renders from the entry, so the two
+* would fight. Checked at every bind site rather than at play time, because a
+* binding that quietly does nothing is the bug class this whole layer exists
+* to stop.
+*
+* @param {any} animation the library timeline being bound
+* @param {{type?: string, isLeaf?: boolean, isBound?: boolean}|null} target the
+*   element the animation MOVES (the binding's target, not its trigger)
+* @returns {string|null} the refusal, or null
+*/
+function countTargetError(animation, target) {
+	if (!animationWritesText(animation)) return null;
+	if (!target) return null;
+	if (!target.isLeaf) return `a 'count' track writes the element's TEXT, and '${target.type || "this element"}' is a container — bind it to a leaf that carries words (a span, a heading, a paragraph)`;
+	if (target.isBound) return "a 'count' track writes the element's TEXT, but this element's text comes from a collection field — the two would fight. Count a plain element beside it.";
+	return null;
 }
 /**
 * @param {any} binding
@@ -7897,4 +7953,4 @@ function routeChannelCounts(trees, instanceMap) {
 	return counts;
 }
 //#endregion
-export { APPEAR_MODES, BUILTIN_LIST_SOURCES, CHANNEL_NAME_RE, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, ELIDED_DATA_URL, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MAX_DEPTH, MAX_INPUT, MAX_SVG_BYTES, MOTION_PROPS, RESERVED_FIELD_NAMES, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, SCHEMA_VERSION, SCROLL_LERP_MAX, SCROLL_LERP_MIN, SLIDER_DEFAULTS, STYLE_SECTIONS, TOKEN_NAME_RE, TRANSITION_DEFAULTS, TRANSITION_PRESET_IDS, VARIANT_NAME_RE, addVariantAxis, addVariantOption, adoptStructure, alignMirrors, alignStructure, applyClass, applyHtml, buildChannelIndex, buildInstanceMap, buildScopeRoots, canNest, channelListeners, channelName, channelTargetId, cloneForMaster, collectFormFields, collectionRouteBase, compileAnimation, componentReaches, componentUsage, contextFromProject, countLocaleSeo, createBody, createNode, createPage, createProject, customSchemaError, deepClone, defaultBreakpoints, defaultSettings, deleteComponent, dependencyOrder, describeMigration, detachInstance, duplicateComponent, effectiveClasses, entryRoutePath, fieldNameError, fieldValueError, findNode, findParent, fontError, fontFormatForUrl, formConfigError, formEnabled, formName, hasAncestorOfType, hasDetailRoutes, inheritedInstanceValue, interactionGroupKey, interactionStateKey, isAllowedAttribute, isChannelName, isChannelTarget, isComponentType, isEmittableToken, isEntryScopeRoot, isInstancePart, isInstanceWrapper, isKnownElement, isLeafElement, isLocalizableAttribute, isNodeHidden, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isTranslatableType, isValidClass, isValidToken, lucideNameOf, lucideSvg, masterToHtml, matchClass, mergeAttributeLayers, mergeClassLayers, migrateProject, nestedComponentNames, nodesByShortId, normalizeComponentName, pageToHtml, parseHtml, pickedKeys, purgeLocaleSeo, pushMasterStructure, removeVariantAxis, removeVariantOption, renameComponent, renameVariantAxis, renameVariantOption, resolveInstanceValue, resolveNodeAttributes, resolvePicks, resolveSliderConfig, routeChannelCounts, sameLayerProperty, sameProperty, sameType, sanitizeAttributes, sanitizeInlineSvg, sanitizeRich, setComponentCategory, setComponentMeta, setInstancePick, setNodeHidden, setStyleTokens, setVariantAxes, setVariantClasses, setVariantDefault, shortIds, slugify, stripExtractedInstanceState, tagForType, tokenError, typeForTag, typeOptionsFor, validateAnimation, validateBinding, validateMotionSettings, validateSliderConfig, validateTree, variantKey, walkNodes };
+export { APPEAR_MODES, BUILTIN_LIST_SOURCES, CHANNEL_NAME_RE, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, ELIDED_DATA_URL, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MAX_DEPTH, MAX_INPUT, MAX_SVG_BYTES, MOTION_PROPS, RESERVED_FIELD_NAMES, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, SCHEMA_VERSION, SCROLL_LERP_MAX, SCROLL_LERP_MIN, SLIDER_DEFAULTS, STYLE_SECTIONS, TOKEN_NAME_RE, TRANSITION_DEFAULTS, TRANSITION_PRESET_IDS, VARIANT_NAME_RE, addVariantAxis, addVariantOption, adoptStructure, alignMirrors, alignStructure, applyClass, applyHtml, buildChannelIndex, buildInstanceMap, buildScopeRoots, canNest, channelListeners, channelName, channelTargetId, cloneForMaster, collectFormFields, collectionRouteBase, compileAnimation, componentReaches, componentUsage, contextFromProject, countLocaleSeo, countTargetError, createBody, createNode, createPage, createProject, customSchemaError, deepClone, defaultBreakpoints, defaultSettings, deleteComponent, dependencyOrder, describeMigration, detachInstance, duplicateComponent, effectiveClasses, entryRoutePath, fieldNameError, fieldValueError, findNode, findParent, fontError, fontFormatForUrl, formConfigError, formEnabled, formName, hasAncestorOfType, hasDetailRoutes, inheritedInstanceValue, interactionGroupKey, interactionStateKey, isAllowedAttribute, isChannelName, isChannelTarget, isComponentType, isEmittableToken, isEntryScopeRoot, isInstancePart, isInstanceWrapper, isKnownElement, isLeafElement, isLocalizableAttribute, isNodeHidden, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isTranslatableType, isValidClass, isValidToken, lucideNameOf, lucideSvg, masterToHtml, matchClass, mergeAttributeLayers, mergeClassLayers, migrateProject, nestedComponentNames, nodesByShortId, normalizeComponentName, pageToHtml, parseHtml, pickedKeys, purgeLocaleSeo, pushMasterStructure, removeVariantAxis, removeVariantOption, renameComponent, renameVariantAxis, renameVariantOption, resolveInstanceValue, resolveNodeAttributes, resolvePicks, resolveSliderConfig, routeChannelCounts, sameLayerProperty, sameProperty, sameType, sanitizeAttributes, sanitizeInlineSvg, sanitizeRich, setComponentCategory, setComponentMeta, setInstancePick, setNodeHidden, setStyleTokens, setVariantAxes, setVariantClasses, setVariantDefault, shortIds, slugify, stripExtractedInstanceState, tagForType, tokenError, typeForTag, typeOptionsFor, validateAnimation, validateBinding, validateMotionSettings, validateSliderConfig, validateTree, variantKey, walkNodes };

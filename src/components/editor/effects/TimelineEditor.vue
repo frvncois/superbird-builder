@@ -25,7 +25,7 @@ import ColorFieldUI from '@/components/editor/style/ColorFieldUI.vue'
 import { useAnimation } from '@/composables/useAnimation'
 import { useSettings } from '@/composables/useSettings'
 import { compileAnimation, EASING_NAMES, MOTION_PROPS } from '@/lib/motion'
-import type { AnimProp, AnimationStep } from '@/types/editor'
+import type { AnimProp, AnimationStep, AnimationTrack } from '@/types/editor'
 
 const props = defineProps<{ id: string }>()
 
@@ -41,6 +41,22 @@ const PROP_OPTIONS = (Object.keys(MOTION_PROPS) as AnimProp[]).map((p) => ({
 }))
 const colorTokens = computed(() => validTokens.value.map((t) => ({ name: t.name, value: t.value })))
 const isColor = (prop: AnimProp) => MOTION_PROPS[prop].kind === 'color'
+/** `count` is the one track that writes TEXT, so it carries its own formatting
+ *  — the authored text IS the final value, and this has to read the same way */
+const isCount = (prop: AnimProp) => MOTION_PROPS[prop].kind === 'text'
+const formatOf = (track: AnimationTrack) => (track.format ??= {})
+function setFormat<K extends keyof NonNullable<AnimationTrack['format']>>(
+  track: AnimationTrack,
+  key: K,
+  value: NonNullable<AnimationTrack['format']>[K],
+) {
+  const f = formatOf(track)
+  if (value === undefined || value === '' || value === false) delete f[key]
+  else f[key] = value
+  // an empty format is no format at all, so an untouched track stays
+  // byte-identical for the merge signature
+  if (!Object.keys(f).length) delete track.format
+}
 
 // --- the ruler ---
 
@@ -182,6 +198,7 @@ function setTrackProp(target: AnimationStep, index: number, prop: AnimProp) {
     track.from = MOTION_PROPS[prop].def as number
     track.to = prop === 'opacity' || prop === 'scale' ? 1 : 100
   }
+  if (!isCount(prop)) delete track.format
 }
 
 const numText = (v: number | string | undefined) => (v === undefined ? '' : String(v))
@@ -368,6 +385,44 @@ function setNum<T, K extends keyof T>(obj: T, key: K, text: string, fallback = 0
             class="w-5 shrink-0 text-muted-foreground"
             @click="removeTrack(step!, ti)"
           />
+        </div>
+        <!-- how the number reads. It has to agree with the element's authored
+             text, which IS the final value — `18,000+` is group + suffix. -->
+        <div
+          v-for="(track, ti) in step.tracks.filter((t) => isCount(t.prop))"
+          :key="`fmt-${ti}`"
+          class="flex items-center gap-1 pl-2"
+        >
+          <span class="shrink-0 text-[10px] text-muted-foreground">Reads</span>
+          <ValueFieldUI
+            v-tooltip="'Prefix'"
+            :model-value="track.format?.prefix ?? ''"
+            placeholder="$"
+            @commit="(t) => setFormat(track, 'prefix', t)"
+          />
+          <ValueFieldUI
+            v-tooltip="'Decimal places'"
+            :model-value="track.format?.decimals === undefined ? '' : String(track.format.decimals)"
+            placeholder="0"
+            :validate="(t: string) => t.trim() === '' || /^\d{1,2}$/.test(t.trim())"
+            @commit="(t) => setFormat(track, 'decimals', t.trim() === '' ? undefined : Number(t))"
+          />
+          <ValueFieldUI
+            v-tooltip="'Suffix'"
+            :model-value="track.format?.suffix ?? ''"
+            placeholder="+"
+            @commit="(t) => setFormat(track, 'suffix', t)"
+          />
+          <ButtonUI
+            variant="outline"
+            size="xs"
+            tooltip="Thousands separators"
+            class="shrink-0"
+            :class="track.format?.group && 'bg-accent text-accent-foreground'"
+            @click="setFormat(track, 'group', !track.format?.group)"
+          >
+            1,000
+          </ButtonUI>
         </div>
         <ButtonUI
           variant="ghost"

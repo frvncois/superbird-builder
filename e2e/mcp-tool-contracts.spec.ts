@@ -1084,3 +1084,95 @@ test('delete_animation reports the pages it rewrote', async () => {
   })
   expect(JSON.stringify(after.elements)).not.toContain('animations')
 })
+
+test.describe('a count track only lands where it can write', () => {
+  async function seeded() {
+    const s = await mcpSession()
+    const made = await s.call('create_animations', {
+      items: [
+        {
+          name: 'Count up',
+          steps: [
+            {
+              tracks: [{ prop: 'count', from: 0, to: 18000, format: { group: true, suffix: '+' } }],
+              duration: 900,
+              easing: 'linear',
+            },
+          ],
+        },
+      ],
+    })
+    expect(made.failures ?? []).toEqual([])
+    return { s, animationId: made.created[0].id as string }
+  }
+
+  test('a container has no text of its own to count into', async () => {
+    const { s, animationId } = await seeded()
+    const home = await s.home()
+    const written = await s.call('set_page_html', {
+      pageId: home.id,
+      version: home.version,
+      html: pageHtml('<div data-ref="box"><span data-ref="n">18,000+</span></div>'),
+    })
+
+    const bad = await s.call('edit_elements', {
+      pageId: home.id,
+      version: written.version,
+      edits: [{ ref: 'box', bindAnimations: [{ animationId, trigger: 'load' }] }],
+    })
+    expect(bad.failed).toBe(1)
+    expect(JSON.stringify(bad.failures)).toMatch(/is a container/)
+
+    // …and the leaf beside it takes it
+    const good = await s.call('edit_elements', {
+      pageId: home.id,
+      version: written.version,
+      edits: [{ ref: 'n', bindAnimations: [{ animationId, trigger: 'load' }] }],
+    })
+    expect(good.failed).toBe(0)
+  })
+
+  test('a field-bound element would fight the render', async () => {
+    const { s, animationId } = await seeded()
+    const c = (await s.call('create_collection', { name: 'stat', detailRoutes: false })).collection
+    await s.call('update_collection', {
+      collectionId: c.id,
+      addFields: [{ name: 'total', type: 'text' }],
+    })
+    const home = await s.home()
+    const written = await s.call('set_page_html', {
+      pageId: home.id,
+      version: home.version,
+      html: pageHtml(
+        '<collection-list source="stat">\n  <span data-ref="v" data-field="total" />\n</collection-list>',
+      ),
+    })
+    const bad = await s.call('edit_elements', {
+      pageId: home.id,
+      version: written.version,
+      edits: [{ ref: 'v', bindAnimations: [{ animationId, trigger: 'load' }] }],
+    })
+    expect(bad.failed).toBe(1)
+    expect(JSON.stringify(bad.failures)).toMatch(/comes from a collection field/)
+  })
+
+  test('a staggered step and a yoyo are refused at the library', async () => {
+    const s = await mcpSession()
+    const track = { prop: 'count', from: 0, to: 100 }
+    const staggered = await s.call('create_animations', {
+      items: [
+        { name: 'A', steps: [{ tracks: [track], duration: 500, easing: 'linear', stagger: 60 }] },
+      ],
+    })
+    expect(staggered.saved).toBe(false)
+    expect(JSON.stringify(staggered.failures)).toMatch(/cannot stagger/)
+
+    const yoyo = await s.call('create_animations', {
+      items: [
+        { name: 'B', steps: [{ tracks: [track], duration: 500, easing: 'linear', yoyo: true }] },
+      ],
+    })
+    expect(yoyo.saved).toBe(false)
+    expect(JSON.stringify(yoyo.failures)).toMatch(/cannot yoyo/)
+  })
+})

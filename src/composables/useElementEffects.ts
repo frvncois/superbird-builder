@@ -186,7 +186,8 @@ export function useElementEffects() {
     }
     if (has.animationId && triggerAllows(trigger, 'animation')) {
       const binding = animations.applyTo(owner, has.animationId)
-      binding.trigger = trigger as AnimationBinding['trigger']
+      // null when the timeline cannot land here (a `count` on a container)
+      if (binding) binding.trigger = trigger as AnimationBinding['trigger']
     }
     return effect
   }

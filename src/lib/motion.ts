@@ -1,7 +1,13 @@
 // Typed surface over the shared motion engine. The math lives in
 // src/lib/shared/motion.js (plain JS, shared with the exporter, the published
 // site runtime and the MCP); this file gives the client the types.
-import type { AnimProp, Animation, AnimationBinding, ProjectSettings } from '@/types/editor'
+import type {
+  AnimProp,
+  Animation,
+  AnimationBinding,
+  AnimationTrack,
+  ProjectSettings,
+} from '@/types/editor'
 import {
   MOTION_PROPS as MOTION_PROPS_DATA,
   EASINGS as EASINGS_DATA,
@@ -14,6 +20,8 @@ import {
   sampleAnimation as sampleAnimationRaw,
   sampleValues as sampleValuesRaw,
   composeMotionStyle as composeMotionStyleRaw,
+  sampleText as sampleTextRaw,
+  countTargetError as countTargetErrorRaw,
   splitByStagger as splitByStaggerRaw,
   initialStyle as initialStyleRaw,
   endStyle as endStyleRaw,
@@ -46,7 +54,7 @@ import {
 } from './shared/motion.js'
 
 export interface MotionPropDef {
-  kind: 'transform' | 'opacity' | 'filter' | 'color' | 'size' | 'clip'
+  kind: 'transform' | 'opacity' | 'filter' | 'color' | 'size' | 'clip' | 'text'
   /** the unit a bare number adopts */
   unit: string
   /** units a string value may carry; empty = unitless property */
@@ -60,6 +68,7 @@ export interface CompiledTrack {
   prop: AnimProp
   from?: number | string
   to: number | string
+  format?: AnimationTrack['format']
   start: number
   duration: number
   easing: string
@@ -82,6 +91,8 @@ export interface MotionValue {
   n?: number
   unit?: string
   color?: string
+  /** `count` only: carried from the track so every surface formats alike */
+  format?: AnimationTrack['format']
 }
 export type MotionValues = Record<string, MotionValue>
 
@@ -130,6 +141,11 @@ export const endStyle = endStyleRaw as (
   opts?: SampleOptions,
 ) => MotionStyle
 export const validateAnimation = validateAnimationRaw as (a: unknown) => ValidationResult
+/** where a `count` track may land: a text leaf that is not field-bound */
+export const countTargetError = countTargetErrorRaw as (
+  animation: Animation | undefined,
+  target: { type?: string; isLeaf?: boolean; isBound?: boolean } | null,
+) => string | null
 export const validateBinding = validateBindingRaw as (
   b: unknown,
   ctx?: { animationIds?: string[] },
@@ -152,6 +168,11 @@ export const sampleValues = sampleValuesRaw as (
   opts?: SampleOptions,
 ) => MotionValues
 export const composeMotionStyle = composeMotionStyleRaw as (values: MotionValues) => MotionStyle
+/** the TEXT a `count` track writes at this sample, or undefined */
+export const sampleText = sampleTextRaw as (
+  values: MotionValues,
+  locale?: string,
+) => string | undefined
 export const splitByStagger = splitByStaggerRaw as (c: CompiledAnimation) => StaggerSplit
 export const initialStyle = initialStyleRaw as (c: CompiledAnimation) => MotionStyle
 export const foldReverseTime = foldReverseTimeRaw as (c: CompiledAnimation, t: number) => number

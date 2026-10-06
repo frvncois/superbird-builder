@@ -52,9 +52,16 @@ const resolved = computed(
     (!!inter.value && !!interactions.animationFor(inter.value.interactionId)) ||
     (!!anim.value && !!animations.animationFor(anim.value.animationId)),
 )
+/** the element the timeline MOVES — what a `count` track writes into */
+const movedElement = computed(() => {
+  const id = anim.value?.targetId
+  if (!id) return props.owner
+  if (channelName(id)) return null // a channel: any element anywhere listens
+  return getElement(id) ?? findMasterNode(id) ?? null
+})
 const error = computed(() => {
   const timeline = anim.value && animations.animationFor(anim.value.animationId)
-  return timeline ? animations.animationError(timeline) : null
+  return timeline ? animations.animationError(timeline, movedElement.value) : null
 })
 
 /** only a click can be aimed: the symmetric triggers drive both directions

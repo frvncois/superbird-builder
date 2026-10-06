@@ -214,6 +214,7 @@ export {
   compileAnimation,
   validateAnimation,
   validateBinding,
+  countTargetError,
   APPEAR_MODES,
   validateMotionSettings,
   TRANSITION_PRESET_IDS,

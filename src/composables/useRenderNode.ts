@@ -12,7 +12,13 @@ import { useAnimation, animBindingActiveAt, scopedAnimBindings } from './useAnim
 import { bindingScope, entryScopePart } from '@/lib/shared/entryScope.js'
 import { resolveFieldAttrs } from '@/lib/shared/fields.js'
 import { useMotion } from './useMotion'
-import { appearRootMargin, composeMotionStyle, effectiveAppearMode } from '@/lib/motion'
+import {
+  appearRootMargin,
+  composeMotionStyle,
+  effectiveAppearMode,
+  reducedMotion,
+  sampleText,
+} from '@/lib/motion'
 import { useProject } from './useProject'
 import { useViewMode } from './useViewMode'
 import { FRAME_BREAKPOINT } from '@/components/editor/canvas/frameScope'
@@ -122,7 +128,7 @@ export function useRenderNode(
     () => project.value.breakpoints.find((b) => b.id === frameBreakpointId)?.width ?? null,
   )
   const { collections, collectionByName, activeCollection, activeEntry, entryPath } = useCollections()
-  const { nodeContent, nodeSrc, localeAttributes, entryValue, setNodeContent, setEntryValue } =
+  const { nodeContent, nodeSrc, localeAttributes, entryValue, setNodeContent, setEntryValue, activeLocale } =
     useLocale()
   const { assetForSrc } = useMedia()
 
@@ -344,7 +350,7 @@ export function useRenderNode(
     }
     return { value: def.value?.defaultContent, untranslated: false }
   })
-  const displayContent = computed(() => contentInfo.value.value)
+  const displayContent = computed(() => motionText.value ?? contentInfo.value.value)
 
   // rich content renders through the shared sanitizer via v-html
   const richContent = computed(() =>
@@ -654,6 +660,19 @@ export function useRenderNode(
     const inherited = inheritedMotionValues.value
     if (!own && !inherited) return undefined
     return composeMotionStyle({ ...(inherited ?? {}), ...(own ?? {}) })
+  })
+
+  /**
+   * The TEXT a `count` track writes this frame, or undefined. The one track
+   * that is not style — `displayContent` prefers it while a play is running,
+   * and falls back to the authored content, which IS the final value. Nothing
+   * is written in reduced motion, exactly as the published runtime's `still`
+   * mode leaves the text alone.
+   */
+  const motionText = computed(() => {
+    const own = ownMotionValues.value
+    if (!own || reducedMotion()) return undefined
+    return sampleText(own, activeLocale.value || undefined)
   })
 
   // Build's breakpoint frames are an EDITING surface: animation bindings never

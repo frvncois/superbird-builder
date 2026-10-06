@@ -47,6 +47,11 @@ export const MOTION_PROPS = {
   clipRight: { kind: 'clip', unit: '%', units: ['%', 'px'], def: 0, label: 'Clip right' },
   clipBottom: { kind: 'clip', unit: '%', units: ['%', 'px'], def: 0, label: 'Clip bottom' },
   clipLeft: { kind: 'clip', unit: '%', units: ['%', 'px'], def: 0, label: 'Clip left' },
+  // The ONE track that writes TEXT rather than style: a number counting up to
+  // the value the element already says. `kind: 'text'` is what keeps it out of
+  // composeMotionStyle, initialStyle and endStyle — see sampleText for why the
+  // last two matter more than they look.
+  count: { kind: 'text', unit: '', units: [], def: 0, label: 'Count' },
 }
 
 /** stable property order so composed transform/filter strings never jitter */
@@ -253,6 +258,7 @@ export function compileAnimation(animation) {
         prop: track.prop,
         from: track.from,
         to: track.to,
+        format: track.format,
         start,
         duration,
         easing,
@@ -379,6 +385,9 @@ export function sampleValues(compiled, t, opts) {
     // fall back to the property's neutral value in the destination's unit
     const fromN = fromVal && fromVal.unit === to.unit ? fromVal.n : fromVal ? fromVal.n : meta.def
     values[track.prop] = { n: fromN + (to.n - fromN) * eased, unit: to.unit }
+    // the formatting rides with the value so every surface renders the same
+    // separators from the same sample
+    if (meta.kind === 'text' && track.format) values[track.prop].format = track.format
   }
   return values
 }
@@ -430,6 +439,38 @@ export function composeMotionStyle(values) {
 }
 
 /**
+ * The TEXT a `count` track writes at this sample, or undefined when nothing
+ * counts. Separate from composeMotionStyle because text is not style: the
+ * caller writes `textContent`, not an inline declaration.
+ *
+ * `format` rides on the track (decimals, grouping, prefix, suffix) and reaches
+ * here through the sampled value, so the exporter, the canvas and the
+ * published runtime all format identically.
+ *
+ * @param {Record<string, any>} values
+ * @param {string} [locale] BCP-47; the route's language decides the separators
+ * @returns {string|undefined}
+ */
+export function sampleText(values, locale) {
+  const v = values && values.count
+  if (!v || typeof v.n !== 'number') return undefined
+  const f = v.format || {}
+  const decimals = typeof f.decimals === 'number' && f.decimals >= 0 ? Math.min(20, f.decimals) : 0
+  let body
+  try {
+    body = new Intl.NumberFormat(locale || undefined, {
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+      useGrouping: !!f.group,
+    }).format(v.n)
+  } catch {
+    // an unusable locale tag must not take the number down with it
+    body = v.n.toFixed(decimals)
+  }
+  return `${f.prefix || ''}${body}${f.suffix || ''}`
+}
+
+/**
  * Samples a compiled animation at time `t` into a style object.
  * @returns {Record<string, string|number>}
  */
@@ -461,6 +502,12 @@ export function initialStyle(compiled) {
     if (earliest[track.prop] !== undefined && earliest[track.prop] <= track.start) continue
     earliest[track.prop] = track.start
     const meta = MOTION_PROPS[track.prop]
+    // NEVER bake a count's `from` into the HTML. The exporter writes this into
+    // the markup so an entrance does not flash its final state — which for a
+    // number would ship `0` as the text that a visitor without JavaScript, and
+    // every visitor with reduced motion, reads forever. The authored text IS
+    // the final value; the runtime writes the first frame.
+    if (meta.kind === 'text') continue
     if (meta.kind === 'color') {
       values[track.prop] = { color: lerpColor(track.from, track.from, 0) }
     } else {
@@ -550,6 +597,41 @@ export function validateAnimation(animation) {
         }
         continue
       }
+      if (meta.kind === 'text') {
+        // a staggered step moves the CHILDREN, and a child has no number of
+        // its own to count — the track would write the same text into every
+        // one of them
+        if (step.stagger) {
+          return fail(`${at} cannot stagger "${track.prop}" — a staggered step moves the children, which have no number to count`)
+        }
+        // a number that counts up and then back down is not what anyone means
+        // by a counter, and the end state would be the START value
+        if (step.yoyo) {
+          return fail(`${at} cannot yoyo "${track.prop}" — it would count back down and end on the starting number`)
+        }
+        if (track.format !== undefined) {
+          const f = track.format
+          if (typeof f !== 'object' || f === null || Array.isArray(f)) {
+            return fail(`${at} property "${track.prop}" format must be an object`)
+          }
+          if (f.decimals !== undefined && (typeof f.decimals !== 'number' || f.decimals < 0 || f.decimals > 20)) {
+            return fail(`${at} property "${track.prop}" format.decimals must be 0–20`)
+          }
+          if (f.group !== undefined && typeof f.group !== 'boolean') {
+            return fail(`${at} property "${track.prop}" format.group must be true or false`)
+          }
+          for (const k of ['prefix', 'suffix']) {
+            if (f[k] !== undefined && (typeof f[k] !== 'string' || f[k].length > 16)) {
+              return fail(`${at} property "${track.prop}" format.${k} must be a string of at most 16 characters`)
+            }
+          }
+          for (const k of Object.keys(f)) {
+            if (['decimals', 'group', 'prefix', 'suffix'].indexOf(k) === -1) {
+              return fail(`${at} property "${track.prop}" format has an unknown key "${k}"`)
+            }
+          }
+        }
+      }
       const units = meta.units.length ? ` (units: ${meta.units.join(', ')})` : ' (no unit)'
       const to = parseTrackValue(track.to, track.prop)
       if (!to) return fail(`${at} property "${track.prop}" has an invalid "to" value${units}`)
@@ -566,6 +648,50 @@ export function validateAnimation(animation) {
     }
   }
   return { ok: true }
+}
+
+/** does this animation write TEXT — i.e. hold a `count` track? */
+export function animationWritesText(animation) {
+  for (const step of (animation && animation.steps) || []) {
+    for (const track of step.tracks || []) {
+      const meta = MOTION_PROPS[track && track.prop]
+      if (meta && meta.kind === 'text') return true
+    }
+  }
+  return false
+}
+
+/**
+ * Where a `count` may land: a LEAF that carries text, and not one whose text
+ * comes from a collection field.
+ *
+ * A container has no text of its own to replace — the write would wipe its
+ * children — and a field-bound element re-renders from the entry, so the two
+ * would fight. Checked at every bind site rather than at play time, because a
+ * binding that quietly does nothing is the bug class this whole layer exists
+ * to stop.
+ *
+ * @param {any} animation the library timeline being bound
+ * @param {{type?: string, isLeaf?: boolean, isBound?: boolean}|null} target the
+ *   element the animation MOVES (the binding's target, not its trigger)
+ * @returns {string|null} the refusal, or null
+ */
+export function countTargetError(animation, target) {
+  if (!animationWritesText(animation)) return null
+  if (!target) return null // a channel target: no one element to check
+  if (!target.isLeaf) {
+    return (
+      `a 'count' track writes the element's TEXT, and '${target.type || 'this element'}' is a ` +
+      'container — bind it to a leaf that carries words (a span, a heading, a paragraph)'
+    )
+  }
+  if (target.isBound) {
+    return (
+      "a 'count' track writes the element's TEXT, but this element's text comes from a " +
+      'collection field — the two would fight. Count a plain element beside it.'
+    )
+  }
+  return null
 }
 
 /**

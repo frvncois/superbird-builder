@@ -154,6 +154,7 @@ export function createToolSet({ api, runtime, elicit, hasElicitation = () => nul
     compileAnimation,
     validateAnimation,
     validateBinding,
+    countTargetError,
     validateMotionSettings,
     TRANSITION_PRESET_IDS,
     TRANSITION_DEFAULTS,
@@ -435,6 +436,17 @@ export function createToolSet({ api, runtime, elicit, hasElicitation = () => nul
             prop: { type: 'string', description: 'see list_animations.properties' },
             from: { description: "start value; omit to start from the element's current value" },
             to: { description: 'end value (number, or #hex for colors)' },
+            format: {
+              type: 'object',
+              description: "'count' only: how the number reads. Must match the authored text.",
+              properties: {
+                decimals: { type: 'integer', minimum: 0, maximum: 20 },
+                group: { type: 'boolean', description: 'thousands separators' },
+                prefix: { type: 'string' },
+                suffix: { type: 'string' },
+              },
+              additionalProperties: false,
+            },
           },
           required: ['prop', 'to'],
           additionalProperties: false,
@@ -1461,6 +1473,35 @@ function bindTargetArg(bind) {
  * would run two independent timelines on the same element. A scrub aimed at a
  * shared overlay means nothing at all.
  */
+/**
+ * The element an animation binding MOVES, described for `countTargetError`:
+ * is it a leaf that carries text, and is its text a collection field's?
+ *
+ * Null for a channel target — the listener may be any element anywhere, so
+ * there is no one node to check.
+ */
+function animTargetShape(project, page, masterDef, ownerNode, targetId) {
+  if (isChannelTarget(targetId)) return null
+  let node = ownerNode
+  if (targetId) {
+    const roots = masterDef
+      ? [masterDef.root]
+      : [...(page?.elements ?? []), ...(project.components ?? []).map((c) => c.root)]
+    node = findNode(roots, targetId) ?? null
+    if (!node) {
+      for (const comp of project.components ?? []) {
+        const hit = findNode([comp.root], targetId)
+        if (hit) {
+          node = hit
+          break
+        }
+      }
+    }
+  }
+  if (!node) return null
+  return { type: node.type, isLeaf: isLeafElement(node.type), isBound: !!node.arg }
+}
+
 function channelAnimationError(trigger, targetId) {
   if (!isChannelTarget(targetId) || trigger === 'click') return null
   return (
@@ -2429,6 +2470,16 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
           const channelBad = channelAnimationError(bind.trigger, resolved.targetId)
           if (channelBad) {
             errors.push(`animation refused: ${channelBad}`)
+            continue
+          }
+          // a `count` track writes the target's TEXT, so it only lands on a
+          // leaf that carries words and is not bound to a field
+          const countBad = countTargetError(
+            (project.animations ?? []).find((a) => a.id === bind.animationId),
+            animTargetShape(project, page, masterDef, bindTargetNode, resolved.targetId),
+          )
+          if (countBad) {
+            errors.push(`animation refused: ${countBad}`)
             continue
           }
           bindTargetNode.animations = bindTargetNode.animations ?? []

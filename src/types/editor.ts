@@ -85,6 +85,7 @@ export type AnimProp =
   | 'clipRight'
   | 'clipBottom'
   | 'clipLeft'
+  | 'count'
 
 /** one property's journey inside a step. `from` omitted = start from the
  * element's current computed value (measured at play time).
@@ -95,6 +96,15 @@ export interface AnimationTrack {
   prop: AnimProp
   from?: number | string
   to: number | string
+  /** `count` only: how the number reads. The authored text is the FINAL value,
+   * so this has to agree with it — `18,000+` is `{group: true, suffix: '+'}`. */
+  format?: {
+    decimals?: number
+    /** thousands separators, in the route's locale */
+    group?: boolean
+    prefix?: string
+    suffix?: string
+  }
 }
 
 /** one segment of a timeline: a set of tracks sharing duration/easing */

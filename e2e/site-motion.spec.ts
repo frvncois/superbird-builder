@@ -233,3 +233,127 @@ test.describe('site-wide motion', () => {
     })
   })
 })
+
+// ---------------------------------------------------------------------------
+// The `count` track: the ONE property that writes TEXT rather than style.
+//
+// THE LOAD-BEARING RULE: a count's `from` is NEVER baked into the exported
+// HTML. The exporter writes initialStyle into the markup so an entrance does
+// not flash its final state — which for a number would ship `0` as the text a
+// visitor without JavaScript, and every visitor with reduced motion, reads
+// forever. The authored text IS the final value; the runtime writes the first
+// frame, and `still` mode never touches the text at all.
+
+const COUNT = 'a-count'
+
+function countFixture() {
+  return {
+    pages: [
+      {
+        id: 'p1',
+        name: 'Home',
+        path: '/',
+        status: 'published',
+        elements: [
+          node('body', 'body', {
+            children: [
+              node('stat', 'span', {
+                htmlId: 'stat',
+                content: '18,000+',
+                animations: [{ id: 'cb1', animationId: COUNT, trigger: 'load' }],
+              }),
+            ],
+          }),
+        ],
+      },
+    ],
+    components: [],
+    collections: [],
+    interactions: [],
+    animations: [
+      {
+        id: COUNT,
+        name: 'Count up',
+        steps: [
+          {
+            id: 'cs1',
+            tracks: [{ prop: 'count', from: 0, to: 18000, format: { group: true, suffix: '+' } }],
+            duration: 900,
+            easing: 'linear',
+          },
+        ],
+      },
+    ],
+    breakpoints: [],
+    comments: [],
+    locales: ['en'],
+    defaultLocale: 'en',
+    settings: {
+      publishing: { method: 'server', github: { repo: '', branch: '' } },
+      seo: { siteName: 'T', titleTemplate: '%s', description: '' },
+      domain: '',
+      smtp: {},
+      integrations: { stripe: {}, mailing: {} },
+      tokens: [],
+      customCode: { head: '' },
+      fonts: { family: 'sans' },
+    },
+  }
+}
+
+test.describe('a count track', () => {
+  test.beforeAll(async () => {
+    await exportSite(countFixture(), SITE)
+  })
+
+  test('the authored number ships, and no first frame is baked over it', async () => {
+    const html = await readFile(join(SITE, 'index.html'), 'utf8')
+    const tag = /<span[^>]*id="stat"[^>]*>([^<]*)</.exec(html)!
+    // the FINAL value is what the markup says — not `0`, and not a formatted 0
+    expect(tag[1]).toBe('18,000+')
+    // and nothing was baked: a count contributes no initial style at all
+    expect(/<span[^>]*id="stat"[^>]*style=/.test(html)).toBe(false)
+  })
+
+  test('the runtime counts up to the authored text and stops there', async ({ page }) => {
+    const seen: string[] = []
+    await page.exposeFunction('record', (t: string) => void seen.push(t))
+    await page.addInitScript(() => {
+      // installed before the runtime, so every write it makes is observed
+      document.addEventListener('DOMContentLoaded', () => {
+        const el = document.getElementById('stat')
+        if (!el) return
+        new MutationObserver(() => {
+          ;(window as unknown as { record: (t: string) => void }).record(el.textContent ?? '')
+        }).observe(el, { childList: true, characterData: true, subtree: true })
+      })
+    })
+    await page.goto('/')
+    // it ends on the authored text…
+    await expect.poll(() => page.locator('#stat').textContent(), { timeout: 5000 }).toBe('18,000+')
+    // …having passed through something else on the way, grouped and suffixed
+    expect(seen.length).toBeGreaterThan(0)
+    expect(seen.some((t) => t !== '18,000+' && /^[\d,]+\+$/.test(t))).toBe(true)
+  })
+
+  test('?noanim reads the authored number, written by nobody', async ({ page }) => {
+    const writes: string[] = []
+    await page.exposeFunction('record', (t: string) => void writes.push(t))
+    await page.addInitScript(() => {
+      document.addEventListener('DOMContentLoaded', () => {
+        const el = document.getElementById('stat')
+        if (!el) return
+        new MutationObserver(() => {
+          ;(window as unknown as { record: (t: string) => void }).record(el.textContent ?? '')
+        }).observe(el, { childList: true, characterData: true, subtree: true })
+      })
+    })
+    await page.goto('/?noanim')
+    expect(await page.locator('#stat').textContent()).toBe('18,000+')
+    // `still` mode never touches the text: the end state IS what is in the
+    // markup, so writing it would be churn — and a `0` first frame would be
+    // what this visitor reads forever
+    await page.waitForTimeout(500)
+    expect(writes).toEqual([])
+  })
+})

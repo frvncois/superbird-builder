@@ -18,6 +18,7 @@
 // every card owns its own play and its own "already appeared" state.
 import {
   compileAnimation,
+  sampleText,
   sampleValues,
   composeMotionStyle,
   splitByStagger,
@@ -175,6 +176,14 @@ if (Object.keys(lib).length || siteFx) {
   function write(play: Play) {
     const elementValues = sampleValues(play.split.element, play.time)
     applyStyle(play.el, composeMotionStyle(mergeForElement(play.el, elementValues, play)))
+    // a `count` track writes TEXT, not style. NEVER in `still` mode: the end
+    // state of a count IS the authored text, and the exporter deliberately
+    // never baked a first frame for it — so a reduced-motion visitor, and
+    // anyone on ?noanim, reads the real number and the runtime never touches it.
+    if (!still) {
+      const text = sampleText(elementValues, document.documentElement.lang)
+      if (text !== undefined) play.el.textContent = text
+    }
     if (!play.split.hasStagger) return
     const kids = staggerTargets(play.el, play.split.selector)
     for (let i = 0; i < kids.length; i++) {

@@ -169,6 +169,9 @@ export function useEffects() {
             from === 'interaction'
               ? animations.applyTo(node, toId)
               : interactions.applyTo(node, toId)
+          // a timeline the node cannot carry (a `count` on a container) binds
+          // nothing rather than landing a binding that writes nowhere
+          if (!made) continue
           made.trigger = source.trigger as typeof made.trigger
           made.targetId = source.targetId
           if (source.action) made.action = source.action

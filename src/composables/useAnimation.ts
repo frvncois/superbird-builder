@@ -4,7 +4,8 @@ import { useProject } from './useProject'
 import { cancelPickFor } from './useInteraction'
 import { walkNodes } from '@/lib/tree'
 import { masterAnimationsTargeting, type OwnedBinding } from './useMasterBindings'
-import { validateAnimation } from '@/lib/motion'
+import { countTargetError, validateAnimation } from '@/lib/motion'
+import { isLeafElement } from '@/lib/elements'
 import type { Animation, AnimationBinding, ElementNode } from '@/types/editor'
 
 // The animation library + per-element bindings — the tween counterpart of
@@ -162,8 +163,21 @@ export function useAnimation() {
     }
   }
 
-  /** binds an animation to a node; appear is the sane default trigger */
-  function applyTo(node: ElementNode, animationId: string): AnimationBinding {
+  /** binds an animation to a node; appear is the sane default trigger.
+   *  Returns null when the timeline cannot land here — a `count` track writes
+   *  the element's TEXT, so a container has nothing for it to write into. */
+  function applyTo(node: ElementNode, animationId: string): AnimationBinding | null {
+    const timeline = animationIndex.value.get(animationId)
+    if (
+      timeline &&
+      countTargetError(timeline, {
+        type: node.type,
+        isLeaf: isLeafElement(node.type),
+        isBound: !!node.arg,
+      })
+    ) {
+      return null
+    }
     node.animations ??= []
     const binding: AnimationBinding = {
       id: crypto.randomUUID(),
@@ -198,9 +212,21 @@ export function useAnimation() {
   }
 
   /** guards a library edit before it reaches the canvas/export */
-  function animationError(animation: Animation): string | null {
+  function animationError(
+    animation: Animation,
+    /** the element the timeline MOVES — a `count` track writes its text, so
+     *  it only lands on a leaf that carries words and is not field-bound */
+    target?: ElementNode | null,
+  ): string | null {
     const result = validateAnimation(animation)
-    return result.ok ? null : result.error
+    if (!result.ok) return result.error
+    return target
+      ? countTargetError(animation, {
+          type: target.type,
+          isLeaf: isLeafElement(target.type),
+          isBound: !!target.arg,
+        })
+      : null
   }
 
   /** every binding whose timeline lands on this node (see animDriversIndex) */

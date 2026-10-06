@@ -2025,6 +2025,35 @@ Notes that matter:
   conflict on the SAME entity resolves to the human. Still prefer a draft for large
   changes (golden rule 5).
 
+### Counting up to a number
+
+`count` is the one property that writes the element's TEXT rather than its style.
+
+**Write the FINAL number as the element's text**, and let the track count up to it:
+
+```html
+<span data-ref="stat">18,000+</span>
+```
+
+```json
+{"prop": "count", "from": 0, "to": 18000, "format": {"group": true, "suffix": "+"}}
+```
+
+`format` is `{decimals?, group?, prefix?, suffix?}` and has to AGREE with what you
+wrote — it is how the counting frames read, and the authored text is the last one.
+
+Why the text and not the track decides the final value: the export bakes an entrance's
+first frame into the markup so nothing flashes its end state before the runtime boots.
+A count is deliberately exempt. Baking it would ship `0` as the text that a visitor
+without JavaScript — and every visitor with reduced motion — reads forever. The runtime
+writes the first frame instead, and never writes anything at all under `?noanim` or
+`prefers-reduced-motion`.
+
+Three refusals: it binds only to a LEAF that carries words (a container has no text of
+its own, and the write would wipe its children); not to a field-bound element (the entry
+re-renders over it); and not in a staggered step or beside `yoyo` — the children have no
+number to count, and a number that counts back down ends on the one it started from.
+
 ## Sliders (carousels)
 
 `<slider>` is a container that lays its children out as a horizontal, snap-scrolling
