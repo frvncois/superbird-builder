@@ -408,6 +408,62 @@ function adoptCodeOwned(node, master, box, chain) {
 	}
 }
 /**
+* The per-instance keys a node can carry — what is LOST when the positional
+* pairing has no counterpart for it and the node is discarded.
+*
+* Not the same list as MIRROR_KEYS (what a host says about a nested instance):
+* this is everything a PLACEMENT owns and nothing above it would give back,
+* so it includes the page-only `htmlId` and the per-placement attribute layer.
+*/
+var INSTANCE_STATE_KEYS = [
+	"content",
+	"src",
+	"svg",
+	"background",
+	"locales",
+	"hidden",
+	"variants",
+	"link",
+	"listQuery",
+	"slider",
+	"entryId",
+	"fieldAttrs",
+	"instanceAttributes",
+	"htmlId",
+	"ref"
+];
+/** the per-instance keys this node actually holds, in a form worth printing */
+function stateOn(node) {
+	const keys = [];
+	for (const key of INSTANCE_STATE_KEYS) {
+		const value = node[key];
+		if (value === void 0 || value === null || value === "" || value === false) continue;
+		if (typeof value === "object" && !Object.keys(value).length) continue;
+		keys.push(key === "locales" ? `locales(${Object.keys(value).join(", ")})` : key);
+	}
+	return keys;
+}
+/**
+* Record a node — and everything under it — that the pairing is about to throw
+* away, with the per-instance state going with it.
+*
+* Why this exists: alignLevel is positional and per level, so when a master
+* node changes DEPTH every instance's counterpart shifts and the nodes that no
+* longer pair are recreated by createMirror, inheriting instead of carrying.
+* Wrapping one div in a master therefore wiped the per-instance icon on nine
+* FeatureCards across three pages — and the only number the caller got back was
+* `updatedInstances: 3`, while `removed` counted MASTER elements (of which none
+* were lost). The loss was invisible in every response and in the HTML.
+*/
+function collectDiscarded(node, into) {
+	const keys = stateOn(node);
+	if (keys.length) into.push({
+		type: node.type,
+		keys
+	});
+	for (const child of node.children ?? []) collectDiscarded(child, into);
+}
+/**
 * Reshape one level of children to the master's, KEEPING the node object for
 * each child that survives — which is what carries everything the structure
 * does not: the id, the per-instance text, media, translations, hidden flag and
@@ -436,6 +492,10 @@ function alignLevel(node, master, box, chain) {
 		alignLevel(kept, child, box, chain);
 		return kept;
 	});
+	if (box.lost) {
+		const reused = new Set(matches.values());
+		for (let i = 0; i < old.length; i++) if (!reused.has(i)) collectDiscarded(old[i], box.lost);
+	}
 	if (next.length !== old.length || next.some((child, i) => child !== old[i])) {
 		node.children = next;
 		box.moved = true;
@@ -450,8 +510,11 @@ function alignLevel(node, master, box, chain) {
 * Returns whether anything moved, so a caller can tell a real change from a
 * push that found everything already current.
 */
-function alignStructure(instance, master, chain) {
-	const box = { moved: false };
+function alignStructure(instance, master, chain, lost) {
+	const box = {
+		moved: false,
+		lost
+	};
 	alignLevel(instance, master, box, chain);
 	return box.moved;
 }
@@ -4853,26 +4916,7 @@ function detachInstance(project, page, instanceId) {
 	if (!detachOne(page, def, instanceId, project.components)) return false;
 	return true;
 }
-/**
-* Pushes a master's current structure out to every instance of it, on every
-* page. Returns how many instance subtrees it had to move.
-*
-* Realigning (rather than rebuilding) is what carries per-instance state
-* across: every node that survives the match IS the same node object, so its
-* id, text, media, translations, hidden flag, variant picks and htmlId come
-* with it, and a subtree that was already in step comes out byte-identical. A
-* push that found everything current therefore reads as no edit at all.
-*
-* "Every instance" includes the ones NESTED in other components: the mirrors
-* those components hold in their own masters are brought back in step first —
-* inner components before the hosts that mirror them — and the blocks on the
-* pages follow at any depth.
-*
-* An instance that was never materialized (a `:Card:` leaf in stored code) is
-* simply one whose children do not match yet, so it is filled in here with no
-* special case.
-*/
-function pushMasterStructure(project, def) {
+function pushMasterStructure(project, def, report) {
 	if (!project.components.some((c) => c.id === def.id)) return 0;
 	const chain = effectiveLinkChain(project.components);
 	alignMirrors(project.components, chain);
@@ -4883,7 +4927,16 @@ function pushMasterStructure(project, def) {
 			if (n.type === def.name) instances.push(n);
 		});
 		if (!instances.length) continue;
-		for (const node of instances) if (alignStructure(node, def.root, chain)) moved++;
+		for (const node of instances) {
+			const lost = report ? [] : void 0;
+			if (alignStructure(node, def.root, chain, report ? lost : void 0)) moved++;
+			if (report) for (const entry of lost) report.lost.push({
+				pageId: page.id,
+				page: page.name,
+				...node.ref ? { ref: node.ref } : {},
+				...entry
+			});
+		}
 	}
 	return moved;
 }

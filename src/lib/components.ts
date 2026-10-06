@@ -214,6 +214,70 @@ function adoptCodeOwned(
 }
 
 /**
+ * The per-instance keys a node can carry — what is LOST when the positional
+ * pairing has no counterpart for it and the node is discarded.
+ *
+ * Not the same list as MIRROR_KEYS (what a host says about a nested instance):
+ * this is everything a PLACEMENT owns and nothing above it would give back,
+ * so it includes the page-only `htmlId` and the per-placement attribute layer.
+ */
+const INSTANCE_STATE_KEYS = [
+  'content',
+  'src',
+  'svg',
+  'background',
+  'locales',
+  'hidden',
+  'variants',
+  'link',
+  'listQuery',
+  'slider',
+  'entryId',
+  'fieldAttrs',
+  'instanceAttributes',
+  'htmlId',
+  'ref',
+] as const
+
+/** one discarded node's type and the per-instance state it was carrying */
+export interface DiscardedState {
+  type: string
+  keys: string[]
+}
+
+/** the per-instance keys this node actually holds, in a form worth printing */
+function stateOn(node: ElementNode): string[] {
+  const keys: string[] = []
+  for (const key of INSTANCE_STATE_KEYS) {
+    const value = (node as unknown as Record<string, unknown>)[key]
+    if (value === undefined || value === null || value === '' || value === false) continue
+    if (typeof value === 'object' && !Object.keys(value as object).length) continue
+    keys.push(
+      key === 'locales' ? `locales(${Object.keys(value as object).join(', ')})` : key,
+    )
+  }
+  return keys
+}
+
+/**
+ * Record a node — and everything under it — that the pairing is about to throw
+ * away, with the per-instance state going with it.
+ *
+ * Why this exists: alignLevel is positional and per level, so when a master
+ * node changes DEPTH every instance's counterpart shifts and the nodes that no
+ * longer pair are recreated by createMirror, inheriting instead of carrying.
+ * Wrapping one div in a master therefore wiped the per-instance icon on nine
+ * FeatureCards across three pages — and the only number the caller got back was
+ * `updatedInstances: 3`, while `removed` counted MASTER elements (of which none
+ * were lost). The loss was invisible in every response and in the HTML.
+ */
+function collectDiscarded(node: ElementNode, into: DiscardedState[]): void {
+  const keys = stateOn(node)
+  if (keys.length) into.push({ type: node.type, keys })
+  for (const child of node.children ?? []) collectDiscarded(child, into)
+}
+
+/**
  * Reshape one level of children to the master's, KEEPING the node object for
  * each child that survives — which is what carries everything the structure
  * does not: the id, the per-instance text, media, translations, hidden flag and
@@ -226,7 +290,7 @@ function adoptCodeOwned(
 function alignLevel(
   node: ElementNode,
   master: ElementNode,
-  box: { moved: boolean },
+  box: { moved: boolean; lost?: DiscardedState[] },
   chain?: LinkChain,
 ): void {
   // under a slot the children are the holder's own: a push never touches them
@@ -253,6 +317,14 @@ function alignLevel(
     alignLevel(kept, child, box, chain)
     return kept
   })
+  // every old child the pairing did NOT reuse is thrown away, and so is the
+  // per-instance state on it and under it — reported rather than silent
+  if (box.lost) {
+    const reused = new Set(matches.values())
+    for (let i = 0; i < old.length; i++) {
+      if (!reused.has(i)) collectDiscarded(old[i]!, box.lost)
+    }
+  }
   // untouched when nothing moved: a subtree that was already in step must come
   // out byte-identical, or every push would read as an edit to the host
   if (next.length !== old.length || next.some((child, i) => child !== old[i])) {
@@ -274,8 +346,9 @@ export function alignStructure(
   instance: ElementNode,
   master: ElementNode,
   chain?: LinkChain,
+  lost?: DiscardedState[],
 ): boolean {
-  const box = { moved: false }
+  const box = { moved: false, lost }
   alignLevel(instance, master, box, chain)
   return box.moved
 }

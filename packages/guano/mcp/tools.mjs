@@ -2850,7 +2850,8 @@ async function applyComponentHtml(project, def, html) {
   // the push brings every mirror back in step first (a nested instance written
   // as markup arrives as plain nodes), then realigns every instance on every
   // page — the editor's own code, from the runtime bundle
-  const updatedInstances = pushMasterStructure(project, def)
+  const push = { lost: [] }
+  const updatedInstances = pushMasterStructure(project, def, push)
   const touchedPages = (project.pages ?? []).filter(
     (p) => before.get(p.id) !== pageVersion(project, p),
   )
@@ -2860,6 +2861,14 @@ async function applyComponentHtml(project, def, html) {
     ...(result.warnings.length ? { warnings: result.warnings } : {}),
     diagnostics: result.diagnostics,
     updatedInstances,
+    // What the push THREW AWAY on the pages. `applied.removed` counts MASTER
+    // elements and `updatedInstances` is a count, so a master node that changed
+    // DEPTH — one wrapped div — silently rebuilt every instance's subtree and
+    // dropped the per-instance icons, text and translations on it, with every
+    // number in this response unchanged. Nothing gives those back, so they are
+    // named per placement.
+    ...(push.lost.length ? { lostPerInstanceState: push.lost.slice(0, 40) } : {}),
+    ...(push.lost.length > 40 ? { lostPerInstanceMore: push.lost.length - 40 } : {}),
     touchedPages,
   }
 }
@@ -6465,13 +6474,35 @@ const tools = [
         out.updatedInstances = done.updatedInstances
         out.diagnostics = done.diagnostics
         if (done.warnings) out.warnings = done.warnings
+        out.notes = []
         if (done.applied.removed) {
-          out.notes = [
+          out.notes.push(
             `${done.applied.removed} master element(s) are gone, with whatever they carried — ` +
               'classes, interaction bindings, translations. If that was not intended, echo back ' +
               'the `data-id`s from list_components so each one is adopted rather than replaced.',
-          ]
+          )
         }
+        // The loss that no counter in this response could show: a master node
+        // that changed DEPTH has no positional counterpart on the instances, so
+        // their subtrees were rebuilt and the per-instance icons, text and
+        // translations on them are gone. `applied.removed` counts MASTER
+        // elements, and it can be 0 while nine placements lose their icon.
+        if (done.lostPerInstanceState) {
+          out.lostPerInstanceState = done.lostPerInstanceState
+          if (done.lostPerInstanceMore) out.lostPerInstanceMore = done.lostPerInstanceMore
+          const total =
+            done.lostPerInstanceState.length + (done.lostPerInstanceMore ?? 0)
+          out.notes.push(
+            `${total} element(s) INSIDE instances lost per-instance state (${[
+              ...new Set(done.lostPerInstanceState.flatMap((l) => l.keys)),
+            ]
+              .slice(0, 6)
+              .join(', ')}) — nothing gives it back. Re-set it with edit_elements ` +
+              '{ref, part}. To avoid it, keep a master element at the same DEPTH, or echo its ' +
+              '`data-id` so it is adopted: the pairing inside an instance is positional, not by id.',
+          )
+        }
+        if (!out.notes.length) delete out.notes
         // ids of the new shape — what edit_elements {componentId} addresses
         out.nodes = masterNodeRows(project, def)
       }

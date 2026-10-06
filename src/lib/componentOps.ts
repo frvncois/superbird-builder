@@ -3,6 +3,7 @@ import {
   alignHostMirrors,
   alignStructure,
   effectiveLinkChain,
+  type DiscardedState,
   type LinkChain,
   cloneForMaster,
   isComponentType,
@@ -392,7 +393,23 @@ export function detachInstance(project: Project, page: Page, instanceId: string)
  * simply one whose children do not match yet, so it is filled in here with no
  * special case.
  */
-export function pushMasterStructure(project: Project, def: ComponentDef): number {
+/** where a push discarded per-instance state, for a caller to report */
+export interface PushLoss {
+  pageId: string
+  page: string
+  /** the instance's ref, when it has one — the address an agent would re-edit by */
+  ref?: string
+  /** the element that went away */
+  type: string
+  /** the per-instance keys it was carrying */
+  keys: string[]
+}
+
+export function pushMasterStructure(
+  project: Project,
+  def: ComponentDef,
+  report?: { lost: PushLoss[] },
+): number {
   // a library preview is not in the project; instances match by NAME, so
   // pushing one would rewrite blocks belonging to a real component of the
   // same name
@@ -411,7 +428,26 @@ export function pushMasterStructure(project: Project, def: ComponentDef): number
       if (n.type === def.name) instances.push(n)
     })
     if (!instances.length) continue
-    for (const node of instances) if (alignStructure(node, def.root, chain)) moved++
+    for (const node of instances) {
+      // A master node that changed DEPTH has no positional counterpart on the
+      // instances, so their nodes are recreated and whatever they carried is
+      // gone (see collectDiscarded). The caller gets told which placement lost
+      // what, because `updatedInstances` is a count and `removed` counts MASTER
+      // elements — neither could tell "realigned, nothing lost" from "rebuilt
+      // nine subtrees and dropped their icons".
+      const lost: DiscardedState[] = report ? [] : (undefined as never)
+      if (alignStructure(node, def.root, chain, report ? lost : undefined)) moved++
+      if (report) {
+        for (const entry of lost) {
+          report.lost.push({
+            pageId: page.id,
+            page: page.name,
+            ...(node.ref ? { ref: node.ref } : {}),
+            ...entry,
+          })
+        }
+      }
+    }
   }
   return moved
 }

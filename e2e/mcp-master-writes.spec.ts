@@ -240,3 +240,127 @@ test('a button is an instance part, addressable per placement', async () => {
   expect(html).toContain('type="submit"')
   expect(html).toContain('type="reset"')
 })
+
+// A master restructure and the per-instance state on the pages.
+//
+// The pairing INSIDE an instance is positional and per level (alignLevel): an
+// instance has no `data-id` to echo, because its structure is the master's. So
+// a master node that changes DEPTH — one wrapped div — leaves every instance's
+// counterpart shifted, their nodes are recreated by createMirror, and whatever
+// they carried is gone: the per-instance icon, text, translations, variant
+// picks, htmlId.
+//
+// None of the numbers in the response could show it. `applied.removed` counts
+// MASTER elements, and is 0 in exactly the case where nine placements lose
+// their icon; `updatedInstances` is a count that cannot tell "realigned,
+// nothing lost" from "rebuilt nine subtrees". The write answered `saved: true`
+// and the loss was invisible in the response AND in the exported HTML (the
+// instances just render the master's default).
+test.describe('a master restructure and per-instance state', () => {
+  async function threeCards() {
+    const s = await mcpSession()
+    const comp = await s.call('create_component', {
+      name: 'FeatureCard',
+      html: '<div class="card"><div class="p-2"><svg data-icon="star" /></div><span>Title</span></div>',
+    })
+    const listed = (
+      await s.call('list_components', { names: ['FeatureCard'], includeNodes: true, includeHtml: true })
+    ).components[0]
+    const home = await s.home()
+    await s.call('set_page_html', {
+      pageId: home.id,
+      version: home.version,
+      html: pageHtml(
+        ['a', 'b', 'c']
+          .map(
+            (r) =>
+              `<FeatureCard data-ref="f-${r}"><div><svg data-icon="star" /></div><span>T ${r}</span></FeatureCard>`,
+          )
+          .join('\n'),
+      ),
+    })
+    // a different icon per placement — per-instance state with a master default
+    for (const [i, r] of ['a', 'b', 'c'].entries()) {
+      const edit = await s.call('edit_elements', {
+        pageId: home.id,
+        version: (await s.home()).version,
+        edits: [{ ref: `f-${r}`, part: 'icon', icon: ['star', 'heart', 'zap'][i] }],
+      })
+      expect(edit.failed).toBe(0)
+    }
+    const icons = () => {
+      const out: string[] = []
+      const walk = (ns: { type: string; svg?: string; children?: unknown[] }[]) => {
+        for (const n of ns ?? []) {
+          if (n.type === 'icon') out.push(n.svg ? (/lucide:([a-z-]+)/.exec(n.svg)?.[1] ?? 'custom') : 'inherits')
+          walk((n.children ?? []) as never)
+        }
+      }
+      walk(s.stored().pages[0].elements)
+      return out
+    }
+    expect(icons()).toEqual(['star', 'heart', 'zap'])
+    const html = () => s.call('list_components', { names: ['FeatureCard'], includeHtml: true })
+      .then((r) => r.components[0].html as string)
+    return { s, comp, listed, icons, html }
+  }
+
+  test('a wrapped div loses the icon on every placement, and SAYS so', async () => {
+    const { s, comp, listed, icons } = await threeCards()
+    const id = (pred: (n: { type: string; classes?: string }) => boolean) =>
+      listed.nodes.find(pred).id as string
+    const version = (await s.call('list_components', { names: ['FeatureCard'] })).components[0]
+      .version
+
+    // the icon box gains a level above it: every id is echoed, so the MASTER
+    // loses nothing — the damage is entirely on the pages
+    const res = await s.call('update_component', {
+      componentId: comp.componentId,
+      version,
+      html:
+        `<FeatureCard>\n  <div data-id="${id((n) => n.classes === 'card')}" class="card">\n` +
+        `    <div class="ring">\n      <div data-id="${id((n) => n.classes === 'p-2')}" class="p-2">\n` +
+        `        <svg data-id="${id((n) => n.type === 'icon')}" data-icon="star" />\n      </div>\n    </div>\n` +
+        `    <span data-id="${id((n) => n.type === 'span')}">Title</span>\n  </div>\n</FeatureCard>`,
+    })
+    expect(res.saved).toBe(true)
+
+    // the loss is real…
+    expect(icons()).toEqual(['inherits', 'inherits', 'inherits'])
+    // …and it is NAMED, per placement, with the ref an agent re-edits by
+    expect(res.lostPerInstanceState).toHaveLength(3)
+    expect(res.lostPerInstanceState.map((l: { ref: string }) => l.ref).sort()).toEqual([
+      'f-a',
+      'f-b',
+      'f-c',
+    ])
+    expect(res.lostPerInstanceState[0].keys).toContain('svg')
+    expect(res.lostPerInstanceState[0].page).toBe('Home')
+    expect(JSON.stringify(res.notes)).toMatch(/lost per-instance state/)
+    // and it says how to avoid it next time
+    expect(JSON.stringify(res.notes)).toMatch(/same DEPTH/)
+  })
+
+  test('a restructure that keeps the depth keeps the icons, and says nothing', async () => {
+    const { s, comp, listed, icons } = await threeCards()
+    const id = (pred: (n: { type: string; classes?: string }) => boolean) =>
+      listed.nodes.find(pred).id as string
+    const version = (await s.call('list_components', { names: ['FeatureCard'] })).components[0]
+      .version
+    // same shape, a class changed — a push that finds everything current must
+    // stay silent, or the warning is noise on every edit
+    const res = await s.call('update_component', {
+      componentId: comp.componentId,
+      version,
+      html:
+        `<FeatureCard>\n  <div data-id="${id((n) => n.classes === 'card')}" class="card gap-4">\n` +
+        `    <div data-id="${id((n) => n.classes === 'p-2')}" class="p-2">\n` +
+        `      <svg data-id="${id((n) => n.type === 'icon')}" data-icon="star" />\n    </div>\n` +
+        `    <span data-id="${id((n) => n.type === 'span')}">Title</span>\n  </div>\n</FeatureCard>`,
+    })
+    expect(res.saved).toBe(true)
+    expect(icons()).toEqual(['star', 'heart', 'zap'])
+    expect(res.lostPerInstanceState).toBeUndefined()
+    expect(res.notes).toBeUndefined()
+  })
+})
