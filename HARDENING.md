@@ -152,50 +152,50 @@ keepalive flush is impossible anyway, because keepalive caps a request body at
 
 ## Phase 3 — Editor robustness
 
-- [ ] **B-1 Ack sequence.** `src/lib/store.ts`: per-op `seq`, per-key acked
+- [x] **B-1 Ack sequence.** `src/lib/store.ts`: per-op `seq`, per-key acked
       high-water mark, a `storeAck` tick and `ackedSeq()`. `storeSet` stays
       synchronous and returns the seq, so no caller changes.
-- [ ] **B-2 Error text.** Read the server's `{error}` body; classify retryable
+- [x] **B-2 Error text.** Read the server's `{error}` body; classify retryable
       (network, 5xx, 429, 412) against terminal (400, 403, 404, 507); drop a
       terminal op instead of retrying it forever. Fix the 401 path that returns
       before clearing `inflight` and pins `pendingWrites` above zero.
-- [ ] **B-3 Key-tagged baseline.** `persist(snapshot, key)`, a baseline tagged
+- [x] **B-3 Key-tagged baseline.** `persist(snapshot, key)`, a baseline tagged
       with the key it belongs to, a pending baseline promoted only on ack, and a
       write generation guard. **This is correction 1** — the branch-switch
       write-to-wrong-key bug.
-- [ ] **B-4 Undo through merge.** `apply` routes through `persistMerged`, which
+- [x] **B-4 Undo through merge.** `apply` routes through `persistMerged`, which
       rewrites `history[pointer]` **in place** when the call came from history,
       instead of truncating the redo arm. No write at all while autosave is
       suspended for an agent run.
       *Gate: a new concurrent-undo assertion in `store-concurrency`; land them
       together.*
-- [ ] **B-5 resetTo split.** Rename `replaceFromRemote` to `adoptRemote` and use
+- [x] **B-5 resetTo split.** Rename `replaceFromRemote` to `adoptRemote` and use
       it for create-branch and switch-branch; add `commitReplacement` for
       merge-into-Main and have it return the snapshot actually stored, so the
       kept draft's merge base cannot disagree with the new Main. Delete
       `resetTo`.
-- [ ] **B-6 Publish ordering.** `commit`/`saveNow` return their promise;
+- [x] **B-6 Publish ordering.** `commit`/`saveNow` return their promise;
       `usePublish` awaits the save and the flush and refuses to publish while
       `storeError` is set; `switchBranch` and `previewMerge` await too.
-- [ ] **B-7 Notices.** New `useNotice.ts`, `NoticeHost.vue` (z-115, above the
+- [x] **B-7 Notices.** New `useNotice.ts`, `NoticeHost.vue` (z-115, above the
       tooltip host, bottom-centre so it clears both canvas corners) and
       `errorReporting.ts` wired to `app.config.errorHandler`,
       `unhandledrejection` and `storeError`. First `aria-live` region in the app.
       Add the new rung to CLAUDE.md's z-index ladder.
-- [ ] **B-8 Unload guard.** `hasUnsavedWork` derived from the existing save
+- [x] **B-8 Unload guard.** `hasUnsavedWork` derived from the existing save
       status so it can never disagree with the pill the user is looking at; a
       conditional `beforeunload`; a `pagehide` `saveNow()`; and a deliberate-
       navigation flag so logout and the 401 bounce never prompt.
       *No direct gate is possible — Playwright dismisses the prompt. Noted
       honestly rather than papered over.*
-- [ ] **B-9 uid helper, lib.** New `src/lib/shared/ids.js` with a
+- [x] **B-9 uid helper, lib.** New `src/lib/shared/ids.js` with a
       `getRandomValues` fallback for non-secure contexts, then the 14
       bundle-reachable call sites. **Rebuild and commit the MCP runtime bundle in
       the same commit.**
-- [ ] **B-10 uid helper, rest.** The remaining ~31 call sites in composables and
+- [x] **B-10 uid helper, rest.** The remaining ~31 call sites in composables and
       components. Add a convention line to CLAUDE.md and a CI grep, since there
       is no linter to enforce it.
-- [ ] **B-11 Accessibility, minimal.** Dialog semantics, focus trap and focus
+- [x] **B-11 Accessibility, minimal.** Dialog semantics, focus trap and focus
       restore in `ModalHost`; `alertdialog` and initial focus in `ConfirmModal`;
       an accessible name on the modal close button; `aria-live` on the save pill;
       `aria-describedby` and keyboard reachability for tooltips.
