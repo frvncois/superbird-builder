@@ -287,6 +287,22 @@ async function readPublishConfig() {
         ? parsed.forms.retentionDays
         : 365,
     },
+    // Disk housekeeping, deliberately NOT folded into `forms`: that number is
+    // a data-protection obligation about other people's personal data, edited
+    // in Settings → Forms. These are about this operator's own bytes.
+    // Nothing here ever prunes store.pre-v2 — it is the only way back from the
+    // one-way schema migration, and putting it on a timer is the wrong instinct.
+    retention: {
+      snapshotKeep: Number.isFinite(parsed?.retention?.snapshotKeep)
+        ? parsed.retention.snapshotKeep
+        : 10,
+      snapshotDays: Number.isFinite(parsed?.retention?.snapshotDays)
+        ? parsed.retention.snapshotDays
+        : 0, // 0 = no age limit, keep-count only
+      variantDays: Number.isFinite(parsed?.retention?.variantDays)
+        ? parsed.retention.variantDays
+        : 30,
+    },
   }
 }
 
@@ -1968,6 +1984,12 @@ async function buildPackage() {
     files.push({ path: `store/${path}`, data })
   }
   for (const { path, data } of await readDirFiles(MEDIA_DIR)) {
+    // `variants/` is a DERIVED cache: the exporter regenerates any resize from
+    // the original, at the cost of CPU only. Shipping it inflated every backup
+    // by the whole resized-image set for no durable value — and the import
+    // allowlist rejected the entries, so a snapshot taken after any publish
+    // with a resizable raster could not be restored at all.
+    if (path.startsWith('variants/')) continue
     files.push({ path: `media/${path}`, data })
   }
   return createZip(files)
@@ -1982,9 +2004,34 @@ async function handleProjectExport(req, res) {
   })
 }
 
+const SNAPSHOT_MAX_BYTES = Number(process.env.SNAPSHOT_MAX_BYTES) || 512 * 1024 * 1024
+
+/** total bytes under `dir`, by stat — never reads file contents */
+async function dirBytes(dir) {
+  let total = 0
+  try {
+    for (const entry of await readdir(dir, { withFileTypes: true, recursive: true })) {
+      if (!entry.isFile()) continue
+      try {
+        total += (await stat(join(entry.parentPath ?? entry.path, entry.name))).size
+      } catch {
+        /* vanished mid-scan */
+      }
+    }
+  } catch {
+    /* missing dir contributes nothing */
+  }
+  return total
+}
+
 const IMPORT_STORE_RE = /^store\/[A-Za-z0-9_-]{1,100}\.json$/
 const IMPORT_MEDIA_FILE_RE = /^media\/files\/[a-f0-9]{16}$/
 const IMPORT_MEDIA_THUMB_RE = /^media\/thumbs\/[a-f0-9]{16}\.webp$/
+// buildPackage no longer bundles these, but every snapshot taken BEFORE that
+// change contains them, and refusing them would leave those backups
+// permanently unrestorable — the worst possible outcome for a backup feature.
+// The hash here is the exporter's 12-char content hash, not a media id.
+const IMPORT_MEDIA_VARIANT_RE = /^media\/variants\/[a-f0-9]{8,32}-\d{2,5}\.webp$/
 
 /** POST /api/project-import — admin-only full replace from a package. Strict
  * allowlist: any unrecognized entry rejects the whole import. */
@@ -2013,6 +2060,7 @@ async function applyPackage(raw) {
 
   let manifestOk = false
   let hasProject = false
+  const skipped = new Set()
   for (const { path, data } of entries) {
     if (path === 'manifest.json') {
       try {
@@ -2046,8 +2094,21 @@ async function applyPackage(raw) {
       } catch {
         return 'invalid media index'
       }
-    } else if (IMPORT_MEDIA_FILE_RE.test(path) || IMPORT_MEDIA_THUMB_RE.test(path)) {
+    } else if (
+      IMPORT_MEDIA_FILE_RE.test(path) ||
+      IMPORT_MEDIA_THUMB_RE.test(path) ||
+      IMPORT_MEDIA_VARIANT_RE.test(path)
+    ) {
       // opaque bytes — id shape already validated by the regex
+    } else if (path.startsWith('media/')) {
+      // An unknown shape UNDER media/ is skipped, not fatal. Failing a whole
+      // restore because the exporter learned to cache a new derived format is
+      // a self-inflicted outage, and skipping is strictly safer than today:
+      // only matched paths are ever joined and written, so this writes nothing
+      // either way. Anything outside store/ and media/ still hard-rejects,
+      // which is what guards against zip-slip and arbitrary writes.
+      log.warn(`import: skipping unrecognized media entry ${path}`)
+      skipped.add(path)
     } else {
       return `unexpected entry: ${path}`
     }
@@ -2066,7 +2127,7 @@ async function applyPackage(raw) {
     await mkdir(tmpStore, { recursive: true })
     await mkdir(tmpMedia, { recursive: true })
     for (const { path, data } of entries) {
-      if (path === 'manifest.json') continue
+      if (path === 'manifest.json' || skipped.has(path)) continue
       const dest = join(tmp, path) // path already allowlisted, safe to join
       await mkdir(join(dest, '..'), { recursive: true })
       await writeFile(dest, data)
@@ -2133,6 +2194,20 @@ async function handleSnapshots(req, res, path) {
   if (path === '/api/snapshots') {
     if (req.method === 'GET') return send(res, 200, JSON.stringify(await listSnapshots()))
     if (req.method === 'POST') {
+      // createZip builds the whole archive in memory, so a library approaching
+      // the media quota can OOM a small container. Refuse with a number the
+      // operator can act on rather than dying mid-request. Streaming the zip
+      // would lift this, and is a bigger change than it looks.
+      const raw = (await dirBytes(STORE_DIR)) + (await dirBytes(MEDIA_DIR))
+      if (raw > SNAPSHOT_MAX_BYTES) {
+        return fail(
+          res,
+          507,
+          `too large to snapshot in memory (${Math.round(raw / 1e6)} MB of ${Math.round(
+            SNAPSHOT_MAX_BYTES / 1e6,
+          )} MB) — raise SNAPSHOT_MAX_BYTES or use GET /api/project-export`,
+        )
+      }
       const id = new Date().toISOString().replace(/:/g, '-').replace('.', '-')
       await mkdir(BACKUPS_DIR, { recursive: true })
       const zip = await withCritical('snapshot', () => buildPackage())
@@ -2629,6 +2704,77 @@ async function runRetention() {
   } catch (err) {
     log.warn('forms: retention prune failed:', err.message)
   }
+  try {
+    await pruneSnapshots()
+  } catch (err) {
+    log.warn('snapshots: retention prune failed:', err.message)
+  }
+  try {
+    await pruneVariantCache()
+  } catch (err) {
+    log.warn('media: variant cache prune failed:', err.message)
+  }
+}
+
+/** Keep the newest `snapshotKeep`, and of the rest drop anything past
+ * `snapshotDays`. The keep count is floored at 1 whatever the config says: a
+ * retention job that deletes the only restore point is not housekeeping. */
+async function pruneSnapshots() {
+  const { snapshotKeep, snapshotDays } = (await readPublishConfig()).retention
+  const keep = Math.max(1, snapshotKeep)
+  const all = await listSnapshots() // already newest-first
+  const cutoff = snapshotDays > 0 ? Date.now() - snapshotDays * 86_400_000 : null
+  const doomed = all
+    .slice(keep)
+    .filter((s) => cutoff === null || !Number.isFinite(s.createdAt) || s.createdAt < cutoff)
+  for (const snap of doomed) {
+    await rm(join(BACKUPS_DIR, `${snap.id}.zip`), { force: true })
+    await rm(join(BACKUPS_DIR, `${snap.id}.json`), { force: true }) // the name sidecar
+  }
+  if (doomed.length) {
+    log.info(`snapshots: pruned ${doomed.length} snapshot(s) (kept ${all.length - doomed.length})`)
+  }
+}
+
+/**
+ * Evict resized images nothing has read for `variantDays`.
+ *
+ * By ACCESS time, not modification time. A cache hit is a read, so mtime never
+ * moves after the first write and an mtime policy would evict exactly the
+ * files every publish uses. A variant whose original is gone is simply never
+ * read again, so it ages out on its own — which is why this does not need to
+ * hash the library to find orphans (the cache key is a content hash of the
+ * file, not a media id, so there is no cheap mapping back).
+ *
+ * Falls back to mtime where atime is older than mtime, which is what a
+ * `noatime` mount looks like. Being wrong here costs one re-encode, never
+ * correctness — the one prune that can afford to be approximate.
+ */
+async function pruneVariantCache() {
+  const { variantDays } = (await readPublishConfig()).retention
+  if (!variantDays || variantDays <= 0) return
+  const dir = join(MEDIA_DIR, 'variants')
+  let names
+  try {
+    names = await readdir(dir)
+  } catch {
+    return // no cache yet
+  }
+  const cutoff = Date.now() - variantDays * 86_400_000
+  let pruned = 0
+  for (const name of names) {
+    if (!name.endsWith('.webp')) continue
+    try {
+      const st = await stat(join(dir, name))
+      const seen = Math.max(st.atimeMs < st.mtimeMs ? 0 : st.atimeMs, st.mtimeMs)
+      if (seen >= cutoff) continue
+      await rm(join(dir, name), { force: true })
+      pruned++
+    } catch {
+      /* vanished mid-scan — nothing to do */
+    }
+  }
+  if (pruned) log.info(`media: pruned ${pruned} cached variant(s) unused for ${variantDays}d`)
 }
 
 /**
