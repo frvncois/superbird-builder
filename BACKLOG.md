@@ -753,14 +753,14 @@ habits.
   count afterwards. Interlocked, with `bindings` on the list tools so the refusal is not
   the only way to find out.
 
-## First client build (Vezaro, 2026-10-05) — V1–V9 FIXED, V10–V13 open
+## First client build (Vezaro, 2026-10-05) — V1–V13 FIXED
 
 The first real client project driven entirely through the MCP tools: a US telehealth
 marketing site plus a subscription funnel, built in a draft and never published. The
 brief's second half was to log every place Guano fell short, which is
 `docs/history/GUANO-FEEDBACK.md` (the session handoff is beside it). Thirteen findings,
-V1–V13 below in that file's order. V1–V9 are fixed with specs; V10–V13 are product
-gaps that need design, not repair.
+V1–V13 below in that file's order. All thirteen are fixed with specs; the plan the last
+four were built from is `docs/history/GAPS-PLAN.md`.
 
 ### Fixed
 
@@ -798,43 +798,42 @@ gaps that need design, not repair.
   sixteen copies of one class warning per response, the undiscoverable file root, and
   the `<slot>` shorthand that ends re-typing a component's skeleton on every page.
 
-### Open — product gaps
+### Fixed — the four product gaps (plan: `docs/history/GAPS-PLAN.md`)
 
 - **V10. A site-wide overlay cannot be one component** (MAJOR in the report, and the
-  largest piece of work here). A binding's target must be reachable from its trigger, so
-  nothing outside an instance can open something inside one. "Get started" lives in
-  `SiteHeader`, `SiteFooter` and `CtaBand`; the modal it opens therefore had to be
-  page-owned markup repeated on all 8 pages, with slots added to three components so
-  each page could re-declare their CTAs as page nodes. It works, and changing the modal
-  chrome now means editing 8 pages — and because the page cannot reach inside the flow
-  component, opening the modal cannot reset it to step 1.
-  What this wants is a **site-level target**: one overlay rendered once per route, with
-  a sentinel any element in any master can aim at (`href="@open:start"`, in the spirit of
-  `@item` and `@locale:`), plus a reset action. Touches the state-key design in
-  `shared/interactionKeys.js`, both Vue renderers, the exporter and the published
-  runtime, so it is a design task first. The alternative worth weighing: let a binding
-  target an instance by `ref` + `part` on the same page, which is narrower and does not
-  give the header's own instance a way in.
-- **V11. No way to animate a number.** "The stat should count up" has no expressible
-  form: the property catalog is transforms, opacity, colours, size and clip. The session
-  built an odometer — per digit, a 1em clipping box with ten stacked numerals rolled on
-  `appear` — which renders well and degrades correctly, at ten elements per digit, one
-  animation per target digit, and a number no longer editable as text. Wants a `count`
-  track (`{prop: "count", from, to, format}`) on a leaf, which is the first track that
-  would write textContent rather than a style, in `shared/motion.js` and all three
-  runtimes.
-- **V12. A class interaction used as a dialog has no dialog behaviour.** No scroll lock,
-  no focus move into the panel, no Tab trap, no focus restore, no `aria-modal`, and no
-  reset: the flow reopens on the step it was left on, and the wheel over the backdrop
-  scrolls the page behind. Expressible only as custom code, which agents cannot ship by
-  default. Wants either a `dialog` element type or a modal flag on an interaction
-  target, carrying those behaviours with it.
-- **V13. Images export at upload size.** Originals are copied verbatim: 16 photos,
-  4.9 MB of `assets/media`, no `width`/`height`, no `srcset`, no `loading="lazy"`, to a
-  brief that said mobile-first. `loading` is authorable, but most images sit inside
-  components and collection bindings where an agent cannot reach each placement. Wants
-  variants generated at export with `srcset`/`sizes`, intrinsic dimensions emitted, and
-  `lazy` by default below the first viewport.
+  largest piece of work here) — FIXED in `7f2543a`. A binding's target had to be
+  reachable from its trigger, so nothing outside an instance could open something inside
+  one: "Get started" lives in `SiteHeader`, `SiteFooter` and `CtaBand`, and the modal
+  they open was page-owned markup repeated on all 8 pages.
+  A **channel** is the answer: `targetId: "@start"` aims at a NAME, and any element
+  declaring `channel: "start"` listens, wherever in the project it lives. The one rule
+  that makes it work is that a channel target is UNSCOPED — no component instance, no
+  entry — because the trigger and the listener are in different trees and neither could
+  reproduce the other's scope. Tweens on a channel are `click` only (the one shared play
+  key). The reset the report also wanted is a recipe, not a flag: step panels declare
+  `step-1`, `step-2`… and the open button binds `action: "on"` to `@step-1` in the same
+  exclusive group, which is possible because a channel group is unscoped too.
+  `e2e/export-channel.spec.ts`, `e2e/interactions.spec.ts`, `scripts/check-html.ts`.
+- **V11. No way to animate a number** — FIXED in `532934f`. A `count` track, the first
+  property that writes `textContent` rather than a style. The rule that earns its keep:
+  a count's `from` is never baked into the exported HTML, so the authored text IS the
+  final value and a visitor with no JavaScript (or reduced motion) reads the real
+  number instead of a permanent `0`. Leaf-only, never field-bound, never staggered,
+  never `yoyo`. `e2e/site-motion.spec.ts`, `e2e/mcp-tool-contracts.spec.ts`.
+- **V12. A class interaction used as a dialog has no dialog behaviour** — FIXED in
+  `07c774d`. `Interaction.modal` adds the lot: scroll lock, focus moved in and trapped,
+  `aria-modal`, and everything given back on off. A flag rather than a `<dialog>`
+  element type, because every project already builds overlays from classes and a native
+  dialog would duplicate the exclusive-group / `closeOn` model. The scroll lock needed a
+  handshake with the motion runtime's inertia scroller, which writes `window.scrollTo`
+  and so walked straight past `overflow: hidden`. `e2e/interactions.spec.ts`.
+- **V13. Images export at upload size** — FIXED in `917ca1a` (dimensions, lazy loading)
+  and `2c769dd` (variants). Intrinsic `width`/`height`, `decoding="async"`, one eager
+  image per route and `loading="lazy"` for the rest; plus 480/768/1200/1600 px webp
+  variants as a `srcset`, cached by content hash so a republish re-encodes nothing. The
+  dimensions are safe only because the exported stylesheet carries Tailwind's
+  `img,video{height:auto}` — verified before the attributes shipped, and asserted in the
+  spec beside them. `e2e/export-images.spec.ts`.
 
 ### Assessed, not built: the Bask Health integration
 

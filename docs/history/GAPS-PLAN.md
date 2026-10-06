@@ -481,5 +481,62 @@ CLAUDE.md's e2e sentence updated with the new counts.
 
 ## Session notes
 
-(filled in by the executing session: deviations, open decisions, what was found that
-this plan did not name)
+Executed 2026-10-05 in one session. All five phases landed, one commit each, every
+gate green at the end: `type-check`, `check:html`, `check:migrate`, `check:mcp`
+(70,785 B of 80,000), `check:corpus`, and `build && test:e2e` (338 tests in 48 files,
+up from 314 in 46).
+
+| phase | commit |
+|---|---|
+| V13a images | `917ca1a` |
+| V10 channels | `7f2543a` |
+| V12 modal | `07c774d` |
+| V11 count | `532934f` |
+| V13b variants | `2c769dd` |
+
+**Decisions** — all four taken as the plan's stated default, each named in its commit:
+Play mirrors a modal's focus and aria but not the scroll lock (3.5); `count` + `yoyo` is
+refused (4.1); preview generates variants too, relying on the shared cache (5.2); a
+channel listener may live on a component master, with `channel-declared-twice` as the
+guard (2.6).
+
+**Deviations and things the plan did not name.**
+
+1. **The corpus referee compares the shipped RUNTIME files too**, not only page HTML.
+   Ground rule 3 said V10–V12 must leave the corpus byte-identical; V12 and V11 rebuild
+   `server/site-runtime.js` and `server/motion-runtime.js`, which the export writes to
+   `assets/script.js` / `assets/motion.js`, so each produced a diff of exactly those
+   files and nothing else. Both diffs were read line by line before the baseline moved,
+   and both commits say so. Page HTML was byte-identical throughout and no node id ever
+   moved.
+2. **V13a's `sizeFor` reads the header for LIBRARY assets too** (1.2 said to emit nothing
+   when the media index has no dimensions). The buffer is already in memory and a header
+   read is cheap, so the narrower rule bought nothing and cost coverage for every asset
+   uploaded before thumbnails existed. The index value is still preferred when present.
+3. **`useMotion` now carries a play's scope explicitly on the PlayState.** `inScope`
+   parsed it back out of the key by finding the `@`; a channel target puts an `@` inside
+   the key itself (`animId:@start`), so neither the first nor the last one is reliably
+   the separator. Parsing was replaced rather than patched.
+4. **For animations, a channel binding's `k` is unscoped too** — 2.3 said to leave `k`
+   scoped. `data-atgt` is matched by `meta.k`, not by the play key, so a scoped `k` on
+   the trigger side could never match the listener's. (For interactions it makes no
+   difference: `site-runtime.js` never reads `i.k`.) One rule in `scopeFor` covers both
+   engines.
+5. **The corpus exercises neither image phase**: every image in the three projects is an
+   SVG, so no `width`/`height` and no `srcset` appears there at all. The only baseline
+   move for V13a was `decoding`/`loading`/`fetchpriority`; V13b moved nothing. The raster
+   paths are covered by `e2e/export-images.spec.ts` alone — worth knowing before trusting
+   the referee on anything image-shaped.
+6. **A dropped `/media/<id>` still renders an `<img>`** (with no `src`), which 1.4
+   assumed was elided. The spec asserts the real behaviour rather than changing it.
+7. **`overflow: hidden` does not stop programmatic scrolling**, only user input. The V12
+   spec therefore proves the lock with a real wheel event; a `window.scrollBy` check
+   would have passed whether or not the motion-runtime handshake existed.
+8. **The editor's `applyTo` can now refuse**, returning `null` when a `count` cannot land
+   on the node. Two callers (`useEffects.copyBindings`, `useElementEffects.createActionFor`)
+   were updated to skip rather than dereference.
+9. **`bind_interaction` has no tween path** (4.3 implied one); the only animation bind
+   site in the toolset is `edit_elements {bindAnimations}`.
+
+**Not built, deliberately**: `resetOnOpen` (2.9 — it is a recipe, written into GUIDE
+instead), and the Layers-row `@name` label (2.8, marked optional).
