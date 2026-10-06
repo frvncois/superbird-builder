@@ -942,8 +942,8 @@ test.describe('get_guide sections', () => {
   })
 })
 
-// From BACKLOG, surfaced again by the Harbour run: three writes that could
-// destroy work an agent had not read, and said so only afterwards.
+// Three writes that could destroy work an agent had not read, and said so
+// only afterwards.
 test.describe('destructive writes are interlocked', () => {
   test('a token replace that drops an in-use token is refused', async () => {
     const s = await mcpSession()

@@ -2293,7 +2293,7 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
           // can only ever match nothing: the list rendered empty on every
           // route while this tool reported success. The feature an agent
           // reaching for it on a text field actually wants is
-          // `equalsCurrentField`, which does not exist yet (BACKLOG).
+          // `equalsCurrentField`, which does not exist yet.
           if (!bad.length && !refusedFilter && q.filter?.equalsCurrent && filterField) {
             const kind = filterField.type
             if (kind !== 'reference' && kind !== 'multi-reference') {

@@ -2241,7 +2241,7 @@ async function handleStatic(req, res) {
       // page turns a logged-in admin's clicks into publish/delete actions.
       // frame-ancestors only — deliberately NOT a full CSP, because the editor
       // compiles Tailwind in the browser at runtime and a script-src would
-      // white-screen it (that half stays open; see BACKLOG S10).
+      // white-screen it (that half stays open).
       const base = headersFor(target)
       const adminHeaders = {
         ...base,

@@ -14,7 +14,7 @@
 // A trigger that already holds several actions — an agent's write, an older
 // project — shows them all, stacked, so nothing is hidden; the UI just never
 // adds a second one. Dismissal, exclusive groups and remembered dismissal are
-// not edited here (agent-only for now; see BACKLOG.md).
+// not edited here (agent-only for now).
 import { computed } from 'vue'
 import { Plus } from 'lucide-vue-next'
 import ButtonUI from '@/components/ui/ButtonUI.vue'

@@ -402,7 +402,7 @@ const ids = (n: ElementNode) => { const out: string[] = []; walkNodes([n], (x) =
   // `data-*` is authorable, so these used to land as a custom DOM attribute and
   // bind nothing while the write reported success — the exact bug class this
   // whole format exists to stop. Found by driving the toolset as an agent
-  // would (docs/history/TREE-SOURCE-PLAN.md 5.3).
+  // would.
   const p = fresh()
   const res = write(p, '<collection-list data-source="post"><h2 /></collection-list>')
   ok(res.refused.some((r) => /binds nothing/.test(r.message) && /'source'/.test(r.message)),
