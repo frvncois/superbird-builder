@@ -1,4 +1,4 @@
-# BACKLOG.md — deferred items (MCP eval run 2026-10-04; security section verified 2026-09-15; rest as of 2026-09-05)
+# BACKLOG.md — deferred items (first client build 2026-10-05; MCP eval run 2026-10-04; security section verified 2026-09-15; rest as of 2026-09-05)
 
 Carried over from the 2026-09-05 launch-readiness audit (its `S*`/`C*`/`D*`/`Q*` ids kept) after the
 launch-prep pass fixed the CRITICAL/HIGH security items (S1, S2, S3+S15, S6, S12 —
@@ -752,6 +752,104 @@ habits.
 - `delete_interaction` / `delete_animation` unbound from everything and reported the
   count afterwards. Interlocked, with `bindings` on the list tools so the refusal is not
   the only way to find out.
+
+## First client build (Vezaro, 2026-10-05) — V1–V9 FIXED, V10–V13 open
+
+The first real client project driven entirely through the MCP tools: a US telehealth
+marketing site plus a subscription funnel, built in a draft and never published. The
+brief's second half was to log every place Guano fell short, which is
+`docs/history/GUANO-FEEDBACK.md` (the session handoff is beside it). Thirteen findings,
+V1–V13 below in that file's order. V1–V9 are fixed with specs; V10–V13 are product
+gaps that need design, not repair.
+
+### Fixed
+
+- **V1 — a saved page silently reverted** (MAJOR). The home page came back as the empty
+  page its draft started from, after writes to other pages issued in parallel; every
+  call in between answered `saved: true`. The compare-and-swap baseline was one pair of
+  closure variables shared by every call, so the second of two concurrent saves compared
+  against the FIRST one's write, found it current, and wrote a project built on the
+  bytes from before it. Fixed three deep: a per-call baseline, a write lock over the
+  load→save window (so the guide's "writes to different pages parallelize freely" is
+  true rather than merely promised), and `If-Match` on `PUT /api/store/:key` checked
+  server-side under a new per-key lock — the only one of the three that closes the gap
+  between a client's check and its own write. `e2e/mcp-concurrent-writes.spec.ts`,
+  `e2e/store-concurrency.spec.ts`; both halves proved load-bearing by removal.
+- **V2 — no path to a target at all** (BLOCKER). The Claude desktop Code tab declares
+  the elicitation capability and answers the dialog without showing it; because the
+  capability was declared, the chat attestation was ignored too. `dialog-unavailable`
+  now distinguishes a blind channel from a human's refusal, `GUANO_MCP_TARGET` lets the
+  operator settle the target in the MCP config (the one consent channel an injected
+  agent cannot reach), and `get_status` reports `elicitationWorks: false` once a dialog
+  has proved blind.
+- **V3 — an un-enabled form still submitted** (MAJOR). The handbook called a bare
+  `<form>` the right shape for a visual mock and said nothing is sent. Enter in a text
+  field, or any `<button>` with no `type`, GETs the current url with every named control
+  in the query string — on a health questionnaire, the answers in the address bar, in
+  history and in the host's logs. Exported `method="dialog"` now (abandoned by the
+  browser, validation intact) plus `data-form-inert` for the runtime, and
+  `form-not-enabled-has-fields` warns when such a form holds named controls.
+- **V4 — `instanceAttributes` on a mirror was accepted and dropped** (MAJOR). Four
+  radios inside a component host, each given its own `name`, exported with the inner
+  component's default — so four questions were one radio group. `resolveNodeAttributes`
+  resolves the whole chain (master → each host mirror → own → locale) in all three
+  renderers and every tool that reads attributes.
+- **V5–V9** — the marquee false positive, the app-shell warning on a marketing header,
+  sixteen copies of one class warning per response, the undiscoverable file root, and
+  the `<slot>` shorthand that ends re-typing a component's skeleton on every page.
+
+### Open — product gaps
+
+- **V10. A site-wide overlay cannot be one component** (MAJOR in the report, and the
+  largest piece of work here). A binding's target must be reachable from its trigger, so
+  nothing outside an instance can open something inside one. "Get started" lives in
+  `SiteHeader`, `SiteFooter` and `CtaBand`; the modal it opens therefore had to be
+  page-owned markup repeated on all 8 pages, with slots added to three components so
+  each page could re-declare their CTAs as page nodes. It works, and changing the modal
+  chrome now means editing 8 pages — and because the page cannot reach inside the flow
+  component, opening the modal cannot reset it to step 1.
+  What this wants is a **site-level target**: one overlay rendered once per route, with
+  a sentinel any element in any master can aim at (`href="@open:start"`, in the spirit of
+  `@item` and `@locale:`), plus a reset action. Touches the state-key design in
+  `shared/interactionKeys.js`, both Vue renderers, the exporter and the published
+  runtime, so it is a design task first. The alternative worth weighing: let a binding
+  target an instance by `ref` + `part` on the same page, which is narrower and does not
+  give the header's own instance a way in.
+- **V11. No way to animate a number.** "The stat should count up" has no expressible
+  form: the property catalog is transforms, opacity, colours, size and clip. The session
+  built an odometer — per digit, a 1em clipping box with ten stacked numerals rolled on
+  `appear` — which renders well and degrades correctly, at ten elements per digit, one
+  animation per target digit, and a number no longer editable as text. Wants a `count`
+  track (`{prop: "count", from, to, format}`) on a leaf, which is the first track that
+  would write textContent rather than a style, in `shared/motion.js` and all three
+  runtimes.
+- **V12. A class interaction used as a dialog has no dialog behaviour.** No scroll lock,
+  no focus move into the panel, no Tab trap, no focus restore, no `aria-modal`, and no
+  reset: the flow reopens on the step it was left on, and the wheel over the backdrop
+  scrolls the page behind. Expressible only as custom code, which agents cannot ship by
+  default. Wants either a `dialog` element type or a modal flag on an interaction
+  target, carrying those behaviours with it.
+- **V13. Images export at upload size.** Originals are copied verbatim: 16 photos,
+  4.9 MB of `assets/media`, no `width`/`height`, no `srcset`, no `loading="lazy"`, to a
+  brief that said mobile-first. `loading` is authorable, but most images sit inside
+  components and collection bindings where an agent cannot reach each placement. Wants
+  variants generated at export with `srcset`/`sizes`, intrinsic dimensions emitted, and
+  `lazy` by default below the first viewport.
+
+### Assessed, not built: the Bask Health integration
+
+Scope 3 of the brief (questionnaire ↔ a REST API, webhooks, statuses, journey state) and
+analytics were assessed rather than built, and the gap analysis in the feedback file is
+the most useful product document to come out of the run. Guano today is a static-site
+builder with one unauthenticated write endpoint, so every item lands on four
+capabilities it does not have: **server-side actions** (named, admin-defined HTTP calls
+that run on the instance with an integration's secrets, never in the page), **inbound
+signed webhooks** (HMAC-verified, idempotent), a **pass-through PHI mode** for a form
+(stream to an action, persist nothing, no notify, no retention, no submission reads),
+and **per-visitor state** (which a static exporter has no answer for at all). The
+recommendation in the report is the right one: keep Guano for the public site and the
+funnel's visual screens, hand off anything touching PHI or payment to the vendor's own
+hosted flows, and revisit native integration only if those four exist.
 
 ## MCP evaluation run (Ridgeline, 2026-10-04) — FIXED
 
