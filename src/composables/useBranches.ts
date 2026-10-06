@@ -46,7 +46,7 @@ function baseStorageKey(branchId: string) {
 export function useBranches() {
   const { project } = useProject()
   const { userId } = useAuth()
-  const { saveNow, resetTo } = usePersistence()
+  const { saveNow, adoptRemote, commitReplacement } = usePersistence()
 
   if (!metaLoaded) {
     metaLoaded = true
@@ -95,19 +95,22 @@ export function useBranches() {
       },
     ]
     activeBranchId.value = id
-    resetTo(JSON.parse(snapshot) as Project) // fresh undo history on the branch
+    // the project and base keys were just written with these exact bytes, so
+    // this only adopts them — a write here would land under the new branch
+    // key for a second time
+    adoptRemote(JSON.parse(snapshot) as Project) // fresh undo history on the branch
     saveMeta()
   }
 
   async function switchBranch(id: string) {
     if (id === activeBranchId.value) return
-    saveNow() // current branch's work lands under its own key first
+    await saveNow() // current branch's work lands under its own key first
     await hydrateStore([projectStorageKey(id)])
     const target = readProject(projectStorageKey(id))
     if (!target) return
     target.comments = project.value.comments // comments are shared across branches
     activeBranchId.value = id
-    resetTo(target)
+    adoptRemote(target) // read from this branch's key a moment ago
     saveMeta()
   }
 
@@ -122,7 +125,7 @@ export function useBranches() {
 
   /** dry-run the three-way merge so the UI can offer conflict choices */
   async function previewMerge(id: string): Promise<MergeResult | null> {
-    saveNow()
+    await saveNow()
     await hydrateStore([baseStorageKey(id), projectStorageKey(id), projectStorageKey(MAIN_ID)])
     const base = readProject(baseStorageKey(id))
     const theirs = readProject(projectStorageKey(id))
@@ -143,12 +146,20 @@ export function useBranches() {
   ): Promise<boolean> {
     const result = await previewMerge(id)
     if (!result) return false
+    // the Main the merge was computed FROM: handing it over as the baseline is
+    // what lets a change that landed on Main while the dialog was open merge
+    // in rather than be overwritten
+    const mainUsed = onMain.value
+      ? JSON.stringify(project.value)
+      : (storeGet(projectStorageKey(MAIN_ID)) ?? null)
     const merged = applyResolutions(result, choices)
     merged.comments = project.value.comments
     activeBranchId.value = MAIN_ID
-    resetTo(merged)
+    const snapshot = await commitReplacement(merged, mainUsed)
     if (opts.keep) {
-      const snapshot = JSON.stringify(merged)
+      // the snapshot actually STORED, which differs from `merged` when Main
+      // moved — otherwise the kept draft's base disagrees with the new Main
+      // and the next diff shows divergence nobody authored
       storeSet(baseStorageKey(id), snapshot)
       // the kept draft adopts the merged state too — it applied cleanly, so
       // it starts over from the new Main instead of re-proposing old edits

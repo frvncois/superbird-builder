@@ -2,7 +2,15 @@ import { computed, ref, watch } from 'vue'
 import { activeBranchId, currentSnapshot, projectStorageKey, usePersistence } from './usePersistence'
 import { MAIN_ID } from './useBranches'
 import { readStoredProject } from '@/lib/storage'
-import { hydrateStore, onUnauthorized, storeGet, storeRemove, storeSet } from '@/lib/store'
+import {
+  flushStore,
+  hydrateStore,
+  onUnauthorized,
+  storeError,
+  storeGet,
+  storeRemove,
+  storeSet,
+} from '@/lib/store'
 import { downloadBlob } from '@/lib/download'
 import type { PublishMethod } from '@/types/editor'
 
@@ -72,8 +80,15 @@ export function usePublish() {
    * failure. Only the client enforces Main-only publishing — the server
    * stores whatever snapshot it's sent. */
   async function markPublished(method: PublishMethod = 'server', signal?: AbortSignal): Promise<void> {
-    // settle any pending edit so the committed snapshot is what we publish
-    usePersistence().saveNow()
+    // Settle any pending edit so the committed snapshot is what we publish —
+    // AWAITED. Fired and forgotten, the snapshot read a line later could
+    // predate the merge the save was still doing, and the live site would be
+    // ahead of (or behind) the saved project.
+    await usePersistence().saveNow()
+    await flushStore()
+    if (storeError.value) {
+      throw new Error(`Changes are not saved — publishing would ship something else. ${storeError.value}`)
+    }
     let snapshot: string
     if (activeBranchId.value === MAIN_ID) {
       snapshot = currentSnapshot.value

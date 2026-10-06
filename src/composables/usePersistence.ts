@@ -1,7 +1,15 @@
-import { computed, ref, watch } from 'vue'
+import { computed, effectScope, ref, watch } from 'vue'
 import { useProject } from './useProject'
 import { migrateStoredProject, readStoredProject } from '@/lib/storage'
-import { pendingWrites, storeError, storeGet, storeGetFresh, storeSet } from '@/lib/store'
+import {
+  ackedSeq,
+  pendingWrites,
+  storeAck,
+  storeError,
+  storeGet,
+  storeGetFresh,
+  storeSet,
+} from '@/lib/store'
 import { computeMerge } from '@/lib/merge'
 import type { Project } from '@/types/editor'
 
@@ -71,8 +79,53 @@ let initialized = false
  * animation would come back from the dead. With it, a save that finds the
  * stored blob changed merges per entity instead of overwriting.
  * null = no baseline yet (fresh boot / corrupt read) → plain write.
+ *
+ * TAGGED WITH ITS KEY, which is not bookkeeping. A branch switch moves
+ * `activeBranchId` and then replaces the project, so an untagged baseline
+ * could be carried from the branch you left into a merge against the branch
+ * you opened.
  */
-let baseline: string | null = null
+let baseline: { key: string; snapshot: string } | null = null
+
+/**
+ * Written, but not yet confirmed by the server.
+ *
+ * The baseline used to advance the instant a write was QUEUED, so an offline
+ * save left every later merge resolving against an ancestor the server never
+ * held. It is promoted only when the store reports that op accepted.
+ */
+let pendingBaseline: { key: string; snapshot: string; seq: number } | null = null
+
+/** the baseline, but only when it belongs to `key` */
+const baselineFor = (key: string) => (baseline?.key === key ? baseline.snapshot : null)
+
+/**
+ * Bumps on every write entry point. A call that resumes after a newer one
+ * started skips its history and project adoption — the same latest-wins rule
+ * the store's own queue applies to the bytes, applied to the undo stack.
+ */
+let writeGen = 0
+
+// Detached: this is app-wide state, and a watcher created inside whichever
+// component happened to call the composable first would die with it.
+effectScope(true).run(() => {
+  watch(storeAck, () => {
+    const p = pendingBaseline
+    if (p && ackedSeq(p.key) >= p.seq) {
+      baseline = { key: p.key, snapshot: p.snapshot }
+      pendingBaseline = null
+    }
+  })
+})
+
+/**
+ * Is there work the server does not have yet?
+ *
+ * Derived from the same `status` the save pill shows — not a second piece of
+ * state — because an unload guard that disagrees with the visible status is
+ * worse than no guard at all.
+ */
+const hasUnsavedWork = computed(() => status.value !== 'saved')
 
 export function usePersistence() {
   const { project, projectVersion } = useProject()
@@ -80,12 +133,18 @@ export function usePersistence() {
   const canUndo = computed(() => pointer.value > 0)
   const canRedo = computed(() => pointer.value < history.value.length - 1)
 
-  /** the single storage write — server-backed via the store adapter.
-   * Deliberate wholesale writes (load/reset/undo) use this directly and take
-   * ownership of the baseline; edits go through persistMerged instead. */
-  function persist(snapshot: string) {
-    storeSet(projectStorageKey(activeBranchId.value), snapshot)
-    baseline = snapshot
+  /**
+   * The single storage write — server-backed via the store adapter.
+   *
+   * `key` is explicit, and that fixes a live bug rather than tidying one.
+   * `persistMerged` captures the key BEFORE its awaits while this read it
+   * back AFTER them, so a save still in flight across a branch switch read
+   * the right key and wrote the wrong one: the branch you had just opened was
+   * overwritten with a merge of the branch you left.
+   */
+  function persist(snapshot: string, key = projectStorageKey(activeBranchId.value)) {
+    const seq = storeSet(key, snapshot)
+    pendingBaseline = { key, snapshot, seq }
     typing.value = false
   }
 
@@ -100,53 +159,84 @@ export function usePersistence() {
    *    genuine conflict (the human is here and typing); entities only THEY
    *    touched — including deletions — survive.
    */
-  async function persistMerged(snapshot: string) {
-    const key = projectStorageKey(activeBranchId.value)
-    if (baseline === null || autosaveSuspended.value) {
-      persist(snapshot)
-      return
+  async function persistMerged(
+    snapshot: string,
+    opts: { fromHistory?: boolean; key?: string; baseline?: string | null } = {},
+  ): Promise<string> {
+    const gen = ++writeGen
+    const key = opts.key ?? projectStorageKey(activeBranchId.value)
+    const base = opts.baseline !== undefined ? opts.baseline : baselineFor(key)
+
+    // An agent owns the project while autosave is suspended, and the lock
+    // overlay is what normally keeps a human out. An undo is still reachable
+    // programmatically, and a plain write there would clobber the agent
+    // mid-run — the one thing the flag exists to prevent — so it changes the
+    // in-memory project and writes nothing at all.
+    if (autosaveSuspended.value && opts.fromHistory) {
+      typing.value = false
+      return snapshot
+    }
+    if (base === null || autosaveSuspended.value) {
+      persist(snapshot, key)
+      return snapshot
     }
     let storedRaw: string | null
     try {
       storedRaw = await storeGetFresh(key)
     } catch {
-      persist(snapshot) // offline / server hiccup — behave as before
-      return
+      persist(snapshot, key) // offline / server hiccup — behave as before
+      return snapshot
     }
-    if (storedRaw === null || storedRaw === baseline) {
-      persist(snapshot)
-      return
+    // `pendingBaseline` covers the round trip our own write is still in: for
+    // that window the stored bytes differ from the confirmed baseline but are
+    // ours, and merging against them would be work for nothing.
+    if (storedRaw === null || storedRaw === base || storedRaw === pendingBaseline?.snapshot) {
+      persist(snapshot, key)
+      return snapshot
     }
     let merged: Project
     try {
       const theirs = migrateStoredProject(JSON.parse(storedRaw) as Project)
       if (!theirs) {
-        persist(snapshot)
-        return
+        persist(snapshot, key)
+        return snapshot
       }
       const { merged: result } = computeMerge(
-        JSON.parse(baseline) as Project,
+        JSON.parse(base) as Project,
         JSON.parse(snapshot) as Project,
         theirs,
       )
       merged = result
     } catch {
-      persist(snapshot) // unparseable remote — our state is the better bet
-      return
+      persist(snapshot, key) // unparseable remote — our state is the better bet
+      return snapshot
     }
     const mergedSnapshot = JSON.stringify(merged)
-    persist(mergedSnapshot)
-    if (mergedSnapshot === snapshot) return
-    // adopt what we actually stored, so the editor shows the merged truth.
-    // History gains an entry (rather than being wiped) so undo still works.
+    persist(mergedSnapshot, key)
+    if (mergedSnapshot === snapshot) return mergedSnapshot
+    // a newer write started while this one was reading; its history is the
+    // one that counts
+    if (gen !== writeGen) return mergedSnapshot
+    // adopt what we actually stored, so the editor shows the merged truth
     restoring = true
     project.value = merged
     restoring = false
-    const next = history.value.slice(0, pointer.value + 1)
-    next.push(mergedSnapshot)
-    if (next.length > HISTORY_LIMIT) next.shift()
-    history.value = next
-    pointer.value = next.length - 1
+    if (opts.fromHistory) {
+      // Replace the slot the user navigated TO, rather than truncating and
+      // pushing. `undo()` has already moved the pointer, so a push would
+      // discard the whole redo arm: one ⌘Z against a busy agent left a state
+      // that was neither the old nor the new one, and no ⌘⇧Z to get back.
+      const h = history.value.slice()
+      h[pointer.value] = mergedSnapshot
+      history.value = h
+    } else {
+      const next = history.value.slice(0, pointer.value + 1)
+      next.push(mergedSnapshot)
+      if (next.length > HISTORY_LIMIT) next.shift()
+      history.value = next
+      pointer.value = next.length - 1
+    }
+    return mergedSnapshot
   }
 
   function load() {
@@ -161,7 +251,11 @@ export function usePersistence() {
         restoring = true
         project.value = stored
         restoring = false
-        baseline = JSON.stringify(stored)
+        // read straight off the server, so it IS what the server holds
+        baseline = {
+          key: projectStorageKey(activeBranchId.value),
+          snapshot: JSON.stringify(stored),
+        }
       } else {
         // fresh instance: persist the default project immediately, instead of
         // only on the first edit — otherwise the server has no project blob
@@ -176,35 +270,20 @@ export function usePersistence() {
   }
 
   /**
-   * Replaces the working project wholesale (branch switch / merge):
-   * fresh undo history seeded with the new state, persisted under the
-   * current branch key.
+   * Adopt a state that is ALREADY on the server: fresh undo history, no write.
+   *
+   * Used for the live agent sync and for opening a branch. Writing here would
+   * race a concurrent agent save — our echo of the fetched blob could land
+   * after a newer one and revert it, since the store is latest-wins — and for
+   * a branch switch there is nothing to write anyway: these bytes came out of
+   * that branch's own key a moment ago.
    */
-  function resetTo(next: Project) {
+  function adoptRemote(next: Project) {
     if (timer) {
       clearTimeout(timer)
       timer = null
     }
-    restoring = true
-    project.value = next
-    restoring = false
-    const snapshot = JSON.stringify(next)
-    history.value = [snapshot]
-    pointer.value = 0
-    persist(snapshot)
-  }
-
-  /**
-   * Like resetTo but WITHOUT the write-back — for applying a state that is
-   * already on the server (live agent sync). Persisting here would race a
-   * concurrent agent write: our echo of the fetched blob could land after a
-   * newer agent save and revert it (the store is latest-wins).
-   */
-  function replaceFromRemote(next: Project) {
-    if (timer) {
-      clearTimeout(timer)
-      timer = null
-    }
+    writeGen++
     restoring = true
     project.value = next
     restoring = false
@@ -212,38 +291,72 @@ export function usePersistence() {
     history.value = [snapshot]
     pointer.value = 0
     // this state came FROM the server, so it is the new common ancestor
-    baseline = snapshot
+    baseline = { key: projectStorageKey(activeBranchId.value), snapshot }
+    pendingBaseline = null
     typing.value = false
   }
 
-  /** snapshot the settled state into history and storage */
-  function commit() {
+  /**
+   * Replace the project with a state that exists NOWHERE yet, and write it.
+   *
+   * The merge-into-Main case: the result of a 3-way merge the user resolved in
+   * a dialog, which Main has never held. It is merge-aware on purpose —
+   * `priorBaseline` is the Main the merge was computed from, so a change that
+   * landed on Main while the dialog was open is merged in rather than
+   * overwritten. Returns the snapshot actually stored, which may differ.
+   */
+  async function commitReplacement(next: Project, priorBaseline: string | null): Promise<string> {
+    if (timer) {
+      clearTimeout(timer)
+      timer = null
+    }
+    restoring = true
+    project.value = next
+    restoring = false
+    const snapshot = JSON.stringify(next)
+    history.value = [snapshot]
+    pointer.value = 0
+    const key = projectStorageKey(activeBranchId.value)
+    return persistMerged(snapshot, { key, baseline: priorBaseline })
+  }
+
+  /** snapshot the settled state into history and storage.
+   * Returns the write, so a publish can await the save it just asked for
+   * instead of racing it. */
+  function commit(): Promise<string> {
     if (timer) {
       clearTimeout(timer)
       timer = null
     }
     const snapshot = JSON.stringify(project.value)
     if (snapshot === history.value[pointer.value]) {
-      void persistMerged(snapshot)
-      return
+      return persistMerged(snapshot)
     }
     const next = history.value.slice(0, pointer.value + 1)
     next.push(snapshot)
     if (next.length > HISTORY_LIMIT) next.shift()
     history.value = next
     pointer.value = next.length - 1
-    void persistMerged(snapshot)
+    return persistMerged(snapshot)
   }
 
-  function saveNow() {
-    commit()
+  function saveNow(): Promise<string> {
+    return commit()
   }
 
+  /**
+   * Apply a history entry (undo/redo).
+   *
+   * Through the MERGE path, not a plain write. Undo wrote the whole blob with
+   * no re-read, so one ⌘Z reverted everything another writer had changed since
+   * this tab's baseline — while the save pill said Saved.
+   */
   function apply(snapshot: string) {
     restoring = true
     project.value = JSON.parse(snapshot) as Project
     restoring = false
-    persist(snapshot)
+    typing.value = false
+    void persistMerged(snapshot, { fromHistory: true })
   }
 
   function undo() {
@@ -274,5 +387,16 @@ export function usePersistence() {
     })
   }
 
-  return { status, canUndo, canRedo, init, saveNow, undo, redo, resetTo, replaceFromRemote }
+  return {
+    status,
+    hasUnsavedWork,
+    canUndo,
+    canRedo,
+    init,
+    saveNow,
+    undo,
+    redo,
+    adoptRemote,
+    commitReplacement,
+  }
 }

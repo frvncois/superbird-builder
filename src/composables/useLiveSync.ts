@@ -14,7 +14,7 @@ import { readStoredProject } from '@/lib/storage'
  * active branch:
  *
  *  - live-applies each save so the canvas shows the agent's work in real time
- *    (via replaceFromRemote — never persisted back: an echo write could race
+ *    (via adoptRemote — never persisted back: an echo write could race
  *    a newer agent save and revert it on the latest-wins store)
  *  - hard-locks the UI while the session is active (AgentLockHost renders the
  *    overlay off `agentLocked`) and suspends autosave, because a debounced
@@ -42,13 +42,13 @@ let applyTimer: ReturnType<typeof setTimeout> | null = null
 let weSuspendedAutosave = false
 
 export function useLiveSync() {
-  const { replaceFromRemote } = usePersistence()
+  const { adoptRemote } = usePersistence()
 
   async function applyRemote(key: string) {
     try {
       await rehydrateStore([key])
       const stored = readStoredProject(key)
-      if (stored) replaceFromRemote(stored)
+      if (stored) adoptRemote(stored)
     } catch {
       // fetch hiccup — the next event (or reload) converges
     }
