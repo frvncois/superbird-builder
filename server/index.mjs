@@ -181,7 +181,11 @@ const APP_VERSION = (() => {
 
 const PORT = Number(process.env.PORT) || 4174
 const TOKEN = process.env.PUBLISH_TOKEN || ''
-const MAX_BODY = 10 * 1024 * 1024 // data-URL images make snapshots heavy
+const MAX_BODY = 10 * 1024 * 1024
+// Credentials are small. The 10 MB cap belongs to a project blob; applying it
+// to an unauthenticated login means buffering 10 MB before the rate limiter is
+// even consulted.
+const MAX_AUTH_BODY = 4 * 1024 // data-URL images make snapshots heavy
 const IMPORT_CAP = 512 * 1024 * 1024 // project package upload ceiling
 
 // Behind a reverse proxy every socket carries the proxy's address, so rate
@@ -230,12 +234,12 @@ const MIME = {
 }
 
 /** reads a request body with the size cap; null when too large */
-async function readBody(req) {
+async function readBody(req, cap = MAX_BODY) {
   const chunks = []
   let size = 0
   for await (const chunk of req) {
     size += chunk.length
-    if (size > MAX_BODY) return null
+    if (size > cap) return null
     chunks.push(chunk)
   }
   return Buffer.concat(chunks).toString('utf8')
@@ -592,7 +596,14 @@ async function handleAuth(req, res, path) {
   if (path === '/api/auth/login' && req.method === 'POST') {
     if (needsSetup()) return fail(res, 403, 'no account yet')
     const ip = clientIp(req)
-    const body = await readBody(req)
+    // the per-IP limiter first, so a flood is shed before anything is read.
+    // The per-(ip,email) and per-email buckets still need the body, but the
+    // cheap guard no longer sits behind 10 MB of buffering.
+    if (!loginAllowed(ip, '')) {
+      return fail(res, 429, 'too many attempts — try again later')
+    }
+    const body = await readBody(req, MAX_AUTH_BODY)
+    if (body === null) return fail(res, 400, 'invalid request')
     let email, password
     try {
       ;({ email, password } = JSON.parse(body ?? ''))
@@ -651,7 +662,8 @@ async function handleInvite(req, res, path) {
     return send(res, 200, JSON.stringify({ ...inviteView(invite), projectName: await currentProjectName() }))
   }
   if (accept && req.method === 'POST') {
-    const body = await readBody(req)
+    const body = await readBody(req, MAX_AUTH_BODY)
+    if (body === null) return fail(res, 400, 'invalid request')
     let password
     try {
       ;({ password } = JSON.parse(body ?? ''))
@@ -1045,10 +1057,22 @@ function closeEventClients() {
   eventClients.clear()
 }
 
+// One per editor tab is the normal case; a handful covers someone with the
+// editor open in several windows. Unbounded, any authed user — or one API
+// token — could hold open as many as they liked, and each one costs a socket
+// and a heartbeat timer for as long as it is held.
+const MAX_EVENT_CLIENTS_PER_USER = 5
+
 function handleEvents(req, res) {
   const user = requestUser(req)
   if (!user) return fail(res, 401, 'unauthorized')
   if (isShuttingDown()) return fail(res, 503, 'server is restarting')
+  let held = 0
+  for (const client of eventClients) if (client.guanoUserId === user.id) held++
+  if (held >= MAX_EVENT_CLIENTS_PER_USER) {
+    return fail(res, 429, 'too many open change feeds — close another editor tab')
+  }
+  res.guanoUserId = user.id
   res.writeHead(200, {
     'content-type': 'text/event-stream',
     'cache-control': 'no-cache',
@@ -1529,7 +1553,16 @@ async function handleAgentPolicy(req, res) {
 async function handlePublishConfig(req, res) {
   const user = sessionUser(req)
   if (!user) return fail(res, 401, 'unauthorized')
+  // Reads stay open to editors: the response is `{github:{tokenSet}}`, a
+  // boolean the Publish panel needs and no secret. WRITES are admin only — the
+  // GitHub token is the credential the server signs every push with, so an
+  // editor able to replace it could point the operator's PAT at a repository
+  // they control. The comment on handleAgentPolicy already claimed this route
+  // followed that rule; it did not.
   if (user.role === 'contributor') return fail(res, 403, 'forbidden')
+  if (req.method !== 'GET' && user.role !== 'admin') {
+    return fail(res, 403, 'only an admin can change publishing secrets')
+  }
 
   if (req.method === 'GET') {
     const cfg = await readPublishConfig()
@@ -1888,7 +1921,13 @@ async function siteGate() {
 async function handleSitePassword(req, res) {
   const user = sessionUser(req)
   if (!user) return fail(res, 401, 'unauthorized')
+  // Reads stay open to editors (`{enabled, passwordSet}` — no secret). Setting
+  // it is admin only: it is the one credential shared with visitors, and
+  // changing it signs every one of them out.
   if (user.role === 'contributor') return fail(res, 403, 'forbidden')
+  if (req.method !== 'GET' && user.role !== 'admin') {
+    return fail(res, 403, 'only an admin can change the site password')
+  }
   const shape = (site) => ({ enabled: site.enabled, passwordSet: !!site.hash })
 
   if (req.method === 'GET') return send(res, 200, JSON.stringify(shape(await siteGate())))
@@ -2526,6 +2565,8 @@ async function handleStatic(req, res) {
       const adminHeaders = {
         ...base,
         'x-frame-options': 'DENY',
+        // never send this instance's URL to a third party on an outbound click
+        'referrer-policy': 'strict-origin-when-cross-origin',
         // APPEND, never replace: a .svg under /admin/ already carries the
         // no-script CSP from headersFor, and dropping it would let a served
         // SVG run script on this origin when navigated to directly
@@ -2597,6 +2638,13 @@ const server = createServer(async (req, res) => {
     // carries no session and may come from the site's own (different) origin,
     // so it is answered by its own CORS rule rather than the /api same-origin
     // check below. Keeping the two prefixes disjoint is the point.
+    if (path.startsWith('/api/')) {
+      // The store GET returns the whole project blob; nothing under /api is
+      // worth a shared cache holding on to. setHeader, not writeHead, so a
+      // handler with its own opinion (media thumbnails) still overrides it.
+      res.setHeader('cache-control', 'no-store')
+      res.setHeader('referrer-policy', 'strict-origin-when-cross-origin')
+    }
     if (isFormPath(path)) {
       if (await siteGateBlocksForm(req)) {
         return send(res, 401, JSON.stringify({ error: 'this site is private' }), 'application/json', {

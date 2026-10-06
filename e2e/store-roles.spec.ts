@@ -197,3 +197,75 @@ test("the draft index is not a way to take over someone's draft", async ({ baseU
   await admin.dispose()
   await contribCtx.dispose()
 })
+
+/**
+ * Publishing secrets and the visitor password are admin-only.
+ *
+ * Both routes refused contributors and let editors through, while the comment
+ * on the agent-policy route claimed all three followed the admin rule. The
+ * GitHub token is the credential the server signs every push with, so an
+ * editor who could replace it could point the operator's PAT at a repository
+ * of their own; the site password is the one credential shared with visitors,
+ * and changing it signs every one of them out.
+ */
+test('publishing secrets and the site password are admin-only', async ({ baseURL }) => {
+  const EDITOR = { email: 'editor-roles@example.com', password: 'editor-pass-1' }
+  const admin = await pwRequest.newContext({ baseURL })
+  let res = await login(admin, ADMIN)
+  if (!res.ok()) {
+    res = await admin.post('/api/auth/setup', { data: { ...ADMIN, name: 'Smoke Co' } })
+    expect(res.ok()).toBeTruthy()
+  }
+
+  const editor = await pwRequest.newContext({ baseURL })
+  if (!(await login(editor, EDITOR)).ok()) {
+    const invite = await admin.post('/api/users/invite', {
+      data: { email: EDITOR.email, role: 'editor' },
+    })
+    expect(invite.ok()).toBeTruthy()
+    const { token } = (await invite.json()) as { token: string }
+    expect(
+      (
+        await editor.post(`/api/invite/${token}/accept`, {
+          data: { name: 'Editor', password: EDITOR.password },
+        })
+      ).ok(),
+    ).toBeTruthy()
+  }
+  expect(((await (await editor.get('/api/auth/me')).json()) as { role: string }).role).toBe('editor')
+
+  // an editor may still READ both: the responses are booleans the Publish and
+  // General panels need — whether a token is set, whether the gate is on — and
+  // neither carries a secret
+  expect((await editor.get('/api/publish-config')).status()).toBe(200)
+  expect(await (await editor.get('/api/publish-config')).json()).toMatchObject({
+    github: { tokenSet: expect.any(Boolean) },
+  })
+  expect((await editor.get('/api/site-password')).status()).toBe(200)
+
+  // a contributor reads neither
+  const contrib = await pwRequest.newContext({ baseURL })
+  if ((await login(contrib, CONTRIB)).ok()) {
+    expect((await contrib.get('/api/publish-config')).status()).toBe(403)
+    expect((await contrib.get('/api/site-password')).status()).toBe(403)
+  }
+  await contrib.dispose()
+
+  // ...and may change neither
+  let bad = await editor.put('/api/publish-config', { data: { github: { token: 'ghp_theirs' } } })
+  expect(bad.status()).toBe(403)
+  expect(await bad.text()).toContain('admin')
+
+  bad = await editor.put('/api/site-password', { data: { enabled: true, password: 'theirs12' } })
+  expect(bad.status()).toBe(403)
+  expect(await bad.text()).toContain('admin')
+
+  // the admin still can, and the site is left as it was
+  expect((await admin.get('/api/publish-config')).status()).toBe(200)
+  expect(
+    (await admin.put('/api/site-password', { data: { enabled: false, password: '' } })).status(),
+  ).toBe(200)
+
+  await admin.dispose()
+  await editor.dispose()
+})
