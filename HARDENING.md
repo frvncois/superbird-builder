@@ -56,48 +56,48 @@ keepalive flush is impossible anyway, because keepalive caps a request body at
 
 ## Phase 1 — Server lifecycle
 
-- [ ] **A-1 Logger.** New `server/log.mjs`: levels, ISO timestamp, `LOG_LEVEL`,
+- [x] **A-1 Logger.** New `server/log.mjs`: levels, ISO timestamp, `LOG_LEVEL`,
       `LOG_JSON=1`, `log.banner()` for the startup box, `newRequestId()`. Keeps
       existing message text verbatim so later migration is a one-token rename.
       *Nothing imports it yet, so this step cannot break anything.*
-- [ ] **A-2 Atomic primitives.** `server/util.mjs`: move `swapDir` in **with
+- [x] **A-2 Atomic primitives.** `server/util.mjs`: move `swapDir` in **with
       rollback**, add `withStagingDir`, `sweepStaleDirs` and
       `sweepOrphanTmpFiles` (both **age-gated**, default 60 min). Unique tmp name
       in `writeAtomic` plus an `fsync`, opt out with `GUANO_FSYNC=0`.
       The sweep regex must never match `store.pre-v2` — that is the only way back
       from the one-way migration.
-- [ ] **A-3 Self-cleaning swaps.** `server/export.mjs` adopts `withStagingDir`;
+- [x] **A-3 Self-cleaning swaps.** `server/export.mjs` adopts `withStagingDir`;
       `server/index.mjs` drops its local `swapDir`; `applyPackage` gets its
       `finally`. **Watch the write-path backstop** around `export.mjs:1832` — it
       is a security control, and moving ~70 lines into a callback is where it
       would silently stop working.
       *Gates: `check:corpus`, `export-images`, `export-structured-data`, `smoke`.*
-- [ ] **A-4 Shutdown.** New `server/lifecycle.mjs`: `beginRequest`,
+- [x] **A-4 Shutdown.** New `server/lifecycle.mjs`: `beginRequest`,
       `withCritical`, `installShutdown`, `isShuttingDown`. Wrap publish, preview,
       `applyPackage`, `buildPackage` and `withStoreKeyLock`. Close SSE clients
       before closing the servers. Separate request and critical deadlines.
       Second signal forces exit.
-- [ ] **A-5 Boot order.** Split into `boot()` / `listenWalking()` / `main()` /
+- [x] **A-5 Boot order.** Split into `boot()` / `listenWalking()` / `main()` /
       `printBanner()`. The one-way migration finishes **before** the socket
       accepts. The port walk moves into a promise so no retry can re-enter boot.
       Add a boot watchdog that logs the stalled stage.
       *Gate: `smoke` — it is the only spec that depends on first-run boot order.*
-- [ ] **A-6 Health.** `GET /api/health` first in the chain after the public forms
+- [x] **A-6 Health.** `GET /api/health` first in the chain after the public forms
       namespace. No auth, no store parse, no data-dir path in the body. 503 while
       draining and when the data dir is unwritable; 200 degraded for an empty
       store or a missing preview port, so a fresh instance can come up behind a
       load balancer. New `e2e/health.spec.ts`.
-- [ ] **A-7 Logging migration, index.mjs.** 22 call sites to `log.*`, two to
+- [x] **A-7 Logging migration, index.mjs.** 22 call sites to `log.*`, two to
       `log.banner()`. Add the request id to the 500 body and teach both
       catch-alls the `err.expose` convention the publish path already uses.
-- [ ] **A-8 Logging migration, rest.** `export-media.mjs`, `media.mjs`,
+- [x] **A-8 Logging migration, rest.** `export-media.mjs`, `media.mjs`,
       `public/deliver.mjs` — six lines.
-- [ ] **A-9 Retention.** New `retention` namespace in `readPublishConfig`
+- [x] **A-9 Retention.** New `retention` namespace in `readPublishConfig`
       (separate from `forms`, which is a data-protection obligation, not disk
       housekeeping). `pruneSnapshots` keeps N newest with a floor of 1;
       `pruneVariantCache` evicts by **atime**, since a cache hit is a read and an
       mtime policy would evict exactly the files every publish uses.
-- [ ] **A-10 Snapshot restore bug.** `buildPackage` stops bundling the variant
+- [x] **A-10 Snapshot restore bug.** `buildPackage` stops bundling the variant
       cache **and** `applyPackage` accepts variant entries anyway, for the
       backups already on disk. Unknown paths under `media/` are skipped with a
       log line instead of failing the whole restore; anything outside
@@ -105,7 +105,7 @@ keepalive flush is impossible anyway, because keepalive caps a request body at
       *Gate: extend `store-snapshots` to publish a raster first, so the spec stops
       passing vacuously. Lift `pngDataUrl` out of `export-images` into the
       fixtures.*
-- [ ] **A-11 Lifecycle spec.** New `e2e/lifecycle.spec.ts`, spawning its own
+- [x] **A-11 Lifecycle spec.** New `e2e/lifecycle.spec.ts`, spawning its own
       server on a scratch port: SIGTERM exits 0, an in-flight request still
       completes, two signals exit non-zero, an old temp dir is swept and a fresh
       one survives.
