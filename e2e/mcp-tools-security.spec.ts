@@ -253,12 +253,79 @@ test('set_target: a dismissed dialog sets nothing and tells the agent to stop', 
   const runtime = await runtimePromise
   test.skip(!runtime, 'runtime bundle missing')
 
-  const elicit = async () => ({ action: 'cancel' })
+  // a HUMAN dismissal: it took them a moment to read the dialog and decline.
+  // That is a refusal, and the agent's own chosenByUser does not overrule it.
+  const elicit = async () => {
+    await new Promise((r) => setTimeout(r, 1100))
+    return { action: 'cancel' }
+  }
   const set = createToolSet({ api, runtime, elicit })
   const res = await set.toolMap.get('set_target')!.handler({ target: 'main', chosenByUser: true })
   expect(res.ok).toBe(false)
   expect(res.reason).toBe('declined-by-user')
   expect(set.getTarget()).toBe(null)
+})
+
+test('set_target: a dialog answered without being shown is not a refusal', async () => {
+  const { api } = fixture()
+  const runtime = await runtimePromise
+  test.skip(!runtime, 'runtime bundle missing')
+
+  // The Vezaro BLOCKER: a client declares elicitation, then answers `decline`
+  // instantly without displaying anything. Because the capability was
+  // declared, chosenByUser was ignored too — so there was no path to a target,
+  // and with no target no write is possible at all.
+  const elicit = async () => ({ action: 'decline' })
+
+  // with nothing to go on, the agent is told how to recover — not "the human
+  // said no", which was false and sent it to a dead end
+  const blind = createToolSet({ api, runtime, elicit })
+  const stuck = await blind.toolMap.get('set_target')!.handler({ createDraft: 'D' })
+  expect(stuck.ok).toBe(false)
+  expect(stuck.reason).toBe('dialog-unavailable')
+  expect(stuck.message).toMatch(/chosenByUser/)
+  expect(blind.getTarget()).toBe(null)
+
+  // and once it has asked in chat, that answer carries — with the fallback
+  // named on the result, so a human reading the transcript sees it
+  const set = createToolSet({ api, runtime, elicit })
+  const res = await set.toolMap
+    .get('set_target')!
+    .handler({ createDraft: 'Vezaro MVP', chosenByUser: true })
+  expect(res.ok).toBe(true)
+  expect(res.chosenVia).toBe('chat')
+  expect(res.dialogUnavailable).toBe(true)
+  expect(set.getTarget()).toBe(res.target)
+  // and get_status stops calling the channel healthy
+  const status = await set.toolMap.get('get_status')!.handler({})
+  expect(status.elicitationWorks).toBe(false)
+})
+
+test('set_target: a target in the MCP config is the human having decided', async () => {
+  const { api } = fixture()
+  const runtime = await runtimePromise
+  test.skip(!runtime, 'runtime bundle missing')
+
+  // editing the client's own config is a channel no prompt-injected agent can
+  // reach, so it needs neither a dialog nor an attestation
+  process.env.GUANO_MCP_TARGET = 'new:Configured draft'
+  try {
+    const set = createToolSet({ api, runtime, elicit: async () => ({ action: 'decline' }) })
+    const res = await set.toolMap.get('set_target')!.handler({})
+    expect(res.ok).toBe(true)
+    expect(res.chosenVia).toBe('config')
+    expect(res.name ?? res.draftName).toBe('Configured draft')
+    expect(set.getTarget()).toBe(res.target)
+
+    // a second process (a client restart respawns this one) REUSES that draft
+    // by name rather than piling up a new one per session
+    const again = createToolSet({ api, runtime })
+    const second = await again.toolMap.get('set_target')!.handler({})
+    expect(second.target).toBe(res.target)
+    expect(second.created).toBeUndefined()
+  } finally {
+    delete process.env.GUANO_MCP_TARGET
+  }
 })
 
 test('set_target: no elicitation capability falls back to the attestation gates', async () => {

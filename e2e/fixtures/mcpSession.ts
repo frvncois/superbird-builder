@@ -2,6 +2,7 @@ import { test } from '@playwright/test'
 // @ts-expect-error untyped package module
 import { createToolSet } from '../../packages/guano/mcp/tools.mjs'
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 // @ts-expect-error untyped server module
@@ -21,10 +22,18 @@ const runtimePromise = import(
  *  rather than passed bare so the body element's own state is exercised too. */
 export const pageHtml = (body: string) => `<body>\n${body}\n</body>`
 
+const sha256 = (s: string) => createHash('sha256').update(s).digest('hex')
+
 export interface McpSession {
   call: (name: string, args?: Record<string, unknown>) => Promise<any>
   tool: (name: string) => { description: string; inputSchema: Record<string, unknown> }
   stored: () => any
+  /** write a stored blob BEHIND the toolset — what a human's editor save, or a
+   *  second agent, looks like to a tool call that is already in flight */
+  writeStore: (key: string, raw: string) => void
+  /** run `fn` after every project read, so a test can land another writer's
+   *  save inside a handler's load→save window (null clears it) */
+  onProjectRead: (fn: (() => void) | null) => void
   /** put ready-made components (e2e/fixtures/components.json) into Main */
   seed: (keys: string[]) => Promise<void>
   /** the exported <body>… of the first route */
@@ -53,12 +62,40 @@ export async function mcpSession(
   const runtime = await runtimePromise
   test.skip(!runtime, 'runtime/mcp-runtime.mjs missing — run `npm run build:mcp-runtime`')
   const store = new Map([['guano-project:main', JSON.stringify(runtime.createProject(projectName))]])
+  // The real api is HTTP, so every read and write yields to the event loop
+  // before it lands. Model that: a store whose methods resolve synchronously
+  // cannot interleave two tool calls at all, which is precisely the bug class
+  // mcp-concurrent-writes.spec.ts is about.
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 0))
+  let onRead: (() => void) | null = null
   const api = {
     base: 'http://localhost:4174',
     whoami: async () => ({ id: 'u1', email: 'a@b.c', role: 'admin', name: 'A' }),
-    storeGetRaw: async (k: string) => store.get(k) ?? null,
-    storeGetJson: async (k: string) => (store.has(k) ? JSON.parse(store.get(k)!) : null),
-    storePutRaw: async (k: string, v: string) => void store.set(k, v),
+    storeGetRaw: async (k: string) => {
+      await tick()
+      const value = store.get(k) ?? null
+      // the hook fires AFTER the value is read and BEFORE the caller can save,
+      // which is the only window where another writer's work can be lost
+      if (onRead && k.startsWith('guano-project:')) onRead()
+      return value
+    },
+    storeGetJson: async (k: string) => {
+      await tick()
+      return store.has(k) ? JSON.parse(store.get(k)!) : null
+    },
+    // `ifMatch` is the server's compare-and-swap, mirrored here so the refusal
+    // is exercised in-process: the real server checks it under a per-key lock
+    // and answers 412.
+    storePutRaw: async (k: string, v: string, { ifMatch }: { ifMatch?: string } = {}) => {
+      await tick()
+      if (ifMatch) {
+        const current = store.has(k) ? sha256(store.get(k)!) : null
+        if (current !== ifMatch) {
+          throw Object.assign(new Error('precondition failed'), { status: 412 })
+        }
+      }
+      store.set(k, v)
+    },
     publish: async () => publishStats,
     mediaIndex: async () => ({ assets: [], folders: [] }),
     mediaUpload: async () => ({ id: 'm1' }),
@@ -71,6 +108,10 @@ export async function mcpSession(
     call: (name: string, args: Record<string, unknown> = {}) => set.toolMap.get(name)!.handler(args),
     tool: (name: string) => set.toolMap.get(name)!,
     stored,
+    writeStore: (key: string, raw: string) => void store.set(key, raw),
+    onProjectRead: (fn: (() => void) | null) => {
+      onRead = fn
+    },
     seed: async (keys: string[]) => {
       store.set('guano-project:main', JSON.stringify(withComponents(stored(), keys)))
     },

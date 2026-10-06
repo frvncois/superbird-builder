@@ -18,7 +18,7 @@
 import { createServer } from 'node:http'
 import { chmod, cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { existsSync, readFileSync } from 'node:fs'
-import { createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
+import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
 import { extname, join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { exportSite } from './export.mjs'
@@ -897,6 +897,44 @@ function handleEvents(req, res) {
   })
 }
 
+/** the hash an `If-Match` store write is compared against */
+const sha256Hex = (s) => createHash('sha256').update(s).digest('hex')
+
+/**
+ * Serialize the work on one store key.
+ *
+ * Node runs one request at a time only between awaits, and a store write
+ * awaits several times before it writes: the read, the quota recount, the
+ * policy read, the contributor merge. Two PUTs to the same key interleave
+ * freely in those gaps, so each one's checks — If-Match included — can be
+ * decided against bytes the other has already replaced.
+ *
+ * Per key rather than one global lock, so a draft's write never waits on
+ * Main's, and the chain is dropped once nothing is queued on it.
+ */
+const storeKeyLocks = new Map()
+
+async function withStoreKeyLock(key, fn) {
+  const prior = storeKeyLocks.get(key) ?? Promise.resolve()
+  let release
+  const held = new Promise((resolve) => {
+    release = resolve
+  })
+  const chain = prior.then(
+    () => held,
+    () => held,
+  )
+  storeKeyLocks.set(key, chain)
+  await prior.catch(() => {})
+  try {
+    return await fn()
+  } finally {
+    release()
+    // drop the entry when nothing queued behind this call
+    if (storeKeyLocks.get(key) === chain) storeKeyLocks.delete(key)
+  }
+}
+
 async function handleStore(req, res, path, query) {
   // any authenticated user (incl. contributors editing content) may use the
   // store — via session cookie OR a `guano_` API-token bearer (the MCP server)
@@ -941,31 +979,64 @@ async function handleStore(req, res, path, query) {
     const body = await readBody(req)
     if (body === null) return fail(res, 400, 'too large')
 
-    const existing = await readFileOrNull(storeFile(key))
-    const existingBytes = existing === null ? 0 : Buffer.byteLength(existing)
-    if ((await storeBytes()) - existingBytes + Buffer.byteLength(body) > STORE_QUOTA) {
-      return fail(res, 507, 'project storage is full')
-    }
+    // One key, one writer at a time. Everything below reads the stored copy,
+    // decides against it (the quota, the protected-field delta, a
+    // contributor's content merge, the If-Match baseline) and then writes — and
+    // every one of those decisions is void if another request writes in
+    // between. A whole project blob goes out on each write, so what a lost
+    // update costs is not a field but every page the other writer had.
+    return withStoreKeyLock(key, async () => {
+      const existing = await readFileOrNull(storeFile(key))
 
-    if (isProjectBlobKey(key)) {
-      const denied = await protectedWriteDenial(req, user, key, existing, body)
-      if (denied) return fail(res, 403, denied)
-    }
+      // Compare-and-swap, for a client that knows which bytes it read
+      // (`If-Match: <sha256 of the expected current value>`). The MCP server
+      // sends it on every project write: it loads the whole blob, works on it
+      // for as long as the tool takes, and writes it all back, so without this
+      // a human's editor save — or a second agent — lands inside that window
+      // and is erased with no error anywhere. The browser editor sends no
+      // header and keeps its last-writer-wins autosave.
+      const expected = String(req.headers['if-match'] ?? '').replace(/^"|"$/g, '')
+      if (expected) {
+        const current = existing === null ? null : sha256Hex(existing)
+        if (current !== expected) {
+          return send(
+            res,
+            412,
+            JSON.stringify({
+              error:
+                'the stored value changed since you read it — nothing was written. Re-read the ' +
+                'key and reapply your change on top of the current value.',
+              currentHash: current,
+            }),
+          )
+        }
+      }
 
-    let toWrite = body
-    if (user.role === 'contributor' && isProjectBlobKey(key)) {
-      // server-authoritative merge: structure/settings come from the stored
-      // copy (or Main for a new draft), only the content allowlist from the
-      // contributor's blob — a hand-crafted structural edit is silently dropped
-      const main = await readFileOrNull(storeFile(MAIN_PROJECT_KEY))
-      const r = mergeContributorProject(existing, main, body)
-      if (r.error) return fail(res, 403, r.error)
-      toWrite = r.merged
-    }
-    await writeAtomic(storeFile(key), toWrite)
-    storeSize.bytes += Math.max(0, Buffer.byteLength(toWrite) - existingBytes)
-    broadcastStoreEvent(key, isAgentRequest(req) ? 'agent' : 'human')
-    return send(res, 200, JSON.stringify({ ok: true }))
+      const existingBytes = existing === null ? 0 : Buffer.byteLength(existing)
+      if ((await storeBytes()) - existingBytes + Buffer.byteLength(body) > STORE_QUOTA) {
+        return fail(res, 507, 'project storage is full')
+      }
+
+      if (isProjectBlobKey(key)) {
+        const denied = await protectedWriteDenial(req, user, key, existing, body)
+        if (denied) return fail(res, 403, denied)
+      }
+
+      let toWrite = body
+      if (user.role === 'contributor' && isProjectBlobKey(key)) {
+        // server-authoritative merge: structure/settings come from the stored
+        // copy (or Main for a new draft), only the content allowlist from the
+        // contributor's blob — a hand-crafted structural edit is silently dropped
+        const main = await readFileOrNull(storeFile(MAIN_PROJECT_KEY))
+        const r = mergeContributorProject(existing, main, body)
+        if (r.error) return fail(res, 403, r.error)
+        toWrite = r.merged
+      }
+      await writeAtomic(storeFile(key), toWrite)
+      storeSize.bytes += Math.max(0, Buffer.byteLength(toWrite) - existingBytes)
+      broadcastStoreEvent(key, isAgentRequest(req) ? 'agent' : 'human')
+      return send(res, 200, JSON.stringify({ ok: true }))
+    })
   }
   if (req.method === 'DELETE') {
     // contributors may discard their own drafts — the branch project copy and

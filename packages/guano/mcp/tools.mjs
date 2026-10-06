@@ -6,6 +6,7 @@
 // in-server); `runtime` is the bundled editor logic (runtime/mcp-runtime.mjs).
 // `target` (Main or a draft id) is per-toolset closure state — create one
 // toolset per session/request context, never share across users.
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash, randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { lookup as dnsLookup } from 'node:dns/promises'
@@ -581,10 +582,132 @@ const staleMessage = (what) => `the ${what} ${STALE_MESSAGE}`
 // null until the human picks; then 'main' or a draft (branch) id
 let target = null
 
-// the exact bytes the last loadTargetProject() read, and the key they came
-// from — the baseline saveTargetProject() refuses to overwrite past
+/**
+ * A target the OPERATOR fixed in the MCP client's own config:
+ * `GUANO_MCP_TARGET=main`, `=<draftId>` or `=new:<Draft name>`.
+ *
+ * Editing that config is the human deciding, before the session starts and
+ * through the one channel no prompt-injected agent can reach — strictly better
+ * consent than a boolean the agent passes itself. It exists because a client
+ * can DECLARE the elicitation capability and then answer the dialog without
+ * ever showing it, which left the agent with no way to a target and so no way
+ * to write anything at all.
+ */
+const ENV_TARGET = (process.env.GUANO_MCP_TARGET ?? '').trim()
+
+/** set once a dialog comes back unanswerable — reported by get_status, so
+ *  "the client supports dialogs" stops meaning "declared" alone */
+let elicitationBroken = false
+
+/** why a tool that needs a target has none yet, naming the configured one */
+const targetMissingMessage = () =>
+  ENV_TARGET
+    ? `no target set yet — call set_target (it needs no question: the human configured ` +
+      `GUANO_MCP_TARGET="${ENV_TARGET}")`
+    : 'no target set — call set_target first (ask the user: Main or a draft?)'
+
+/**
+ * One tool call's own view of the target blob.
+ *
+ * PER CALL, not per process. A write tool loads the whole project, works, and
+ * writes the whole thing back, so the baseline it must not overwrite past is
+ * the bytes IT read. Held in one module-level pair, that baseline was SHARED:
+ * two handlers running at once both read `raw0`, the first save set the shared
+ * baseline to its own bytes, and the second save then compared against that —
+ * found it current — and wrote a project built on `raw0`, erasing the first
+ * write completely. Nothing reported a conflict, because by the time the guard
+ * looked, the guard's own baseline was the other handler's write.
+ *
+ * That is the Vezaro "silent revert": a finished home page back at the empty
+ * version it started from, every call in between answering `saved: true`.
+ *
+ * `callState` is an AsyncLocalStorage store created per handler invocation by
+ * `serializeHandler`, so each call compares against its own read. The
+ * module-level pair survives only as the fallback for a helper called outside a
+ * wrapped handler (the in-process test harness reaching for one directly).
+ */
+const callState = new AsyncLocalStorage()
 let loadedRaw = null
 let loadedKey = null
+
+/** this call's baseline slot — its own store, or the process-wide fallback */
+function baselineSlot() {
+  return (
+    callState.getStore() ?? {
+      get loadedRaw() {
+        return loadedRaw
+      },
+      set loadedRaw(v) {
+        loadedRaw = v
+      },
+      get loadedKey() {
+        return loadedKey
+      },
+      set loadedKey(v) {
+        loadedKey = v
+      },
+    }
+  )
+}
+
+/**
+ * The target blob's write lock: one load→save window at a time.
+ *
+ * A per-call baseline makes a lost update impossible, but on its own it turns
+ * the guide's promise — "writes to different pages parallelize freely" — into
+ * a refusal, because the second of two concurrent writes would now correctly
+ * find the blob moved under it. Serializing the window keeps the promise
+ * instead: each call loads AFTER the previous one saved, so both land.
+ *
+ * Held from the first `loadTargetProject()` of a call until that call returns
+ * (`serializeHandler`'s finally), which is exactly the read-modify-write
+ * window. Re-entrant within one call, so a handler with two save paths or a
+ * second load cannot deadlock against itself.
+ *
+ * It covers reads too, since they load the same way. That is a feature: a read
+ * never observes a half-written project, and the cost is only that two reads
+ * queue behind one another against a local instance. `publish` and `preview`
+ * hold it across the export, which is the behaviour to want — nothing should
+ * mutate the blob an export is halfway through rendering.
+ */
+let lockTail = Promise.resolve()
+
+function acquireProjectLock() {
+  let release
+  const held = new Promise((resolve) => {
+    release = resolve
+  })
+  const prior = lockTail
+  lockTail = prior.then(
+    () => held,
+    () => held,
+  )
+  return prior.then(
+    () => release,
+    () => release,
+  )
+}
+
+/**
+ * Run one tool handler with its own baseline, and release the write lock it
+ * took however it ends. Applied to every handler at registration rather than
+ * tool by tool: a `writes: true` flag per tool is 40+ chances to forget one,
+ * and a forgotten one is this bug again, silent.
+ */
+function serializeHandler(handler) {
+  return async (args) => {
+    const store = { loadedRaw: null, loadedKey: null, lock: null }
+    return callState.run(store, async () => {
+      try {
+        return await handler(args)
+      } finally {
+        const release = store.lock
+        store.lock = null
+        if (release) release()
+      }
+    })
+  }
+}
 
 /**
  * The last translation worklist, by handle.
@@ -613,7 +736,11 @@ async function readBranchesMeta() {
 
 /** the target project blob (parsed), or throws with a clear message */
 async function loadTargetProject() {
-  if (!target) throw new Error('no target set — call set_target first (ask the user: Main or a draft?)')
+  if (!target) throw new Error(targetMissingMessage())
+  // the load→save window starts HERE: take the lock before reading, or two
+  // calls read the same bytes and one of the two writes is lost
+  const store = callState.getStore()
+  if (store && !store.lock) store.lock = await acquireProjectLock()
   const raw = await storeGetRaw(projectKey(target))
   if (raw === null) {
     throw new Error(
@@ -622,8 +749,9 @@ async function loadTargetProject() {
       `and pick another.`,
     )
   }
-  loadedKey = projectKey(target)
-  loadedRaw = raw
+  const slot = baselineSlot()
+  slot.loadedKey = projectKey(target)
+  slot.loadedRaw = raw
   const project = JSON.parse(raw)
   // feed design-token names into the class vocabulary so bg-<token> etc.
   // validate in edit_elements/create_interactions (mirrors useSettings' watcher).
@@ -633,18 +761,33 @@ async function loadTargetProject() {
   return { project, raw }
 }
 
+const CHANGED_UNDER_US = (t) =>
+  `"${t}" changed while you were working on it — someone saved in the editor, or another ` +
+  'agent wrote to the same target. NOTHING was written. Re-read what you were editing and ' +
+  'reapply your change on top of the current state.'
+
 /**
  * Save the target blob, refusing to overwrite work that landed since the load.
  *
- * Storage is whole-blob latest-wins, so the window that matters is INSIDE one
- * handler: it loads the entire project, does async work, then writes the whole
- * thing back. A human save landing in that window would be erased — including
- * edits to pages this tool never looked at — and most tools here carry no
- * per-page version check to catch it. Comparing against the exact bytes this
- * handler loaded covers all 40+ write tools at once.
+ * Storage is whole-blob latest-wins, so the window that matters is the one
+ * INSIDE a handler: it loads the entire project, does async work, then writes
+ * the whole thing back. Anything that landed in that window would be erased —
+ * including edits to pages this tool never looked at — and most tools here
+ * carry no per-page version check to catch it. Comparing against the exact
+ * bytes this handler loaded covers all 40+ write tools at once.
  *
- * (Between handlers there is no race to lose: each one loads fresh, so a
- * human's write is built on rather than overwritten.)
+ * Guarded in three places, because a lost write is invisible to the agent that
+ * caused it and to the human whose work went:
+ *
+ * 1. the write LOCK (see acquireProjectLock), so two calls of this process
+ *    cannot share a window at all;
+ * 2. this comparison, against the bytes THIS CALL read — which also catches a
+ *    human's editor save, and still holds on an older instance that knows
+ *    nothing of the header below;
+ * 3. `If-Match` on the PUT, which the server checks against the file under its
+ *    own per-key lock. Only this one closes the gap between the check and the
+ *    write: another process can save in exactly that gap, and no amount of
+ *    client-side comparing can see it.
  *
  * Same direction the editor already expects — useLiveSync suspends its autosave
  * while an agent is active precisely so that when the human takes over, it is
@@ -652,20 +795,23 @@ async function loadTargetProject() {
  */
 async function saveTargetProject(project) {
   const key = projectKey(target)
-  if (loadedKey === key && loadedRaw !== null) {
+  const slot = baselineSlot()
+  const baseline = slot.loadedKey === key ? slot.loadedRaw : null
+  if (baseline !== null) {
     const current = await storeGetRaw(key)
-    if (current !== null && current !== loadedRaw) {
-      throw new Error(
-        `"${target}" changed while you were working on it — someone saved in the editor, or ` +
-          'another agent wrote to the same target. NOTHING was written. Re-read what you were ' +
-          'editing and reapply your change on top of the current state.',
-      )
-    }
+    if (current !== null && current !== baseline) throw new Error(CHANGED_UNDER_US(target))
   }
   const next = JSON.stringify(project)
-  await storePutRaw(key, next)
-  loadedRaw = next // our own write becomes the baseline for the next save
-  loadedKey = key
+  try {
+    await storePutRaw(key, next, { ifMatch: baseline === null ? undefined : sha256(baseline) })
+  } catch (e) {
+    // 412: the server found other bytes under the key at the moment it wrote.
+    // The same event as the comparison above, caught where it cannot be raced.
+    if (e?.status === 412) throw new Error(CHANGED_UNDER_US(target))
+    throw e
+  }
+  slot.loadedRaw = next // our own write becomes the baseline for the next save
+  slot.loadedKey = key
 }
 
 function findPage(project, pageId) {
@@ -4416,6 +4562,26 @@ const tools = [
         // whether set_target can put its dialog in front of the human on THIS
         // client — null until the client has said what it supports
         elicitation: hasElicitation(),
+        // DECLARED is not the same as working: a client can declare the
+        // capability and answer the request without showing anything. Once
+        // that has happened, say so, because the recovery is different (ask in
+        // chat, pass chosenByUser) and the agent is otherwise stuck.
+        ...(elicitationBroken
+          ? {
+              elicitationWorks: false,
+              elicitationNote:
+                'this client answered a dialog without showing it to the human — target ' +
+                'choices here go through chat (chosenByUser: true) or GUANO_MCP_TARGET',
+            }
+          : {}),
+        // the directory every *Path argument must sit under (htmlPath,
+        // editsPath, manifestPath, upload_media.path). Reported because the
+        // guide tells agents to move big payloads through a file, and their own
+        // scratch directory is usually OUTSIDE this root — which turned the
+        // advice into a refusal on the first try.
+        fileRoot: FILE_ROOT ?? null,
+        ...(FILE_ROOT ? {} : { fileRootNote: 'unset — any absolute path this process can read' }),
+        ...(ENV_TARGET ? { configuredTarget: ENV_TARGET } : {}),
         serverVersion,
         ...(versionMismatch
           ? {
@@ -4465,10 +4631,11 @@ const tools = [
       'Choose where writes go: Main or a draft. THE HUMAN DECIDES THIS, NOT YOU. On clients ' +
       'with MCP elicitation this opens a dialog they answer directly — call it early, pass ' +
       'target/createDraft as your suggestion, and respect the outcome; a dismissed dialog ' +
-      'means STOP and ask in chat. Without elicitation, ask one question, then pass ' +
-      'chosenByUser: true; a non-empty Main also needs acknowledgeMain: true. Suggest Main ' +
-      'ONLY when get_status reports mainIsEmpty: true. Pass {target: "main"}, ' +
-      '{target: "<draftId>"} or {createDraft: "<name>"}.',
+      'means STOP and ask in chat. Without elicitation — or on "dialog-unavailable", a ' +
+      'dialog the client never showed — ask one question, then pass chosenByUser: true; a ' +
+      'non-empty Main also needs acknowledgeMain: true. Suggest Main ONLY when get_status ' +
+      'reports mainIsEmpty: true. Pass {target: "main"}, {target: "<draftId>"} or ' +
+      '{createDraft: "<name>"}.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -4477,22 +4644,22 @@ const tools = [
         chosenByUser: {
           type: 'boolean',
           description:
-            'attests the human explicitly chose this target (in their request or in answer to ' +
-            'your question). Required true on clients WITHOUT elicitation — if they have not ' +
-            'answered, ask them, do not guess. Ignored when the consent dialog is available: ' +
-            'there the human answers directly.',
+            'attests the human chose this target, in their request or answering your question. ' +
+            'Required wherever no dialog reaches them; never guess it.',
         },
         acknowledgeMain: {
           type: 'boolean',
           description:
-            'clients without elicitation only: required when targeting Main while it already ' +
-            'holds a site — attests the human was told what is there and still chose Main. ' +
-            'Writes to Main are immediate and overwrite whatever is in the way.',
+            'required when targeting Main while it already holds a site: attests the human saw ' +
+            'the counts and still chose Main. Writes there are immediate.',
         },
       },
       additionalProperties: false,
     },
     handler: async (args) => {
+      // set when a dialog was attempted and answered without ever reaching the
+      // human, so the chat attestation below carries that on its result
+      let chatAfterDialog = false
       // one implementation per outcome, shared by both consent paths
       const createDraftTarget = async (name) => {
         const mainRaw = await storeGetRaw(projectKey(MAIN_ID))
@@ -4540,6 +4707,41 @@ const tools = [
         }
       }
 
+      // ---- config path: the OPERATOR named the target in the MCP client's own
+      // config, which is the human deciding before the session even starts —
+      // and the one channel no prompt-injected agent can reach. It needs
+      // neither a dialog nor an attestation, and it is what unblocks a client
+      // that declares elicitation and then answers without showing anything.
+      if (ENV_TARGET) {
+        const mainProject = await storeGetJson(projectKey(MAIN_ID))
+        const stats = mainProject ? projectStats(mainProject) : null
+        if (ENV_TARGET === MAIN_ID) {
+          target = MAIN_ID
+          return { ok: true, target, chosenVia: 'config', ...(stats ? { main: stats } : {}) }
+        }
+        const meta = await readBranchesMeta()
+        const wanted = ENV_TARGET.startsWith('new:') ? ENV_TARGET.slice(4).trim() : null
+        if (wanted) {
+          // by NAME, so a restart (the client respawns this process on every
+          // launch) reuses the draft instead of piling up a new one per session
+          const existing = meta.branches.find((b) => b.id !== MAIN_ID && b.name === wanted)
+          if (existing) return { ...(await selectDraft(existing)), chosenVia: 'config' }
+          return { ...(await createDraftTarget(wanted || 'Draft')), chosenVia: 'config' }
+        }
+        const draft = meta.branches.find((b) => b.id === ENV_TARGET)
+        if (!draft) {
+          throw new Error(
+            `GUANO_MCP_TARGET is "${ENV_TARGET}", which is neither "main", "new:<name>", nor a ` +
+              `draft that exists (${meta.branches
+                .filter((b) => b.id !== MAIN_ID)
+                .map((b) => `${b.name} = ${b.id}`)
+                .join(', ') || 'no drafts'}). Ask the human to fix it in the MCP config, or ` +
+              'unset it and choose a target here.',
+          )
+        }
+        return { ...(await selectDraft(draft)), chosenVia: 'config' }
+      }
+
       // ---- dialog path: the client can put the choice in front of the human,
       // so the human's answer IS the consent — no agent-asserted booleans. The
       // agent's own args only seed the suggestion line in the dialog.
@@ -4561,6 +4763,7 @@ const tools = [
               ? `use draft "${drafts.find((d) => d.id === args.target)?.name ?? args.target}"`
               : null
         let res
+        const askedAt = Date.now()
         try {
           res = await elicit({
             message:
@@ -4606,8 +4809,24 @@ const tools = [
         }
         // res === null means the client never declared the elicitation
         // capability — fall through to the ask-in-chat attestation flow
-        if (res !== null && res !== undefined) {
-          if (res.action !== 'accept' || !res.content?.choice) {
+        const answered = res !== null && res !== undefined
+        const chose = answered && res.action === 'accept' && res.content?.choice
+        if (answered && !chose) {
+          // A DECLARED capability that does not WORK was the blocker that
+          // stopped the first client build dead: the client answered `decline`
+          // instantly, having shown the human nothing, and because the
+          // capability was declared the chat attestation was ignored as well —
+          // so there was no path to a target, and with no target no write is
+          // possible at all. A human cannot read a dialog and dismiss it in
+          // under a second and a half, and an `accept` carrying no choice is
+          // not an answer either: both mean the channel is broken, not that
+          // the human refused.
+          // deliberately well under a human's read-and-click time: a broken
+          // client answers in milliseconds, and the narrower the window the
+          // less chance a genuinely fast dismissal is read as a broken channel
+          const instant = Date.now() - askedAt < 1000
+          const emptyAccept = res.action === 'accept'
+          if (!instant && !emptyAccept) {
             return {
               ok: false,
               reason: 'declined-by-user',
@@ -4616,6 +4835,26 @@ const tools = [
                 'writes, and ask them in chat how they want to proceed',
             }
           }
+          elicitationBroken = true
+          if (args.chosenByUser !== true) {
+            return {
+              ok: false,
+              reason: 'dialog-unavailable',
+              message:
+                'this client declared dialog support and then answered without showing one, so ' +
+                'the human never saw it. Ask them in chat ("Work on Main directly, or in a ' +
+                'draft?") and call set_target again with chosenByUser: true (plus ' +
+                'acknowledgeMain: true for a Main that already holds a site). The human can ' +
+                'also set GUANO_MCP_TARGET in the MCP config to settle it before the session ' +
+                'starts.',
+            }
+          }
+          // the agent asked in chat and carries the answer: that IS the
+          // consent, exactly as on a client with no dialog at all. Falls
+          // through to the attestation path below, which says so on its result.
+          chatAfterDialog = true
+        }
+        if (chose) {
           const choice = String(res.content.choice)
           if (choice === NEW_DRAFT) {
             const name =
@@ -4646,8 +4885,23 @@ const tools = [
           'and pass chosenByUser: true once they have answered',
         )
       }
+      // When the dialog was tried and could not reach the human, SAY so on the
+      // result. The attestation is the agent's own word either way, and a
+      // bypassed dialog is exactly the thing a human scrolling the transcript
+      // should be able to see.
+      const viaChat = (result) =>
+        chatAfterDialog
+          ? {
+              ...result,
+              chosenVia: 'chat',
+              dialogUnavailable: true,
+              note:
+                'this client answered the consent dialog without showing it, so the target was ' +
+                'set on your chat confirmation. Tell the human which target you are writing to.',
+            }
+          : result
       if (args.createDraft) {
-        return createDraftTarget(String(args.createDraft).trim() || 'Draft')
+        return viaChat(await createDraftTarget(String(args.createDraft).trim() || 'Draft'))
       }
       const t = String(args.target ?? '')
       if (t === MAIN_ID) {
@@ -4671,14 +4925,14 @@ const tools = [
           }
         }
         target = MAIN_ID
-        return { ok: true, target, ...(stats ? { main: stats } : {}) }
+        return viaChat({ ok: true, target, ...(stats ? { main: stats } : {}) })
       }
       const meta = await readBranchesMeta()
       const draft = meta.branches.find((b) => b.id === t)
       if (!draft) {
         throw new Error(`no draft with id "${t}" (call get_status to list drafts)`)
       }
-      return selectDraft(draft)
+      return viaChat(await selectDraft(draft))
     },
   },
   {
@@ -9525,10 +9779,15 @@ const tools = [
   },
 ]
 
-  const toolMap = new Map(tools.map((t) => [t.name, t]))
+  // every handler gets its own baseline and releases the write lock on the way
+  // out — see serializeHandler. Wrapped HERE, once, so both callers (the stdio
+  // server and the in-process test harness, which reach for toolMap directly)
+  // get the guarantee and no tool can be left out of it.
+  const guarded = tools.map((t) => ({ ...t, handler: serializeHandler(t.handler) }))
+  const toolMap = new Map(guarded.map((t) => [t.name, t]))
 
   return {
-    tools,
+    tools: guarded,
     toolMap,
     getTarget: () => target,
     setTarget: (t) => {

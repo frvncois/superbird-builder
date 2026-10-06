@@ -49,7 +49,13 @@ and a miss returns the slug list, so a wrong guess costs one small response.
    overrides whatever you passed, and a dismissed dialog (`reason: "declined-by-user"`)
    means STOP writing and ask in chat. On clients without that dialog channel, ask
    exactly one question — *"Work on Main directly, or in a draft?"* — and pass
-   `chosenByUser: true` once they answer. Either way, base your recommendation on
+   `chosenByUser: true` once they answer. Some clients DECLARE the dialog channel and
+   then answer it without ever showing anything: that comes back as
+   `reason: "dialog-unavailable"`, which is not a refusal — ask in chat and retry with
+   `chosenByUser: true`, exactly as on a client with no dialog at all (the human can also
+   settle it before the session with `GUANO_MCP_TARGET=main | <draftId> | new:<Name>` in
+   the MCP config, which `get_status` reports as `configuredTarget`). Either way, base
+   your recommendation on
    **`get_status`'s `mainIsEmpty`**, never on the project's name: recommend **Main**
    only when `mainIsEmpty` is true, and **a draft** whenever Main holds anything,
    because Main writes are immediate and overwrite whatever is there (drafts are
@@ -140,6 +146,12 @@ off disk:
 Generating a page's HTML and its edit batch to disk and passing two paths is the
 cheapest way to build a large page.
 
+**Where those paths may point.** The operator can confine every path argument to one
+directory (`GUANO_MCP_FILE_ROOT`), and `get_status` reports it as `fileRoot`. Your own
+scratch directory is usually OUTSIDE it, so write these files under `fileRoot` — or ask
+the operator to widen it. Check it once, before you generate a 40 KB file somewhere the
+tools will refuse to read.
+
 **Ask for less back.** `set_page_html` echoes a per-element summary by default, which is
 one row per node — on a 300-node page that is 300 rows you probably already know.
 `elements: "refs"` trims it to `{path, id, type, ref?}`; `elements: "none"` omits it.
@@ -169,8 +181,9 @@ a page edited since your read is never deleted on stale information. A component
 own version, from `list_components` — `update_component {html}` and
 `edit_structure {componentId}` both check it.
 
-Writes to **different pages** parallelize freely; writes to the same page are
-sequential. To touch several pages at once (shared chrome, a sweeping restyle), pass
+Writes to **different pages** parallelize freely — the server queues them one at a
+time, so each is applied to the project the one before it left; writes to the same page
+are sequential. To touch several pages at once (shared chrome, a sweeping restyle), pass
 `edit_elements` its `pages: [{pageId, version, edits}]` form — one call, one save,
 per-page version checks (a stale page fails alone, the rest still apply).
 
@@ -1739,8 +1752,8 @@ the previous step, `stagger` across the target's children, `repeat`, and `yoyo`.
 - `create_animations {items: [{name, steps}]}` / `update_animation {animationId, name?, steps?}` /
   `delete_animation {animationId}` (delete also unbinds everywhere).
 - **`create_animations {items: [...]}`** is the batch form — use it when porting a design.
-  Each single create rewrites the whole project, and parallel calls race, so 39 separate
-  calls is both slow and unsafe; one batch call is neither.
+  Each single create rewrites the whole project, so 39 separate calls queue behind one
+  another for 39 saves; one batch call is one save.
 - **Bind in batch** via `edit_elements`: `bindAnimations: [{animationId, trigger, …}]`,
   and remove with `unbindAnimationIds: [bindingId]`. Read binding ids from
   `get_page {includeInteractions: true}` → `animations[]` / `masterAnimations[]`.

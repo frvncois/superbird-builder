@@ -16,7 +16,7 @@ class ApiError extends Error {
   }
 }
 
-async function req(method, path, body) {
+async function req(method, path, body, extraHeaders) {
   let res
   try {
     res = await fetch(BASE + path, {
@@ -24,6 +24,7 @@ async function req(method, path, body) {
       headers: {
         authorization: `Bearer ${TOKEN}`,
         ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
+        ...extraHeaders,
       },
       body: body === undefined ? undefined : typeof body === 'string' ? body : JSON.stringify(body),
     })
@@ -57,9 +58,23 @@ export async function storeGetJson(key) {
   return raw === null ? null : JSON.parse(raw)
 }
 
-/** write a raw string under a key */
-export async function storePutRaw(key, raw) {
-  await req('PUT', `/api/store/${encodeURIComponent(key)}`, raw)
+/**
+ * Write a raw string under a key.
+ *
+ * `ifMatch` is the sha256 of the bytes the caller believes are stored — the
+ * server compares it under its own per-key lock and answers 412 rather than
+ * overwriting someone else's write. That last word matters: the caller's own
+ * read-then-compare cannot see a write that lands between its check and its
+ * PUT, and the whole blob goes out on every write, so what is lost in that gap
+ * is a whole page, not a field.
+ */
+export async function storePutRaw(key, raw, { ifMatch } = {}) {
+  await req(
+    'PUT',
+    `/api/store/${encodeURIComponent(key)}`,
+    raw,
+    ifMatch ? { 'if-match': ifMatch } : undefined,
+  )
 }
 
 /** publish (server method): editor+ only, gated server-side */
