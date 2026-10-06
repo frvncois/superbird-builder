@@ -208,7 +208,21 @@ export function serializeAttribute(name, value, escape) {
  * copy, and on a multilingual site they used to render in the default language
  * on every locale route with no way to change it.
  */
-export const LOCALIZABLE_ATTRS = ['placeholder', 'aria-label', 'alt', 'title']
+export const LOCALIZABLE_ATTRS = [
+  'placeholder',
+  'aria-label',
+  'alt',
+  'title',
+  // the carousel chrome's own words (SLIDER_LABEL_ATTRS in shared/slider.js).
+  // Renderer-invented, so they are in no tree and nothing translated them: a
+  // French route shipped "Previous slide" on every slider while the worklist
+  // reported `missingTranslatable: 0`. Consumed by the slider renderers, never
+  // emitted as attributes.
+  'data-prev-label',
+  'data-next-label',
+  'data-dots-label',
+  'data-dot-label',
+]
 
 /** true when `name` carries text worth translating */
 export function isLocalizableAttribute(name) {

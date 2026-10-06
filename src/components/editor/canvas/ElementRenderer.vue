@@ -72,6 +72,7 @@ const {
   motionStyle,
   sliderBound,
   sliderResolved,
+  sliderLabels,
   sliderTrackClass,
 } = useRenderNode(() => props.node, { fieldPlaceholders: true })
 
@@ -399,7 +400,7 @@ const handlers = {
         type="button"
         data-sl-prev
         tabindex="-1"
-        aria-label="Previous slide"
+        :aria-label="sliderLabels.prev"
         :class="[SLIDER_ARROW_CLASSES, SLIDER_PREV_CLASS]"
         v-html="SLIDER_PREV_SVG"
       />
@@ -407,12 +408,17 @@ const handlers = {
         type="button"
         data-sl-next
         tabindex="-1"
-        aria-label="Next slide"
+        :aria-label="sliderLabels.next"
         :class="[SLIDER_ARROW_CLASSES, SLIDER_NEXT_CLASS]"
         v-html="SLIDER_NEXT_SVG"
       />
     </template>
-    <div v-if="sliderResolved.dots" data-sl-dots :class="SLIDER_DOTS_CLASSES">
+    <div
+      v-if="sliderResolved.dots"
+      data-sl-dots
+      :aria-label="sliderLabels.dots"
+      :class="SLIDER_DOTS_CLASSES"
+    >
       <span
         v-for="i in canvasDotCount"
         :key="i"

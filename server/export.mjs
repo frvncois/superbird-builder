@@ -66,6 +66,9 @@ import {
   sliderWireData,
   sliderHostExtraClass,
   sliderCandidateClasses,
+  resolveSliderLabels,
+  sliderDotLabel,
+  SLIDER_LABEL_ATTRS,
   SLIDER_SLIDE_CLASSES,
   SLIDER_ARROW_CLASSES,
   SLIDER_PREV_CLASS,
@@ -882,7 +885,21 @@ function attrsFor(node, ctx, bg, { wrapLink = true, extraClass = '' } = {}) {
   // <a> and is skipped here.
   // `sizes` is consumed above, beside the srcset it describes — emitted there
   // or not at all, since it means nothing without one
-  const managed = new Set(['id', 'class', 'style', 'src', 'alt', 'href', 'sizes'])
+  // `managed` names are written by this function itself (or resolved before it),
+  // so the pass-through loop must not emit them a second time. The slider's
+  // label attributes are in here because they are CONSUMED, not rendered: they
+  // set the chrome's aria-labels, which are emitted on the arrows and the dot
+  // rail, not on the host.
+  const managed = new Set([
+    'id',
+    'class',
+    'style',
+    'src',
+    'alt',
+    'href',
+    'sizes',
+    ...Object.keys(SLIDER_LABEL_ATTRS),
+  ])
   const wrapsInAnchor = wrapLink && def?.tag !== 'a' && !!resolveHref(node, ctx)
   const own = wrapsInAnchor ? splitLinkAttributes(withBound).element : withBound
   // attributes the element TYPE implies (:checkbox → type="checkbox"), unless
@@ -1018,17 +1035,24 @@ function renderNode(node, ctx) {
       slides = node.children.map((child) => slide(renderNode(child, ctx))).join('')
     }
     const track = `<div data-sl-track class="${escapeHtml(sliderTrackClasses(sliderConfig, ctx.project.breakpoints))}">${slides}</div>`
+    // the chrome's WORDS, per locale: the authored label attributes over the
+    // built-in defaults. They used to be English literals here, so every
+    // /fr/ route shipped "Previous slide" and the worklist never offered them.
+    const labels = resolveSliderLabels(
+      nodeAttributes(node, ctx.mm.get(node.id), ctx.locale, ctx.defaultLocale),
+    )
     const arrow = (side, cls, svg, label) =>
-      `<button type="button" data-sl-${side} aria-label="${label}" class="${escapeHtml(`${SLIDER_ARROW_CLASSES} ${cls}`)}">${svg}</button>`
+      `<button type="button" data-sl-${side} aria-label="${escapeHtml(label)}" class="${escapeHtml(`${SLIDER_ARROW_CLASSES} ${cls}`)}">${svg}</button>`
     const arrows = config.arrows
-      ? arrow('prev', SLIDER_PREV_CLASS, SLIDER_PREV_SVG, 'Previous slide') +
-        arrow('next', SLIDER_NEXT_CLASS, SLIDER_NEXT_SVG, 'Next slide')
+      ? arrow('prev', SLIDER_PREV_CLASS, SLIDER_PREV_SVG, labels.prev) +
+        arrow('next', SLIDER_NEXT_CLASS, SLIDER_NEXT_SVG, labels.next)
       : ''
-    // the runtime fills the dot rail — it alone knows the reachable count
+    // the runtime fills the dot rail — it alone knows the reachable count, so
+    // the per-dot pattern travels on the wire (data.dl)
     const dots = config.dots
-      ? `<div data-sl-dots role="tablist" aria-label="Slides" class="${escapeHtml(SLIDER_DOTS_CLASSES)}"></div>`
+      ? `<div data-sl-dots role="tablist" aria-label="${escapeHtml(labels.dots)}" class="${escapeHtml(SLIDER_DOTS_CLASSES)}"></div>`
       : ''
-    const wire = JSON.stringify(sliderWireData(sliderConfig)).replaceAll('</', '<\\/')
+    const wire = JSON.stringify(sliderWireData(sliderConfig, labels)).replaceAll('</', '<\\/')
     ctx.sliderIds.add(node.id)
     const attrs = attrsFor(node, ctx, undefined, {
       extraClass: sliderHostExtraClass(node.classes),

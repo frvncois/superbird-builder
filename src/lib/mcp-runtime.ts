@@ -226,7 +226,14 @@ export { defaultSettings } from './settings'
 
 // --- slider (carousel) config — validated against the SAME rules the editor's
 // Data panel writes through, so an agent can't author a config the UI refuses
-export { SLIDER_DEFAULTS, validateSliderConfig, resolveSliderConfig } from './shared/slider.js'
+export {
+  SLIDER_DEFAULTS,
+  validateSliderConfig,
+  resolveSliderConfig,
+  // the carousel chrome's own words — translatable like any other attribute
+  // text, which is what makes the worklist and the publish warning see them
+  sliderLabelAttributes,
+} from './shared/slider.js'
 // forms: the config validator (edit_elements {form}) and the field reader the
 // publish warnings use — the same functions the Data panel and the exporter run
 export { collectFormFields, formConfigError, formEnabled, formName } from './shared/forms.js'

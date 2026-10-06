@@ -179,3 +179,102 @@ test.describe('attribute text per placement and per locale', () => {
     expect(routes['index.html']).not.toMatch(/<a class=[^>]*><span>FR<\/span>/)
   })
 })
+
+// The carousel's chrome — "Previous slide", "Next slide", "Slides", and each
+// dot's "Go to slide N" — is renderer-invented, like its Tailwind classes. So it
+// lived in no tree: nothing translated it, every /fr/ route shipped English, and
+// the worklist reached `missingTranslatable: 0` with it sitting there. The four
+// SLIDER_LABEL_ATTRS are ordinary localizable attributes, so the mechanism that
+// already exists for placeholder/alt/title carries them.
+test.describe('the slider chrome speaks the route’s language', () => {
+  async function sliderPage() {
+    const s = await mcpSession()
+    await s.call('update_settings', { addLocales: ['fr'] })
+    const home = await s.home()
+    await s.call('set_page_html', {
+      pageId: home.id,
+      version: home.version,
+      html: pageHtml('<slider data-ref="deck">\n  <div><span>One</span></div>\n  <div><span>Two</span></div>\n</slider>'),
+    })
+    return s
+  }
+
+  test('the defaults ship, and a locale override replaces them', async () => {
+    const s = await sliderPage()
+    const before = await s.html()
+    // the built-in English, on the default route
+    expect(before).toContain('aria-label="Previous slide"')
+    expect(before).toContain('aria-label="Next slide"')
+    expect(before).toContain('aria-label="Slides"')
+    // and the label attributes are CONSUMED, never emitted on the host
+    expect(before).not.toContain('data-prev-label')
+
+    const after = await s.home()
+    const edit = await s.call('edit_elements', {
+      pageId: after.id,
+      version: after.version,
+      locale: 'fr',
+      edits: [
+        {
+          ref: 'deck',
+          attributes: {
+            'data-prev-label': 'Diapositive précédente',
+            'data-next-label': 'Diapositive suivante',
+            'data-dots-label': 'Diapositives',
+            'data-dot-label': 'Aller à la diapositive {n}',
+          },
+        },
+      ],
+    })
+    expect(edit.failed).toBe(0)
+
+    const routes = await s.exportAll()
+    const fr = routes['fr/index.html']
+    expect(fr).toContain('aria-label="Diapositive précédente"')
+    expect(fr).toContain('aria-label="Diapositive suivante"')
+    expect(fr).toContain('aria-label="Diapositives"')
+    // the DOTS are built in the browser, so the pattern travels on the wire
+    expect(fr).toMatch(/data-slider="[^"]*Aller/)
+
+    // the default route is untouched…
+    const en = routes['index.html']
+    expect(en).toContain('aria-label="Previous slide"')
+    // …and its wire carries no label at all, so an untranslated slider is
+    // byte-identical to before this existed
+    expect(en).not.toMatch(/data-slider="[^"]*dl/)
+  })
+
+  test('the worklist offers them, and the counters stop lying', async () => {
+    const s = await sliderPage()
+    const work = await s.call('get_translation_worklist', { locale: 'fr', kind: 'attribute' })
+    const items = work.items as { attribute: string; key: string; base: unknown }[]
+    expect(items.map((i) => i.attribute).sort()).toEqual([
+      'data-dot-label',
+      'data-dots-label',
+      'data-next-label',
+      'data-prev-label',
+    ])
+    // the base is the built-in English, so there is something to translate FROM
+    const prev = items.find((i) => i.attribute === 'data-prev-label')!
+    expect(JSON.stringify(prev.base)).toContain('Previous slide')
+    const counts = await s.call('get_translation_worklist', { locale: 'fr', countsOnly: true })
+    expect(counts.missingTranslatable).toBeGreaterThanOrEqual(4)
+
+    // set_translations writes them through the existing attribute path
+    const wrote = await s.call('set_translations', {
+      locale: 'fr',
+      handle: work.handle,
+      items: [{ key: prev.key, text: 'Précédent' }],
+    })
+    expect(wrote.failures ?? []).toEqual([])
+    expect((await s.exportAll())['fr/index.html']).toContain('aria-label="Précédent"')
+  })
+
+  test('publish names them as untranslated while they are', async () => {
+    const s = await sliderPage()
+    const warnings = (await s.call('publish')).warnings ?? []
+    const hit = warnings.find((w: { kind: string }) => w.kind === 'untranslated-attributes')
+    expect(hit, JSON.stringify(warnings.map((w: { kind: string }) => w.kind))).toBeTruthy()
+    expect(JSON.stringify(hit.where)).toContain('label')
+  })
+})

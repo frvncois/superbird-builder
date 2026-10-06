@@ -247,6 +247,82 @@ const SLIDER_DOT_BASE = 'size-2 rounded-full bg-current transition-opacity'
 export const SLIDER_DOT_CLASSES = `${SLIDER_DOT_BASE} opacity-30`
 export const SLIDER_DOT_ACTIVE_CLASSES = `${SLIDER_DOT_BASE} opacity-100`
 
+/**
+ * The chrome's own WORDS. Renderer-invented, like its Tailwind classes — which
+ * means they live in no tree, nothing ever translated them, and a French route
+ * shipped "Previous slide" on every carousel while the worklist reported
+ * `missingTranslatable: 0`. They were also invisible to the
+ * `untranslated-attributes` publish warning for the same reason.
+ *
+ * Overridden per slider AND per locale through the node's ordinary localizable
+ * attributes (SLIDER_LABEL_ATTRS below), which is the mechanism
+ * `node.locales[code].attributes` already provides for placeholder/alt/title —
+ * resolved in all three renderers, enumerated by the worklist, written by
+ * set_translations. No second translation mechanism, and no schema change.
+ */
+export const SLIDER_LABELS = {
+  prev: 'Previous slide',
+  next: 'Next slide',
+  dots: 'Slides',
+  /** `{n}` is the 1-based slide number */
+  dot: 'Go to slide {n}',
+}
+
+/**
+ * Which attribute sets which label. Plain `data-*` names, so they are ordinary
+ * authored attributes an agent and the Data panel can already write — NOT under
+ * the reserved `data-sl-` prefix, which exists to stop an authored name
+ * shadowing a value the renderer owns. Here the renderer WANTS the authored
+ * value, so the opposite rule applies. They are consumed, never emitted.
+ */
+export const SLIDER_LABEL_ATTRS = {
+  'data-prev-label': 'prev',
+  'data-next-label': 'next',
+  'data-dots-label': 'dots',
+  'data-dot-label': 'dot',
+}
+
+/**
+ * The chrome's words for this slider: authored attributes over the defaults.
+ * @param {Record<string,string>} [attributes] the node's RESOLVED attributes
+ *   (layered master → placement → locale), i.e. what the renderer would emit
+ * @returns {{prev: string, next: string, dots: string, dot: string}}
+ */
+export function resolveSliderLabels(attributes) {
+  const out = { ...SLIDER_LABELS }
+  for (const name of Object.keys(SLIDER_LABEL_ATTRS)) {
+    const value = attributes ? attributes[name] : undefined
+    if (typeof value === 'string' && value.trim()) out[SLIDER_LABEL_ATTRS[name]] = value
+  }
+  return out
+}
+
+/**
+ * The resolved labels back as attribute names — what the translation worklist
+ * lists, so an unauthored slider still offers its four English defaults to
+ * translate instead of being silently absent.
+ * @param {Record<string,string>} [attributes]
+ * @param {{arrows?: boolean, dots?: boolean}} [config] only the chrome that renders
+ */
+export function sliderLabelAttributes(attributes, config) {
+  const labels = resolveSliderLabels(attributes)
+  const out = {}
+  for (const name of Object.keys(SLIDER_LABEL_ATTRS)) {
+    const key = SLIDER_LABEL_ATTRS[name]
+    if (config) {
+      if ((key === 'prev' || key === 'next') && !config.arrows) continue
+      if ((key === 'dots' || key === 'dot') && !config.dots) continue
+    }
+    out[name] = labels[key]
+  }
+  return out
+}
+
+/** one dot's label: the pattern with `{n}` filled in (i is 0-based) */
+export function sliderDotLabel(pattern, i) {
+  return String(pattern || SLIDER_LABELS.dot).replace('{n}', String(i + 1))
+}
+
 export const SLIDER_PREV_SVG =
   '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>'
 export const SLIDER_NEXT_SVG =
@@ -283,7 +359,7 @@ export function sliderCandidateClasses(config, breakpoints = []) {
  * the DOM, so it tracks the CSS cascade for free and never needs the breakpoint
  * table shipped (nor invalidating when a breakpoint is renamed or resized).
  */
-export function sliderWireData(config) {
+export function sliderWireData(config, labels) {
   const r = resolveSliderConfig(config, [])
   const data = {}
   if (r.autoplay) data.au = 1
@@ -292,6 +368,11 @@ export function sliderWireData(config) {
   if (!r.drag) data.dr = 0
   if (!r.arrows) data.ar = 0
   if (!r.dots) data.dt = 0
+  // the DOT labels are built in the browser (only the runtime knows the
+  // reachable count), so the pattern has to travel — otherwise every locale's
+  // dots said "Go to slide 3" however the arrows were translated. Omitted when
+  // it is the default, so an untranslated slider's wire is byte-identical.
+  if (labels && labels.dot && labels.dot !== SLIDER_LABELS.dot) data.dl = labels.dot
   return data
 }
 
@@ -385,7 +466,7 @@ export function initSlider(host, data, opts = {}) {
       dot.type = 'button'
       dot.className = SLIDER_DOT_CLASSES
       dot.setAttribute('role', 'tab')
-      dot.setAttribute('aria-label', `Go to slide ${i + 1}`)
+      dot.setAttribute('aria-label', sliderDotLabel(data.dl, i))
       dot.addEventListener('click', (e) => {
         // the whole slider may sit inside a link — paging it must never
         // navigate away (the editor hides the Link field for a slider, but

@@ -371,3 +371,61 @@ test.describe(':slider export', () => {
     })
   })
 })
+
+// The chrome's WORDS. Renderer-invented like its classes, so they were English
+// literals in all three renderers and in the runtime's dot builder: a French
+// route shipped "Previous slide" on every carousel and the dots said "Go to
+// slide 3" whatever the arrows said. They resolve off the node's ordinary
+// localizable attributes now (SLIDER_LABEL_ATTRS), and the DOT pattern travels
+// on the wire because only the runtime knows the reachable count.
+test.describe(':slider chrome labels', () => {
+  const labelled = () => {
+    const f = fixture(undefined) as unknown as {
+      pages: { elements: { children: { htmlId?: string; attributes?: unknown }[] }[] }[]
+    }
+    const host = f.pages[0]!.elements[0]!.children.find((n) => n.htmlId === 'sl')!
+    host.attributes = {
+      'data-prev-label': 'Précédent',
+      'data-next-label': 'Suivant',
+      'data-dots-label': 'Diapositives',
+      'data-dot-label': 'Aller à {n}',
+    }
+    return f
+  }
+
+  test('the defaults ship when nothing is authored, and cost the wire nothing', async () => {
+    await exportSite(fixture(undefined), SITE)
+    const html = await readFile(join(SITE, 'index.html'), 'utf8')
+    expect(html).toContain('aria-label="Previous slide"')
+    expect(html).toContain('aria-label="Next slide"')
+    expect(html).toContain('aria-label="Slides"')
+    // no label on the wire, so an untranslated slider is byte-identical
+    expect(/data-slider="[^"]*dl/.test(html)).toBe(false)
+    // and the authoring attributes are consumed, never emitted on the host
+    expect(html).not.toContain('data-prev-label')
+  })
+
+  test('authored labels reach the arrows, the rail AND every dot', async ({ page }) => {
+    await exportSite(labelled(), SITE)
+    const html = await readFile(join(SITE, 'index.html'), 'utf8')
+    expect(html).toContain('aria-label="Précédent"')
+    expect(html).toContain('aria-label="Suivant"')
+    expect(html).toContain('aria-label="Diapositives"')
+    expect(html).not.toContain('data-dot-label=')
+
+    // the dots are built in the browser, from the pattern on the wire
+    await page.goto('/')
+    const dots = page.locator('[data-sl-dots] button')
+    await expect.poll(() => dots.count()).toBeGreaterThan(1)
+    expect(await dots.nth(0).getAttribute('aria-label')).toBe('Aller à 1')
+    expect(await dots.nth(1).getAttribute('aria-label')).toBe('Aller à 2')
+  })
+
+  test('the default dot label still numbers every dot', async ({ page }) => {
+    await exportSite(fixture(undefined), SITE)
+    await page.goto('/')
+    const dots = page.locator('[data-sl-dots] button')
+    await expect.poll(() => dots.count()).toBeGreaterThan(1)
+    expect(await dots.nth(2).getAttribute('aria-label')).toBe('Go to slide 3')
+  })
+})

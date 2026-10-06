@@ -2157,6 +2157,24 @@ canvas — arrows, dots, dragging and autoplay all run in Preview and on the pub
 Animations write inline styles, so never bind an animation that tweens `transform` or
 `width` to a slider's slides; the track is a real scroller and the two will fight.
 
+**The chrome's words are translatable.** The arrows, the dot rail and each dot carry
+aria-labels the renderer supplies — "Previous slide", "Next slide", "Slides", "Go to
+slide N" — and on a multilingual site they are text a visitor reads. Override them per
+slider with four ordinary attributes on the `<slider>`:
+
+| attribute | default |
+|---|---|
+| `data-prev-label` | `Previous slide` |
+| `data-next-label` | `Next slide` |
+| `data-dots-label` | `Slides` |
+| `data-dot-label` | `Go to slide {n}` — `{n}` is the 1-based slide number |
+
+They are localizable like `placeholder` and `alt`, so `get_translation_worklist` lists
+them as `kind: "attribute"` for every slider (with the English default as the base) and
+`set_translations` writes the per-locale value. `publish` names them in
+`untranslated-attributes` while they are missing. You do not need to set the base: leave
+it and translate the locales.
+
 ## Forms
 
 A `<form>` is a plain form until you turn it on. With `form: {enabled: true}` it posts to

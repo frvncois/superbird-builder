@@ -65,7 +65,7 @@ const pageTransition = usePageTransition()
 const {
   def, mapping, boundField, boundEntry,
   listCollection, listEntries, listTemplateChildren, listEmptyChildren, itemCollection, itemEntry, itemTemplateChildren, selfNested,
-  customAttrs, backgroundInfo,
+  customAttrs, backgroundInfo, sliderLabels,
   displayContent, richContent, srcAttr, altAttr, iconInfo, hidden, linkRaw, baseClasses,
   editableText, richEditing, inlineInitialText, commitInlineText,
   hoverHandlers, fireClickInteractions, fireChangeInteractions, el,
@@ -387,14 +387,14 @@ const handlers = {
       <button
         type="button"
         data-sl-prev
-        aria-label="Previous slide"
+        :aria-label="sliderLabels.prev"
         :class="[SLIDER_ARROW_CLASSES, SLIDER_PREV_CLASS]"
         v-html="SLIDER_PREV_SVG"
       />
       <button
         type="button"
         data-sl-next
-        aria-label="Next slide"
+        :aria-label="sliderLabels.next"
         :class="[SLIDER_ARROW_CLASSES, SLIDER_NEXT_CLASS]"
         v-html="SLIDER_NEXT_SVG"
       />
@@ -404,7 +404,7 @@ const handlers = {
       v-if="sliderResolved.dots"
       data-sl-dots
       role="tablist"
-      aria-label="Slides"
+      :aria-label="sliderLabels.dots"
       :class="SLIDER_DOTS_CLASSES"
     />
   </component>

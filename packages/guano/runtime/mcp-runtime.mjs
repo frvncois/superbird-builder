@@ -1931,7 +1931,11 @@ var LOCALIZABLE_ATTRS = [
 	"placeholder",
 	"aria-label",
 	"alt",
-	"title"
+	"title",
+	"data-prev-label",
+	"data-next-label",
+	"data-dots-label",
+	"data-dot-label"
 ];
 /** true when `name` carries text worth translating */
 function isLocalizableAttribute(name) {
@@ -8070,6 +8074,73 @@ function resolveSliderConfig(config, breakpoints = []) {
 var SLIDER_DOT_BASE = "size-2 rounded-full bg-current transition-opacity";
 `${SLIDER_DOT_BASE}`;
 `${SLIDER_DOT_BASE}`;
+/**
+* The chrome's own WORDS. Renderer-invented, like its Tailwind classes — which
+* means they live in no tree, nothing ever translated them, and a French route
+* shipped "Previous slide" on every carousel while the worklist reported
+* `missingTranslatable: 0`. They were also invisible to the
+* `untranslated-attributes` publish warning for the same reason.
+*
+* Overridden per slider AND per locale through the node's ordinary localizable
+* attributes (SLIDER_LABEL_ATTRS below), which is the mechanism
+* `node.locales[code].attributes` already provides for placeholder/alt/title —
+* resolved in all three renderers, enumerated by the worklist, written by
+* set_translations. No second translation mechanism, and no schema change.
+*/
+var SLIDER_LABELS = {
+	prev: "Previous slide",
+	next: "Next slide",
+	dots: "Slides",
+	/** `{n}` is the 1-based slide number */
+	dot: "Go to slide {n}"
+};
+/**
+* Which attribute sets which label. Plain `data-*` names, so they are ordinary
+* authored attributes an agent and the Data panel can already write — NOT under
+* the reserved `data-sl-` prefix, which exists to stop an authored name
+* shadowing a value the renderer owns. Here the renderer WANTS the authored
+* value, so the opposite rule applies. They are consumed, never emitted.
+*/
+var SLIDER_LABEL_ATTRS = {
+	"data-prev-label": "prev",
+	"data-next-label": "next",
+	"data-dots-label": "dots",
+	"data-dot-label": "dot"
+};
+/**
+* The chrome's words for this slider: authored attributes over the defaults.
+* @param {Record<string,string>} [attributes] the node's RESOLVED attributes
+*   (layered master → placement → locale), i.e. what the renderer would emit
+* @returns {{prev: string, next: string, dots: string, dot: string}}
+*/
+function resolveSliderLabels(attributes) {
+	const out = { ...SLIDER_LABELS };
+	for (const name of Object.keys(SLIDER_LABEL_ATTRS)) {
+		const value = attributes ? attributes[name] : void 0;
+		if (typeof value === "string" && value.trim()) out[SLIDER_LABEL_ATTRS[name]] = value;
+	}
+	return out;
+}
+/**
+* The resolved labels back as attribute names — what the translation worklist
+* lists, so an unauthored slider still offers its four English defaults to
+* translate instead of being silently absent.
+* @param {Record<string,string>} [attributes]
+* @param {{arrows?: boolean, dots?: boolean}} [config] only the chrome that renders
+*/
+function sliderLabelAttributes(attributes, config) {
+	const labels = resolveSliderLabels(attributes);
+	const out = {};
+	for (const name of Object.keys(SLIDER_LABEL_ATTRS)) {
+		const key = SLIDER_LABEL_ATTRS[name];
+		if (config) {
+			if ((key === "prev" || key === "next") && !config.arrows) continue;
+			if ((key === "dots" || key === "dot") && !config.dots) continue;
+		}
+		out[name] = labels[key];
+	}
+	return out;
+}
 //#endregion
 //#region src/lib/collectionFields.ts
 /**
@@ -8218,4 +8289,4 @@ function routeChannelCounts(trees, instanceMap) {
 	return counts;
 }
 //#endregion
-export { APPEAR_MODES, BUILTIN_LIST_SOURCES, CHANNEL_NAME_RE, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, ELIDED_DATA_URL, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MAX_DEPTH, MAX_INPUT, MAX_SVG_BYTES, MOTION_PROPS, RESERVED_FIELD_NAMES, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, SCHEMA_VERSION, SCROLL_LERP_MAX, SCROLL_LERP_MIN, SLIDER_DEFAULTS, STYLE_SECTIONS, TOKEN_NAME_RE, TRANSITION_DEFAULTS, TRANSITION_PRESET_IDS, VARIANT_NAME_RE, addVariantAxis, addVariantOption, adoptStructure, alignMirrors, alignStructure, applyClass, applyHtml, buildChannelIndex, buildInstanceMap, buildScopeRoots, canNest, channelListeners, channelName, channelTargetId, cloneForMaster, collectFormFields, collectionRouteBase, compileAnimation, componentReaches, componentUsage, contextFromProject, countLocaleSeo, countTargetError, createBody, createNode, createPage, createProject, customSchemaError, deepClone, defaultBreakpoints, defaultSettings, deleteComponent, dependencyOrder, describeMigration, detachInstance, duplicateComponent, effectiveClasses, entryRoutePath, fieldNameError, fieldValueError, findNode, findParent, fontError, fontFormatForUrl, formConfigError, formEnabled, formName, hasAncestorOfType, hasDetailRoutes, inheritedInstanceValue, interactionGroupKey, interactionStateKey, isAllowedAttribute, isChannelName, isChannelTarget, isComponentType, isEmittableToken, isEntryScopeRoot, isInstancePart, isInstanceWrapper, isKnownElement, isLeafElement, isLocalizableAttribute, isNodeHidden, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isTranslatableType, isValidClass, isValidToken, lucideNameOf, lucideSvg, masterToHtml, matchClass, mergeAttributeLayers, mergeClassLayers, migrateProject, nestedComponentNames, nodesByShortId, normalizeComponentName, pageToHtml, parseHtml, pickedKeys, purgeLocaleSeo, pushMasterStructure, removeVariantAxis, removeVariantOption, renameComponent, renameVariantAxis, renameVariantOption, resolveInstanceValue, resolveNodeAttributes, resolvePicks, resolveSliderConfig, routeChannelCounts, sameLayerProperty, sameProperty, sameType, sanitizeAttributes, sanitizeInlineSvg, sanitizeRich, setComponentCategory, setComponentMeta, setInstancePick, setNodeHidden, setStyleTokens, setVariantAxes, setVariantClasses, setVariantDefault, shortIds, slugify, stripExtractedInstanceState, tagForType, tokenError, typeForTag, typeOptionsFor, validateAnimation, validateBinding, validateMotionSettings, validateSliderConfig, validateTree, variantKey, walkNodes };
+export { APPEAR_MODES, BUILTIN_LIST_SOURCES, CHANNEL_NAME_RE, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, ELIDED_DATA_URL, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MAX_DEPTH, MAX_INPUT, MAX_SVG_BYTES, MOTION_PROPS, RESERVED_FIELD_NAMES, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, SCHEMA_VERSION, SCROLL_LERP_MAX, SCROLL_LERP_MIN, SLIDER_DEFAULTS, STYLE_SECTIONS, TOKEN_NAME_RE, TRANSITION_DEFAULTS, TRANSITION_PRESET_IDS, VARIANT_NAME_RE, addVariantAxis, addVariantOption, adoptStructure, alignMirrors, alignStructure, applyClass, applyHtml, buildChannelIndex, buildInstanceMap, buildScopeRoots, canNest, channelListeners, channelName, channelTargetId, cloneForMaster, collectFormFields, collectionRouteBase, compileAnimation, componentReaches, componentUsage, contextFromProject, countLocaleSeo, countTargetError, createBody, createNode, createPage, createProject, customSchemaError, deepClone, defaultBreakpoints, defaultSettings, deleteComponent, dependencyOrder, describeMigration, detachInstance, duplicateComponent, effectiveClasses, entryRoutePath, fieldNameError, fieldValueError, findNode, findParent, fontError, fontFormatForUrl, formConfigError, formEnabled, formName, hasAncestorOfType, hasDetailRoutes, inheritedInstanceValue, interactionGroupKey, interactionStateKey, isAllowedAttribute, isChannelName, isChannelTarget, isComponentType, isEmittableToken, isEntryScopeRoot, isInstancePart, isInstanceWrapper, isKnownElement, isLeafElement, isLocalizableAttribute, isNodeHidden, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isTranslatableType, isValidClass, isValidToken, lucideNameOf, lucideSvg, masterToHtml, matchClass, mergeAttributeLayers, mergeClassLayers, migrateProject, nestedComponentNames, nodesByShortId, normalizeComponentName, pageToHtml, parseHtml, pickedKeys, purgeLocaleSeo, pushMasterStructure, removeVariantAxis, removeVariantOption, renameComponent, renameVariantAxis, renameVariantOption, resolveInstanceValue, resolveNodeAttributes, resolvePicks, resolveSliderConfig, routeChannelCounts, sameLayerProperty, sameProperty, sameType, sanitizeAttributes, sanitizeInlineSvg, sanitizeRich, setComponentCategory, setComponentMeta, setInstancePick, setNodeHidden, setStyleTokens, setVariantAxes, setVariantClasses, setVariantDefault, shortIds, sliderLabelAttributes, slugify, stripExtractedInstanceState, tagForType, tokenError, typeForTag, typeOptionsFor, validateAnimation, validateBinding, validateMotionSettings, validateSliderConfig, validateTree, variantKey, walkNodes };

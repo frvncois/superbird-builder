@@ -175,6 +175,8 @@ export function createToolSet({ api, runtime, elicit, hasElicitation = () => nul
     buildChannelIndex,
     SLIDER_DEFAULTS,
     validateSliderConfig,
+    resolveSliderConfig,
+    sliderLabelAttributes,
     formConfigError,
     formEnabled,
     collectFormFields,
@@ -194,6 +196,7 @@ export function createToolSet({ api, runtime, elicit, hasElicitation = () => nul
     setNodeHidden,
     isNodeHidden,
     inheritedInstanceValue,
+    resolveInstanceValue,
     ELEMENTS,
     setComponentMeta,
     componentUsage,
@@ -1018,6 +1021,22 @@ async function readHtml(project, html) {
 
 /** the diagnostics an agent sees — one funnel for every reporting path */
 const diagnose = (project, root) => (root ? validateTree(root, contextFromProject(project)) : [])
+
+/**
+ * A node's attributes, plus — for a `slider` — its CHROME labels.
+ *
+ * The arrows' and dots' words are renderer-invented (shared/slider.js), so they
+ * live in no tree: the worklist listed nothing for them and reached
+ * `missingTranslatable: 0` while every /fr/ carousel said "Previous slide", and
+ * the untranslated-attributes warning was blind for the same reason. Synthesized
+ * with their effective values, so an unauthored slider still offers its four
+ * defaults to translate — and only the chrome that actually renders.
+ */
+function withSliderLabels(node, mapping, attrs) {
+  if (node.type !== 'slider') return attrs
+  const config = resolveSliderConfig(resolveInstanceValue(node, mapping, 'slider'), [])
+  return { ...attrs, ...sliderLabelAttributes(attrs, config) }
+}
 
 function elementSummary(project, page, opts = {}) {
   // "own" (default) collapses each component instance to a single row and drops
@@ -4397,7 +4416,7 @@ function designWarnings(project) {
     for (const page of published) {
       const mm = buildInstanceMap(project, page)
       walkNodes(page.elements ?? [], (n) => {
-        const attrs = resolveNodeAttributes(n, mm.get(n.id), undefined)
+        const attrs = withSliderLabels(n, mm.get(n.id), resolveNodeAttributes(n, mm.get(n.id), undefined))
         for (const [name, value] of Object.entries(attrs)) {
           if (!isLocalizableAttribute(name) || !String(value).trim()) continue
           // the same gate the worklist applies: a bare number, a glyph or a
@@ -8183,7 +8202,11 @@ const tools = [
             const mapped = mapping?.master
             // the whole chain, so a `translate="no"` a HOST set on the instance
             // it holds excludes that subtree too
-            const nodeAttrs = resolveNodeAttributes(n, mapping, undefined)
+            const nodeAttrs = withSliderLabels(
+              n,
+              mapping,
+              resolveNodeAttributes(n, mapping, undefined),
+            )
             const skip = skipping || nodeAttrs.translate === 'no'
             if (!skip && isLeafElement(n.type) && n.content && n.arg === undefined) {
               all.push({

@@ -28,7 +28,15 @@ import { refDisplay, resolveBinding, resolveListScope, applyListQuery, mediaUrls
 import { isRich, sanitizeRich } from '@/lib/shared/richtext.js'
 import { backgroundRender, backgroundKindFromUrl } from '@/lib/shared/background.js'
 import { conflictingBaseClasses } from '@/lib/shared/interactionClasses.js'
-import { resolveSliderConfig, sliderTrackClasses, sliderWireData } from '@/lib/shared/slider.js'
+import {
+  resolveSliderConfig,
+  resolveSliderLabels,
+  sliderDotLabel,
+  sliderTrackClasses,
+  sliderWireData,
+  SLIDER_LABELS,
+  SLIDER_LABEL_ATTRS,
+} from '@/lib/shared/slider.js'
 import { FORM_STATE_TYPES } from '@/lib/shared/forms.js'
 import { useMedia, kindOfMime } from './useMedia'
 import {
@@ -212,7 +220,26 @@ export function useRenderNode(
   const sliderResolved = computed(() =>
     resolveSliderConfig(sliderConfig.value, project.value.breakpoints),
   )
-  const sliderWire = computed(() => sliderWireData(sliderConfig.value))
+  /** the chrome's own WORDS for this slider, per locale: the authored label
+   *  attributes (SLIDER_LABEL_ATTRS) over the built-in English defaults. They
+   *  were literals in both renderers' templates, so a French route showed
+   *  "Previous slide" and no worklist ever offered them. */
+  const sliderLabels = computed(() =>
+    node.value.type === 'slider'
+      ? // resolved here rather than from `customAttrs`, which STRIPS these four
+        // (they are consumed, not rendered) — and gated on the type so no other
+        // node pays for the call
+        resolveSliderLabels(
+          resolveNodeAttributes(node.value, mapping.value, localeAttributes(node.value)) as Record<
+            string,
+            string
+          >,
+        )
+      : SLIDER_LABELS,
+  )
+  /** one dot's label — the runtime builds the rail, Preview mirrors it */
+  const sliderDotLabelAt = (i: number) => sliderDotLabel(sliderLabels.value.dot, i)
+  const sliderWire = computed(() => sliderWireData(sliderConfig.value, sliderLabels.value))
 
   // --- form ---
 
@@ -291,6 +318,13 @@ export function useRenderNode(
     // route, since a shared component's master cannot know which page its
     // instance is on. Mirrors ariaCurrentFor in server/export.mjs.
     if (isCurrentLink.value && !attrs['aria-current']) attrs['aria-current'] = 'page'
+    // a slider's label attributes are CONSUMED, not rendered: they set the
+    // chrome's aria-labels on the arrows and the dot rail, and the host would
+    // otherwise carry four copies of the same text (the exporter's `managed`
+    // set skips them for the same reason)
+    if (node.value.type === 'slider') {
+      for (const name of Object.keys(SLIDER_LABEL_ATTRS)) delete attrs[name]
+    }
     // attribute values bound to collection fields, resolved in the entry scope
     // being rendered. Per-instance with a component default, like listQuery.
     const bound = resolveInstanceValue(node.value, mapping.value, 'fieldAttrs') as
@@ -988,6 +1022,8 @@ export function useRenderNode(
     sliderBound,
     sliderConfig,
     sliderResolved,
+    sliderLabels,
+    sliderDotLabelAt,
     sliderTrackClass,
     sliderWire,
     isForm,
