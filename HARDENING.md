@@ -203,21 +203,24 @@ keepalive flush is impossible anyway, because keepalive caps a request body at
 
 ## Phase 4 — Infra, docs, release
 
-- [ ] **I-1 Docker.** `Dockerfile` on `node:22-slim`, non-root, `/data` volume,
+- [x] **I-1 Docker.** `Dockerfile` on `node:22-slim`, non-root, `/data` volume,
       `HEALTHCHECK` against `/api/health`. Plus `.dockerignore` and a
       `compose.yaml` showing the volume, `TRUST_PROXY` and a TLS-terminating
-      proxy.
-- [ ] **I-2 CI.** `.github/workflows/ci.yml`: type-check, the three cheap checks,
+      proxy. **Not built here** — no Docker daemon was running on this machine,
+      so every path it copies was checked against the server's imports instead.
+      Build it once before relying on it.
+- [x] **I-2 CI.** `.github/workflows/ci.yml`: type-check, the three cheap checks,
       build, then Playwright. `check:corpus` runs only when `.corpus/inputs` is
       present, since it is local and gitignored.
-- [ ] **I-3 Docs.** Fix the package README's claims of a bundled component
+- [x] **I-3 Docs.** Fix the package README's claims of a bundled component
       library, `npm create guano` and the two MCP tools that do not exist, and the
       seven real tools it omits. Drop "DSL editor" from the package description.
       Document `STORE_QUOTA`, `GUANO_PREVIEW_PORT`, `PORT_STRICT` and everything
       this branch adds. State that HSTS is the proxy's job and that
       `store.pre-v2/` is deletable once an upgrade is verified.
-- [ ] **I-4 Release.** `.nvmrc`, `CHANGELOG.md`, and a `v0.1.0` tag once the
-      branch lands.
+- [x] **I-4 Release.** `.nvmrc` and `CHANGELOG.md` are in. The tag waits for
+      the branch to land on main — tagging a side branch would name a commit
+      that is not what shipped.
 
 ---
 

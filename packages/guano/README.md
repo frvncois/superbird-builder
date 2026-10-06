@@ -1,14 +1,14 @@
 # guano
 
 Self-hosted visual website builder: build pages on a live canvas with a layers
-tree, style with Tailwind classes, add interactions, components (with a bundled
-library), CMS collections and locales — then publish a fully static site
+tree, style with Tailwind classes, add interactions, reusable components, CMS
+collections and locales — then publish a fully static site
 (plain HTML + one CSS file + a ~1.5 KB runtime) served by the built-in server,
 downloaded as a zip, or pushed to GitHub.
 
 ```sh
-npm create guano my-site
-cd my-site && npm install && npm run dev
+npm install -g guano   # or: npx guano dev
+guano dev
 ```
 
 Open `http://localhost:4174/admin`, create the first (admin) account, build.
@@ -20,16 +20,24 @@ Your published site is at `http://localhost:4174/`.
 - `guano start` — production server (`NODE_ENV=production`)
 - `guano build [--out dir]` — export the current project as static files (default `./dist-site`)
 - `guano mcp` — run the MCP server (stdio) so AI agents can edit the site (see [MCP](#mcp-ai-agents))
+- `guano connect` — issue an API token to a local instance, for `guano mcp`
 
 ## Environment
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `PORT` | `4174` | server port |
-| `GUANO_DATA_DIR` | `./data` | users, media, drafts, published site — **backup = copy this dir**; on ephemeral hosts point it at a volume |
+| `GUANO_DATA_DIR` | `./data` under `node_modules`, else `server/data` | users, media, drafts, published site — **backup = copy this dir**; on ephemeral hosts point it at a volume |
 | `COOKIE_SECURE` | `1` | session cookie `Secure` flag; set `0` only for plain-HTTP LAN setups |
 | `PUBLISH_TOKEN` | unset | when set, allows token-authenticated CI publishes |
 | `MEDIA_QUOTA` | 2 GiB | media library ceiling, bytes |
+| `STORE_QUOTA` | 512 MiB | project storage ceiling, bytes |
+| `TRUST_PROXY` | unset | set `1` **only behind a reverse proxy** — every rate limit then keys on the last `X-Forwarded-For` hop instead of the socket address |
+| `PORT_STRICT` | unset | `1` refuses to walk to the next free port when `PORT` is busy |
+| `GUANO_PREVIEW_PORT` | `PORT + 1` | the preview site's port |
+| `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error`; `warn` drops the per-request access line |
+| `LOG_JSON` | unset | `1` emits one JSON object per line, for a log shipper |
+| `SHUTDOWN_GRACE_MS` | `0` | how long to keep failing health checks before the socket closes, so a load balancer can drain first |
 | `GUANO_URL` | `http://localhost:4174` | `guano mcp` only — the running instance to connect to |
 | `GUANO_TOKEN` | unset | `guano mcp` only — an API token (see [MCP](#mcp-ai-agents)) |
 
@@ -109,15 +117,20 @@ editor is viewing.
 `create_page`, `delete_page`, `set_page_seo` · `edit_elements` (batch: classes, text
 content, media src/background, attributes, html id) · `list_components`,
 `create_component`, `update_component`, `duplicate_component`, `detach_instance`,
-`delete_component`, `set_component_variants` · `list_library`,
-`add_library_components` · `get_settings`, `update_settings` (design tokens, SEO
+`delete_component`, `set_component_variants`, `create_components` ·
+`get_settings`, `update_settings` (design tokens, SEO
 defaults, fonts, custom head) · `list_interactions`, `create_interactions`,
+`update_interaction`, `delete_interaction`,
 `bind_interaction`, `unbind_interaction` · `list_animations`, `create_animations`,
 `update_animation`, `delete_animation` · `list_collections`, `get_collection`,
 `create_collection`, `update_collection`, `delete_collection`, `upsert_entries`,
 `delete_entry` · `get_translation_worklist`, `set_translations` · `list_media`,
-`upload_media`, `list_icons` · `list_comments`, `reply_to_comment` · `preview`,
-`publish`.
+`upload_media`, `list_icons` · `list_comments`, `create_comment`,
+`reply_to_comment` · `list_form_submissions`, `list_integrations` · `preview`,
+`publish`, `update_page`.
+
+There is no bundled component library: every component is the project's own,
+made in the editor or by an agent with `create_component`.
 
 **Pages are read and written as HTML** — a strict subset where `<Card>` is a
 component instance and `data-ref` is a stable address, so one write carries
