@@ -2,6 +2,13 @@
 @import '@fontsource-variable/geist';
 @import '@fontsource-variable/geist-mono';
 
+/* The committed MCP runtime bundle is server-side JavaScript, not markup, and
+   nothing in it ever reaches this stylesheet — but automatic source detection
+   scans it all the same, and a class-shaped token anywhere in it (a bracketed
+   example inside a doc comment, say) becomes a real rule here. One of those
+   was an unresolvable `url()`, which is a build warning on every build. */
+@source not '../../packages';
+
 /* Dark is the default theme */
 :root {
   --background: oklch(14.479% 0.00002 271.152);

@@ -1,3 +1,4 @@
+import { defineAsyncComponent } from 'vue'
 import { useKeymap } from './useShortcut'
 import { useContextMenu } from './useContextMenu'
 import { usePersistence } from './usePersistence'
@@ -6,7 +7,9 @@ import { togglePalette } from './useCommandPalette'
 import { useEffectsDrawer } from './useEffectsDrawer'
 import { useModal } from './useModal'
 import { useViewMode } from './useViewMode'
-import PublishDialog from '@/components/shared/PublishDialog.vue'
+
+// opened on demand, never on first paint — split out of the editor chunk
+const PublishDialog = defineAsyncComponent(() => import('@/components/shared/PublishDialog.vue'))
 
 /**
  * App-wide keyboard shortcuts (registered once from the editor view, which now

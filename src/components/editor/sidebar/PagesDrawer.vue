@@ -1,5 +1,5 @@
 <script lang="ts">
-import { ref } from 'vue'
+import { defineAsyncComponent, ref } from 'vue'
 
 // per-collection expand state — module-level because the column unmounts when
 // it is toggled off, and the tree should come back as the user left it
@@ -27,7 +27,6 @@ import DrawerShell from './DrawerShell.vue'
 import PageSettingsEditor, { type SettingsTarget } from './PageSettingsEditor.vue'
 import CollectionSettingsEditor from './CollectionSettingsEditor.vue'
 import LayersPane from '@/components/editor/layers/LayersPane.vue'
-import CreateCollectionModal from '@/components/shared/CreateCollectionModal.vue'
 import { usePage } from '@/composables/usePage'
 import { useProject } from '@/composables/useProject'
 import { useCollections } from '@/composables/useCollections'
@@ -40,6 +39,9 @@ import { useViewMode } from '@/composables/useViewMode'
 import { useDrawerEscape } from '@/composables/useDrawerEscape'
 import { walkNodes } from '@/lib/tree'
 import type { Collection, CollectionEntry, ElementNode, Page } from '@/types/editor'
+
+// opened on demand, never on first paint — split out of the editor chunk
+const CreateCollectionModal = defineAsyncComponent(() => import('@/components/shared/CreateCollectionModal.vue'))
 
 const { homePage, duplicatePage, removePage } = usePage()
 const {

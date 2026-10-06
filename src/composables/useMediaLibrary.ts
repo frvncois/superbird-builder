@@ -1,7 +1,9 @@
-import { ref } from 'vue'
+import { defineAsyncComponent, ref } from 'vue'
 import type { MediaAsset, MediaKind } from '@/types/media'
 import { useModal } from './useModal'
-import MediaLibraryModal from '@/components/shared/MediaLibraryModal.vue'
+
+// opened on demand, never on first paint — split out of the editor chunk
+const MediaLibraryModal = defineAsyncComponent(() => import('@/components/shared/MediaLibraryModal.vue'))
 
 /**
  * Opens the media library through the app modal host, with an added "select"

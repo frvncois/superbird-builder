@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue'
 import {
   Archive, Check, ChevronRight, Code2, Copy, KeyRound, Languages, Palette, Pencil, Plug,
   Plus, Rocket, ScanSearch, Search, Settings, Settings2, Trash2, Type, UserRound, Users, X,
@@ -33,7 +33,6 @@ import { useModal } from '@/composables/useModal'
 import { useApiTokens } from '@/composables/useApiTokens'
 import { useIntegrations } from '@/composables/useIntegrations'
 import { useFormSubmissions } from '@/composables/useFormSubmissions'
-import FormSubmissionsModal from '@/components/editor/forms/FormSubmissionsModal.vue'
 import RenameModal from '@/components/modal/RenameModal.vue'
 import {
   envRef,
@@ -47,7 +46,6 @@ import type { CustomFont, ElementNode, StructuredDataType } from '@/types/editor
 import { walkNodes } from '@/lib/tree'
 import { SCHEMA_TYPES, customSchemaError } from '@/lib/shared/structuredData.js'
 import UsersSettings from '@/components/shared/UsersSettings.vue'
-import PublishDialog from '@/components/shared/PublishDialog.vue'
 import MediaPickerControl from '@/components/editor/content/MediaPickerControl.vue'
 import {
   FONT_STACKS,
@@ -62,6 +60,10 @@ import { useMedia } from '@/composables/useMedia'
 import { timeAgo } from '@/lib/time'
 import { formatBytes } from '@/lib/media'
 import { downloadBlob } from '@/lib/download'
+
+// opened on demand, never on first paint — split out of the editor chunk
+const FormSubmissionsModal = defineAsyncComponent(() => import('@/components/editor/forms/FormSubmissionsModal.vue'))
+const PublishDialog = defineAsyncComponent(() => import('@/components/shared/PublishDialog.vue'))
 
 const { project, renameProject } = useProject()
 const {

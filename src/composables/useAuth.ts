@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue'
 import { flushStore } from '@/lib/store'
-import { beginDeliberateNavigation } from './useUnloadGuard'
+import { beginDeliberateNavigation } from './navigationIntent'
 
 export type Role = 'admin' | 'editor' | 'contributor'
 

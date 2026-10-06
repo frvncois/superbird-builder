@@ -4156,8 +4156,11 @@ function isStateClass(cls) {
 	return splitClassVariants(cls).variants.some((v) => STATE_VARIANTS.has(v));
 }
 /** splits `hover:md:bg-red-500` into its variant prefix and base class.
-* Bracket-aware, so `[&_a]:underline` and `bg-[url(https://x)]` both split where
-* they actually should. */
+* Bracket-aware, so `[&_a]:underline` and an arbitrary bg value holding
+* `url(https://x)` both split where they actually should. (Written the long
+* way round on purpose: a bracketed class spelled out in a comment is a class
+* Tailwind's source scan extracts, and an unresolvable `url()` in the emitted
+* stylesheet is a build warning.) */
 function splitVariant(cls) {
 	const { variants, base } = splitClassVariants(cls);
 	return {
@@ -4235,7 +4238,8 @@ function isKnownVariant(v) {
 * Split a class into its variant segments and base, respecting brackets.
 *
 * A plain `split(':')` breaks every class whose brackets contain a colon —
-* `[&_a:hover]:underline`, `bg-[url(https://…)]` — which is most of what
+* `[&_a:hover]:underline`, an arbitrary bg value holding `url(https://…)`
+* — which is most of what
 * descendant styling is for. Depth tracking is the difference between those
 * being expressible and being rejected as malformed.
 */

@@ -1,5 +1,6 @@
 import { onBeforeUnmount, onMounted } from 'vue'
 import { usePersistence } from './usePersistence'
+import { isDeliberateNavigation } from './navigationIntent'
 
 /**
  * Warn before closing the tab on work the server does not have.
@@ -17,19 +18,11 @@ import { usePersistence } from './usePersistence'
  * now, through the ordinary path.
  */
 
-// A navigation WE started — logout, or the 401 bounce. There is nothing to
-// warn about: the first has already flushed, and the second cannot save
-// anything on a dead session, so a prompt would only be in the way.
-let leaving = false
-export function beginDeliberateNavigation() {
-  leaving = true
-}
-
 export function useUnloadGuard() {
   const { hasUnsavedWork, saveNow } = usePersistence()
 
   const onBeforeUnload = (e: BeforeUnloadEvent) => {
-    if (leaving || !hasUnsavedWork.value) return
+    if (isDeliberateNavigation() || !hasUnsavedWork.value) return
     // conditional: unconditional would prompt on every ordinary reload
     e.preventDefault()
     e.returnValue = '' // still required by Chrome and Safari
@@ -38,7 +31,7 @@ export function useUnloadGuard() {
   // not beforeunload: that one does not fire on mobile, or when the page goes
   // into the back/forward cache
   const onPageHide = () => {
-    if (leaving || !hasUnsavedWork.value) return
+    if (isDeliberateNavigation() || !hasUnsavedWork.value) return
     void saveNow()
   }
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onMounted, ref, watch } from 'vue'
 import { ChevronDown, ChevronUp, Inbox, Plus, X } from 'lucide-vue-next'
 import { usePanel, focusWhenPanelVisible } from '@/composables/usePanel'
 import GroupPopover from '@/components/popover/GroupPopover.vue'
@@ -31,12 +31,14 @@ import { useProject } from '@/composables/useProject'
 import { useSettings } from '@/composables/useSettings'
 import { useAuth } from '@/composables/useAuth'
 import { useModal } from '@/composables/useModal'
-import FormSubmissionsModal from '@/components/editor/forms/FormSubmissionsModal.vue'
 import { useComponents } from '@/composables/useComponents'
 import { useComponentBoard } from '@/composables/useComponentBoard'
 import { acceptsChildren } from '@/lib/treeOps'
 import { pushMasterStructure } from '@/lib/componentOps'
 import type { CollectionEntry, CollectionField, ElementNode } from '@/types/editor'
+
+// opened on demand, never on first paint — split out of the editor chunk
+const FormSubmissionsModal = defineAsyncComponent(() => import('@/components/editor/forms/FormSubmissionsModal.vue'))
 
 const { selectedElement, getElement, setElementChannel } = useElement()
 // structural writes go through the backend so they land on the page or on a

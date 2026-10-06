@@ -1,13 +1,15 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref } from 'vue'
 import { Copy, ClipboardPaste, CopyPlus, Trash2, Palette, Zap, Component, Unlink, Group, Eye, EyeOff, type LucideIcon } from 'lucide-vue-next'
 import { isComponentType } from '@/lib/components'
 import { useComponents } from '@/composables/useComponents'
 import { useStructure } from '@/composables/useStructure'
 import { useModal } from '@/composables/useModal'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
-import CreateComponentModal from '@/components/editor/canvas/CreateComponentModal.vue'
 import { useContextMenu } from '@/composables/useContextMenu'
+
+// opened on demand, never on first paint — split out of the editor chunk
+const CreateComponentModal = defineAsyncComponent(() => import('@/components/editor/canvas/CreateComponentModal.vue'))
 
 const { masterFor, detachComponent, isHidden, setHidden } = useComponents()
 

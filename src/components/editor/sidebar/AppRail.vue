@@ -1,14 +1,17 @@
 <script setup lang="ts">
+import { defineAsyncComponent } from 'vue'
 import {
   Component, Files, Image, Settings, UserRound, LogOut,
 } from 'lucide-vue-next'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import MainLogo from '@/assets/MainLogo.vue'
-import SettingsPanel from '@/components/shared/SettingsPanel.vue'
 import { useMediaLibrary } from '@/composables/useMediaLibrary'
 import { useModal } from '@/composables/useModal'
 import { useAuth } from '@/composables/useAuth'
 import { useViewMode } from '@/composables/useViewMode'
+
+// opened on demand, never on first paint — split out of the editor chunk
+const SettingsPanel = defineAsyncComponent(() => import('@/components/shared/SettingsPanel.vue'))
 
 const { openLibrary } = useMediaLibrary()
 const { openModal } = useModal()

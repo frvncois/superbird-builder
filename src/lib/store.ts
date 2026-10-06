@@ -1,4 +1,5 @@
 import { ref } from 'vue'
+import { beginDeliberateNavigation } from '@/composables/navigationIntent'
 
 /**
  * Write-through store: the editor's persistence lives on the server
@@ -20,7 +21,7 @@ export function onUnauthorized() {
   bouncing = true
   // a dead session cannot save anything, so the unload guard must not stand in
   // front of the redirect asking about it
-  void import('@/composables/useUnloadGuard').then((m) => m.beginDeliberateNavigation())
+  beginDeliberateNavigation()
   window.location.assign('/admin/login')
 }
 

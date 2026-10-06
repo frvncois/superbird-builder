@@ -13,13 +13,11 @@ import AppRail from '@/components/editor/sidebar/AppRail.vue'
 import PagesDrawer from '@/components/editor/sidebar/PagesDrawer.vue'
 import ComponentsDrawer from '@/components/editor/sidebar/ComponentsDrawer.vue'
 import CanvasEditor from '@/components/editor/canvas/CanvasEditor.vue'
-import ComponentsBoard from '@/components/editor/canvas/ComponentsBoard.vue'
 import SettingsEditor from '@/components/editor/sidebar/SettingsEditor.vue'
 import ContextMenu from '@/components/editor/canvas/ContextMenu.vue'
 import InsertDragChip from '@/components/editor/canvas/InsertDragChip.vue'
 import ModeToggle from '@/components/editor/canvas/ModeToggle.vue'
 import EffectsDrawer from '@/components/editor/effects/EffectsDrawer.vue'
-import SitePreview from '@/components/site/SitePreview.vue'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import { useEditorShortcuts } from '@/composables/useEditorShortcuts'
 import { useUnloadGuard } from '@/composables/useUnloadGuard'
@@ -27,6 +25,16 @@ import { useEditorBoot } from '@/composables/useEditorBoot'
 import { useAuth } from '@/composables/useAuth'
 import { useViewMode } from '@/composables/useViewMode'
 import LoadingUI from '@/components/ui/LoadingUI.vue'
+import { defineAsyncComponent } from 'vue'
+
+// The centre has three faces and shows one at a time, so the other two need
+// not be in the chunk that boots the editor: the board is only reached from
+// Components, and Play is a mode you switch into (a contributor lands there,
+// one request later).
+const ComponentsBoard = defineAsyncComponent(
+  () => import('@/components/editor/canvas/ComponentsBoard.vue'),
+)
+const SitePreview = defineAsyncComponent(() => import('@/components/site/SitePreview.vue'))
 
 // editor-zone globals: keymaps live here (NOT in App.vue) so the public
 // site never boots them. Structural shortcuts self-gate to Build mode.

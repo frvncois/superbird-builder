@@ -2,17 +2,19 @@
 // The Drafts panel: create/switch/discard drafts and launch the apply flow.
 // A draft is a private copy of the project (a branch internally); applying
 // it merges into Main via ApplyDraftModal.
-import { onMounted, reactive, ref, watch } from 'vue'
+import { defineAsyncComponent, onMounted, reactive, ref, watch } from 'vue'
 import { GitBranch, Plus, TriangleAlert } from 'lucide-vue-next'
 import GroupPopover from '@/components/popover/GroupPopover.vue'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import InputUI from '@/components/ui/InputUI.vue'
-import ApplyDraftModal from '@/components/editor/drafts/ApplyDraftModal.vue'
 import { useBranches, MAIN_ID } from '@/composables/useBranches'
 import { useModal } from '@/composables/useModal'
 import { changeSummaryLabel, hasChanges } from '@/lib/merge'
 import { timeAgoShort } from '@/lib/time'
 import type { BranchMeta, DraftStatus } from '@/composables/useBranches'
+
+// opened on demand, never on first paint — split out of the editor chunk
+const ApplyDraftModal = defineAsyncComponent(() => import('@/components/editor/drafts/ApplyDraftModal.vue'))
 
 const {
   branches,

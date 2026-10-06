@@ -77,7 +77,8 @@ const TEXT_NON_COLOR_RE =
 const BORDER_NON_COLOR_RE =
   /^border(?:-(?:[xytblrse]|solid|dashed|dotted|double|hidden|none|\d+))?(?:-\d+)?$/
 // arbitrary values on these families split on VALUE shape: text-[#fff] is a
-// color, text-[14px] is a size; bg-[url(…)] is an image, bg-[#fff] a color
+// color, text-[14px] is a size; an arbitrary bg holding `url()` is an image,
+// bg-[#fff] a color
 const ARBITRARY_COLOR_RE = /^\[(?:#|rgb|hsl|oklch|oklab|color\(|var\()/
 
 function colorHead(base) {

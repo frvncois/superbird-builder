@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, defineAsyncComponent, ref } from 'vue'
 import {
   Check,
   CircleAlert,
@@ -12,7 +12,6 @@ import {
 } from 'lucide-vue-next'
 import BadgeUI from '@/components/ui/BadgeUI.vue'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
-import SettingsPanel from '@/components/shared/SettingsPanel.vue'
 import { usePersistence, SAVE_STATES } from '@/composables/usePersistence'
 import { usePublish } from '@/composables/usePublish'
 import { useBranches } from '@/composables/useBranches'
@@ -22,6 +21,9 @@ import { usePopover } from '@/composables/usePopover'
 import { timeAgo } from '@/lib/time'
 import { formatBytes } from '@/lib/media'
 import type { PublishMethod } from '@/types/editor'
+
+// opened on demand, never on first paint — split out of the editor chunk
+const SettingsPanel = defineAsyncComponent(() => import('@/components/shared/SettingsPanel.vue'))
 
 // visual minimum so the ring doesn't flash on a fast local POST
 const MIN_DURATION = 800
