@@ -1,7 +1,7 @@
-import { test, expect, request as pwRequest } from '@playwright/test'
-import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdirSync, rmSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { test, expect } from '@playwright/test'
+import { mkdirSync, readdirSync } from 'node:fs'
+import { join } from 'node:path'
+import { boot, exitOf, instances } from './fixtures/server'
 
 // Process lifecycle: the boot sweep, a graceful SIGTERM, and the forced exit
 // on a second signal.
@@ -16,88 +16,9 @@ import { join, resolve } from 'node:path'
 // between its two renames. So the promise under test is "work that has already
 // started finishes, then we exit".
 
-const REPO = resolve(import.meta.dirname, '..')
-
-interface Instance {
-  proc: ChildProcess
-  port: number
-  dataDir: string
-  out: () => string
-  stop: () => void
-}
-
-let instances: Instance[] = []
-
-/** spawn a server, wait until /api/health answers, and return a handle.
- * `prepare` runs against the freshly made data dir, before the spawn — which
- * is the only window in which a test can plant something for boot to find. */
-async function boot(
-  name: string,
-  port: number,
-  opts: { env?: Record<string, string>; prepare?: (dataDir: string) => void } = {},
-) {
-  const dataDir = join(REPO, `.e2e-lifecycle-${name}`)
-  rmSync(dataDir, { recursive: true, force: true })
-  mkdirSync(dataDir, { recursive: true })
-  opts.prepare?.(dataDir)
-
-  let output = ''
-  const proc = spawn(process.execPath, ['server/index.mjs'], {
-    cwd: REPO,
-    env: {
-      ...process.env,
-      GUANO_DATA_DIR: dataDir,
-      PORT: String(port),
-      PORT_STRICT: '1', // never walk: the test owns this port or it fails
-      LOG_LEVEL: 'info',
-      ...opts.env,
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
-  proc.stdout?.on('data', (c) => (output += String(c)))
-  proc.stderr?.on('data', (c) => (output += String(c)))
-
-  const instance: Instance = {
-    proc,
-    port,
-    dataDir,
-    out: () => output,
-    stop: () => {
-      if (proc.exitCode === null && proc.signalCode === null) proc.kill('SIGKILL')
-      rmSync(dataDir, { recursive: true, force: true })
-    },
-  }
-  instances.push(instance)
-
-  const api = await pwRequest.newContext({ baseURL: `http://localhost:${port}` })
-  for (let i = 0; i < 160; i++) {
-    if (proc.exitCode !== null) throw new Error(`server exited early:\n${output}`)
-    try {
-      if ((await api.get('/api/health')).ok()) return { ...instance, api }
-    } catch {
-      /* not up yet */
-    }
-    await new Promise((r) => setTimeout(r, 125))
-  }
-  throw new Error(`server never became healthy:\n${output}`)
-}
-
-/** resolves with the exit code once the process is gone */
-function exitOf(proc: ChildProcess, timeoutMs = 40_000) {
-  return new Promise<number | null>((res, rej) => {
-    const timer = setTimeout(() => rej(new Error('process did not exit')), timeoutMs)
-    proc.once('exit', (code, signal) => {
-      clearTimeout(timer)
-      // a signalled death reports code null; surface it as 128+n the way a
-      // shell does, so the assertions can tell the two apart
-      res(code ?? (signal === 'SIGKILL' ? 137 : signal === 'SIGTERM' ? 143 : null))
-    })
-  })
-}
-
 test.afterEach(() => {
   for (const i of instances) i.stop()
-  instances = []
+  instances.length = 0
 })
 
 test('SIGTERM drains and exits clean, and the boot sweep is age-gated', async () => {
@@ -112,7 +33,6 @@ test('SIGTERM drains and exits clean, and the boot sweep is age-gated', async ()
       }
     },
   })
-  const { readdirSync } = await import('node:fs')
   const left = readdirSync(srv.dataDir).sort()
 
   expect(left).not.toContain('site.old-1')

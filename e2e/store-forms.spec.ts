@@ -351,7 +351,7 @@ test.describe('the public form endpoint', () => {
   test('a private site gates the endpoint, not just the pages', async ({ baseURL }) => {
     const admin = await adminContext(baseURL)
     await ensurePublished(admin)
-    await admin.put('/api/site-password', { data: { enabled: true, password: 'letmein' } })
+    await admin.put('/api/site-password', { data: { enabled: true, password: 'letmein1' } })
 
     const v = await visitor(baseURL)
     try {

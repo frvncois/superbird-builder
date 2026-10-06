@@ -18,6 +18,7 @@ import { promisify } from 'node:util'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DATA_DIR, timingSafeEqualStr, writeAtomic } from './util.mjs'
+import { log } from './log.mjs'
 const USERS_FILE = join(DATA_DIR, 'users.json')
 const INVITES_FILE = join(DATA_DIR, 'invites.json')
 const SESSIONS_FILE = join(DATA_DIR, 'sessions.json')
@@ -43,7 +44,7 @@ function readJson(file) {
 
 // ---------- users ----------
 
-// { id, name, email, role, salt, hash, createdAt }
+// { id, name, email, role, salt, hash, kdf?, createdAt }
 let users
 let migratedAdminId = null // for one-time session backfill
 
@@ -68,14 +69,38 @@ function loadUsers() {
     }
     users = [admin]
     migratedAdminId = admin.id
-    writeAtomic(USERS_FILE, JSON.stringify(users)).catch(() => {})
+    writeAtomic(USERS_FILE, JSON.stringify(users)).catch((err) =>
+      log.error(`auth: could not persist the migrated admin: ${err.message}`),
+    )
     return users
   }
   users = []
   return users
 }
 
-const persistUsers = () => writeAtomic(USERS_FILE, JSON.stringify(loadUsers())).catch(() => {})
+/**
+ * The four writers below LOG and RETHROW.
+ *
+ * They used to end in an empty catch, so on a read-only volume or a full disk
+ * a created user, a sent invite or a new API token succeeded in memory,
+ * answered 200, and vanished on the next restart with nothing written
+ * anywhere. Rethrowing lets the create paths — which all await — fail the
+ * request through the server's catch-all instead of lying about it.
+ *
+ * Call sites where a write failure genuinely does not matter (a session expiry
+ * sweep, a lastUsedAt touch) swallow it at the call, so it is logged exactly
+ * once either way.
+ */
+const persist = async (file, data, what) => {
+  try {
+    await writeAtomic(file, data)
+  } catch (err) {
+    log.error(`auth: could not persist ${what}: ${err.message}`)
+    throw err
+  }
+}
+
+const persistUsers = () => persist(USERS_FILE, JSON.stringify(loadUsers()), 'users')
 
 export const needsSetup = () => loadUsers().length === 0
 export const findUserById = (id) => loadUsers().find((u) => u.id === id) ?? null
@@ -85,13 +110,46 @@ export const userProfile = (u) => (u ? { id: u.id, name: u.name, email: u.email,
 export const listUsers = () => loadUsers().map(userProfile)
 export const adminCount = () => loadUsers().filter((u) => u.role === 'admin').length
 
-function hashPassword(password, salt) {
-  return scryptSync(password, salt, 64).toString('hex')
+// ---------- key derivation ----------
+//
+// The cost parameters are stored PER RECORD, which is the only way to raise
+// them without invalidating every existing password: a hash written before
+// this carries no `kdf`, and absent means the scrypt defaults it was made
+// with. Verification always uses the record's own parameters, and a legacy
+// record is rehashed at the current cost the next time its owner signs in —
+// so the migration happens as people log in, with no flag day and nobody
+// locked out.
+//
+// N=2^17 is the current OWASP floor. It needs 128*N*r = ~134 MB, well over
+// node's 32 MB maxmem default, so maxmem has to be raised with it or scrypt
+// refuses outright.
+const LEGACY_KDF = { N: 16384, r: 8, p: 1 }
+const CURRENT_KDF = { N: 131072, r: 8, p: 1 }
+const MAXMEM = 256 * 1024 * 1024
+
+/** A password is bounded before it reaches the KDF. Without this a 10 MB
+ * request body — the cap on every other write — is a free way to make the
+ * server do 10 MB of hashing on an unauthenticated route. */
+export const MAX_PASSWORD_LENGTH = 256
+
+const kdfOf = (record) => {
+  const k = record?.kdf
+  return k && Number.isFinite(k.N) && Number.isFinite(k.r) && Number.isFinite(k.p)
+    ? { N: k.N, r: k.r, p: k.p }
+    : LEGACY_KDF
+}
+const isLegacyKdf = (record) => !record?.kdf
+
+function hashPassword(password, salt, kdf = CURRENT_KDF) {
+  return scryptSync(password, salt, 64, { ...kdf, maxmem: MAXMEM }).toString('hex')
 }
 
-// spend comparable CPU on unknown-email logins so timing can't enumerate users
+// spend comparable CPU on unknown-email logins so timing can't enumerate users.
+// Computed at the CURRENT cost, which is what a new account carries; a legacy
+// record is cheaper to verify until its owner next signs in and it is rehashed.
 const DUMMY_SALT = randomBytes(16).toString('hex')
-const DUMMY_HASH = Buffer.from(hashPassword('x'.repeat(24), DUMMY_SALT), 'hex')
+let dummyHash = null
+const dummy = () => (dummyHash ??= Buffer.from(hashPassword('x'.repeat(24), DUMMY_SALT), 'hex'))
 
 // ---------- password verification (async, concurrency-capped) ----------
 //
@@ -113,23 +171,47 @@ export class VerifyBusyError extends Error {
   }
 }
 
-async function computeHash(password, salt) {
+async function computeHash(password, salt, kdf = CURRENT_KDF) {
   if (verifyActive >= VERIFY_CONCURRENCY) {
     if (verifyWaiters.length >= VERIFY_QUEUE_MAX) throw new VerifyBusyError()
     await new Promise((resolve) => verifyWaiters.push(resolve))
   }
   verifyActive++
   try {
-    return await scryptAsync(String(password ?? ''), salt, 64)
+    return await scryptAsync(String(password ?? '').slice(0, MAX_PASSWORD_LENGTH), salt, 64, {
+      ...kdf,
+      maxmem: MAXMEM,
+    })
   } finally {
     verifyActive--
     verifyWaiters.shift()?.()
   }
 }
 
-function makeCredentials(password) {
+/**
+ * Verify a password against a `{salt, hash, kdf?}` record, off the event loop
+ * and through the same concurrency cap as a login.
+ *
+ * Exported for the private-site gate, which held its own `scryptSync` on the
+ * request path: every wrong guess blocked the loop for the whole derivation,
+ * which at the new cost would be a denial of service with ten requests.
+ * Throws VerifyBusyError under overload, like the rest of this path.
+ */
+export async function verifySecret(record, password) {
+  if (!record?.salt || !record?.hash) return false
+  const computed = await computeHash(password, record.salt, kdfOf(record))
+  const stored = Buffer.from(record.hash, 'hex')
+  return stored.length === computed.length && timingSafeEqual(stored, computed)
+}
+
+/** a fresh `{salt, hash, kdf}` at the current cost */
+export function makeCredentials(password) {
   const salt = randomBytes(16).toString('hex')
-  return { salt, hash: hashPassword(password, salt) }
+  return {
+    salt,
+    hash: hashPassword(String(password ?? '').slice(0, MAX_PASSWORD_LENGTH), salt, CURRENT_KDF),
+    kdf: { ...CURRENT_KDF },
+  }
 }
 
 /** create a user directly — bootstrap admin (setup) or invite acceptance */
@@ -159,18 +241,26 @@ export async function verifyLogin(email, password) {
   const user = findUserByEmail(email)
   if (!user) {
     // run a scrypt anyway so timing doesn't reveal whether the email exists
-    timingSafeEqual(await computeHash(password, DUMMY_SALT), DUMMY_HASH)
+    timingSafeEqual(await computeHash(password, DUMMY_SALT), dummy())
     return null
   }
-  const computed = await computeHash(password, user.salt)
-  return timingSafeEqual(Buffer.from(user.hash, 'hex'), computed) ? user : null
+  if (!(await verifySecret(user, password))) return null
+  // The cost migration, such as it is: a record still on the old parameters is
+  // rewritten at the current ones now that we hold the plaintext. Nothing is
+  // blocked on it — a failed write means the record keeps verifying as it did.
+  if (isLegacyKdf(user)) {
+    Object.assign(user, makeCredentials(password))
+    // the password already verified; a failed write only means the record
+    // keeps its old parameters and is tried again at the next sign-in
+    await persistUsers().catch(() => {})
+  }
+  return user
 }
 
 /** throws VerifyBusyError under verification overload */
 export async function verifyUserPassword(user, password) {
   if (!user) return false
-  const computed = await computeHash(password, user.salt)
-  return timingSafeEqual(Buffer.from(user.hash, 'hex'), computed)
+  return verifySecret(user, password)
 }
 
 export async function updateUser(id, { name, email, password }) {
@@ -224,17 +314,17 @@ const sessions = new Map() // sha256(token) → { userId, createdAt, expiresAt }
 }
 
 const persistSessions = () =>
-  writeAtomic(SESSIONS_FILE, JSON.stringify(Object.fromEntries(sessions))).catch(() => {})
+  persist(SESSIONS_FILE, JSON.stringify(Object.fromEntries(sessions)), 'sessions')
 
 export function createSession(userId) {
   const token = randomBytes(32).toString('hex')
   sessions.set(sha256(token), { userId, createdAt: Date.now(), expiresAt: Date.now() + SESSION_TTL })
-  persistSessions()
+  void persistSessions().catch(() => {})
   return token // raw token goes to the cookie; only its hash is stored
 }
 
 export function destroySession(token) {
-  if (sessions.delete(sha256(token))) persistSessions()
+  if (sessions.delete(sha256(token))) void persistSessions().catch(() => {})
 }
 
 /** revoke every session a user holds — used on delete, and on a password
@@ -247,7 +337,7 @@ export function destroyUserSessions(userId) {
       changed = true
     }
   }
-  if (changed) persistSessions()
+  if (changed) void persistSessions().catch(() => {})
 }
 
 function getSession(token) {
@@ -257,7 +347,7 @@ function getSession(token) {
   if (!session) return null
   if (session.expiresAt <= Date.now()) {
     sessions.delete(key)
-    persistSessions()
+    void persistSessions().catch(() => {})
     return null
   }
   return session
@@ -307,7 +397,7 @@ export function sessionUser(req) {
 // regenerate (which mints a new token). A leaked invites.json can no longer be
 // used to accept a pending invite.
 let invites = readJson(INVITES_FILE) ?? []
-const persistInvites = () => writeAtomic(INVITES_FILE, JSON.stringify(invites)).catch(() => {})
+const persistInvites = () => persist(INVITES_FILE, JSON.stringify(invites), 'invites')
 
 const inviteActive = (i) => !i.usedAt && i.expiresAt > Date.now()
 
@@ -416,7 +506,7 @@ export async function acceptInvite(token, password) {
 // deletion takes effect on the very next request. Mirrors the invite pattern.
 let apiTokens = readJson(API_TOKENS_FILE) ?? []
 const persistApiTokens = () =>
-  writeAtomic(API_TOKENS_FILE, JSON.stringify(apiTokens)).catch(() => {})
+  persist(API_TOKENS_FILE, JSON.stringify(apiTokens), 'api tokens')
 
 const apiTokenView = (t) => ({
   id: t.id,
@@ -475,7 +565,7 @@ export async function revokeApiToken(id, requester) {
 function destroyUserApiTokens(userId) {
   const before = apiTokens.length
   apiTokens = apiTokens.filter((t) => t.userId !== userId)
-  if (apiTokens.length !== before) persistApiTokens()
+  if (apiTokens.length !== before) void persistApiTokens().catch(() => {})
 }
 
 // throttle lastUsedAt persistence — every authed API call would otherwise fsync
@@ -497,7 +587,7 @@ export function apiTokenUser(rawToken) {
   const now = Date.now()
   if (!match.lastUsedAt || now - match.lastUsedAt > LAST_USED_THROTTLE) {
     match.lastUsedAt = now
-    persistApiTokens()
+    void persistApiTokens().catch(() => {})
   }
   return user
 }

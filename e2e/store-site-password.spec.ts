@@ -49,7 +49,12 @@ test('a private site asks for its password, then serves', async ({ baseURL }) =>
   expect(await (await visitor.get('/')).text()).toContain('Members only')
 
   expect((await admin.put('/api/site-password', { data: { password: 'abc' } })).status()).toBe(400)
-  res = await admin.put('/api/site-password', { data: { password: 'letmein' } })
+  // the minimum is 8: a shared visitor password is the only thing between the
+  // public and unpublished-adjacent content, and four characters is a guess
+  const short = await admin.put('/api/site-password', { data: { password: 'letmein' } })
+  expect(short.status()).toBe(400)
+  expect(await short.text()).toContain('at least 8')
+  res = await admin.put('/api/site-password', { data: { password: 'letmein1' } })
   expect(await res.json()).toMatchObject({ enabled: true, passwordSet: true })
 
   // now the gate page, for the page and for its assets
@@ -65,14 +70,28 @@ test('a private site asks for its password, then serves', async ({ baseURL }) =>
   expect(await res.text()).toContain('not right')
 
   // right password: redirected to where they were going, cookie set, site served
-  res = await visitor.post('/_guano/unlock', { form: { password: 'letmein', next: '/' }, maxRedirects: 0 })
+  res = await visitor.post('/_guano/unlock', { form: { password: 'letmein1', next: '/' }, maxRedirects: 0 })
   expect(res.status()).toBe(303)
   expect(res.headers()['set-cookie']).toContain('guano_site=')
   expect(await (await visitor.get('/')).text()).toContain('Members only')
 
-  // an open redirect is never followed
-  res = await visitor.post('/_guano/unlock', { form: { password: 'letmein', next: '//evil.test/x' }, maxRedirects: 0 })
-  expect(res.headers()['location']).toBe('/')
+  // an open redirect is never followed. `//` was checked; `/\\` was not, and a
+  // browser treats it the same for a special scheme — so this landed the
+  // visitor on an attacker's host immediately after they typed the real
+  // password. site-runtime.js already rejected both for a form redirect.
+  for (const next of ['//evil.test/x', '/\\evil.test/x', 'https://evil.test', '\\\\evil.test']) {
+    res = await visitor.post('/_guano/unlock', {
+      form: { password: 'letmein1', next },
+      maxRedirects: 0,
+    })
+    expect(res.headers()['location'], `next=${next}`).toBe('/')
+  }
+  // ...while a genuine path still carries through
+  res = await visitor.post('/_guano/unlock', {
+    form: { password: 'letmein1', next: '/about' },
+    maxRedirects: 0,
+  })
+  expect(res.headers()['location']).toBe('/about')
 
   // a new password invalidates the old cookie
   await admin.put('/api/site-password', { data: { password: 'changed1' } })

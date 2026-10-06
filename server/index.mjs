@@ -30,7 +30,7 @@ import {
 } from 'node:fs/promises'
 import { constants as FS } from 'node:fs'
 import { existsSync, readFileSync } from 'node:fs'
-import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { extname, join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { exportSite } from './export.mjs'
@@ -127,6 +127,9 @@ import {
   updateUser,
   userProfile,
   verifyLogin,
+  makeCredentials,
+  MAX_PASSWORD_LENGTH,
+  verifySecret,
   verifyUserPassword,
   VerifyBusyError,
 } from './auth.mjs'
@@ -277,6 +280,10 @@ async function readPublishConfig() {
       enabled: !!parsed?.site?.enabled,
       salt: parsed?.site?.salt ?? '',
       hash: parsed?.site?.hash ?? '',
+      // same per-record cost parameters as a user record: absent means the
+      // scrypt defaults this was written with, so an existing password keeps
+      // verifying after the cost went up
+      ...(parsed?.site?.kdf ? { kdf: parsed.site.kdf } : {}),
     },
     // form submissions: WHERE a notification goes and WHICH integration sends
     // it. Deliberately server-side and admin-only — leads are personal data,
@@ -488,6 +495,9 @@ async function handleAuth(req, res, path) {
     if (typeof password !== 'string' || password.length < 8) {
       return fail(res, 400, 'password must be at least 8 characters')
     }
+    if (password.length > MAX_PASSWORD_LENGTH) {
+      return fail(res, 400, `password must be at most ${MAX_PASSWORD_LENGTH} characters`)
+    }
     const user = await createFirstAdmin(email, password, typeof name === 'string' ? name : '')
     if (!user) return fail(res, 403, 'account already exists')
     // seed the project the moment the instance has an owner, so the install is
@@ -546,6 +556,9 @@ async function handleAuth(req, res, path) {
     if (password !== undefined && password !== '') {
       if (typeof password !== 'string' || password.length < 8) {
         return fail(res, 400, 'password must be at least 8 characters')
+      }
+      if (password.length > MAX_PASSWORD_LENGTH) {
+        return fail(res, 400, `password must be at most ${MAX_PASSWORD_LENGTH} characters`)
       }
       try {
         if (!(await verifyUserPassword(user, currentPassword ?? ''))) {
@@ -647,6 +660,9 @@ async function handleInvite(req, res, path) {
     }
     if (typeof password !== 'string' || password.length < 8) {
       return fail(res, 400, 'password must be at least 8 characters')
+    }
+    if (password.length > MAX_PASSWORD_LENGTH) {
+      return fail(res, 400, `password must be at most ${MAX_PASSWORD_LENGTH} characters`)
     }
     const result = await acceptInvite(token, password)
     if (result.error) return fail(res, 400, result.error)
@@ -1887,13 +1903,18 @@ async function handleSitePassword(req, res) {
     if (typeof patch?.enabled === 'boolean') cfg.site.enabled = patch.enabled
     if (typeof patch?.password === 'string') {
       const password = patch.password
-      if (password && password.length < 4) return fail(res, 400, 'password must be at least 4 characters')
+      if (password && password.length < 8) {
+        return fail(res, 400, 'password must be at least 8 characters')
+      }
+      if (password.length > MAX_PASSWORD_LENGTH) {
+        return fail(res, 400, `password must be at most ${MAX_PASSWORD_LENGTH} characters`)
+      }
       if (password) {
-        cfg.site.salt = randomBytes(16).toString('hex')
-        cfg.site.hash = scryptSync(password, cfg.site.salt, 64).toString('hex')
+        Object.assign(cfg.site, makeCredentials(password))
       } else {
         cfg.site.salt = ''
         cfg.site.hash = ''
+        delete cfg.site.kdf
       }
     }
     await writeAtomic(PUBLISH_CONFIG, JSON.stringify(cfg))
@@ -1931,16 +1952,32 @@ async function siteGateHandled(req, res, path) {
   // the unlock is answered whether or not a cookie is already held — a stale
   // one must not turn a fresh attempt into a 404 from the static site
   if (path === '/_guano/unlock' && req.method === 'POST') {
-    const ip = req.socket.remoteAddress ?? 'unknown'
-    const limit = unlockAllowed(ip)
+    // clientIp, not the socket address: this was the one limiter in the
+    // codebase that ignored TRUST_PROXY, so behind a proxy every visitor
+    // shared one bucket and ten wrong guesses locked the whole site out.
+    const limit = unlockAllowed(clientIp(req))
     if (!limit.ok) return tooManyRequests(res, limit.retryAfterSeconds, 'attempts'), true
     const form = new URLSearchParams((await readBody(req)) ?? '')
     const password = form.get('password') ?? ''
     const rawNext = form.get('next') ?? '/'
-    const next = rawNext.startsWith('/') && !rawNext.startsWith('//') ? rawNext : '/'
-    const attempt = scryptSync(password, site.salt, 64)
-    const stored = Buffer.from(site.hash, 'hex')
-    if (attempt.length === stored.length && timingSafeEqual(attempt, stored)) {
+    // The same three checks server/site-runtime.js already makes on a form
+    // redirect. `//` alone was not enough: a browser treats `/\` as `//` for
+    // a special scheme, so `next=/\evil.test` sent the visitor off-origin
+    // right after they typed the real password.
+    const next =
+      rawNext.charAt(0) === '/' && rawNext.charAt(1) !== '/' && !rawNext.includes('\\')
+        ? rawNext
+        : '/'
+    // the async, concurrency-capped path. A sync derivation here blocked the
+    // event loop for every wrong guess, which at the current cost is a denial
+    // of service with a handful of requests.
+    let ok = false
+    try {
+      ok = await verifySecret(site, password)
+    } catch {
+      return tooManyRequests(res, 2, 'attempts'), true
+    }
+    if (ok) {
       res.writeHead(303, {
         location: next,
         'set-cookie': `${SITE_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SITE_COOKIE_TTL}${siteCookieSecure}`,
