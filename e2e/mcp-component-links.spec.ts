@@ -83,6 +83,109 @@ test.describe('a host’s link on a nested instance', () => {
     expect(both).toContain('href="/nav-b"')
     expect(both).toContain('href="/home"')
   })
+
+  // Both tests above place the instance AFTER the host's mirror link exists, so
+  // every page node is minted fresh by createMirror and carries no link of its
+  // own. The ordinary order is the other one: the pages exist first and hold a
+  // copy of the inner component's default (what extraction leaves behind —
+  // stripExtractedInstanceState keeps `link` on purpose — and what page HTML
+  // writes when it spells the href out).
+  //
+  // adoptCodeOwned deleted such a copy only when it equalled the COUNTERPART's
+  // own link, and the counterpart is a MIRROR, which holds no link unless the
+  // host overrode it. So the copy was never recognized as redundant: it
+  // survived every push, sat first in the resolution chain, and permanently
+  // shadowed whatever the host later set. The published page kept the inner
+  // default while edit_elements and publish both reported success.
+  test('a page copy of the inner default is normalized, so a later host link lands', async () => {
+    const s = await mcpSession()
+    await s.call('create_component', {
+      name: 'Cta',
+      html: '<a class="btn" href="/contact"><span>Talk to us</span></a>',
+    })
+    const host = await s.call('create_component', { name: 'Bar', html: '<div><Cta /></div>' })
+
+    // the page comes FIRST and spells the inner default out on its own node
+    const home = await s.home()
+    const written = await s.call('set_page_html', {
+      pageId: home.id,
+      version: home.version,
+      html: pageHtml(
+        '<Bar data-ref="bar"><div><Cta><a href="/contact"><span>Talk to us</span></a></Cta></div></Bar>',
+      ),
+    })
+    expect(written.refused ?? []).toEqual([])
+    const linkRow = () =>
+      s
+        .call('get_page', { pageId: home.id, elements: 'all' })
+        .then((p) => p.elements.find((e: { type: string }) => e.type === 'link'))
+    // it IS stored as the page node's own, and get_page says so — the HTML
+    // cannot, since a page read prints an instance's interior as content only
+    expect((await linkRow()).link).toBe('/contact')
+
+    // any structural write on the host pushes, and the push is what normalizes
+    const bar0 = (await s.call('list_components', { names: ['Bar'] })).components[0]
+    await s.call('update_component', {
+      componentId: host.componentId,
+      version: bar0.version,
+      html: '<div><Cta /></div>',
+    })
+    const after = await linkRow()
+    expect(after.link).toBeUndefined()
+    expect(after.linkFromComponent).toBe('/contact')
+    expect(await s.html()).toContain('href="/contact"')
+
+    // …so when the host aims its mirror somewhere else, it reaches the page
+    const barHtml = (await s.call('list_components', { names: ['Bar'], includeHtml: true }))
+      .components[0].html
+    const mirrorAnchor = /<a data-id="([0-9a-f]+)"/.exec(barHtml)![1]
+    expect(
+      (
+        await s.call('edit_elements', {
+          componentId: host.componentId,
+          edits: [{ id: mirrorAnchor, link: '#signup' }],
+        })
+      ).edited,
+    ).toBe(1)
+    const bar1 = (await s.call('list_components', { names: ['Bar'] })).components[0]
+    await s.call('update_component', {
+      componentId: host.componentId,
+      version: bar1.version,
+      html: '<div><Cta /></div>',
+    })
+
+    const html = await s.html()
+    expect(html).toContain('href="#signup"')
+    expect(html).not.toContain('href="/contact"')
+  })
+
+  // The other half of the same rule: a copy that DIFFERS from what it inherits
+  // is a real per-instance destination and must survive, because one Button
+  // component serves a dozen placements.
+  test('a page link that differs from what it inherits is kept', async () => {
+    const s = await mcpSession()
+    await s.call('create_component', { name: 'Dest', html: '<a href="/contact"><span>Go</span></a>' })
+    const host = await s.call('create_component', { name: 'Holder', html: '<div><Dest /></div>' })
+    const home = await s.home()
+    await s.call('set_page_html', {
+      pageId: home.id,
+      version: home.version,
+      html: pageHtml(
+        '<Holder data-ref="h"><div><Dest><a href="/pricing"><span>Go</span></a></Dest></div></Holder>',
+      ),
+    })
+    const holder = (await s.call('list_components', { names: ['Holder'] })).components[0]
+    await s.call('update_component', {
+      componentId: host.componentId,
+      version: holder.version,
+      html: '<div><Dest /></div>',
+    })
+    const row = (await s.call('get_page', { pageId: home.id, elements: 'all' })).elements.find(
+      (e: { type: string }) => e.type === 'link',
+    )
+    expect(row.link).toBe('/pricing')
+    expect(await s.html()).toContain('href="/pricing"')
+  })
 })
 
 test.describe('detaching keeps every resolved per-instance value', () => {

@@ -25,7 +25,7 @@ import { resolveBinding, refIds, mediaUrls } from '@/lib/shared/fields.js'
 import { resolveSliderConfig, SLIDER_DEFAULTS } from '@/lib/shared/slider.js'
 import { collectFormFields, formConfigError } from '@/lib/shared/forms.js'
 import { useEntryField } from '@/composables/useEntryField'
-import { isNodeHidden } from '@/lib/instances'
+import { isNodeHidden, resolveInstanceValue } from '@/lib/instances'
 import { isComponentType } from '@/lib/components'
 import { useProject } from '@/composables/useProject'
 import { useSettings } from '@/composables/useSettings'
@@ -155,8 +155,10 @@ const link = computed({
   get: () => {
     const el = selectedElement.value
     if (!el) return ''
-    const mapping = masterFor(el.id)
-    return el.link ?? (mapping && mapping.master !== el ? (mapping.master.link ?? '') : '')
+    // along the CHAIN (own → each host's mirror → the master), not `?? master.link`:
+    // a Nav that aims its Button mirror at #signup must not show Button's own
+    // /contact in the field it is editing
+    return resolveInstanceValue(el, masterFor(el.id), 'link') ?? ''
   },
   set: (value: string) => {
     if (selectedElement.value) setElementLink(selectedElement.value.id, value.trim() || null)

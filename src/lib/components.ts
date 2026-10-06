@@ -1,5 +1,42 @@
 import type { ComponentDef, ElementNode } from '@/types/editor'
 import { walkNodes } from './tree'
+import { buildInstanceMap, resolveInstanceValue } from './instances'
+
+/**
+ * What an instance node pairing with a given MASTER-SIDE node would inherit for
+ * `link`, by master node id — the value an instance's own copy is redundant
+ * with, and so the one `adoptCodeOwned` must compare against.
+ *
+ * Why a map and not `master.link`: a master-side node may itself be inside a
+ * MIRROR, and a mirror deliberately carries `link` only when the host overrides
+ * it (createMirror). So the counterpart of a page node is very often
+ * `link: undefined` while the value it actually resolves to lives one or two
+ * levels down, in the inner component's master. Comparing against the
+ * counterpart's own key therefore never recognized a page copy of the inner
+ * default as redundant: the copy survived every push, sat first in the chain,
+ * and permanently shadowed any link the host later set on its mirror. A Nav
+ * whose Button mirror pointed at #signup kept rendering Button's own /contact,
+ * and every tool reported success.
+ *
+ * Computed once per push and keyed by id, because the walk visits each master
+ * node once per instance and the resolution is the same every time.
+ */
+export type LinkChain = Map<string, string | undefined>
+
+export function effectiveLinkChain(components: ComponentDef[]): LinkChain {
+  const chain: LinkChain = new Map()
+  for (const def of components) {
+    // walking a master's own root maps every node to what it stands for: a
+    // plain node to itself, a mirror to the inner component's master with the
+    // mirror itself as the nearer source. resolveInstanceValue over that is
+    // exactly "own, then each mirror, then the master".
+    const mm = buildInstanceMap([def.root], components)
+    walkNodes([def.root], (n) => {
+      chain.set(n.id, resolveInstanceValue(n, mm.get(n.id), 'link'))
+    })
+  }
+  return chain
+}
 
 /**
  * Deep-clone a subtree into the master id space: fresh ids, and
@@ -138,19 +175,33 @@ function cloneSlotContent(nodes: ElementNode[]): ElementNode[] {
  * component could not be a link, which is the first thing anyone wants from
  * one, and the workaround was a second component.
  *
- * An instance link EQUAL to the master's is deleted rather than kept, so the
- * key means "this placement differs" and nothing else. That also migrates the
- * copies the old copy-down left behind: they are all equal by construction, so
- * one push normalizes a project to pure inheritance and a later change to the
- * master's link reaches every instance that did not override it.
+ * An instance link EQUAL to what the counterpart RESOLVES to is deleted rather
+ * than kept, so the key means "this placement differs" and nothing else. That
+ * also migrates the copies the old copy-down left behind: they are all equal by
+ * construction, so one push normalizes a project to pure inheritance and a
+ * later change to the master's link reaches every instance that did not
+ * override it.
+ *
+ * "Resolves to", not `master.link`: see effectiveLinkChain. Without the chain a
+ * page copy of a NESTED component's default was never recognized as redundant,
+ * because the counterpart is a mirror and a mirror holds no link of its own
+ * unless the host overrode it. `chain` is optional so the callers that align a
+ * FRESH instance (materializing a `:Card:` leaf, filling one from HTML) keep
+ * the cheap path — a node that has no link cannot shadow anything.
  */
-function adoptCodeOwned(node: ElementNode, master: ElementNode, box: { moved: boolean }): void {
+function adoptCodeOwned(
+  node: ElementNode,
+  master: ElementNode,
+  box: { moved: boolean },
+  chain?: LinkChain,
+): void {
   if ((node.arg ?? undefined) !== (master.arg ?? undefined)) {
     if (master.arg) node.arg = master.arg
     else delete node.arg
     box.moved = true
   }
-  if (node.link !== undefined && node.link === master.link) {
+  const inherited = chain?.has(master.id) ? chain.get(master.id) : master.link
+  if (node.link !== undefined && node.link === inherited) {
     delete node.link
     box.moved = true
   }
@@ -172,7 +223,12 @@ function adoptCodeOwned(node: ElementNode, master: ElementNode, box: { moved: bo
  * by type for whatever that left over — so inserting an icon in Button does not
  * slide every Card's button text onto the wrong node.
  */
-function alignLevel(node: ElementNode, master: ElementNode, box: { moved: boolean }): void {
+function alignLevel(
+  node: ElementNode,
+  master: ElementNode,
+  box: { moved: boolean },
+  chain?: LinkChain,
+): void {
   // under a slot the children are the holder's own: a push never touches them
   // (a node that has just become a slot keeps what it had, as its content)
   if (master.slot) return
@@ -193,8 +249,8 @@ function alignLevel(node: ElementNode, master: ElementNode, box: { moved: boolea
     const at = matches.get(i)
     const kept = at !== undefined ? old[at]! : createMirror(child)
     if (at === undefined) box.moved = true
-    adoptCodeOwned(kept, child, box)
-    alignLevel(kept, child, box)
+    adoptCodeOwned(kept, child, box, chain)
+    alignLevel(kept, child, box, chain)
     return kept
   })
   // untouched when nothing moved: a subtree that was already in step must come
@@ -214,9 +270,13 @@ function alignLevel(node: ElementNode, master: ElementNode, box: { moved: boolea
  * Returns whether anything moved, so a caller can tell a real change from a
  * push that found everything already current.
  */
-export function alignStructure(instance: ElementNode, master: ElementNode): boolean {
+export function alignStructure(
+  instance: ElementNode,
+  master: ElementNode,
+  chain?: LinkChain,
+): boolean {
   const box = { moved: false }
-  alignLevel(instance, master, box)
+  alignLevel(instance, master, box, chain)
   return box.moved
 }
 
@@ -226,10 +286,14 @@ export function alignStructure(instance: ElementNode, master: ElementNode): bool
  * mirror that lacked them would not be structurally identical to it, which is
  * the invariant the positional pairing relies on).
  */
-export function alignMirror(mirror: ElementNode, master: ElementNode): boolean {
+export function alignMirror(
+  mirror: ElementNode,
+  master: ElementNode,
+  chain?: LinkChain,
+): boolean {
   const box = { moved: false }
-  adoptCodeOwned(mirror, master, box)
-  alignLevel(mirror, master, box)
+  adoptCodeOwned(mirror, master, box, chain)
+  alignLevel(mirror, master, box, chain)
   return box.moved
 }
 
@@ -237,7 +301,11 @@ export function alignMirror(mirror: ElementNode, master: ElementNode): boolean {
  * Bring every mirror a host holds back in step with the component it mirrors.
  * Returns whether anything changed.
  */
-export function alignHostMirrors(host: ComponentDef, components: ComponentDef[]): boolean {
+export function alignHostMirrors(
+  host: ComponentDef,
+  components: ComponentDef[],
+  chain?: LinkChain,
+): boolean {
   let moved = false
   const visit = (nodes: ElementNode[]) => {
     for (const node of nodes) {
@@ -248,7 +316,7 @@ export function alignHostMirrors(host: ComponentDef, components: ComponentDef[])
       const inner = components.find((c) => c.name === node.type)
       // the inner master already holds ITS mirrors in step (callers go inner
       // first), so aligning to it brings the deeper levels along
-      if (inner && inner !== host && alignMirror(node, inner.root)) moved = true
+      if (inner && inner !== host && alignMirror(node, inner.root, chain)) moved = true
     }
   }
   visit(host.root.children)

@@ -1140,6 +1140,14 @@ function elementSummary(project, page, opts = {}) {
       // shows it (`hidden: false`). Text set on one renders nowhere until then.
       ...(n.hidden === undefined && inherit('hidden') === true ? { hiddenByComponent: true } : {}),
       ...(n.variants ? { variants: n.variants } : {}),
+      // Where this element actually POINTS. `link` is per-instance with a
+      // component default, so a copy equal to what it inherits is invisible in
+      // the HTML (the serializer prints a node's own value and the page read
+      // omits an instance's) while silently shadowing any destination the host
+      // later sets on its mirror. Reported like inheritsMasterContent so that
+      // "it says /contact and I set #signup" is readable without an export.
+      ...(n.link ? { link: n.link } : {}),
+      ...(!n.link && inherit('link') ? { linkFromComponent: inherit('link') } : {}),
       // the bundled icon's name when there is one — the markup itself is noise
       ...(n.svg ? { icon: lucideNameOf(n.svg) ?? 'custom svg' } : {}),
       ...(!n.svg && inherit('svg') ? { masterIcon: lucideNameOf(inherit('svg')) ?? 'custom svg' } : {}),
@@ -3702,33 +3710,31 @@ function upsertEntryInto(project, c, spec, slugify) {
  * data-only collection (a board roster, an FAQ set) reported a 404 that could
  * not happen.
  */
-function linksToEntryRoutes(project, c, masterByType) {
+function linksToEntryRoutes(project, c) {
   const pathPrefix = `/${c.name}/`
   let found = false
 
-  const linkOf = (node) => {
-    if (node.link) return node.link
-    // inside a component instance the link may live on the master
-    const master = masterByType.get(node.type)
-    return master?.link
-  }
-
-  const visit = (nodes, inScope) => {
+  const visit = (nodes, inScope, mm) => {
     for (const node of nodes) {
       if (found) return
-      const link = linkOf(node)
+      // the link this node RENDERS with: its own, then each host's mirror of
+      // it, then the master's. The old read was `masterByType.get(node.type)`,
+      // keyed by COMPONENT NAME, so it only ever saw a link on a master ROOT —
+      // an `@item` that a Card sets on its nested Button mirror was invisible,
+      // and this warning fired for a template nothing linked to.
+      const link = resolveInstanceValue(node, mm.get(node.id), 'link')
       if (link === '@item' && inScope) found = true
       else if (typeof link === 'string' && link.startsWith(pathPrefix)) found = true
       if (found) return
       const opensScope =
         (node.type === 'collection-list' || node.type === 'collection-item') && node.arg === c.name
-      visit(node.children ?? [], inScope || opensScope)
+      visit(node.children ?? [], inScope || opensScope, mm)
     }
   }
 
   for (const page of project.pages ?? []) {
     if (page.status !== 'published') continue
-    visit(page.elements ?? [], false)
+    visit(page.elements ?? [], false, buildInstanceMap(project, page))
     if (found) return true
   }
   // a master's own subtree can carry the literal path form even when no
@@ -3744,13 +3750,10 @@ function linksToEntryRoutes(project, c, masterByType) {
 
 function collectPublishWarnings(project) {
   const warnings = []
-  // component root type → its master root, for resolving links that live on the
-  // master rather than on the instance node
-  const masterByType = new Map((project.components ?? []).map((c) => [c.name, c.root]))
   for (const c of project.collections ?? []) {
     const template = (project.pages ?? []).find((p) => p.id === c.templatePageId)
     if (!template || template.status === 'published') continue
-    if (!linksToEntryRoutes(project, c, masterByType)) continue
+    if (!linksToEntryRoutes(project, c)) continue
     const entries = (c.entries ?? []).length
     warnings.push({
       kind: 'draft-collection-template',

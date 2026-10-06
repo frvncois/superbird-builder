@@ -2,6 +2,8 @@ import type { ComponentDef, ElementNode, Page, Project, VariantAxis } from '@/ty
 import {
   alignHostMirrors,
   alignStructure,
+  effectiveLinkChain,
+  type LinkChain,
   cloneForMaster,
   isComponentType,
   nestedWrappers,
@@ -395,7 +397,13 @@ export function pushMasterStructure(project: Project, def: ComponentDef): number
   // pushing one would rewrite blocks belonging to a real component of the
   // same name
   if (!project.components.some((c) => c.id === def.id)) return 0
-  alignMirrors(project.components)
+  // What a page copy of a link is redundant WITH — computed once, before the
+  // mirrors move, because a redundant copy equals the inner default either way
+  // (see effectiveLinkChain). Without it a page node holding a nested
+  // component's own default was never normalized away and shadowed, forever,
+  // whatever link the host later set on its mirror.
+  const chain = effectiveLinkChain(project.components)
+  alignMirrors(project.components, chain)
   let moved = 0
   for (const page of project.pages) {
     const instances: ElementNode[] = []
@@ -403,7 +411,7 @@ export function pushMasterStructure(project: Project, def: ComponentDef): number
       if (n.type === def.name) instances.push(n)
     })
     if (!instances.length) continue
-    for (const node of instances) if (alignStructure(node, def.root)) moved++
+    for (const node of instances) if (alignStructure(node, def.root, chain)) moved++
   }
   return moved
 }
@@ -412,8 +420,8 @@ export function pushMasterStructure(project: Project, def: ComponentDef): number
  * Bring every mirror in step with the component it mirrors, inner components
  * first so a host two levels up mirrors an already-current structure.
  */
-export function alignMirrors(components: ComponentDef[]): void {
-  for (const host of dependencyOrder(components)) alignHostMirrors(host, components)
+export function alignMirrors(components: ComponentDef[], chain?: LinkChain): void {
+  for (const host of dependencyOrder(components)) alignHostMirrors(host, components, chain)
 }
 
 /**
