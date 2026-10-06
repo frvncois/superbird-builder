@@ -862,6 +862,13 @@ project blob.
 
 **Favicon**: upload the icon, then `update_settings { favicon: "/media/<id>" }`.
 
+**Do not set `loading` by hand.** The export gives every `<img>` its intrinsic
+`width`/`height` (so the box is reserved and the page does not reflow as images arrive),
+`decoding="async"`, and lazy loading for everything but the FIRST image on a route, which
+gets `fetchpriority="high"` instead. Setting `loading="eager"` yourself overrides that for
+one image — reach for it only when the hero is genuinely not the first image in the
+markup.
+
 ## Data
 
 For **repeating / structured content**, use collections instead of own content: create

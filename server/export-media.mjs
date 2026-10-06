@@ -6,6 +6,7 @@
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import sharp from 'sharp'
 import { sanitizeSvg } from './media.mjs'
 import { DATA_DIR, walkNodes } from './util.mjs'
 import { fontSrcRefs } from '../src/lib/shared/fonts.js'
@@ -37,16 +38,39 @@ const MIME_EXT = {
 const MEDIA_LIB = join(DATA_DIR, 'media')
 const LIB_REF_RE = /^\/media\/([a-f0-9]{16})$/
 
+// raster formats sharp can read a header from; an SVG has no intrinsic pixel
+// size worth shipping and a PDF/font/video is not an <img> at all
+const RASTER_EXT = new Set(['png', 'jpg', 'gif', 'webp', 'avif'])
+
 export async function extractMedia(project) {
   const files = new Map() // relPath -> Buffer
   const paths = new Map() // dataUrl | '/media/<id>' -> '/media/<hash>.<ext>' | null (dropped)
   const libraryRefs = new Set() // '/media/<id>' strings, resolved after the scan
+  // data-URL ref -> {width, height}: a library asset carries its dimensions in
+  // the media index, but an inlined image never went through intake, so the
+  // header is read here. Filled by `probes` below, awaited before the return.
+  const dataSizes = new Map()
+  const probes = []
 
   const store = (value, buffer, ext) => {
     const hash = createHash('sha1').update(buffer).digest('hex').slice(0, 12)
     const rel = `assets/media/${hash}.${ext}`
     files.set(rel, buffer)
     paths.set(value, `/${rel}`)
+    if (RASTER_EXT.has(ext) && !dataSizes.has(value)) {
+      probes.push(
+        sharp(buffer)
+          .metadata()
+          .then((meta) => {
+            if (Number.isFinite(meta?.width) && Number.isFinite(meta?.height)) {
+              dataSizes.set(value, { width: meta.width, height: meta.height })
+            }
+          })
+          .catch(() => {
+            /* unreadable header — no dimensions is the honest answer */
+          }),
+      )
+    }
   }
 
   const intern = (value) => {
@@ -155,10 +179,28 @@ export async function extractMedia(project) {
     }
   }
 
+  await Promise.all(probes)
+
   const rewrite = (value) =>
     typeof value === 'string' && (value.startsWith('data:') || LIB_REF_RE.test(value))
       ? (paths.get(value) ?? undefined)
       : value
+  /**
+   * intrinsic pixel size of a media ref, or null. The library index records it
+   * at upload (media.mjs `makeThumb`); an inlined data URL, and an asset from
+   * before thumbnails existed, fall back to the header read in `store`. Null
+   * when neither answers — the exporter then emits no width/height at all,
+   * which is right: a guessed dimension distorts the image.
+   */
+  const sizeFor = (value) => {
+    if (typeof value !== 'string') return null
+    const id = LIB_REF_RE.exec(value)?.[1]
+    const asset = id ? assetsById.get(id) : null
+    if (asset && Number.isFinite(asset.width) && Number.isFinite(asset.height)) {
+      return { width: asset.width, height: asset.height }
+    }
+    return dataSizes.get(value) ?? null
+  }
   /** default alt text from the library asset a src references, if any */
   const altFor = (value) => {
     const id = typeof value === 'string' ? LIB_REF_RE.exec(value)?.[1] : null
@@ -171,5 +213,5 @@ export async function extractMedia(project) {
     if (!mime) return null
     return mime.startsWith('image/') ? 'image' : mime.startsWith('video/') ? 'video' : null
   }
-  return { rewrite, altFor, kindFor, files }
+  return { rewrite, altFor, kindFor, sizeFor, files }
 }

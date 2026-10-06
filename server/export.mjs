@@ -599,6 +599,28 @@ function attrsFor(node, ctx, bg, { wrapLink = true, extraClass = '' } = {}) {
   // else the library asset's default, else '' (decorative)
   if (def?.tag === 'img') {
     attrs.push(`alt="${escapeHtml(withBound.alt ?? ctx.altFor?.(rawSrc) ?? '')}"`)
+    // Performance hints, EXPORTER-ONLY and deliberately so: they change no
+    // pixel, and the canvas loads every image eagerly anyway, so mirroring
+    // them into useRenderNode would be noise. This is the one documented
+    // exception to the three-renderers rule.
+    //
+    // width/height are the intrinsic pixel size, which reserves the box and
+    // stops the page reflowing as images arrive. Neither name is in
+    // ATTR_ALLOW, so an author can never have set one — no conflict to
+    // resolve. They never distort: the exported stylesheet's preflight
+    // carries `img,video{max-width:100%;height:auto}`.
+    const size = ctx.sizeFor?.(rawSrc)
+    if (size) attrs.push(`width="${size.width}" height="${size.height}"`)
+    attrs.push('decoding="async"')
+    // One image eager per route, not three: a hero is one image, and
+    // fetchpriority="high" on several is worse than on none. An authored
+    // `loading` wins — it IS allowlisted, and emitting ours too would
+    // duplicate the attribute (the FIRST occurrence is what a browser reads).
+    if (!('loading' in withBound)) {
+      if (ctx.imgCount.n === 0) attrs.push('fetchpriority="high"')
+      else attrs.push('loading="lazy"')
+    }
+    ctx.imgCount.n += 1
   }
 
   // href: link elements only, scheme-allowlisted, locale-prefixed internals.
@@ -1294,6 +1316,12 @@ function renderPage(route, project, media) {
     rewrite: media.rewrite,
     altFor: media.altFor,
     kindFor: media.kindFor,
+    sizeFor: media.sizeFor,
+    // how many <img> this route has emitted so far — the first one is the
+    // eager/high-priority slot, every later one is lazy. An OBJECT for the
+    // same reason sliderIds is a Set: it has to survive the `{...ctx}` spread
+    // every nested scope makes, which a number would not.
+    imgCount: { n: 0 },
   }
   // the body node renders as the document <body> itself: children inline,
   // classes/id/interactions/background on the real tag (a video background
