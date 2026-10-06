@@ -4,7 +4,7 @@
 // mirror stays there per CLAUDE.md's keep-in-sync mandate.
 
 import { createHash } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import sharp from 'sharp'
 import { sanitizeSvg } from './media.mjs'
@@ -42,6 +42,18 @@ const LIB_REF_RE = /^\/media\/([a-f0-9]{16})$/
 // size worth shipping and a PDF/font/video is not an <img> at all
 const RASTER_EXT = new Set(['png', 'jpg', 'gif', 'webp', 'avif'])
 
+// Formats worth generating responsive variants for. A GIF is excluded because
+// it may be ANIMATED and a resize would flatten it to one frame; an SVG scales
+// by itself; an AVIF is already smaller than the webp we would make of it.
+const VARIANT_EXT = new Set(['png', 'jpg', 'webp'])
+/** the widths a `srcset` offers, filtered to those SMALLER than the original —
+ *  upscaling is strictly worse than letting the browser take the full file */
+const VARIANT_WIDTHS = [480, 768, 1200, 1600]
+// Resized files are cached by content hash + width, so a republish (and the
+// preview export, which runs the same code) reads instead of re-encoding. The
+// original is already named by its content hash, so the key is free.
+const VARIANTS_DIR = join(MEDIA_LIB, 'variants')
+
 export async function extractMedia(project) {
   const files = new Map() // relPath -> Buffer
   const paths = new Map() // dataUrl | '/media/<id>' -> '/media/<hash>.<ext>' | null (dropped)
@@ -50,27 +62,71 @@ export async function extractMedia(project) {
   // the media index, but an inlined image never went through intake, so the
   // header is read here. Filled by `probes` below, awaited before the return.
   const dataSizes = new Map()
+  // ref -> [{w, rel}] smallest first, the `srcset` an <img> offers
+  const variants = new Map()
+  // content hash -> the same list, so two refs to one file resize once
+  const variantsByHash = new Map()
   const probes = []
+  let madeVariantDir = false
+
+  /** resize once per (hash, width), reading the cache when it is already there */
+  const variantFor = async (hash, buffer, width) => {
+    const name = `${hash}-${width}.webp`
+    try {
+      return await readFile(join(VARIANTS_DIR, name))
+    } catch {
+      /* not cached yet */
+    }
+    const out = await sharp(buffer)
+      .resize({ width, withoutEnlargement: true })
+      .webp({ quality: 80 })
+      .toBuffer()
+    try {
+      if (!madeVariantDir) {
+        await mkdir(VARIANTS_DIR, { recursive: true })
+        madeVariantDir = true
+      }
+      await writeFile(join(VARIANTS_DIR, name), out)
+    } catch (err) {
+      // an unwritable cache must not fail the export — it only costs time
+      console.warn(`export: could not cache media variant ${name}: ${err.message}`)
+    }
+    return out
+  }
 
   const store = (value, buffer, ext) => {
     const hash = createHash('sha1').update(buffer).digest('hex').slice(0, 12)
     const rel = `assets/media/${hash}.${ext}`
     files.set(rel, buffer)
     paths.set(value, `/${rel}`)
-    if (RASTER_EXT.has(ext) && !dataSizes.has(value)) {
-      probes.push(
-        sharp(buffer)
-          .metadata()
-          .then((meta) => {
-            if (Number.isFinite(meta?.width) && Number.isFinite(meta?.height)) {
-              dataSizes.set(value, { width: meta.width, height: meta.height })
-            }
-          })
-          .catch(() => {
-            /* unreadable header — no dimensions is the honest answer */
-          }),
-      )
-    }
+    if (!RASTER_EXT.has(ext) || dataSizes.has(value)) return
+    probes.push(
+      sharp(buffer)
+        .metadata()
+        .then(async (meta) => {
+          if (!Number.isFinite(meta?.width) || !Number.isFinite(meta?.height)) return
+          dataSizes.set(value, { width: meta.width, height: meta.height })
+          if (!VARIANT_EXT.has(ext)) return
+          const already = variantsByHash.get(hash)
+          if (already) {
+            variants.set(value, already)
+            return
+          }
+          const made = []
+          for (const width of VARIANT_WIDTHS) {
+            if (width >= meta.width) continue
+            const out = await variantFor(hash, buffer, width)
+            const vrel = `assets/media/${hash}-${width}.webp`
+            files.set(vrel, out)
+            made.push({ w: width, rel: `/${vrel}` })
+          }
+          variantsByHash.set(hash, made)
+          variants.set(value, made)
+        })
+        .catch(() => {
+          /* unreadable header — no dimensions, and no variants, is honest */
+        }),
+    )
   }
 
   const intern = (value) => {
@@ -213,5 +269,16 @@ export async function extractMedia(project) {
     if (!mime) return null
     return mime.startsWith('image/') ? 'image' : mime.startsWith('video/') ? 'video' : null
   }
-  return { rewrite, altFor, kindFor, sizeFor, files }
+  /**
+   * The `srcset` for a media ref, or '' — the resized copies the browser may
+   * take instead of the full file. Never the original: that stays the `src`,
+   * so a browser with no srcset support, and any ref whose widths were all
+   * larger than the image, still gets a working image.
+   */
+  const srcsetFor = (value) => {
+    const list = variants.get(value)
+    if (!list || !list.length) return ''
+    return list.map((v) => `${v.rel} ${v.w}w`).join(', ')
+  }
+  return { rewrite, altFor, kindFor, sizeFor, srcsetFor, files }
 }

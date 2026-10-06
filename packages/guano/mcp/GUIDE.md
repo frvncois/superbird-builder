@@ -869,6 +869,16 @@ gets `fetchpriority="high"` instead. Setting `loading="eager"` yourself override
 one image — reach for it only when the hero is genuinely not the first image in the
 markup.
 
+**`sizes` is the one image attribute worth setting.** The export writes resized copies of
+every jpg/png/webp and offers them as a `srcset`, but only the LAYOUT knows how wide the
+image will actually render, so the default is `sizes="100vw"` — right for a hero, four
+times too much file for a card in a three-up grid. Set it on the image whenever it is not
+full width:
+
+```html
+<img data-ref="cover" sizes="(min-width: 768px) 33vw, 100vw" class="w-full" />
+```
+
 ## Data
 
 For **repeating / structured content**, use collections instead of own content: create

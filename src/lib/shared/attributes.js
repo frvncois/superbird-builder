@@ -9,6 +9,10 @@
 const ATTR_ALLOW = new Set([
   'target', 'rel', 'download', 'title', 'role', 'type', 'name', 'value',
   'placeholder', 'alt', 'loading', 'tabindex', 'lang', 'dir', 'hidden',
+  // `sizes` tells the browser how WIDE an image will render, which is the one
+  // thing the export cannot know: it emits the srcset, the layout decides the
+  // slot. A plain descriptor string, no security surface.
+  'sizes',
   'disabled', 'open', 'for', 'required', 'readonly', 'checked', 'selected',
   'multiple', 'autofocus', 'autocomplete', 'min', 'max', 'step', 'rows',
   'cols', 'maxlength', 'minlength', 'pattern', 'inputmode', 'accept',

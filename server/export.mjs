@@ -614,6 +614,20 @@ function attrsFor(node, ctx, bg, { wrapLink = true, extraClass = '' } = {}) {
     // carries `img,video{max-width:100%;height:auto}`.
     const size = ctx.sizeFor?.(rawSrc)
     if (size) attrs.push(`width="${size.width}" height="${size.height}"`)
+    // Resized copies the browser may take instead of the full file. `src`
+    // stays the ORIGINAL, so a browser without srcset — and any image whose
+    // widths were all larger than it — still gets a working picture.
+    //
+    // `sizes` says how wide the image will RENDER, which is the one thing the
+    // export cannot know: an author who puts three cards in a row sets
+    // `sizes="(min-width: 768px) 33vw, 100vw"` and the browser picks a third
+    // of the file. 100vw is the honest default — it over-fetches rather than
+    // shipping a blurry image.
+    const srcset = ctx.srcsetFor?.(rawSrc)
+    if (srcset) {
+      attrs.push(`srcset="${escapeHtml(srcset)}"`)
+      attrs.push(`sizes="${escapeHtml(withBound.sizes ?? '100vw')}"`)
+    }
     attrs.push('decoding="async"')
     // One image eager per route, not three: a hero is one image, and
     // fetchpriority="high" on several is worse than on none. An authored
@@ -861,7 +875,9 @@ function attrsFor(node, ctx, bg, { wrapLink = true, extraClass = '' } = {}) {
   // value takes precedence over the library default). On a non-anchor element
   // that linkWrap will wrap, the link-related half hoists onto the generated
   // <a> and is skipped here.
-  const managed = new Set(['id', 'class', 'style', 'src', 'alt', 'href'])
+  // `sizes` is consumed above, beside the srcset it describes — emitted there
+  // or not at all, since it means nothing without one
+  const managed = new Set(['id', 'class', 'style', 'src', 'alt', 'href', 'sizes'])
   const wrapsInAnchor = wrapLink && def?.tag !== 'a' && !!resolveHref(node, ctx)
   const own = wrapsInAnchor ? splitLinkAttributes(withBound).element : withBound
   // attributes the element TYPE implies (:checkbox → type="checkbox"), unless
@@ -1375,6 +1391,7 @@ function renderPage(route, project, media, channels) {
     altFor: media.altFor,
     kindFor: media.kindFor,
     sizeFor: media.sizeFor,
+    srcsetFor: media.srcsetFor,
     // how many <img> this route has emitted so far — the first one is the
     // eager/high-priority slot, every later one is lazy. An OBJECT for the
     // same reason sliderIds is a Set: it has to survive the `{...ctx}` spread

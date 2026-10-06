@@ -1,5 +1,7 @@
 import { test, expect } from '@playwright/test'
 import sharp from 'sharp'
+import { existsSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
 import { mcpSession } from './fixtures/mcpSession'
 
 // The performance attributes the exporter puts on every <img>: intrinsic
@@ -153,5 +155,86 @@ test.describe('exported image attributes', () => {
     // the hints that cost nothing are still there
     expect(tags[0]).toContain('decoding="async"')
     expect(tags[0]).toContain('fetchpriority="high"')
+  })
+})
+
+test.describe('responsive variants', () => {
+  /** a solid PNG wide enough to be worth resizing */
+  const wide = (width: number) => pngDataUrl(width, Math.round(width / 2))
+
+  test('a large image offers every width below it, and the files are written', async () => {
+    const s = await mcpSession()
+    const html = await s.exportWith(projectWith(s.runtime, [node({ src: await wide(2000) })]), [])
+    const tag = imgs(html)[0]!
+    for (const w of [480, 768, 1200, 1600]) expect(tag).toContain(`${w}w`)
+    // the src stays the ORIGINAL, so a browser without srcset still works
+    expect(tag).toMatch(/src="\/assets\/media\/[a-f0-9]{12}\.png"/)
+    expect(tag).toContain('sizes="100vw"')
+
+    // …and every file the srcset names really is in the export
+    const dir = await s.exportDir(projectWith(s.runtime, [node({ src: await wide(2000) })]))
+    try {
+      for (const m of tag.matchAll(/\/(assets\/media\/[^ ]+\.webp) \d+w/g)) {
+        expect(existsSync(join(dir, m[1]!))).toBe(true)
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('a small image offers only the widths below it, and a GIF offers none', async () => {
+    const s = await mcpSession()
+    const gifBuf = await sharp({
+      create: { width: 1000, height: 400, channels: 3, background: { r: 1, g: 2, b: 3 } },
+    })
+      .gif()
+      .toBuffer()
+    const html = await s.exportWith(
+      projectWith(s.runtime, [
+        node({ src: await wide(600) }),
+        node({ src: `data:image/gif;base64,${gifBuf.toString('base64')}` }),
+      ]),
+      [],
+    )
+    const tags = imgs(html)
+    expect(tags[0]).toContain('480w')
+    expect(tags[0]).not.toContain('768w')
+    // a GIF may be ANIMATED, and a resize would flatten it to one frame
+    expect(tags[1]).not.toContain('srcset')
+    expect(tags[1]).not.toContain('sizes=')
+  })
+
+  test('an authored sizes wins, and is never emitted twice', async () => {
+    const s = await mcpSession()
+    const src = await wide(2000)
+    const html = await s.exportWith(
+      projectWith(s.runtime, [
+        node({ src, attributes: { sizes: '(min-width: 768px) 33vw, 100vw' } }),
+      ]),
+      [],
+    )
+    const tag = imgs(html)[0]!
+    expect(tag).toContain('sizes="(min-width: 768px) 33vw, 100vw"')
+    expect(tag.match(/sizes=/g)).toHaveLength(1)
+  })
+
+  test('a second export reads the cache: the variant files are byte-identical', async () => {
+    const s = await mcpSession()
+    const src = await wide(2000)
+    const project = projectWith(s.runtime, [node({ src })])
+    const first = await s.exportDir(project)
+    const second = await s.exportDir(project)
+    try {
+      const webps = readdirSync(join(first, 'assets/media')).filter((f) => f.endsWith('.webp'))
+      expect(webps.length).toBe(4)
+      for (const name of webps) {
+        const a = readFileSync(join(first, 'assets/media', name))
+        const b = readFileSync(join(second, 'assets/media', name))
+        expect(b.equals(a)).toBe(true)
+      }
+    } finally {
+      rmSync(first, { recursive: true, force: true })
+      rmSync(second, { recursive: true, force: true })
+    }
   })
 })

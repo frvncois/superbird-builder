@@ -40,6 +40,10 @@ export interface McpSession {
   html: () => Promise<string>
   /** the exported stylesheet — for a rule the renderer emits itself */
   css: () => Promise<string>
+  /** export an ARBITRARY project into a directory the caller keeps, for the
+   * checks that are about the FILES an export writes (the responsive image
+   * variants) rather than the markup. The caller deletes the directory. */
+  exportDir: (project: unknown, dir?: string) => Promise<string>
   /** export an ARBITRARY project with a given integrations list, and return
    * the first route's HTML. The forms/ENV checks need both: a project whose
    * custom code the tools do not write, and the integrations the substitution
@@ -133,6 +137,11 @@ export async function mcpSession(
       } finally {
         rmSync(dir, { recursive: true, force: true })
       }
+    },
+    exportDir: async (project: unknown, dir?: string) => {
+      const out = dir ?? mkdtempSync(join(tmpdir(), 'guano-mcp-'))
+      await exportSite(project, out)
+      return out
     },
     exportWith: async (project: unknown, integrations: unknown[]) => {
       const dir = mkdtempSync(join(tmpdir(), 'guano-mcp-'))
