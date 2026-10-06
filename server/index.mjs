@@ -51,7 +51,17 @@ import { createDeliverer } from './public/deliver.mjs'
 import { csvFilename, submissionsCsv } from './public/csv.mjs'
 import { allowedOrigins, corsFor, publishedSettingsReader } from './public/cors.mjs'
 import { publicIntegration } from '../src/lib/shared/integrations.js'
-import { DATA_DIR, fail, readDirFiles, send, timingSafeEqualStr, writeAtomic } from './util.mjs'
+import {
+  DATA_DIR,
+  fail,
+  readDirFiles,
+  send,
+  swapDir,
+  sweepOrphanTmpFiles,
+  sweepStaleDirs,
+  timingSafeEqualStr,
+  writeAtomic,
+} from './util.mjs'
 import {
   ROLES,
   acceptInvite,
@@ -1929,26 +1939,31 @@ async function applyPackage(raw) {
   if (!manifestOk) return 'package is missing its manifest'
   if (!hasProject) return 'package has no project with pages'
 
-  // stage into a tmp dir, then swap live dirs into place
+  // stage into a tmp dir, then swap live dirs into place. The `finally` is what
+  // keeps a throw anywhere below from stranding a full copy of the store and
+  // media library in the data dir forever.
   const tmp = join(DATA_DIR, `import.tmp-${Date.now()}`)
-  const tmpStore = join(tmp, 'store')
-  const tmpMedia = join(tmp, 'media')
-  await mkdir(tmpStore, { recursive: true })
-  await mkdir(tmpMedia, { recursive: true })
-  for (const { path, data } of entries) {
-    if (path === 'manifest.json') continue
-    const dest = join(tmp, path) // path already allowlisted, safe to join
-    await mkdir(join(dest, '..'), { recursive: true })
-    await writeFile(dest, data)
-  }
+  try {
+    const tmpStore = join(tmp, 'store')
+    const tmpMedia = join(tmp, 'media')
+    await mkdir(tmpStore, { recursive: true })
+    await mkdir(tmpMedia, { recursive: true })
+    for (const { path, data } of entries) {
+      if (path === 'manifest.json') continue
+      const dest = join(tmp, path) // path already allowlisted, safe to join
+      await mkdir(join(dest, '..'), { recursive: true })
+      await writeFile(dest, data)
+    }
 
-  await swapDir(STORE_DIR, tmpStore)
-  await swapDir(MEDIA_DIR, tmpMedia)
-  await rm(tmp, { recursive: true, force: true })
-  await migrateStoreDir() // a legacy backup arrives with old key filenames
-  resetMediaIndexCache() // make imported media visible without a restart
-  resetIntegrationsCache() // the restored store may carry a legacy settings.smtp
-  return null
+    await swapDir(STORE_DIR, tmpStore)
+    await swapDir(MEDIA_DIR, tmpMedia)
+    await migrateStoreDir() // a legacy backup arrives with old key filenames
+    resetMediaIndexCache() // make imported media visible without a restart
+    resetIntegrationsCache() // the restored store may carry a legacy settings.smtp
+    return null
+  } finally {
+    await rm(tmp, { recursive: true, force: true }).catch(() => {})
+  }
 }
 
 // ---------- 🔒 /api/snapshots (server-kept project packages) ----------
@@ -2205,14 +2220,6 @@ async function migrateSchema() {
     if (line) console.log(`schema migration: ${line}`)
   }
   storeSize.at = 0 // the blobs shrank; force a recount rather than guess
-}
-
-/** replace `live` with `staged`: move live aside, staged in, drop the old */
-async function swapDir(live, staged) {
-  const old = `${live}.old-${Date.now()}`
-  if (existsSync(live)) await rename(live, old)
-  await rename(staged, live)
-  await rm(old, { recursive: true, force: true })
 }
 
 async function handleStatic(req, res) {
