@@ -17,7 +17,7 @@ import { clearBindingsToIds, pageHost, masterHost, type StructureHost } from '..
 import { decodeEntities, type ParsedNode } from './parse'
 import { nodesByShortId } from './ids'
 import { ELIDED_DATA_URL } from './serialize'
-import { impliedAttrs, isLeafType, sameType, SOURCE_TYPES } from './tags'
+import { impliedAttrs, isLeafType, sameType, SLOT_FILL_TYPE, SOURCE_TYPES } from './tags'
 
 /**
  * Writing HTML back onto the tree.
@@ -191,6 +191,9 @@ export function applyHtml(
   const refuse = (path: string, message: string) => result.refused.push({ path, message })
   const warn = (path: string, message: string) => result.warnings.push({ path, message })
 
+  /** classes already reported in THIS write — see setClasses */
+  const reportedClasses = new Set<string>()
+
   /** a readable address for a refusal: the element, with its ref when it has one */
   const name = (node: ElementNode) => (node.ref ? `${node.type}#${node.ref}` : node.type)
   const under = (parent: string, node: ElementNode) => `${parent} > ${name(node)}`
@@ -348,6 +351,18 @@ export function applyHtml(
 
     const next: ElementNode[] = []
     for (const child of parsedChildren) {
+      // `<slot>` is a marker, not an element: it means something only as a
+      // component instance's single child (see fillInstance). Anywhere else it
+      // would be stored as structure that renders nothing, so it is refused by
+      // name rather than created.
+      if (child.type === SLOT_FILL_TYPE) {
+        refuse(
+          path,
+          '<slot> only fills a component instance\'s slot — write it as the ONE child of a ' +
+            '<Component>, like <Shell><slot>…</slot></Shell>',
+        )
+        continue
+      }
       let adopted = claim.get(child)
       // a claim must never make a node its own ancestor. An agent can write a
       // document that nests an element inside its own subtree, and a cycle in
@@ -403,6 +418,50 @@ export function applyHtml(
     alignStructure(node, def.root)
     if (!parsed.children.length) return
 
+    // `<Name><slot>…</slot></Name>`: fill the component's SLOT and leave every
+    // other part exactly as it was.
+    //
+    // Without it, an instance's interior has to match its master node for
+    // node, so putting page-specific content into a slot three levels down
+    // meant re-typing the whole shell — header, progress bar, footer — on
+    // every page, nine times for one funnel, and every copy stale the moment
+    // the shell changed. The alternative was two calls and an id lookup per
+    // page. The slot's own children are ordinary page structure (the resolver
+    // leaves them unmapped), so they are adopted by id/ref/LCS like any other
+    // level, which is what carries their identity across rewrites.
+    if (parsed.children.length === 1 && parsed.children[0]!.type === SLOT_FILL_TYPE) {
+      const marker = parsed.children[0]!
+      const slots: { instance: ElementNode; master: ElementNode }[] = []
+      const findSlots = (instance: ElementNode[], master: ElementNode[]) => {
+        const length = Math.min(instance.length, master.length)
+        for (let i = 0; i < length; i++) {
+          const below = master[i]!
+          const target = instance[i]!
+          if (below.slot) slots.push({ instance: target, master: below })
+          // never DOWN into a component this one holds: that slot belongs to
+          // the nested instance, and filling it from out here would be the
+          // positional guess this format exists to avoid
+          else if (!isComponentType(below.type)) findSlots(target.children, below.children)
+        }
+      }
+      findSlots(node.children, def.root.children)
+      if (slots.length !== 1) {
+        refuse(
+          path,
+          slots.length === 0
+            ? `<${def.name}> has no slot, so <slot> has nothing to fill here. Write its parts ` +
+                `out, or mark a container in the component as a slot ` +
+                `(edit_elements {componentId, slot: true}).`
+            : `<${def.name}> has ${slots.length} slots, and <slot> cannot say which one. Write ` +
+                'its parts out so each one is addressed by position.',
+        )
+        return
+      }
+      const slot = slots[0]!
+      alignLevel(slot.instance, marker.children, under(path, slot.instance))
+      return
+    }
+
     //
     // `owner` is the component whose parts THIS level belongs to — the host at
     // the top, and the nested component once the walk steps into one. It used
@@ -431,6 +490,16 @@ export function applyHtml(
         const below = master[i]
         if (!target || !below) return
         const childPath = under(at, target)
+        if (child.type === SLOT_FILL_TYPE) {
+          // the shorthand is all-or-nothing: mixed with written-out parts there
+          // is no way to tell which level it belongs to
+          refuse(
+            childPath,
+            `<slot> cannot sit beside written-out parts of <${owner}> — either write <slot> as ` +
+              `the one child of <${owner}>, or address this slot by position with its own tag`,
+          )
+          return
+        }
         if (!sameType(target.type, child.type)) {
           refuse(
             childPath,
@@ -827,11 +896,15 @@ export function applyHtml(
    */
   function setClasses(node: ElementNode, value: string, path: string) {
     const tokens = value.split(/\s+/).filter(Boolean)
-    // ONE warning per element, listing the tokens: a utility the catalog does
-    // not model usually appears on every element of a page, so a warning each
-    // turned a design-system class into forty lines of the same sentence.
-    const unmodelled = tokens.filter((t) => !isValidClass(t))
+    // ONE warning per CLASS per write, naming the first element it appeared
+    // on. It used to be one per element, and a utility the catalog does not
+    // model is exactly the kind that appears on every second element of a
+    // page: a single write came back with sixteen copies of the same sentence,
+    // which is a tax on the context budget the guide tells agents to husband.
+    // The second occurrence of a class says nothing the first did not.
+    const unmodelled = tokens.filter((t) => !isValidClass(t) && !reportedClasses.has(t))
     if (unmodelled.length) {
+      for (const t of unmodelled) reportedClasses.add(t)
       warn(
         path,
         `${unmodelled.map((t) => `'${t}'`).join(', ')} ` +

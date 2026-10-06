@@ -1150,6 +1150,20 @@ var ALIAS_OF = {
 	heading: "h2",
 	dropdown: "select"
 };
+/**
+* `<slot>` — the write-only shorthand for "fill this instance's slot".
+*
+* Not an element and never stored: it is a parse-time marker that `applyHtml`
+* consumes (see fillInstance). It exists because an instance's interior has to
+* match its master node for node, so filling a slot three levels down meant
+* re-typing the component's whole skeleton on every page that used it — nine
+* times for one funnel shell, each copy stale the moment the shell changed.
+*
+* The type is deliberately unspellable as an element (`@` is not a valid
+* element type, and component names are capitalized), so it can never collide
+* with a real one.
+*/
+var SLOT_FILL_TYPE = "@slot";
 /** the HTML tag a node of this type is written as */
 function tagForType(type) {
 	if (isComponentType(type)) return type;
@@ -1195,6 +1209,7 @@ function typeForTag(tag, attrs, components) {
 		return { type: "input" };
 	}
 	if (tag === "div" && attrs["data-type"] === "text") return { type: "text" };
+	if (tag === "slot") return { type: SLOT_FILL_TYPE };
 	const known = TYPE_OF_TAG[tag];
 	if (known) return { type: known };
 	const matches = components.filter((name) => name.toLowerCase() === tag.toLowerCase());
@@ -1233,8 +1248,9 @@ var FORBIDDEN_TAGS = /* @__PURE__ */ new Set([
 ]);
 /** does this element carry text rather than children? Registry-driven. */
 var isLeafType = (type) => !isComponentType(type) && isLeafElement(type);
-/** is this a type the app can render at all? */
-var isRenderableType = (type) => isComponentType(type) || isKnownElement(type);
+/** is this a type the app can render at all? (the slot-fill marker is not an
+*  element, but the PARSER must let it through for applyHtml to act on) */
+var isRenderableType = (type) => type === "@slot" || isComponentType(type) || isKnownElement(type);
 /**
 * `source` carries the collection an element iterates or embeds; `data-field`
 * carries an ordinary element's field binding. Both land on `node.arg` — two
@@ -3834,7 +3850,89 @@ function buildVocabulary() {
 		"underline-offset-1",
 		"underline-offset-2",
 		"underline-offset-4",
-		"underline-offset-8"
+		"underline-offset-8",
+		"place-items-start",
+		"place-items-end",
+		"place-items-center",
+		"place-items-baseline",
+		"place-items-stretch",
+		"place-content-start",
+		"place-content-end",
+		"place-content-center",
+		"place-content-between",
+		"place-content-around",
+		"place-content-evenly",
+		"place-content-baseline",
+		"place-content-stretch",
+		"place-self-auto",
+		"place-self-start",
+		"place-self-end",
+		"place-self-center",
+		"place-self-stretch",
+		"justify-items-start",
+		"justify-items-end",
+		"justify-items-center",
+		"justify-items-stretch",
+		"justify-items-normal",
+		"justify-self-auto",
+		"justify-self-start",
+		"justify-self-end",
+		"justify-self-center",
+		"justify-self-stretch",
+		"text-wrap",
+		"text-nowrap",
+		"text-balance",
+		"text-pretty",
+		"aspect-auto",
+		"isolate",
+		"isolation-auto",
+		"mix-blend-normal",
+		"mix-blend-multiply",
+		"mix-blend-screen",
+		"mix-blend-overlay",
+		"mix-blend-darken",
+		"mix-blend-lighten",
+		"mix-blend-difference",
+		"mix-blend-exclusion",
+		"mix-blend-luminosity",
+		"mix-blend-plus-lighter",
+		"will-change-auto",
+		"will-change-scroll",
+		"will-change-contents",
+		"will-change-transform",
+		"scroll-auto",
+		"scroll-smooth",
+		"snap-none",
+		"snap-x",
+		"snap-y",
+		"snap-both",
+		"snap-mandatory",
+		"snap-proximity",
+		"snap-start",
+		"snap-center",
+		"snap-end",
+		"snap-align-none",
+		"snap-normal",
+		"snap-always",
+		"overscroll-auto",
+		"overscroll-contain",
+		"overscroll-none",
+		"touch-auto",
+		"touch-none",
+		"touch-pan-x",
+		"touch-pan-y",
+		"touch-manipulation",
+		"touch-pinch-zoom",
+		"hyphens-none",
+		"hyphens-manual",
+		"hyphens-auto",
+		"normal-nums",
+		"ordinal",
+		"slashed-zero",
+		"lining-nums",
+		"oldstyle-nums",
+		"proportional-nums",
+		"tabular-nums"
 	].forEach((c) => out.add(c));
 	for (let n = 1; n <= 12; n++) {
 		out.add(`col-span-${n}`);
@@ -4126,6 +4224,26 @@ var VISIBILITY_CLASSES = /* @__PURE__ */ new Set([
 	"invisible",
 	"collapse"
 ]);
+/** the conflict groups for the utilities the Style panel has no control for
+*  (see the vocabulary block): one key per CSS property, longest prefix first
+*  so `place-self-*` is never read as a `place-*` of another kind */
+var PANEL_LESS_GROUPS = [
+	[/^place-items-/, "place-items"],
+	[/^place-content-/, "place-content"],
+	[/^place-self-/, "place-self"],
+	[/^justify-items-/, "justify-items"],
+	[/^justify-self-/, "justify-self"],
+	[/^text-(?:wrap|nowrap|balance|pretty)$/, "text-wrap"],
+	[/^aspect-/, "aspect-ratio"],
+	[/^(?:isolate|isolation-auto)$/, "isolation"],
+	[/^mix-blend-/, "mix-blend-mode"],
+	[/^will-change-/, "will-change"],
+	[/^scroll-(?:auto|smooth)$/, "scroll-behavior"],
+	[/^snap-(?:none|x|y|both)$/, "scroll-snap-type"],
+	[/^snap-(?:start|center|end|align-none)$/, "scroll-snap-align"],
+	[/^overscroll-(?:auto|contain|none)$/, "overscroll-behavior"],
+	[/^hyphens-/, "hyphens"]
+];
 /**
 * A class is valid if every variant segment is known and the base is either
 * an arbitrary-value class (`p-[13px]`), a numeric flex (`flex-2`), in our
@@ -4232,6 +4350,7 @@ function propKey(base) {
 	const offset = offsetFamily(base);
 	if (offset) return offset;
 	if (base === "truncate" || base.startsWith("line-clamp-")) return "line-clamp";
+	for (const [re, prop] of PANEL_LESS_GROUPS) if (re.test(base)) return prop;
 	if (BG_POSITION_RE.test(base) || base.startsWith("bg-position-")) return "background-position";
 	if (base.startsWith("bg-") && !NON_COLOR_BG_RE.test(base)) return "background-color";
 	if (FONT_FAMILY_RE.test(base) || FONT_ARBITRARY_FAMILY_RE.test(base)) return "font-family";
@@ -5729,6 +5848,8 @@ function applyHtml(root, parsed, opts) {
 		path,
 		message
 	});
+	/** classes already reported in THIS write — see setClasses */
+	const reportedClasses = /* @__PURE__ */ new Set();
 	/** a readable address for a refusal: the element, with its ref when it has one */
 	const name = (node) => node.ref ? `${node.type}#${node.ref}` : node.type;
 	const under = (parent, node) => `${parent} > ${name(node)}`;
@@ -5824,6 +5945,10 @@ function applyHtml(root, parsed, opts) {
 		}
 		const next = [];
 		for (const child of parsedChildren) {
+			if (child.type === "@slot") {
+				refuse(path, "<slot> only fills a component instance's slot — write it as the ONE child of a <Component>, like <Shell><slot>…</slot></Shell>");
+				continue;
+			}
 			let adopted = claim.get(child);
 			if (adopted && (adopted === parent || !!findNode([adopted], parent.id))) {
 				refuse(`${path} > ${name(adopted)}`, `<${child.tag}> is written inside its own subtree; it is kept where it was and a new element is created here`);
@@ -5868,6 +5993,30 @@ function applyHtml(root, parsed, opts) {
 		}
 		alignStructure(node, def.root);
 		if (!parsed.children.length) return;
+		if (parsed.children.length === 1 && parsed.children[0].type === "@slot") {
+			const marker = parsed.children[0];
+			const slots = [];
+			const findSlots = (instance, master) => {
+				const length = Math.min(instance.length, master.length);
+				for (let i = 0; i < length; i++) {
+					const below = master[i];
+					const target = instance[i];
+					if (below.slot) slots.push({
+						instance: target,
+						master: below
+					});
+					else if (!isComponentType(below.type)) findSlots(target.children, below.children);
+				}
+			};
+			findSlots(node.children, def.root.children);
+			if (slots.length !== 1) {
+				refuse(path, slots.length === 0 ? `<${def.name}> has no slot, so <slot> has nothing to fill here. Write its parts out, or mark a container in the component as a slot (edit_elements {componentId, slot: true}).` : `<${def.name}> has ${slots.length} slots, and <slot> cannot say which one. Write its parts out so each one is addressed by position.`);
+				return;
+			}
+			const slot = slots[0];
+			alignLevel(slot.instance, marker.children, under(path, slot.instance));
+			return;
+		}
 		const fill = (instance, master, written, at, owner) => {
 			if (written.length !== master.length) {
 				refuse(at, `<${owner}> has ${master.length} part${master.length === 1 ? "" : "s"} here and ${written.length} ${written.length === 1 ? "was" : "were"} written. Write <${owner} /> to leave its parts alone, or change the component itself with update_component.`);
@@ -5878,6 +6027,10 @@ function applyHtml(root, parsed, opts) {
 				const below = master[i];
 				if (!target || !below) return;
 				const childPath = under(at, target);
+				if (child.type === "@slot") {
+					refuse(childPath, `<slot> cannot sit beside written-out parts of <${owner}> — either write <slot> as the one child of <${owner}>, or address this slot by position with its own tag`);
+					return;
+				}
 				if (!sameType(target.type, child.type)) {
 					refuse(childPath, `part ${i + 1} of <${owner}> is a <${target.type}>, not a <${child.tag}>`);
 					return;
@@ -6098,8 +6251,11 @@ function applyHtml(root, parsed, opts) {
 	*/
 	function setClasses(node, value, path) {
 		const tokens = value.split(/\s+/).filter(Boolean);
-		const unmodelled = tokens.filter((t) => !isValidClass(t));
-		if (unmodelled.length) warn(path, `${unmodelled.map((t) => `'${t}'`).join(", ")} ${unmodelled.length === 1 ? "is" : "are"} kept, but the Style panel has no control for ${unmodelled.length === 1 ? "it" : "them"}`);
+		const unmodelled = tokens.filter((t) => !isValidClass(t) && !reportedClasses.has(t));
+		if (unmodelled.length) {
+			for (const t of unmodelled) reportedClasses.add(t);
+			warn(path, `${unmodelled.map((t) => `'${t}'`).join(", ")} ${unmodelled.length === 1 ? "is" : "are"} kept, but the Style panel has no control for ${unmodelled.length === 1 ? "it" : "them"}`);
+		}
 		assign(node, "classes", tokens.join(" "));
 	}
 	function setSrc(node, value, path) {

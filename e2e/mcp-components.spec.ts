@@ -354,10 +354,34 @@ test('publish warns about what a design review would send back', async () => {
   // the raw select, not the library one (it has appearance-none and a drawn chevron)
   const native = (await call('publish')).warnings.find((x: { kind: string }) => x.kind === 'native-select')
   expect(native.message).toContain('1 :select')
-  // the navbar is sticky and on every page: a body transition blinks it
-  expect(kinds).toContain('body-transition-under-app-shell')
+  // the navbar is sticky top-0 on every page, which is what most marketing
+  // sites are — a fixed bar over a fading page is usually the design somebody
+  // asked for, so it is NOT the app-shell case
+  expect(kinds).not.toContain('body-transition-under-app-shell')
   expect(kinds).toContain('unused-effects')
   expect(kinds).not.toContain('unstyled-controls')
+})
+
+test('a body transition is flagged under an app SHELL, not under a top bar', async () => {
+  const { call, home } = await mcpSession()
+  await call('update_settings', { motion: { transitions: { enabled: true, preset: 'fade' } } })
+  // a sidebar: full height down one side, which the content sits beside. Fading
+  // the body takes the shell with it on every navigation — the app blinking.
+  await call('create_component', {
+    name: 'Rail',
+    html: '<div class="fixed inset-y-0 left-0 w-64 border-r border-border">\n  <span>Rail</span>\n</div>',
+  })
+  const h = await home()
+  await call('set_page_html', { pageId: h.id, version: h.version, html: page('<Rail />') })
+  await call('create_page', { name: 'Two', slug: '/two' })
+  const two = (await call('list_pages')).pages.find((p: { name: string }) => p.name === 'Two')
+  await call('set_page_html', { pageId: two.id, version: two.version, html: page('<Rail />') })
+
+  const warning = (await call('publish')).warnings.find(
+    (x: { kind: string }) => x.kind === 'body-transition-under-app-shell',
+  )
+  expect(warning).toBeTruthy()
+  expect(warning.chrome).toEqual(['Rail'])
 })
 
 // Colour is a class on a thing, never a reason for another thing. A review
@@ -551,6 +575,64 @@ test('a slot holds per-instance structure while the rest of the component stays 
   out = await html()
   expect(out).toContain('Only here')
   expect(out.match(/Dismiss/g)?.length).toBeGreaterThanOrEqual(2)
+})
+
+test('<slot> fills the one slot without re-typing the shell', async () => {
+  const { call, home, html } = await mcpSession()
+  // Vezaro, MINOR: nine funnel screens shared one FunnelShell, and because an
+  // instance's interior must match its master node for node, each page had to
+  // re-type the shell's whole skeleton — header, progress bar, footer — around
+  // its own content. Nine copies, every one stale the moment the shell changed.
+  const shell = await call('create_component', {
+    name: 'Shell',
+    html: `<div class="flex min-h-screen flex-col">
+  <header class="border-b px-6 py-4"><span>Step 1 of 6</span></header>
+  <main data-slot class="flex-1 px-6 py-10"><p>Default body</p></main>
+  <footer class="border-t px-6 py-4"><span>Need help?</span></footer>
+</div>`,
+  })
+  expect(shell.saved).toBe(true)
+
+  const h = await home()
+  const w = await call('set_page_html', {
+    pageId: h.id,
+    version: h.version,
+    html: page(
+      '<Shell data-ref="step">\n  <slot>\n    <h1>What is your goal?</h1>\n    <p>Pick one.</p>\n  </slot>\n</Shell>',
+    ),
+  })
+  expect(w.saved).toBe(true)
+  expect(w.refused ?? []).toEqual([])
+
+  // the slot holds the page's content, and the shell around it still renders
+  const out = await html()
+  expect(out).toContain('What is your goal?')
+  expect(out).toContain('Step 1 of 6')
+  expect(out).toContain('Need help?')
+  expect(out).not.toContain('Default body')
+
+  // a second write through the shorthand keeps the slot's node ids — the
+  // identity every interaction target and comment anchor depends on
+  const read = await call('get_page', { pageId: h.id, elements: 'own' })
+  const idsBefore = read.elements.map((e: { id: string }) => e.id)
+  const again = await call('set_page_html', {
+    pageId: h.id,
+    version: read.version,
+    html: page(
+      '<Shell data-ref="step">\n  <slot>\n    <h1>What is your goal?</h1>\n    <p>Pick two.</p>\n  </slot>\n</Shell>',
+    ),
+  })
+  expect(again.saved).toBe(true)
+  expect(again.elements.map((e: { id: string }) => e.id)).toEqual(idsBefore)
+  expect(await html()).toContain('Pick two.')
+
+  // and it is refused where it cannot mean one thing
+  const loose = await call('set_page_html', {
+    pageId: h.id,
+    version: (await call('get_page', { pageId: h.id })).version,
+    html: page('<section>\n  <slot>\n    <h1>x</h1>\n  </slot>\n</section>'),
+  })
+  expect(JSON.stringify(loose.refused)).toMatch(/only fills a component instance/)
 })
 
 test('a slot is refused where it cannot mean anything', async () => {

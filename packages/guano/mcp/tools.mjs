@@ -3722,7 +3722,28 @@ function designWarnings(project) {
     })
   }
 
-  // 2. a body transition under persistent chrome: fades the whole app every screen
+  // 2. a body transition under an APP SHELL: fades the whole app every screen
+  //
+  // The subject is a shell the content sits inside — a sidebar or a bottom nav
+  // — where fading the body makes the app itself blink on every navigation.
+  // A fixed TOP BAR over a fading page is something else entirely: it is what
+  // most marketing sites are, and the fade is usually the design someone
+  // asked for. Flagging every sticky header meant the check could not tell the
+  // two apart, and the advice it gave ("turn transitions off") was the
+  // opposite of what the client had decided.
+  //
+  // A shell reads from its pinned node's own classes: full-height down one
+  // side (`inset-y-0`, `h-screen`, `h-full` with a width) or pinned to the
+  // bottom edge. `top-0` alone is a header and is left alone.
+  const isShellChrome = (node) => {
+    const cls = classesOf(node)
+    if (!/\b(sticky|fixed)\b/.test(cls)) return false
+    const bottom = /\bbottom-0\b/.test(cls) && !/\btop-0\b/.test(cls)
+    const fullHeight =
+      /\b(inset-y-0|h-screen|min-h-screen|h-dvh|inset-0)\b/.test(cls) ||
+      (/\bh-full\b/.test(cls) && /\bw-(\d|\[|full|px|auto|screen)/.test(cls))
+    return bottom || fullHeight
+  }
   const transitions = project.settings?.motion?.transitions?.enabled
   if (transitions && published.length > 1) {
     const usedOn = new Map()
@@ -3738,11 +3759,11 @@ function designWarnings(project) {
         if (count < published.length) return false
         const def = masterByName.get(name)
         if (!def) return false
-        let pinned = false
+        let shell = false
         walkNodes([def.root], (n) => {
-          if (/\b(sticky|fixed)\b/.test(classesOf(n))) pinned = true
+          if (isShellChrome(n)) shell = true
         })
-        return pinned
+        return shell
       })
       .map(([name]) => name)
     if (chrome.length) {
@@ -3751,10 +3772,11 @@ function designWarnings(project) {
         chrome,
         message:
           `settings.motion.transitions fades the WHOLE page body on every navigation, and ${chrome.join(', ')} ` +
-          `${chrome.length > 1 ? 'are' : 'is'} on every page as persistent chrome — so the sidebar/header ` +
-          'flashes out and back in on each screen, which reads as the app blinking. For an app shell, turn ' +
+          `${chrome.length > 1 ? 'are' : 'is'} on every page as an app SHELL (a sidebar, or a bottom nav) — ` +
+          'so the shell flashes out and back in on each screen, which reads as the app blinking. Turn ' +
           'transitions off (update_settings {motion: {transitions: {enabled: false}}}) and give the CONTENT ' +
-          'region alone a short `load` fade (200–300 ms, opacity only); keep the chrome free of load animations.',
+          'region alone a short `load` fade (200–300 ms, opacity only); keep the shell free of load ' +
+          'animations. A fixed top BAR is not this case and is not flagged.',
       })
     }
   }
@@ -3766,10 +3788,17 @@ function designWarnings(project) {
   // splitByStagger in shared/motion.js), so it is exactly the "small items,
   // staggered" shape this warning recommends — flagging it contradicted the
   // guide's own advice to bind a stagger to the list element.
+  // A step that LOOPS FOREVER (`repeat: -1`) is not an entrance: it is a
+  // marquee, a drifting gradient, a rotating badge — motion whose whole point
+  // is that it keeps moving, usually inside something that clips it. The
+  // warning is about a region that shifts once on load and then sits there
+  // looking wrong, so an infinite loop was never its subject, and flagging one
+  // contradicted the guide, which lists marquees as a thing to build.
   const transformsLayout = (a) =>
     (a?.steps ?? []).some(
       (st) =>
         !(st.stagger > 0) &&
+        !(Number(st.repeat) < 0) &&
         (st.tracks ?? []).some((t) => ['x', 'y', 'scale', 'width', 'height'].includes(t.prop)),
     )
   const countDesc = (n) => (n.children ?? []).reduce((k, c) => k + 1 + countDesc(c), 0)
@@ -3789,7 +3818,8 @@ function designWarnings(project) {
         `${moving.length} large container(s) enter with a \`load\` animation that moves or scales them — ` +
         'the whole region shifts on every page load, and the transform it leaves behind traps any fixed ' +
         'sheet or modal inside. Fade containers (opacity only), or set `stagger` on the step so the ' +
-        'CHILDREN move and the container stays put — a staggered step is not flagged.',
+        'CHILDREN move and the container stays put — neither a staggered step nor an infinite ' +
+        'loop (`repeat: -1`, a marquee) is flagged.',
     })
   }
 

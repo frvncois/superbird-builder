@@ -67,6 +67,32 @@ test.describe('publish design warnings', () => {
     expect(await s.kinds()).toContain('load-animation-moves-layout')
   })
 
+  test('an INFINITE loop is never flagged — a marquee is supposed to move', async () => {
+    const s = await mcpSession()
+    // Vezaro, MINOR: a 40s linear `x: 0% → -50%` marquee on `load`, bound to
+    // the track inside an overflow-hidden strip, was reported as "the whole
+    // region shifts on every page load". The track IS the moving part, the
+    // guide lists marquees as a thing to build, and the only way to silence it
+    // was to switch the trigger to `appear` for no reason.
+    const { created } = await s.call('create_animations', {
+      items: [
+        {
+          name: 'Marquee',
+          steps: [
+            {
+              duration: 40_000,
+              easing: 'linear',
+              repeat: -1,
+              tracks: [{ prop: 'x', from: '0%', to: '-50%' }],
+            },
+          ],
+        },
+      ],
+    })
+    await bindToGrid(s, created[0].id, 'load')
+    expect(await s.kinds()).not.toContain('load-animation-moves-layout')
+  })
+
   test('an opacity-only load animation is never flagged', async () => {
     const s = await mcpSession()
     const { created } = await s.call('create_animations', {

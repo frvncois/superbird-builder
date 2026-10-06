@@ -51,6 +51,21 @@ export const ALIAS_OF: Record<string, string> = {
   dropdown: 'select',
 }
 
+/**
+ * `<slot>` — the write-only shorthand for "fill this instance's slot".
+ *
+ * Not an element and never stored: it is a parse-time marker that `applyHtml`
+ * consumes (see fillInstance). It exists because an instance's interior has to
+ * match its master node for node, so filling a slot three levels down meant
+ * re-typing the component's whole skeleton on every page that used it — nine
+ * times for one funnel shell, each copy stale the moment the shell changed.
+ *
+ * The type is deliberately unspellable as an element (`@` is not a valid
+ * element type, and component names are capitalized), so it can never collide
+ * with a real one.
+ */
+export const SLOT_FILL_TYPE = '@slot'
+
 /** the HTML tag a node of this type is written as */
 export function tagForType(type: string): string {
   if (isComponentType(type)) return type
@@ -115,6 +130,9 @@ export function typeForTag(
     return { type: 'input' }
   }
   if (tag === 'div' && attrs['data-type'] === 'text') return { type: 'text' }
+  // the slot-fill marker, legal only as a component instance's single child —
+  // applyHtml refuses it anywhere else, by name
+  if (tag === 'slot') return { type: SLOT_FILL_TYPE }
 
   const known = TYPE_OF_TAG[tag]
   if (known) return { type: known }
@@ -148,8 +166,10 @@ export const FORBIDDEN_TAGS = new Set(['script', 'style', 'iframe', 'object', 'e
 /** does this element carry text rather than children? Registry-driven. */
 export const isLeafType = (type: string) => !isComponentType(type) && isLeafElement(type)
 
-/** is this a type the app can render at all? */
-export const isRenderableType = (type: string) => isComponentType(type) || isKnownElement(type)
+/** is this a type the app can render at all? (the slot-fill marker is not an
+ *  element, but the PARSER must let it through for applyHtml to act on) */
+export const isRenderableType = (type: string) =>
+  type === SLOT_FILL_TYPE || isComponentType(type) || isKnownElement(type)
 
 /**
  * `source` carries the collection an element iterates or embeds; `data-field`

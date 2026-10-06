@@ -299,6 +299,93 @@ const ids = (n: ElementNode) => { const out: string[] = []; walkNodes([n], (x) =
   ok(cycle.refused.some((r) => /can't hold itself/.test(r.message)), 'a component cannot hold itself')
 }
 
+// ---------- the <slot> shorthand ----------
+//
+// An instance's interior has to match its master node for node, so filling a
+// slot three levels down meant re-typing the component's whole skeleton on
+// every page that used it — nine times for one funnel shell, each copy stale
+// the moment the shell changed. `<Shell><slot>…</slot></Shell>` addresses the
+// slot alone and leaves every other part as it was.
+{
+  const p = fresh()
+  const defOf = (name: string) => ({
+    id: crypto.randomUUID(),
+    name,
+    root: { id: crypto.randomUUID(), type: name, content: '', children: [] },
+  })
+  const shell = defOf('Shell')
+  p.components.push(shell as never)
+  write(
+    p,
+    '<div class="flex min-h-screen flex-col">' +
+      '<header class="border-b"><span>Step 1 of 6</span></header>' +
+      '<main data-slot class="flex-1"><p>default</p></main>' +
+      '<footer class="border-t"><span>help</span></footer>' +
+      '</div>',
+    shell,
+  )
+  const slotOf = (def: any) => def.root.children[0].children[1]
+  ok(slotOf(shell).slot === true, 'the master container is marked as a slot')
+
+  // the shorthand: one child, and it fills the slot three levels down
+  const res = write(p, '<Shell data-ref="s1"><slot><h1>Your goal</h1><p>Pick one</p></slot></Shell>')
+  ok(res.refused.length === 0, `the shorthand is accepted (${res.refused[0]?.message ?? ''})`)
+  const inst = bodyOf(p).children[0]!
+  const filled = inst.children[0]!.children[1]!
+  ok(
+    filled.children.length === 2 && filled.children[0]!.type === 'h1',
+    `the slot holds what was written (${filled.children.map((c) => c.type).join(',')})`,
+  )
+  // and NOTHING else moved: the skeleton around the slot is still the
+  // master's, inherited rather than copied (an instance part carries no
+  // content of its own, which is why a shadowed copy would be a bug)
+  const skeleton = inst.children[0]!
+  ok(
+    skeleton.children.map((c) => c.type).join(',') === 'header,main,footer' &&
+      !skeleton.children[0]!.children[0]!.content,
+    `the skeleton around the slot is untouched (${skeleton.children.map((c) => c.type).join(',')})`,
+  )
+
+  // identity is carried across a second write, exactly as at any other level
+  const keptId = filled.children[0]!.id
+  const again = write(p, '<Shell data-ref="s1"><slot><h1>Your goal</h1><p>Pick two</p></slot></Shell>')
+  ok(again.refused.length === 0 && filled.children[0]!.id === keptId, 'a re-write keeps the slot children')
+
+  // a slot nobody can identify is refused, by name — never guessed at
+  const plain = defOf('Plain')
+  p.components.push(plain as never)
+  write(p, '<div class="p-4"><span>x</span></div>', plain)
+  const none = write(p, '<Plain><slot><h1>x</h1></slot></Plain>')
+  ok(
+    none.refused.some((r) => /has no slot/.test(r.message)),
+    `a component with no slot refuses the shorthand (${none.refused[0]?.message.slice(0, 50) ?? 'none'})`,
+  )
+
+  const two = defOf('Two')
+  p.components.push(two as never)
+  write(p, '<div><div data-slot><p>a</p></div><div data-slot><p>b</p></div></div>', two)
+  const ambiguous = write(p, '<Two><slot><h1>x</h1></slot></Two>')
+  ok(
+    ambiguous.refused.some((r) => /2 slots/.test(r.message)),
+    `two slots refuse the shorthand rather than guessing (${ambiguous.refused[0]?.message.slice(0, 50) ?? 'none'})`,
+  )
+
+  // and <slot> is a marker, not an element: anywhere else it is refused rather
+  // than stored as structure that renders nothing
+  const loose = write(p, '<section><slot><h1>x</h1></slot></section>')
+  ok(
+    loose.refused.some((r) => /only fills a component instance/.test(r.message)),
+    `a loose <slot> is refused (${loose.refused[0]?.message.slice(0, 50) ?? 'none'})`,
+  )
+  const mixed = write(p, '<Shell data-ref="s2"><div><slot><h1>x</h1></slot></div></Shell>')
+  ok(mixed.refused.length > 0, 'a <slot> beside written-out parts is refused')
+
+  // the READ still prints the real structure — the shorthand is write-only, so
+  // a round-trip of a read is unaffected
+  const html = pageToHtml(p.pages[0]!, p)
+  ok(!/<slot/.test(html), 'a page read never emits <slot>')
+}
+
 // ---------- validation reaches the result ----------
 {
   const p = fresh()

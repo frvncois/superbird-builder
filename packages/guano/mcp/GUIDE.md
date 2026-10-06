@@ -1401,6 +1401,24 @@ only), and the slot shows as a part (`slot: true`, with its id) in `parts`:
 
 or `edit_structure {pageId, ops: [{op: "insert", parent: "<slot id>", html: "…"}]}`.
 
+**Or address the slot alone, with `<slot>`.** When a component has exactly ONE slot,
+writing `<slot>` as the instance's only child fills it and leaves every other part as
+it was — no skeleton to re-type, nothing to keep in step when the component changes:
+
+```html
+<Shell data-ref="step-2">
+  <slot>
+    <h1 class="text-2xl font-semibold">What is your goal?</h1>
+    <p class="text-sm text-muted-foreground">Pick the one that fits best.</p>
+  </slot>
+</Shell>
+```
+
+It is a write-only shorthand: a read always prints the real structure. `<slot>` is
+refused anywhere else (beside written-out parts, or outside an instance), and a
+component with no slot or with two is refused by name rather than guessed at — with
+two, write the parts out so each slot is addressed by position.
+
 Rules: a slot is a container of the component's own (not its root, not a leaf, not an
 instance it holds, not inside one); a slot inside a slot is meaningless, since what is
 under a slot is not the component's. `detach_instance` keeps slot content as it is —

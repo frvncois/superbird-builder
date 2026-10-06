@@ -317,6 +317,44 @@ function buildVocabulary(): string[] {
     'backdrop-blur-none', 'backdrop-blur-sm', 'backdrop-blur', 'backdrop-blur-md',
     'backdrop-blur-lg', 'backdrop-blur-xl',
     'underline-offset-1', 'underline-offset-2', 'underline-offset-4', 'underline-offset-8',
+    // Utilities with no Style-panel control, which the validator refused — so
+    // every write carrying one came back "kept, but the Style panel has no
+    // control for it", once per element: sixteen identical lines in a single
+    // response. They render like any other class (every renderer uses
+    // node.classes verbatim), so refusing to recognise them bought nothing but
+    // noise, and rewriting `grid place-items-center` as
+    // `flex items-center justify-center` to silence it is a worse page.
+    'place-items-start', 'place-items-end', 'place-items-center', 'place-items-baseline',
+    'place-items-stretch',
+    'place-content-start', 'place-content-end', 'place-content-center', 'place-content-between',
+    'place-content-around', 'place-content-evenly', 'place-content-baseline',
+    'place-content-stretch',
+    'place-self-auto', 'place-self-start', 'place-self-end', 'place-self-center',
+    'place-self-stretch',
+    'justify-items-start', 'justify-items-end', 'justify-items-center', 'justify-items-stretch',
+    'justify-items-normal',
+    'justify-self-auto', 'justify-self-start', 'justify-self-end', 'justify-self-center',
+    'justify-self-stretch',
+    // how a headline breaks: `text-balance` is the one-class fix for a widow on
+    // a two-line title, `text-pretty` the same for body copy
+    'text-wrap', 'text-nowrap', 'text-balance', 'text-pretty',
+    'aspect-auto',
+    'isolate', 'isolation-auto',
+    'mix-blend-normal', 'mix-blend-multiply', 'mix-blend-screen', 'mix-blend-overlay',
+    'mix-blend-darken', 'mix-blend-lighten', 'mix-blend-difference', 'mix-blend-exclusion',
+    'mix-blend-luminosity', 'mix-blend-plus-lighter',
+    'will-change-auto', 'will-change-scroll', 'will-change-contents', 'will-change-transform',
+    // scroll snapping: the slider's own chrome is built from these, so the
+    // class input refused classes a renderer of ours emits
+    'scroll-auto', 'scroll-smooth',
+    'snap-none', 'snap-x', 'snap-y', 'snap-both', 'snap-mandatory', 'snap-proximity',
+    'snap-start', 'snap-center', 'snap-end', 'snap-align-none', 'snap-normal', 'snap-always',
+    'overscroll-auto', 'overscroll-contain', 'overscroll-none',
+    'touch-auto', 'touch-none', 'touch-pan-x', 'touch-pan-y', 'touch-manipulation',
+    'touch-pinch-zoom',
+    'hyphens-none', 'hyphens-manual', 'hyphens-auto',
+    'normal-nums', 'ordinal', 'slashed-zero', 'lining-nums', 'oldstyle-nums',
+    'proportional-nums', 'tabular-nums',
   ]
   common.forEach((c) => out.add(c))
   // grid placement — spans and explicit start/end lines
@@ -634,6 +672,27 @@ const ORIGIN_RE =
  * must not evict `flex` (it hides the box without changing its layout role) */
 const VISIBILITY_CLASSES = new Set(['visible', 'invisible', 'collapse'])
 
+/** the conflict groups for the utilities the Style panel has no control for
+ *  (see the vocabulary block): one key per CSS property, longest prefix first
+ *  so `place-self-*` is never read as a `place-*` of another kind */
+const PANEL_LESS_GROUPS: [RegExp, string][] = [
+  [/^place-items-/, 'place-items'],
+  [/^place-content-/, 'place-content'],
+  [/^place-self-/, 'place-self'],
+  [/^justify-items-/, 'justify-items'],
+  [/^justify-self-/, 'justify-self'],
+  [/^text-(?:wrap|nowrap|balance|pretty)$/, 'text-wrap'],
+  [/^aspect-/, 'aspect-ratio'],
+  [/^(?:isolate|isolation-auto)$/, 'isolation'],
+  [/^mix-blend-/, 'mix-blend-mode'],
+  [/^will-change-/, 'will-change'],
+  [/^scroll-(?:auto|smooth)$/, 'scroll-behavior'],
+  [/^snap-(?:none|x|y|both)$/, 'scroll-snap-type'],
+  [/^snap-(?:start|center|end|align-none)$/, 'scroll-snap-align'],
+  [/^overscroll-(?:auto|contain|none)$/, 'overscroll-behavior'],
+  [/^hyphens-/, 'hyphens'],
+]
+
 /**
  * A class is valid if every variant segment is known and the base is either
  * an arbitrary-value class (`p-[13px]`), a numeric flex (`flex-2`), in our
@@ -751,6 +810,12 @@ function propKey(base: string): StyleProperty | string | undefined {
   // one line-clamp at a time, and `truncate` is the one-line form of the same
   // thing — they cannot both apply, so adding one evicts the other
   if (base === 'truncate' || base.startsWith('line-clamp-')) return 'line-clamp'
+  // the panel-less families (added to the vocabulary above): grouped ONLY
+  // where the values are mutually exclusive, so adding one replaces the other
+  // instead of stacking. The ones that legitimately combine — `ordinal
+  // tabular-nums`, `touch-pan-x touch-pinch-zoom`, a snap axis beside a snap
+  // strictness — are deliberately left ungrouped.
+  for (const [re, prop] of PANEL_LESS_GROUPS) if (re.test(base)) return prop
   if (BG_POSITION_RE.test(base) || base.startsWith('bg-position-')) return 'background-position'
   if (base.startsWith('bg-') && !NON_COLOR_BG_RE.test(base)) return 'background-color'
   if (FONT_FAMILY_RE.test(base) || FONT_ARBITRARY_FAMILY_RE.test(base)) return 'font-family'
