@@ -2284,6 +2284,11 @@ is a capability the server runs, not something an agent writes into a page.
 url. Open it and look. It touches nothing live, needs no publish permission, and includes
 DRAFT pages — which a publish drops and which are exactly what you need while building.
 
+The url carries a **one-time access token and is good for an hour**: the preview port
+renders unpublished work, so it is not readable without it. Hand the whole url to the
+person, including its query string — a trimmed one gets them a 401. Expired, just call
+`preview` again.
+
 **Use it after every page.** Publishing is the only other way to render anything, and it
 puts bytes on the live origin: a half-built draft goes live every time you want to check a
 layout. Preview as you go, publish once at the end.

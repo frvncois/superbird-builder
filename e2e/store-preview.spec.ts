@@ -85,10 +85,14 @@ test('a preview renders to its own site, includes drafts, and leaves the live on
   expect(res.ok()).toBeTruthy()
   const body = (await res.json()) as { routes: number; bytes: number; url: string }
   expect(body.routes).toBe(2) // the draft is rendered too
-  expect(body.url).toMatch(/^http:\/\/[^/]+:\d+\/$/)
+  // the url now carries a one-time access token (see below)
+  expect(body.url).toMatch(/^http:\/\/[^/]+:\d+\/\?t=\d+\.[a-f0-9]{64}$/)
 
-  // the preview answers on its own port
-  const previewCtx = await pwRequest.newContext({ baseURL: body.url })
+  // the preview answers on its own port. Opening the link the editor was
+  // handed trades the token for a cookie, which the page's own asset requests
+  // then carry.
+  const previewCtx = await pwRequest.newContext({ baseURL: body.url.split('?')[0] })
+  expect((await previewCtx.get(body.url)).ok()).toBeTruthy()
   const home = await previewCtx.get('/')
   expect(home.ok()).toBeTruthy()
   expect(await home.text()).toContain('Live home')
@@ -116,4 +120,59 @@ test('a preview needs a session', async ({ baseURL }) => {
   const res = await anon.post('/api/preview', { data: snapshot() })
   expect(res.status()).toBe(401)
   await anon.dispose()
+})
+
+/**
+ * The preview port is not a public mirror of unpublished work.
+ *
+ * It binds every interface and authenticated nothing, so on any host without a
+ * firewall in front of it every draft page was readable by anyone who guessed
+ * the port — the one surface in the product that renders work explicitly not
+ * ready to ship. A session cookie cannot be the credential, because it is
+ * Secure by default and the preview is plain HTTP on another port, so in the
+ * hosted setup the browser would never send it. Hence a signed token in the
+ * URL the editor is handed, traded for a cookie scoped to the preview.
+ */
+test('the preview port is reachable only from the editor', async ({ baseURL }) => {
+  const admin = await pwRequest.newContext({ baseURL })
+  let res = await login(admin)
+  if (!res.ok()) {
+    res = await admin.post('/api/auth/setup', { data: { ...ADMIN, name: 'Smoke Co' } })
+    expect(res.ok()).toBeTruthy()
+  }
+  res = await admin.post('/api/preview', { data: snapshot() })
+  expect(res.ok()).toBeTruthy()
+  const { url } = (await res.json()) as { url: string }
+  const origin = url.split('?')[0]!
+
+  // cold, with no token and no cookie
+  const stranger = await pwRequest.newContext({ baseURL: origin })
+  const cold = await stranger.get('/')
+  expect(cold.status()).toBe(401)
+  expect(await cold.text()).toContain('open this preview from the editor')
+  // ...including the assets, or the markup would leak through a stylesheet
+  expect((await stranger.get('/assets/style.css')).status()).toBe(401)
+  // ...and a draft route, which is the content that matters here
+  expect((await stranger.get('/draft/')).status()).toBe(401)
+  // a forged token is not enough
+  expect((await stranger.get(`/?t=${Date.now() + 60_000}.${'0'.repeat(64)}`)).status()).toBe(401)
+  // nor is an expired one, however well signed it was
+  expect((await stranger.get('/?t=1.' + '0'.repeat(64))).status()).toBe(401)
+
+  // the editor's own link works, and leaves a cookie behind that the page's
+  // asset requests ride on
+  const visitor = await pwRequest.newContext({ baseURL: origin })
+  const opened = await visitor.get(url)
+  expect(opened.ok()).toBeTruthy()
+  expect(await opened.text()).toContain('Live home')
+  expect((await visitor.get('/assets/style.css')).ok()).toBeTruthy()
+  expect((await visitor.get('/draft/')).ok()).toBeTruthy()
+
+  // the editor and the API stay unreachable from here, cookie or not
+  expect((await visitor.get('/admin/')).status()).toBe(404)
+  expect((await visitor.get('/api/preview')).status()).toBe(404)
+
+  await stranger.dispose()
+  await visitor.dispose()
+  await admin.dispose()
 })

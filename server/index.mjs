@@ -279,6 +279,10 @@ async function readPublishConfig() {
     stripe: { secretKey: parsed?.stripe?.secretKey ?? '' },
     mailing: { apiKey: parsed?.mailing?.apiKey ?? '' },
     smtp: { password: parsed?.smtp?.password ?? '' },
+    // the key the preview port's access tokens are signed with. Generated on
+    // first preview; rotating it (delete the field) invalidates every open
+    // preview session.
+    preview: { secret: parsed?.preview?.secret ?? '' },
     // private site: the visitor password's scrypt hash + whether the gate is on
     site: {
       enabled: !!parsed?.site?.enabled,
@@ -341,6 +345,16 @@ const formLimits = {
   site: slidingLimiter(600, 3_600_000),
 }
 
+// The preview's twin of the live endpoint gets its OWN buckets. Sharing them
+// meant an unauthenticated flood on the preview port spent the published
+// site's per-form and site-wide submission budget.
+const previewFormLimits = {
+  perIpMinute: slidingLimiter(5, 60_000),
+  perIpHour: slidingLimiter(30, 3_600_000),
+  perForm: slidingLimiter(120, 3_600_000),
+  site: slidingLimiter(600, 3_600_000),
+}
+
 const publishedSettings = publishedSettingsReader(SNAPSHOT)
 
 /** the CORS decision for a public request, from the PUBLISHED settings */
@@ -383,7 +397,7 @@ const handleFormPost = createFormsHandler({
 const handlePreviewFormPost = createFormsHandler({
   manifest: previewForms,
   clientIp,
-  limits: formLimits,
+  limits: previewFormLimits,
   cors: () => ({ ok: true, headers: {} }),
   store: async () => ({ ok: true }),
   deliver: () => {},
@@ -1387,7 +1401,7 @@ async function handlePreview(req, res) {
     return send(
       res,
       200,
-      JSON.stringify({ ok: true, ...stats, url: previewOrigin(req) }),
+      JSON.stringify({ ok: true, ...stats, url: await previewOrigin(req) }),
     )
   } catch (err) {
     // Same rule as the publish catch, which this did not follow: a raw
@@ -1404,9 +1418,68 @@ async function handlePreview(req, res) {
 const previewPublished = (page) => (page.status === 'published' ? page : { ...page, status: 'published' })
 
 /** where the preview server answers: same host, PREVIEW_PORT */
-function previewOrigin(req) {
+/**
+ * Access control for the preview port.
+ *
+ * The preview server binds every interface and authenticated nothing, so on
+ * any host without a firewall in front of it every unpublished draft was
+ * public — the one surface in the product that renders work explicitly not
+ * ready to ship.
+ *
+ * A session cookie cannot be the credential here: it is `Secure` by default,
+ * and the preview is plain HTTP on another port, so in the hosted setup (admin
+ * behind HTTPS at a proxy) the browser would never send it. So POST
+ * /api/preview — which already needs a session — mints a short-lived signed
+ * token, the returned URL carries it, and the preview server exchanges it for
+ * a cookie scoped to itself. Opening a preview from the editor keeps working
+ * in every topology; reaching the port cold does not.
+ *
+ * This is NOT the agent publish policy, which the preview deliberately
+ * ignores: seeing your own work should never require shipping it.
+ */
+const PREVIEW_COOKIE = 'guano_preview'
+// An hour to open the link, then eight to work in. The link is handed to a
+// person (the MCP `preview` tool returns it for them to click), so the window
+// has to survive them finishing the sentence they were reading.
+const PREVIEW_TOKEN_TTL_MS = 60 * 60 * 1000
+const PREVIEW_COOKIE_TTL = 8 * 60 * 60 // ...then a working session
+
+let previewSecretCache = null
+async function previewSecret() {
+  if (previewSecretCache) return previewSecretCache
+  const cfg = await readPublishConfig()
+  if (!cfg.preview.secret) {
+    cfg.preview.secret = randomBytes(32).toString('hex')
+    await writeAtomic(PUBLISH_CONFIG, JSON.stringify(cfg))
+  }
+  previewSecretCache = cfg.preview.secret
+  return previewSecretCache
+}
+
+const sign = (secret, value) => createHmac('sha256', secret).update(value).digest('hex')
+
+async function mintPreviewToken() {
+  const exp = String(Date.now() + PREVIEW_TOKEN_TTL_MS)
+  return `${exp}.${sign(await previewSecret(), exp)}`
+}
+
+async function previewTokenValid(raw) {
+  const [exp, mac] = String(raw ?? '').split('.')
+  if (!exp || !mac || !(Number(exp) > Date.now())) return false
+  return timingSafeEqualStr(mac, sign(await previewSecret(), exp))
+}
+
+/** the cookie value — an HMAC of the secret, so rotating it signs everyone out */
+const previewCookie = (secret) => sign(secret, 'preview-cookie')
+
+async function previewUnlocked(req) {
+  const have = parseCookies(req)[PREVIEW_COOKIE] ?? ''
+  return !!have && timingSafeEqualStr(have, previewCookie(await previewSecret()))
+}
+
+async function previewOrigin(req) {
   const host = String(req.headers.host ?? `localhost:${port}`).split(':')[0]
-  return `http://${host}:${previewPort}/`
+  return `http://${host}:${previewPort}/?t=${await mintPreviewToken()}`
 }
 
 async function handlePost(req, res, params) {
@@ -2740,15 +2813,38 @@ let previewPort = 0
 const previewServer = createServer(async (req, res) => {
   beginRequest(req, res, newRequestId(), clientIp(req))
   try {
-    const path = normalize(decodeURIComponent(new URL(req.url, 'http://x').pathname))
+    const url = new URL(req.url, 'http://x')
+    const path = normalize(decodeURIComponent(url.pathname))
+    // never the editor, and never the API, token or no token
+    if (path === '/admin' || path.startsWith('/admin/') || path.startsWith('/api/')) {
+      return fail(res, 404, 'the preview server serves the exported site only')
+    }
+    // the one-time link from the editor, traded for a cookie so the page's
+    // own asset requests carry it
+    const token = url.searchParams.get('t')
+    if (token && (await previewTokenValid(token))) {
+      const secret = await previewSecret()
+      res.writeHead(303, {
+        location: path,
+        'set-cookie': `${PREVIEW_COOKIE}=${previewCookie(secret)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${PREVIEW_COOKIE_TTL}`,
+        'cache-control': 'no-store',
+        'x-robots-tag': 'noindex',
+      })
+      return res.end()
+    }
+    if (!(await previewUnlocked(req))) {
+      return send(
+        res,
+        401,
+        JSON.stringify({ error: 'open this preview from the editor' }),
+        'application/json',
+        { 'cache-control': 'no-store', 'x-robots-tag': 'noindex' },
+      )
+    }
     // the preview's own form endpoint: it validates exactly as the live one
     // does and then stores and sends NOTHING, so a draft form can be tried out
     // without putting a row in the real list
     if (isFormPath(path)) return await handlePreviewFormPost(req, res, path)
-    // never the editor, and never indexed — this is unfinished work
-    if (path === '/admin' || path.startsWith('/admin/') || path.startsWith('/api/')) {
-      return fail(res, 404, 'the preview server serves the exported site only')
-    }
     await serveSiteDir(req, res, PREVIEW)
   } catch (err) {
     log.error(err, { rid: req.rid })
