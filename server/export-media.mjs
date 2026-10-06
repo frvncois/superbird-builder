@@ -8,6 +8,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import sharp from 'sharp'
 import { sanitizeSvg } from './media.mjs'
+import { log } from './log.mjs'
 import { DATA_DIR, walkNodes } from './util.mjs'
 import { fontSrcRefs } from '../src/lib/shared/fonts.js'
 import { mediaRefsInRich } from '../src/lib/shared/richtext.js'
@@ -89,7 +90,7 @@ export async function extractMedia(project) {
       await writeFile(join(VARIANTS_DIR, name), out)
     } catch (err) {
       // an unwritable cache must not fail the export — it only costs time
-      console.warn(`export: could not cache media variant ${name}: ${err.message}`)
+      log.warn(`export: could not cache media variant ${name}: ${err.message}`)
     }
     return out
   }
@@ -140,7 +141,7 @@ export async function extractMedia(project) {
     const match = value.match(/^data:([^;,]+)(;base64)?,/)
     const ext = match && MIME_EXT[match[1]]
     if (!match || !ext) {
-      console.warn(`export: dropping media with unsupported mime ${match?.[1] ?? '?'}`)
+      log.warn(`export: dropping media with unsupported mime ${match?.[1] ?? '?'}`)
       paths.set(value, null)
       return
     }
@@ -222,14 +223,14 @@ export async function extractMedia(project) {
       const asset = assetsById.get(id)
       const ext = asset && MIME_EXT[asset.mime]
       if (!ext) {
-        console.warn(`export: dropping missing/unsupported media asset ${id}`)
+        log.warn(`export: dropping missing/unsupported media asset ${id}`)
         paths.set(ref, null)
         continue
       }
       try {
         store(ref, await readFile(join(MEDIA_LIB, 'files', id)), ext)
       } catch {
-        console.warn(`export: media asset ${id} has no file on disk — dropped`)
+        log.warn(`export: media asset ${id} has no file on disk — dropped`)
         paths.set(ref, null)
       }
     }

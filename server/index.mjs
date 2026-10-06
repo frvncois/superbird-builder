@@ -131,7 +131,7 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url))
 // data location resolution (env overrides, install-aware default) lives in
 // util.mjs — one home for index/auth/media/export-media
 if (!process.env.GUANO_DATA_DIR && process.env.SB_DATA_DIR) {
-  console.warn('SB_DATA_DIR is deprecated — use GUANO_DATA_DIR')
+  log.warn('SB_DATA_DIR is deprecated — use GUANO_DATA_DIR')
 }
 const SNAPSHOT = join(DATA_DIR, 'published.json')
 const SITE = join(DATA_DIR, 'site')
@@ -824,7 +824,7 @@ async function ensureProjectSeeded(name) {
     } catch (err) {
       // in the npm package the bundle always ships; in the repo it is
       // gitignored and built on demand, so a fresh clone lands here
-      console.error(
+      log.error(
         'could not seed the project: the editor-logic bundle is missing — run ' +
           '`npm run build:mcp-runtime`. The editor still creates the project on first open, ' +
           'but a headless (MCP-only) first run will fail until it exists. ' +
@@ -1293,8 +1293,12 @@ async function handlePreview(req, res) {
       JSON.stringify({ ok: true, ...stats, url: previewOrigin(req) }),
     )
   } catch (err) {
-    console.error(err)
-    return fail(res, 500, `preview export failed: ${err.message}`)
+    // Same rule as the publish catch, which this did not follow: a raw
+    // err.message from the exporter, sharp or the Tailwind compiler carries
+    // filesystem paths, so only an error explicitly marked safe is echoed.
+    log.error(err, { rid: req.rid })
+    if (err?.expose) return fail(res, 502, err.message)
+    return fail(res, 500, `preview export failed (ref ${req.rid}) — check the server logs`)
   }
 }
 
@@ -1416,7 +1420,7 @@ async function handlePost(req, res, params) {
     // full detail to the server log only; the client gets a generic
     // message (never leak fs paths / compiler internals in the response) —
     // except errors explicitly marked safe to expose (exporter / github push)
-    console.error(err)
+    log.error(err, { rid: req.rid })
     if (err?.expose) return fail(res, 502, err.message)
     fail(res, 500, 'export failed — check the server logs')
   }
@@ -2020,7 +2024,7 @@ async function applyPackage(raw) {
           return 'unrecognized package format'
         }
         if (m.format === LEGACY_PACKAGE_FORMAT) {
-          console.log('importing a legacy superbird-package backup (deprecated format)')
+          log.info('importing a legacy superbird-package backup (deprecated format)')
         }
         manifestOk = true
       } catch {
@@ -2187,7 +2191,7 @@ async function migrateStoreDir() {
     const to = 'guano-' + f.slice('superbird-'.length)
     if (existsSync(join(STORE_DIR, to))) continue
     await rename(join(STORE_DIR, f), join(STORE_DIR, to))
-    console.log(`store migration: ${f} -> ${to}`)
+    log.info(`store migration: ${f} -> ${to}`)
   }
   await migrateSchema()
   await migrateIntegrations()
@@ -2225,7 +2229,7 @@ async function migrateIntegrations() {
   const created = await seedLegacyIntegrations({ legacySecrets, legacySmtp })
   for (const row of created) {
     // by NAME, never a value
-    console.log(`integrations: carried "${row.name}" across (${row.keys.join(', ')})`)
+    log.info(`integrations: carried "${row.name}" across (${row.keys.join(', ')})`)
   }
 
   // drop the legacy secret namespaces from publish.json once they are stored
@@ -2259,7 +2263,9 @@ async function migrateIntegrations() {
     stripped++
   }
   if (stripped) {
-    console.log(`integrations: removed the legacy settings block from ${stripped} project blob(s)`)
+    log.info(
+      `integrations: removed the legacy settings block from ${stripped} project blob(s)`,
+    )
     storeSize.at = 0 // the blobs changed size; force a recount
   }
 }
@@ -2287,7 +2293,7 @@ async function migrateSchema() {
     // the bundle is gitignored in the repo and built on demand; the editor
     // migrates defensively on load, so a missing bundle delays this, never
     // breaks it
-    console.warn(
+    log.warn(
       'schema migration skipped: the editor-logic bundle is missing — run ' +
         '`npm run build:mcp-runtime`',
     )
@@ -2319,10 +2325,10 @@ async function migrateSchema() {
     try {
       await cp(STORE_DIR, backup, { recursive: true })
       if (existsSync(SNAPSHOT)) await cp(SNAPSHOT, join(backup, 'published.json'))
-      console.log(`schema migration: kept a copy of the store at ${backup}`)
+      log.info(`schema migration: kept a copy of the store at ${backup}`)
     } catch (err) {
       // no backup, no migration: the alternative is an irreversible rewrite
-      console.error(`schema migration ABORTED — could not back up the store: ${err.message}`)
+      log.error(`schema migration ABORTED — could not back up the store: ${err.message}`)
       return
     }
   }
@@ -2331,7 +2337,7 @@ async function migrateSchema() {
     const { report } = migrateProject(project)
     await writeAtomic(file, JSON.stringify(project))
     const line = describeMigration(label, report)
-    if (line) console.log(`schema migration: ${line}`)
+    if (line) log.info(`schema migration: ${line}`)
   }
   storeSize.at = 0 // the blobs shrank; force a recount rather than guess
 }
@@ -2511,8 +2517,13 @@ const server = createServer(async (req, res) => {
     }
     return await handleStatic(req, res)
   } catch (err) {
-    console.error(err)
-    fail(res, 500, 'internal error')
+    log.error(err, { rid: req.rid })
+    // The expose convention lived only in the publish catch, so an exporter or
+    // github error thrown from any other route was flattened into "internal
+    // error". The id is in the body so a user's screenshot can be joined to the
+    // stack trace in the log.
+    if (err?.expose) return fail(res, 502, err.message)
+    fail(res, 500, `internal error (ref ${req.rid})`)
   }
 })
 
@@ -2539,8 +2550,13 @@ const previewServer = createServer(async (req, res) => {
     }
     await serveSiteDir(req, res, PREVIEW)
   } catch (err) {
-    console.error(err)
-    fail(res, 500, 'internal error')
+    log.error(err, { rid: req.rid })
+    // The expose convention lived only in the publish catch, so an exporter or
+    // github error thrown from any other route was flattened into "internal
+    // error". The id is in the body so a user's screenshot can be joined to the
+    // stack trace in the log.
+    if (err?.expose) return fail(res, 502, err.message)
+    fail(res, 500, `internal error (ref ${req.rid})`)
   }
 })
 

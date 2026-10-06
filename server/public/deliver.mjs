@@ -19,6 +19,7 @@ import { lookup as dnsLookup } from 'node:dns/promises'
 import { resolveCapability } from '../capabilities.mjs'
 import { assertPublicUrl } from '../net-guard.mjs'
 import { sendMail } from '../smtp.mjs'
+import { log } from '../log.mjs'
 
 /** site-wide ceiling on notification mail, so a flood cannot turn the
  *  instance into a spam source (or exhaust a provider's quota). Past it, one
@@ -42,7 +43,7 @@ export function createDeliverer({ readConfig, adminUrl }) {
     // also to the log. The admin view shows this too, but a notification that
     // silently stopped working is how a month of leads goes unread — and the
     // operator reads logs long before they open the submissions modal.
-    if (!value.ok) console.warn(`forms: ${channel} failed for ${id}: ${value.error}`)
+    if (!value.ok) log.warn(`forms: ${channel} failed for ${id}: ${value.error}`)
   }
 
   function mailBudgetLeft() {
