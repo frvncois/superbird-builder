@@ -45,7 +45,7 @@ import {
 import { useLocale } from './useLocale'
 import { SAFE_SRC } from '@/lib/shared/urls.js'
 import { DEFAULT_ICON_SVG, parseInlineSvg, sanitizeInlineSvg } from '@/lib/shared/svg.js'
-import { isNodeHidden, resolveInstanceValue } from '@/lib/instances'
+import { isBareWrapper, isNodeHidden, resolveInstanceValue } from '@/lib/instances'
 import { variantClassesFor } from './useVariants'
 import type {
   CollectionEntry,
@@ -521,6 +521,24 @@ export function useRenderNode(
     return isChannelName(declared) ? declared : undefined
   })
 
+  /**
+   * Is anything AIMED at this node — a class effect or a tween — whether or not
+   * it is firing right now? A targeted instance wrapper has to emit a real
+   * element even while the effect is off, and `interactionCls` cannot say so:
+   * it is empty exactly then. (Evaluated lazily, like `scopeOfTarget` below.)
+   */
+  const targetedByEffect = computed(() => {
+    const keys = mapping.value
+      ? scopedTargetStateKeys(
+          mapping.value.master.id,
+          mapping.value.root,
+          scopeOfTarget,
+          listensOn.value,
+        )
+      : targetStateKeys(node.value.id, scopeOfTarget, listensOn.value)
+    return keys.length > 0 || animTargets.value.length > 0 || channelAnimTargets.value.length > 0
+  })
+
   const baseClasses = computed(() => {
     // the master's classes inside an instance, with the instance's variant
     // options layered on (lib/variants) — or the node's own
@@ -545,14 +563,23 @@ export function useRenderNode(
       : own
     // a bare component :Name wrapper is a logical grouping — render it
     // layout-transparent (display:contents) so it adds no box, matching the
-    // static export which emits no wrapper element at all. A styled/interactive
-    // wrapper stays a real box.
-    const bareComponentRoot =
-      /^[A-Z]/.test(node.value.type) &&
-      !own.trim() &&
-      !interactionCls &&
-      !(mapping.value ? mapping.value.master.animations : node.value.animations)?.length &&
-      !backgroundInfo.value
+    // static export which emits no wrapper element at all. A
+    // styled/interactive/targeted wrapper stays a real box.
+    //
+    // One shared predicate with the exporter and the published site: the two
+    // used to check DIFFERENT keys, and the exporter's version ran before
+    // attrsFor, so a wrapper it judged bare silently lost every attribute that
+    // call would have written (see isBareWrapper).
+    const bareComponentRoot = isBareWrapper(
+      node.value,
+      mapping.value ? mapping.value.master : node.value,
+      {
+        classes: own,
+        // anything aimed at it needs a real element, whether or not it is
+        // firing this frame — `interactionCls` is empty while the effect is off
+        targeted: targetedByEffect.value,
+      },
+    )
     return [
       // the body fills its frame/viewport column
       node.value.type === 'body' && 'flex-1',

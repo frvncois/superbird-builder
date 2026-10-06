@@ -2071,6 +2071,23 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
         (page ? repeatAncestor(page.elements ?? [], node.id) : null)
       if (typeof edit.channel !== 'string') {
         errors.push('channel must be a string ("" clears it)')
+      } else if (isComponentType(node.type) && edit.channel !== '') {
+        // Covers the master ROOT as well as an instance wrapper. `isWrapper`
+        // deliberately exempts the root (it legitimately takes classes, a
+        // background, an arg), but a channel is not style: the root emits no
+        // element of its own, so the listener's data-tgt has nowhere to land and
+        // the modal is dead on the published page. Every other writer already
+        // refused this — the HTML writer's setChannel, the Data panel's
+        // setElementChannel, validateTree — and this was the one way in, which
+        // then made every trigger bind succeed (channelListeners walks
+        // [component.root]) and publish's reachability check count it.
+        const first = (node.children ?? []).find((c) => !isComponentType(c.type))
+        errors.push(
+          `channel refused: <${node.type}> emits no element of its own, so it cannot listen on a ` +
+            `channel — declare it on an element INSIDE ${node.type}` +
+            (first ? ` (its <${first.type}>, the element the effect's classes land on)` : '') +
+            `, with edit_elements {componentId} or data-channel in update_component`,
+        )
       } else if (isWrapper) {
         errors.push(
           `channel refused: <${node.type}> emits no element of its own — declare the channel ` +
@@ -8003,6 +8020,18 @@ const tools = [
           ...(failures.length ? { failures } : {}),
           ...(!args.verbose && bound.length ? { bound } : {}),
           ...(args.verbose ? { results: results.filter((r) => !r.errors?.length) } : {}),
+          // What the tree says about itself after the write. A page edit's
+          // diagnostics were only ever reported by get_page and by a structure
+          // op, so an edit that left a page (or a MASTER — those were not
+          // validated here at all) in a state validateTree rejects answered
+          // `saved: true` and nothing else. Omitted when clean, like get_page's.
+          ...(() => {
+            const root = scopeDef
+              ? scopeDef.root
+              : (page.elements ?? []).find((n) => n.type === 'body')
+            const diagnostics = diagnose(project, root)
+            return diagnostics.length ? { diagnostics } : {}
+          })(),
         })
       }
 

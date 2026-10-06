@@ -13,6 +13,49 @@
 export const isComponentType = (type) => /^[A-Z]/.test(type)
 
 /**
+ * Does this `:Name` instance wrapper emit NO element of its own?
+ *
+ * A wrapper is a logical grouping, not a visual box: with nothing to say it
+ * renders its children inline (the exporter emits no tag at all; the canvas
+ * uses `display: contents`) so `header → component` stays a bare `<header>`
+ * rather than `<div><header>`.
+ *
+ * The RULE lives here because the three renderers each had their own version of
+ * it and they checked DIFFERENT things. The exporter tested own classes, the
+ * master's background and the master's declared interactions; the canvas tested
+ * own classes, the classes an interaction TARGETING it contributes, the
+ * master's animations and its background. The exporter's gaps were silent and
+ * total: it returns before `attrsFor` runs, so a wrapper it judged bare lost
+ * `data-tgt`, `data-anim` and its whole `ctx.fx` / `int-modal` registration.
+ * A channel declared on a master ROOT therefore published a modal that nothing
+ * could open, intermittently — adding one class to the root "fixed" it.
+ *
+ * `targeted` is the one part a caller must resolve, because "is anything aimed
+ * at this node" comes from a different index in each renderer.
+ *
+ * @param {object} node the wrapper (any node; false unless it is component-typed)
+ * @param {object} master the master root it stands for
+ * @param {{classes?: string, targeted?: boolean}} [state]
+ * @returns {boolean}
+ */
+export function isBareWrapper(node, master, state) {
+  if (!node || !isComponentType(node.type)) return false
+  if (((state && state.classes) || '').trim()) return false
+  if (!master) return true
+  if (master.background) return false
+  // a declared trigger, and a declared tween, both need an element to hang on
+  if (master.interactions && master.interactions.length) return false
+  if (master.animations && master.animations.length) return false
+  // a channel LISTENER needs an element to carry data-tgt and to wear the
+  // effect's classes. Tested as a non-empty string rather than a valid name on
+  // purpose: a misspelled channel should render a box and be reported by
+  // validateTree, never disappear.
+  if (typeof master.channel === 'string' && master.channel) return false
+  if (state && state.targeted) return false
+  return true
+}
+
+/**
  * @typedef {object} Mapping
  * @property {object} master      the master node this page node stands for —
  *                                where its classes, interactions and structure live

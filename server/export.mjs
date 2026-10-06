@@ -33,7 +33,12 @@ import {
 import { isRich, rewriteRichMedia, sanitizeRich } from '../src/lib/shared/richtext.js'
 import { backgroundRender, backgroundKindFromUrl } from '../src/lib/shared/background.js'
 import { DEFAULT_ICON_SVG, parseInlineSvg, sanitizeInlineSvg } from '../src/lib/shared/svg.js'
-import { buildInstanceMap, isNodeHidden, resolveInstanceValue } from '../src/lib/shared/instances.js'
+import {
+  buildInstanceMap,
+  isBareWrapper,
+  isNodeHidden,
+  resolveInstanceValue,
+} from '../src/lib/shared/instances.js'
 import { conflictingBaseClasses } from '../src/lib/shared/interactionClasses.js'
 import { buildScopeRoots, entryScopePart, bindingScope } from '../src/lib/shared/entryScope.js'
 import {
@@ -903,15 +908,26 @@ function renderNode(node, ctx) {
   const tag = def?.tag ?? 'div'
 
   // a component instance's :Name wrapper is a logical grouping, not a visual
-  // box — with no styling/background/interactions of its own it emits NO
-  // element (its children render inline), so `header → component` stays a
-  // bare <header>, not <div><header>. A styled/interactive wrapper stays real.
+  // box — with nothing of its own to say it emits NO element (its children
+  // render inline), so `header → component` stays a bare <header>, not
+  // <div><header>. A styled/interactive/targeted wrapper stays real.
+  //
+  // The predicate is shared (isBareWrapper) because this return happens BEFORE
+  // attrsFor: everything that call would have emitted for the wrapper —
+  // data-tgt, data-anim, its ctx.fx and int-modal registration — is discarded
+  // silently. A channel on a master ROOT published a modal nothing could open,
+  // and adding one class to the root made it work again.
   if (/^[A-Z]/.test(node.type)) {
-    const master = ctx.mm.get(node.id)?.master ?? node
-    const bare =
-      !ownClasses(node, ctx.mm.get(node.id)).trim() &&
-      !master.background &&
-      !(master.interactions?.length)
+    const mapping = ctx.mm.get(node.id)
+    const master = mapping?.master ?? node
+    const targeted = mapping
+      ? scopedTargets(mapping.root, mapping.master.id).length > 0 ||
+        scopedAnimTargets(mapping.root, mapping.master.id).length > 0
+      : (ctx.plainTargets.get(node.id) ?? []).length > 0
+    const bare = isBareWrapper(node, master, {
+      classes: ownClasses(node, mapping),
+      targeted,
+    })
     if (bare) return node.children.map((child) => renderNode(child, ctx)).join('')
   }
 

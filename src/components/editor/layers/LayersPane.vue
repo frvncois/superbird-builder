@@ -86,13 +86,19 @@ const { onKeydown } = useLayerSurface({
 // (they still arrive from agents, merges and older projects)
 
 const issues = computed(() => {
-  const page = activePage.value
-  const body = isPage.value ? page?.elements.find((n) => n.type === 'body') : null
-  if (!body) return []
   // ONE context builder, shared with the HTML writer's diagnostics — these
   // were two copies of the same lines, so a check added to one reported
   // nothing in the other
-  return validateTree(body, validateContext(project.value))
+  const ctx = validateContext(project.value)
+  if (isPage.value) {
+    const body = activePage.value?.elements.find((n) => n.type === 'body')
+    return body ? validateTree(body, ctx) : []
+  }
+  // A MASTER is a tree too, and it was validated NOWHERE: the board showed an
+  // empty footer however broken the component was, so a channel on a master
+  // root, a component holding itself or a misplaced list-empty only surfaced
+  // at publish, buried in a truncated warning list.
+  return roots.value.flatMap((root) => validateTree(root, ctx))
 })
 </script>
 

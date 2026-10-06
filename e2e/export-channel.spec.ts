@@ -294,3 +294,87 @@ test('a channel bound but listened to nowhere published is a publish warning', a
   const kinds = await s.kinds()
   expect(kinds).toContain('binding-target-unreachable')
 })
+
+// The hole that let a dead modal publish while every tool reported success:
+// `edit_elements`' wrapper refusal deliberately exempts the master ROOT (it
+// legitimately takes classes, a background, an arg), and nothing else in the
+// channel branch tested for it. The root emits no element of its own, so the
+// listener's `data-tgt` had nowhere to land — and because `channelListeners`
+// walks `[component.root]`, the root counted as a listener for the bind check
+// AND for publish's reachability warning. The HTML writer, the Data panel and
+// validateTree all already refused it.
+test('a channel on a component MASTER ROOT is refused, by name', async () => {
+  const s = await mcpSession()
+  const modal = await s.call('create_component', {
+    name: 'Sheet',
+    html: '<div class="fixed inset-0 hidden"><p>Hi</p></div>',
+  })
+  const root = modal.nodes.find((n: Node & { root?: boolean }) => n.root)
+  const bad = await s.call('edit_elements', {
+    componentId: modal.componentId,
+    edits: [{ id: root.id, channel: 'sheet' }],
+  })
+  expect(bad.failed).toBe(1)
+  expect(JSON.stringify(bad.failures)).toMatch(/emits no element of its own/)
+  // and it names where it DOES belong — the element the classes land on
+  expect(JSON.stringify(bad.failures)).toMatch(/INSIDE Sheet/)
+  expect(s.stored().components[0].root.channel).toBeUndefined()
+
+  // the element inside takes it
+  const panel = modal.nodes.find((n: Node & { root?: boolean }) => n.type === 'div' && !n.root)
+  expect(
+    (
+      await s.call('edit_elements', {
+        componentId: modal.componentId,
+        edits: [{ id: panel.id, channel: 'sheet' }],
+      })
+    ).failed,
+  ).toBe(0)
+})
+
+// The other half of the same bug, in the exporter: renderNode's "bare wrapper"
+// early return happens BEFORE attrsFor, so everything that call would have
+// written for the wrapper is discarded without a word. Its predicate tested own
+// classes, the master's background and the master's declared interactions —
+// not a channel, not animations, and not "is anything aimed at this". A
+// listener on a non-bare root worked and the same listener on a bare one did
+// not, so adding one class to the root "fixed" the modal.
+test('a wrapper that is a listener or a target still emits its element', async () => {
+  const { s, showId, headerId } = await withHeaderAndModal()
+  const home = await s.home()
+  await s.call('set_page_html', {
+    pageId: home.id,
+    version: home.version,
+    html: page('<Header />\n<StartModal />'),
+  })
+  const html = await s.html()
+  // the StartModal wrapper is bare (no classes of its own) — its CHILD is the
+  // listener, and that child's data-tgt must be on the route
+  const keys = listenKeys(html)
+  expect(keys.filter((k) => k.endsWith(':@start'))).toHaveLength(1)
+  expect(triggerKeys(html)).toEqual([`${showId}:@start`])
+  expect(Object.keys(fxMap(html))).toContain(`${showId}:@start`)
+
+  // now put the listener's own channel aside and make the WRAPPER the target of
+  // an ordinary in-master binding: the wrapper has no classes, so the old
+  // predicate judged it bare and dropped the data-tgt it should carry
+  const fx = await s.call('create_interactions', { items: [{ name: 'Lift', toClasses: 'opacity-100' }] })
+  const liftId: string = fx.created[0].id
+  const headerComp = (await s.call('list_components', { names: ['Header'], includeNodes: true }))
+    .components[0]
+  const btn = headerComp.nodes.find((n: Node) => n.type === 'button')
+  const headerRoot = headerComp.nodes.find((n: Node & { root?: boolean }) => n.root)
+  const bound = await s.call('edit_elements', {
+    componentId: headerId,
+    edits: [
+      {
+        id: btn.id,
+        bindInteractions: [{ interactionId: liftId, trigger: 'click', targetId: headerRoot.id }],
+      },
+    ],
+  })
+  expect(bound.failed).toBe(0)
+  const after = await s.html()
+  // the Header wrapper is the target, so the route must list its state key
+  expect(listenKeys(after).some((k) => k.startsWith(`${liftId}:`))).toBe(true)
+})

@@ -4,6 +4,7 @@ import {
   componentReaches as reaches,
   dependencyOrder as order,
   isInstanceWrapper as wrapper,
+  isBareWrapper as bareWrapper,
   nestedComponentNames as nested,
   buildInstanceMap as build,
   inheritedInstanceValue as inherited,
@@ -64,6 +65,14 @@ export const setNodeHidden = setHidden as (
 
 /** is this mapped node the `:Name` wrapper of its instance? */
 export const isInstanceWrapper = wrapper as (mapping: InstanceMapping | null | undefined) => boolean
+
+/** does this `:Name` wrapper emit no element of its own? One rule for all three
+ *  renderers — see the doc comment in shared/instances.js for why it is shared */
+export const isBareWrapper = bareWrapper as (
+  node: ElementNode,
+  master: ElementNode | null | undefined,
+  state?: { classes?: string; targeted?: boolean },
+) => boolean
 
 /** the components a component's master holds directly, by name */
 export const nestedComponentNames = nested as (def: ComponentDef) => string[]
