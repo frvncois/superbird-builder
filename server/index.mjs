@@ -16,7 +16,19 @@
 //         PUBLISH_TOKEN optionally allows CI publishes)
 
 import { createServer } from 'node:http'
-import { chmod, cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import {
+  access,
+  chmod,
+  cp,
+  mkdir,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises'
+import { constants as FS } from 'node:fs'
 import { existsSync, readFileSync } from 'node:fs'
 import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
 import { extname, join, normalize } from 'node:path'
@@ -51,6 +63,14 @@ import { createDeliverer } from './public/deliver.mjs'
 import { csvFilename, submissionsCsv } from './public/csv.mjs'
 import { allowedOrigins, corsFor, publishedSettingsReader } from './public/cors.mjs'
 import { publicIntegration } from '../src/lib/shared/integrations.js'
+import { log, newRequestId } from './log.mjs'
+import {
+  beginRequest,
+  exitRequestedDuringBoot,
+  installShutdown,
+  isShuttingDown,
+  withCritical,
+} from './lifecycle.mjs'
 import {
   DATA_DIR,
   fail,
@@ -164,6 +184,11 @@ const IMPORT_CAP = 512 * 1024 * 1024 // project package upload ceiling
 // nearest proxy; earlier entries are client-controlled and trivially spoofed.
 // Without a proxy the header must stay ignored, or anyone could mint fresh
 // "IPs" per request and bypass the limiter entirely.
+// What /api/health reports. Written once during boot(); read by the probe.
+// `migrated` can never be false through the socket, because boot() awaits the
+// migration before listening — which is exactly the property worth asserting.
+const bootState = { startedAt: Date.now(), migrated: false }
+
 const TRUST_PROXY = process.env.TRUST_PROXY === '1'
 function clientIp(req) {
   if (TRUST_PROXY) {
@@ -890,9 +915,82 @@ function broadcastStoreEvent(key, source) {
   for (const client of eventClients) client.write(payload)
 }
 
+/**
+ * GET /api/health — the one unauthenticated /api route.
+ *
+ * An orchestrator probe carries no credential, so requiring one would make the
+ * route useless. That constrains what it may say: no path (filesystem layout
+ * disclosure), no user count, no secret, and nothing from publish.json.
+ *
+ * It must also stay cheap, because something will poll it every second. So it
+ * checks that the data dir is WRITABLE without writing a probe file (which
+ * would be both heavy and a tmp-file leak generator, the bug class the boot
+ * sweep exists to clean up) and that the store dir is READABLE without parsing
+ * a blob (published.json is hundreds of KB; a JSON.parse per probe is real
+ * CPU). Reading the directory proves the mount is alive, which is the question.
+ *
+ * `status` is reported next to the HTTP code rather than derived from it: the
+ * code answers an orchestrator ("should I route here"), the status answers a
+ * human ("what is wrong"). 503 is reserved for the two states that make the
+ * instance unfit to serve — draining, and an unwritable data dir. An empty
+ * store is 200 degraded, or a fresh instance could never come up behind a load
+ * balancer.
+ */
+async function handleHealth(res) {
+  const checks = { dataDir: 'ok', store: 'ok' }
+  try {
+    await access(DATA_DIR, FS.W_OK)
+  } catch {
+    checks.dataDir = 'fail'
+  }
+  try {
+    checks.store = (await readdir(STORE_DIR)).some((f) => f.endsWith('.json')) ? 'ok' : 'empty'
+  } catch {
+    checks.store = checks.dataDir === 'fail' ? 'fail' : 'empty'
+  }
+
+  const stopping = isShuttingDown()
+  const unfit = stopping || checks.dataDir === 'fail'
+  const status = stopping ? 'stopping' : unfit || checks.store === 'empty' ? 'degraded' : 'ok'
+  return send(
+    res,
+    unfit ? 503 : 200,
+    JSON.stringify({
+      status,
+      ok: !unfit,
+      version: APP_VERSION,
+      uptime: Math.round((Date.now() - bootState.startedAt) / 1000),
+      migrated: bootState.migrated,
+      port,
+      previewPort,
+      checks,
+    }),
+    'application/json',
+    { 'cache-control': 'no-store' },
+  )
+}
+
+/** End every open change-feed response.
+ *
+ * These are long-lived by design and never finish on their own, so
+ * server.close() would wait on them for the whole shutdown deadline. Told
+ * explicitly, the editor's EventSource reconnects against the next process. */
+function closeEventClients() {
+  for (const client of eventClients) {
+    try {
+      client.write('event: shutdown\ndata: {}\n\n')
+      client.end()
+    } catch {
+      // already gone — the per-client close handler cleans up the Set
+    }
+  }
+  eventClients.clear()
+}
+
 function handleEvents(req, res) {
   const user = requestUser(req)
   if (!user) return fail(res, 401, 'unauthorized')
+  if (isShuttingDown()) return fail(res, 503, 'server is restarting')
   res.writeHead(200, {
     'content-type': 'text/event-stream',
     'cache-control': 'no-cache',
@@ -925,6 +1023,10 @@ const sha256Hex = (s) => createHash('sha256').update(s).digest('hex')
 const storeKeyLocks = new Map()
 
 async function withStoreKeyLock(key, fn) {
+  return withCritical(`store:${key}`, () => withStoreKeyLockInner(key, fn))
+}
+
+async function withStoreKeyLockInner(key, fn) {
   const prior = storeKeyLocks.get(key) ?? Promise.resolve()
   let release
   const held = new Promise((resolve) => {
@@ -1175,12 +1277,16 @@ async function handlePreview(req, res) {
     // A preview exports EVERY page, published or not: it is the surface for
     // looking at work in progress, and a draft page you cannot see is the thing
     // you most need to. The live export still drops unpublished pages.
-    const stats = await exportSite(
-      { ...parsed, pages: parsed.pages.map(previewPublished) },
-      PREVIEW,
-      { integrations: await readIntegrations() },
-    )
-    await writeFormsManifest(PREVIEW_FORMS_MANIFEST, stats.forms, parsed)
+    const integrations = await readIntegrations()
+    const stats = await withCritical('preview', async () => {
+      const s = await exportSite(
+        { ...parsed, pages: parsed.pages.map(previewPublished) },
+        PREVIEW,
+        { integrations },
+      )
+      await writeFormsManifest(PREVIEW_FORMS_MANIFEST, s.forms, parsed)
+      return s
+    })
     return send(
       res,
       200,
@@ -1282,11 +1388,15 @@ async function handlePost(req, res, params) {
   // exported site stays live (atomic swap inside exportSite). Every method
   // exports once, so the local site at `/` refreshes regardless of method.
   try {
-    const stats = await exportSite(parsed, SITE, { integrations: await readIntegrations() })
-    // the manifest the public endpoint validates against, written only after a
-    // successful export — a failed publish must never leave one pointing at
-    // pages that did not ship
-    await writeFormsManifest(FORMS_MANIFEST, stats.forms, parsed)
+    const integrations = await readIntegrations()
+    const stats = await withCritical('publish', async () => {
+      const s = await exportSite(parsed, SITE, { integrations })
+      // the manifest the public endpoint validates against, written only after
+      // a successful export — a failed publish must never leave one pointing
+      // at pages that did not ship
+      await writeFormsManifest(FORMS_MANIFEST, s.forms, parsed)
+      return s
+    })
     if (method === 'zip') {
       const zip = createZip(await readDirFiles(SITE))
       return send(res, 200, zip, 'application/zip', {
@@ -1296,7 +1406,9 @@ async function handlePost(req, res, params) {
       })
     }
     if (method === 'github') {
-      const { commit } = await pushSiteToGitHub(SITE, github)
+      const { commit } = await withCritical('publish:github', () =>
+        pushSiteToGitHub(SITE, github),
+      )
       return send(res, 200, JSON.stringify({ ok: true, ...stats, commit }))
     }
     send(res, 200, JSON.stringify({ ok: true, ...stats }))
@@ -1943,7 +2055,8 @@ async function applyPackage(raw) {
   // keeps a throw anywhere below from stranding a full copy of the store and
   // media library in the data dir forever.
   const tmp = join(DATA_DIR, `import.tmp-${Date.now()}`)
-  try {
+  return await withCritical('restore', async () => {
+   try {
     const tmpStore = join(tmp, 'store')
     const tmpMedia = join(tmp, 'media')
     await mkdir(tmpStore, { recursive: true })
@@ -1961,9 +2074,10 @@ async function applyPackage(raw) {
     resetMediaIndexCache() // make imported media visible without a restart
     resetIntegrationsCache() // the restored store may carry a legacy settings.smtp
     return null
-  } finally {
+   } finally {
     await rm(tmp, { recursive: true, force: true }).catch(() => {})
-  }
+   }
+  })
 }
 
 // ---------- 🔒 /api/snapshots (server-kept project packages) ----------
@@ -2017,8 +2131,8 @@ async function handleSnapshots(req, res, path) {
     if (req.method === 'POST') {
       const id = new Date().toISOString().replace(/:/g, '-').replace('.', '-')
       await mkdir(BACKUPS_DIR, { recursive: true })
-      const zip = await buildPackage()
-      await writeFile(join(BACKUPS_DIR, `${id}.zip`), zip)
+      const zip = await withCritical('snapshot', () => buildPackage())
+      await writeAtomic(join(BACKUPS_DIR, `${id}.zip`), zip)
       return send(res, 200, JSON.stringify({ id, createdAt: Date.now(), bytes: zip.length, name: '' }))
     }
     return fail(res, 404, 'not found')
@@ -2316,6 +2430,7 @@ async function serveSiteDir(req, res, root) {
 }
 
 const server = createServer(async (req, res) => {
+  beginRequest(req, res, newRequestId(), clientIp(req))
   try {
     const url = new URL(req.url, 'http://x')
     const path = url.pathname
@@ -2331,6 +2446,10 @@ const server = createServer(async (req, res) => {
       }
       return await handleFormPost(req, res, path)
     }
+    // Unauthenticated on purpose, and placed here so a probe at 1Hz costs one
+    // string compare rather than a walk down the whole chain. After the public
+    // forms namespace, which stays the first thing read.
+    if (path === '/api/health' && req.method === 'GET') return await handleHealth(res)
     // CSRF defense-in-depth (on top of the SameSite=Lax cookie): every
     // mutating API request must be same-origin. Non-browser clients send no
     // Origin header and pass — the CI bearer publish keeps working.
@@ -2407,6 +2526,7 @@ const PREVIEW_PORT = Number(process.env.GUANO_PREVIEW_PORT) || 0
 let previewPort = 0
 
 const previewServer = createServer(async (req, res) => {
+  beginRequest(req, res, newRequestId(), clientIp(req))
   try {
     const path = normalize(decodeURIComponent(new URL(req.url, 'http://x').pathname))
     // the preview's own form endpoint: it validates exactly as the live one
@@ -2435,61 +2555,146 @@ const previewServer = createServer(async (req, res) => {
 const PORT_EXPLICIT = Boolean(process.env.PORT)
 const PORT_STRICT = process.env.PORT_STRICT === '1' || process.env.PORT_STRICT === 'true'
 const PORT_TRIES = PORT_EXPLICIT || PORT_STRICT ? 1 : 10
+const BOOT_TIMEOUT_MS = Number(process.env.BOOT_TIMEOUT_MS) || 60_000
 let port = PORT
 
-server.on('error', (err) => {
-  if (err.code === 'EADDRINUSE') {
-    if (port - PORT + 1 < PORT_TRIES) {
-      port++
-      server.listen(port)
-      return
-    }
-    console.error(
-      PORT_EXPLICIT || PORT_STRICT
-        ? `port ${PORT} is already in use — stop the other process or pick another PORT`
-        : `ports ${PORT}–${port} are all in use — set PORT to a free one`,
-    )
-  } else {
-    console.error(`could not start the server: ${err.message}`)
-  }
-  process.exit(1)
-})
-
-server.listen(port, async () => {
+/**
+ * Everything that must finish before the socket accepts a single request.
+ *
+ * The schema migration is the reason this is not in the listen callback any
+ * more: it is a ONE-WAY rewrite of every blob on the instance, and it used to
+ * run inside an `async` callback nobody awaited — so the server was already
+ * serving while blobs were being rewritten under it, outside the per-key lock.
+ * A request landing in that window could read a half-migrated store.
+ *
+ * A throw here is fatal on purpose. Refusing to start is the correct answer to
+ * "the one-way migration did not complete"; serving an unmigrated store is not.
+ */
+async function boot() {
   // owner-only data dir: one chmod at the root protects every secret beneath
   // (users/sessions/invites/publish.json) even for files written pre-upgrade
   try {
     await mkdir(DATA_DIR, { recursive: true, mode: 0o700 })
     await chmod(DATA_DIR, 0o700)
   } catch (err) {
-    console.warn('could not restrict data dir permissions:', err.message)
+    log.warn('could not restrict data dir permissions:', err.message)
   }
+  await sweepDataDir()
   await migrateStoreDir()
-  // Retention is a real obligation, not housekeeping: submissions are other
-  // people's names and email addresses kept on someone else's server. Pruned
-  // at boot and once a day; `unref` so it never holds the process open.
-  const pruneSubmissions = async () => {
-    try {
-      const { retentionDays } = (await readPublishConfig()).forms
-      const { pruned } = await submissionStore.prune(retentionDays)
-      if (pruned) console.log(`forms: pruned ${pruned} submission(s) past ${retentionDays} days`)
-    } catch (err) {
-      console.warn('forms: retention prune failed:', err.message)
-    }
+  bootState.migrated = true
+  await runRetention()
+  // `unref` so a timer never holds the process open against a shutdown
+  setInterval(runRetention, 24 * 60 * 60 * 1000).unref()
+}
+
+/** Remove the debris of a swap that was killed mid-flight. Age-gated — see
+ * sweepStaleDirs: two instances can share a data dir, so a young staging
+ * directory may belong to a publish the other one is running right now. */
+async function sweepDataDir() {
+  try {
+    const dirs = await sweepStaleDirs(DATA_DIR, ['site', 'preview', 'import', 'store', 'media'])
+    const files = await sweepOrphanTmpFiles([DATA_DIR, STORE_DIR, BACKUPS_DIR, FORMS_DIR])
+    if (dirs) log.info(`boot: swept ${dirs} stale temp dir(s)`)
+    if (files) log.info(`boot: swept ${files} orphan temp file(s)`)
+  } catch (err) {
+    log.warn(`boot: sweep failed: ${err.message}`)
   }
-  await pruneSubmissions()
-  setInterval(pruneSubmissions, 24 * 60 * 60 * 1000).unref()
+}
+
+/** Retention is three separate obligations, so three separate try/catches: one
+ * failing must never skip the others. Submissions are other people's names and
+ * email addresses kept on someone else's server; the other two are this
+ * operator's own disk. */
+async function runRetention() {
+  try {
+    const { retentionDays } = (await readPublishConfig()).forms
+    const { pruned } = await submissionStore.prune(retentionDays)
+    if (pruned) log.info(`forms: pruned ${pruned} submission(s) past ${retentionDays} days`)
+  } catch (err) {
+    log.warn('forms: retention prune failed:', err.message)
+  }
+}
+
+/**
+ * Listen on `first`, walking up to `tries` ports when it is busy.
+ *
+ * The retry is a `listen()` INSIDE this promise rather than a re-entry of the
+ * boot path, which is what makes "the one-way migration cannot run twice" true
+ * by construction instead of by discipline.
+ */
+function listenWalking(srv, first, tries) {
+  return new Promise((resolve, reject) => {
+    let attempt = first
+    const onError = (err) => {
+      if (err.code === 'EADDRINUSE' && attempt - first + 1 < tries) {
+        attempt++
+        srv.listen(attempt)
+        return
+      }
+      srv.off('listening', onListening)
+      reject(err)
+    }
+    const onListening = () => {
+      srv.off('error', onError)
+      resolve(srv.address().port)
+    }
+    srv.on('error', onError)
+    srv.once('listening', onListening)
+    srv.listen(attempt)
+  })
+}
+
+async function main() {
+  // A boot that hangs now hangs the socket too, so say which stage is stuck
+  // rather than leaving an operator (or the e2e webServer poll) guessing.
+  const watchdog = setTimeout(() => {
+    log.error(`boot: still running after ${BOOT_TIMEOUT_MS}ms — the socket is NOT open yet`)
+  }, BOOT_TIMEOUT_MS)
+  watchdog.unref()
+  await boot()
+  clearTimeout(watchdog)
+  // a signal that arrived during the migration: let it finish its current
+  // blob (migrateSchema is idempotent, so the next boot resumes), then go
+  if (exitRequestedDuringBoot()) process.exit(0)
+
+  try {
+    port = await listenWalking(server, PORT, PORT_TRIES)
+  } catch (err) {
+    log.error(
+      err.code === 'EADDRINUSE'
+        ? PORT_EXPLICIT || PORT_STRICT
+          ? `port ${PORT} is already in use — stop the other process or pick another PORT`
+          : `ports ${PORT}–${PORT + PORT_TRIES - 1} are all in use — set PORT to a free one`
+        : `could not start the server: ${err.message}`,
+    )
+    process.exit(1)
+  }
+
+  // steady state: the walk is over, so no handler here can exit the process
+  server.on('error', (err) => {
+    if (isShuttingDown()) return
+    log.error(`server error: ${err.message}`)
+  })
+
   // the preview site, on its own port. A failure here is never fatal: it is a
   // convenience, and the editor and the live site must come up regardless.
+  // Registered BEFORE listen, or an immediate EADDRINUSE would be unhandled.
   previewServer.once('error', (err) => {
-    console.warn(`preview server unavailable (${err.message}) — /api/preview will still export`)
+    if (isShuttingDown()) return
+    log.warn(`preview server unavailable (${err.message}) — /api/preview will still export`)
     previewPort = 0
   })
   previewServer.listen(PREVIEW_PORT || port + 1, () => {
     previewPort = previewServer.address().port
   })
+
+  installShutdown({ servers: [server, previewServer], beforeClose: closeEventClients })
+  printBanner()
+}
+
+function printBanner() {
   const base = `http://localhost:${port}`
-  console.log(`
+  log.banner(`
   guano is running${TOKEN ? ' (publish token required)' : ''}
 
   ➜ editor:  ${base}/admin
@@ -2499,7 +2704,7 @@ server.listen(port, async () => {
 ${needsSetup() ? `\n  first run — open ${base}/admin to create your admin account\n` : ''}`)
   // Last thing printed, because it is the thing that will waste your day.
   if (port !== PORT) {
-    console.warn(`  ⚠  PORT ${PORT} WAS BUSY — THIS SERVER IS ON ${port}
+    log.banner(`  ⚠  PORT ${PORT} WAS BUSY — THIS SERVER IS ON ${port}
 
      Another process is still listening on ${PORT}, and everything that
      addresses guano by its default port goes THERE, not here:
@@ -2514,4 +2719,6 @@ ${needsSetup() ? `\n  first run — open ${base}/admin to create your admin acco
        lsof -nP -iTCP:${PORT} -sTCP:LISTEN
 `)
   }
-})
+}
+
+void main()

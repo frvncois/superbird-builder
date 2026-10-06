@@ -3,15 +3,14 @@ import { ImagePlus, Plus, X } from 'lucide-vue-next'
 
 // A square upload tile for icons and logos: the tile IS the control. Empty, it
 // is a dashed drop zone; filled, it previews the image at the size it will be
-// seen and a click replaces it, a corner × clears it. `scheme` previews a
-// dark-mode variant on a dark ground so the two can be told apart at a glance.
+// seen and a click replaces it, a corner × clears it. Every tile sits on the
+// editor's own input surface — the light/dark favicon pair used to preview on a
+// white and a near-black ground, which made two controls doing the same job
+// look like two different controls.
 withDefaults(
   defineProps<{
     label?: string
     accept?: string
-    /** favicon previews: a white or near-black ground, as the browser tab shows it;
-     * unset, the tile sits on the editor's own input surface */
-    scheme?: 'light' | 'dark'
     /** a 16:9 tile for images shown wide (OG image, covers): the picture
      * fills it and the remove action reads as a label on hover */
     wide?: boolean
@@ -36,15 +35,10 @@ function onFile(e: Event) {
 <template>
   <div class="flex flex-col gap-1.5" :class="wide ? 'w-full' : 'items-center'">
     <label
-      class="group relative flex cursor-pointer items-center justify-center overflow-hidden rounded-xl border transition-colors"
+      class="group relative flex cursor-pointer items-center justify-center overflow-hidden rounded-xl border bg-input/40 transition-colors"
       :class="[
         wide ? 'aspect-video w-full max-w-64' : 'size-16',
         model ? 'border-input' : 'border-dashed border-input hover:border-foreground/40',
-        scheme === 'dark'
-          ? 'bg-neutral-900 text-neutral-100'
-          : scheme === 'light'
-            ? 'bg-white text-neutral-900'
-            : 'bg-input/40',
       ]"
       v-tooltip="model ? 'Replace' : undefined"
     >

@@ -35,7 +35,16 @@ export default defineConfig({
     // shares one socket address — so the limiter, not the endpoint, is what a
     // forms spec would end up measuring. Harmless for every other spec: with
     // no XFF header, clientIp falls back to the socket address exactly as before.
-    env: { GUANO_DATA_DIR: DATA_DIR, PORT: String(PORT), TRUST_PROXY: '1' },
+    // LOG_LEVEL=warn silences the per-request access line. `stdout: 'pipe'`
+    // means every one of them would print between the test rows, which buries
+    // the result; warnings and errors still come through, which is what a
+    // failing run needs. Drop this to `info` while debugging a spec.
+    env: {
+      GUANO_DATA_DIR: DATA_DIR,
+      PORT: String(PORT),
+      TRUST_PROXY: '1',
+      LOG_LEVEL: 'warn',
+    },
     port: PORT,
     reuseExistingServer: false,
     timeout: 60_000,
