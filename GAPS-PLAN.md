@@ -26,9 +26,8 @@ implementation that drops the rule is worse than no implementation.
    with the attribution line the session's system reminder gives.
 2. **Gates.** `npm run type-check` after every code change. `npm run check:html` after
    anything in `src/lib/html/` or `src/lib/shared/`. `npm run check:mcp` after any tool
-   description or `inputSchema` edit — it has **224 bytes of headroom**; trim prose
-   elsewhere (the `closeOn`/`group`/`once` descriptions are the fat), never raise the
-   budget. `npm run build && npm run test:e2e` at the end of each phase (full suite,
+   description or `inputSchema` edit — the budget is **80,000 B** (raised from 70,000 for this plan, ~10 KB of
+   headroom); keep descriptions to WHAT and WHEN, explanation goes in GUIDE.md. `npm run build && npm run test:e2e` at the end of each phase (full suite,
    314 tests; it takes ~3 minutes).
 3. **The corpus referee.** `npm run check:corpus` is green now. V13a and V13b each change
    the rendered HTML of every image on purpose; after each, READ the diff (`check:corpus`
@@ -326,8 +325,7 @@ Note the asymmetry in CLAUDE.md.
   writing `effect.modal`.
 - `tools.mjs` `create_interactions` (`:8261`) and `update_interaction` (`:8335`):
   `modal: {type: 'boolean', description: 'locks scroll, traps focus, sets aria-modal while on'}`.
-  Two short descriptions ≈ 180 B of the 224 B headroom — run `check:mcp`; if over, shorten
-  the `closeOn` description, which currently restates GUIDE.
+  Run `check:mcp` as always.
 - `list_interactions` output carries `modal` when set.
 
 ### 3.7 Spec — `e2e/interactions.spec.ts` (browser)
@@ -474,7 +472,7 @@ example (`sizes="(min-width: 768px) 33vw, 100vw"`).
 npm run type-check
 npm run check:html
 npm run check:migrate
-npm run check:mcp          # ≤ 70,000 B
+npm run check:mcp          # ≤ 80,000 B
 npm run check:corpus       # byte-identical against the baseline saved in 1.5 / 5.4
 npm run build && npm run test:e2e
 ```

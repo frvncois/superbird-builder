@@ -18,8 +18,15 @@ import { createToolSet, GUIDE_INSTRUCTIONS } from '../packages/guano/mcp/tools.m
  * JSON structure (keys, types, enums) before a word of prose. That part is not
  * compressible without dropping the shapes an agent needs to get a call right
  * the first time, so this is close to the floor at the current tool count.
+ *
+ * Raised 70,000 → 80,000 on 2026-10-05 (the reason: V10–V13 in GAPS-PLAN.md add
+ * a channel target, a modal flag and a count-track format, and the list sat 224
+ * bytes under the old line). Lazy tool loading via tools/list_changed was
+ * weighed and set aside: no client capability says a client honours the
+ * notification, so one that caches the first list would call tools it cannot
+ * see. ~2,500 more tokens per turn if the room is used; the discipline stays.
  */
-const BUDGET = 70_000
+const BUDGET = 80_000
 
 const runtime = await import('../packages/guano/runtime/mcp-runtime.mjs').catch(() => null)
 if (!runtime) {
