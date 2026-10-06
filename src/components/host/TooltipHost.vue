@@ -44,9 +44,14 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
+  <!-- a stable id and role, so the trigger can point at this with
+       aria-describedby: without them the label was drawn for sighted users
+       and did not exist for anyone else -->
   <span
     v-if="active"
+    id="guano-tooltip"
     ref="labelEl"
+    role="tooltip"
     class="pointer-events-none fixed z-110 rounded-xl border border-input bg-background px-4 py-2 font-mono text-[10px] tracking-wider whitespace-nowrap"
     :style="style"
   >
