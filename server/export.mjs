@@ -3,10 +3,10 @@
 // no Vue; rendering semantics mirror src/components/site/PublicRenderer.vue
 // (the SPA dev preview), which is the source of truth for behavior.
 
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { withStagingDir } from './util.mjs'
 import { compile, optimize } from '@tailwindcss/node'
 // Element registry shared verbatim with the client (src/lib/elements.ts
 // re-exports this same module) — one source of truth, no drift.
@@ -1826,72 +1826,65 @@ export async function exportSite(rawProject, outDir, { integrations } = {}) {
     // only fatal if a page actually carries a slider — checked below
   }
 
-  const tmp = `${outDir}.tmp-${Date.now()}`
-  await mkdir(tmp, { recursive: true })
-
-  const tmpAbs = resolve(tmp)
-  let bytes = 0
-  const write = async (rel, data) => {
-    const file = join(tmp, rel)
-    // hard backstop: never write outside the output dir, whatever the
-    // (server-untrusted) page path / locale / collection name contained
-    if (file !== tmpAbs && !file.startsWith(tmpAbs + sep)) {
-      throw new Error(`export: refusing to write outside the output dir (${rel})`)
+  return await withStagingDir(outDir, async (tmp) => {
+    const tmpAbs = resolve(tmp)
+    let bytes = 0
+    const write = async (rel, data) => {
+      const file = join(tmp, rel)
+      // hard backstop: never write outside the output dir, whatever the
+      // (server-untrusted) page path / locale / collection name contained
+      if (file !== tmpAbs && !file.startsWith(tmpAbs + sep)) {
+        throw new Error(`export: refusing to write outside the output dir (${rel})`)
+      }
+      await mkdir(dirname(file), { recursive: true })
+      await writeFile(file, data)
+      bytes += typeof data === 'string' ? Buffer.byteLength(data) : data.length
     }
-    await mkdir(dirname(file), { recursive: true })
-    await writeFile(file, data)
-    bytes += typeof data === 'string' ? Buffer.byteLength(data) : data.length
-  }
 
-  await write('assets/style.css', css)
-  await write('assets/script.js', runtime)
-  await write('404.html', renderNotFound(project, media.rewrite))
-  for (const [rel, buffer] of media.files) await write(rel, buffer)
+    await write('assets/style.css', css)
+    await write('assets/script.js', runtime)
+    await write('404.html', renderNotFound(project, media.rewrite))
+    for (const [rel, buffer] of media.files) await write(rel, buffer)
 
-  const routes = enumerateRoutes(project)
-  // Channel bindings are PROJECT-wide, not route-wide: a listener on route A
-  // has to carry the key a trigger declares in a component route B renders.
-  // Built once, outside the route loop, and read by every listener.
-  const channels = buildChannelIndex(project)
-  const written = new Set()
-  // render before writing: whether any route plays an animation decides
-  // whether the tween runtime ships at all
-  let usesMotion = false
-  let usesSlider = false
-  const rendered = []
-  const manifest = {}
-  for (const route of routes) {
-    if (written.has(route.outPath)) continue // page paths win over entry collisions
-    written.add(route.outPath)
-    const { html, forms, route: routePath } = renderPage(route, project, media, channels)
-    if (!usesMotion && html.includes('/assets/motion.js')) usesMotion = true
-    if (!usesSlider && html.includes('/assets/slider.js')) usesSlider = true
-    collectManifest(manifest, forms, routePath, route)
-    rendered.push([route.outPath, html])
-  }
-  if (usesMotion) {
-    if (!motionRuntime) {
-      throw new Error(
-        'motion runtime missing — run `npm run build:motion` to rebuild server/motion-runtime.js',
-      )
+    const routes = enumerateRoutes(project)
+    // Channel bindings are PROJECT-wide, not route-wide: a listener on route A
+    // has to carry the key a trigger declares in a component route B renders.
+    // Built once, outside the route loop, and read by every listener.
+    const channels = buildChannelIndex(project)
+    const written = new Set()
+    // render before writing: whether any route plays an animation decides
+    // whether the tween runtime ships at all
+    let usesMotion = false
+    let usesSlider = false
+    const rendered = []
+    const manifest = {}
+    for (const route of routes) {
+      if (written.has(route.outPath)) continue // page paths win over entry collisions
+      written.add(route.outPath)
+      const { html, forms, route: routePath } = renderPage(route, project, media, channels)
+      if (!usesMotion && html.includes('/assets/motion.js')) usesMotion = true
+      if (!usesSlider && html.includes('/assets/slider.js')) usesSlider = true
+      collectManifest(manifest, forms, routePath, route)
+      rendered.push([route.outPath, html])
     }
-    await write('assets/motion.js', motionRuntime)
-  }
-  if (usesSlider) {
-    if (!sliderRuntime) {
-      throw new Error(
-        'slider runtime missing — run `npm run build:slider` to rebuild server/slider-runtime.js',
-      )
+    if (usesMotion) {
+      if (!motionRuntime) {
+        throw new Error(
+          'motion runtime missing — run `npm run build:motion` to rebuild server/motion-runtime.js',
+        )
+      }
+      await write('assets/motion.js', motionRuntime)
     }
-    await write('assets/slider.js', sliderRuntime)
-  }
-  for (const [outPath, html] of rendered) await write(outPath, html)
+    if (usesSlider) {
+      if (!sliderRuntime) {
+        throw new Error(
+          'slider runtime missing — run `npm run build:slider` to rebuild server/slider-runtime.js',
+        )
+      }
+      await write('assets/slider.js', sliderRuntime)
+    }
+    for (const [outPath, html] of rendered) await write(outPath, html)
 
-  // atomic swap: the old site stays live until the new one is complete
-  const old = `${outDir}.old-${Date.now()}`
-  if (existsSync(outDir)) await rename(outDir, old)
-  await rename(tmp, outDir)
-  await rm(old, { recursive: true, force: true })
-
-  return { routes: written.size, bytes, forms: manifest }
+    return { routes: written.size, bytes, forms: manifest }
+  })
 }

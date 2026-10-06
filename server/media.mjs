@@ -21,6 +21,7 @@ import { randomBytes } from 'node:crypto'
 import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { log } from './log.mjs'
 import sharp from 'sharp'
 import { DATA_DIR, fail, send, writeAtomic } from './util.mjs'
 
@@ -297,7 +298,7 @@ async function makeThumb(id, buf) {
       .toFile(join(THUMBS_DIR, `${id}.webp`))
     return { hasThumb: true, width: meta.width, height: meta.height }
   } catch (err) {
-    console.error(`media: thumbnail failed for ${id}:`, err.message)
+    log.error(`media: thumbnail failed for ${id}:`, err.message)
     return { hasThumb: false }
   }
 }

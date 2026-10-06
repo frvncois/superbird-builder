@@ -4,6 +4,7 @@ import { migrateProject } from './migrate'
 import { defaultSettings } from './settings'
 import { walkNodes } from './tree'
 import { storeGet } from './store'
+import { uid } from './shared/ids.js'
 
 /**
  * One-time split of the old inline interaction model (trigger + classes +
@@ -26,7 +27,7 @@ function migrateInlineInteractions(project: Project) {
         const old = raw as InteractionBinding & Partial<Interaction>
         if (old.interactionId) return old // already a binding
         const animation: Interaction = {
-          id: crypto.randomUUID(),
+          id: uid(),
           name: `Interaction ${++n}`,
           toClasses: old.toClasses ?? '',
           duration: old.duration ?? 'duration-300',

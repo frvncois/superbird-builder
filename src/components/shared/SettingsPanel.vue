@@ -43,7 +43,8 @@ import {
   type Integration,
   type IntegrationField,
 } from '@/lib/integrations'
-import type { CustomFont, StructuredDataType } from '@/types/editor'
+import type { CustomFont, ElementNode, StructuredDataType } from '@/types/editor'
+import { walkNodes } from '@/lib/tree'
 import { SCHEMA_TYPES, customSchemaError } from '@/lib/shared/structuredData.js'
 import UsersSettings from '@/components/shared/UsersSettings.vue'
 import PublishDialog from '@/components/shared/PublishDialog.vue'
@@ -619,10 +620,31 @@ async function saveGhToken() {
 
 // --- apiOrigin: where a statically hosted page reaches this instance ---
 //
-// Only the zip/GitHub methods need it (the `server` method IS this host), and
-// it is validated here as well as at export: a typo would make every form on
-// the published site post into nowhere, and the publish warning that catches
-// that is one round trip later than the author.
+// A zip/GitHub export is otherwise a self-contained static site, so the field
+// is shown only once something in the project actually needs it: an ENABLED
+// form, whose action has to post back here. Everything else about the export is
+// root-relative, and asking every author for a studio URL to download a zip
+// read as a step they had to complete.
+//
+// Validated here as well as at export: a typo would make every form on the
+// published site post into nowhere, and the publish warning that catches that
+// is one round trip later than the author.
+
+/** an enabled form anywhere in the project — pages and component masters alike */
+const hasEnabledForm = computed(() => {
+  let found = false
+  const look = (nodes: ElementNode[]) => walkNodes(nodes, (n) => {
+    if (n.form?.enabled) found = true
+  })
+  for (const page of project.value.pages) look(page.elements)
+  for (const def of project.value.components) look([def.root])
+  return found
+})
+
+/** the zip/GitHub methods are served elsewhere; `server` IS this host */
+const needsApiOrigin = computed(
+  () => settings.value.publishing.method !== 'server' && hasEnabledForm.value,
+)
 
 const apiOriginError = ref<string | null>(null)
 const apiOrigin = computed({
@@ -1119,13 +1141,11 @@ async function onImportFile(e: Event) {
                   <IconTileUI
                     v-model="favicon"
                     label="Light"
-                    scheme="light"
                     accept="image/png,image/svg+xml,image/x-icon"
                   />
                   <IconTileUI
                     v-model="faviconDark"
                     label="Dark"
-                    scheme="dark"
                     accept="image/png,image/svg+xml,image/x-icon"
                   />
                 </div>
@@ -1249,6 +1269,10 @@ async function onImportFile(e: Event) {
               title="Design tokens"
               description="Project colors, used as bg-<name>, text-<name>, border-<name>."
             >
+              <template #action>
+                <ButtonUI size="xs" :icon="Plus" @click="addToken()">Add token</ButtonUI>
+              </template>
+
               <div v-for="token in settings.tokens" :key="token.id" class="flex flex-col gap-0.5">
                 <div class="flex items-center gap-1.5">
                   <InputUI v-model="token.name" placeholder="brand" class="font-mono" />
@@ -1265,9 +1289,7 @@ async function onImportFile(e: Event) {
                   {{ tokenNameNote(token.name) }}
                 </p>
               </div>
-              <ButtonUI variant="outline" size="sm" :icon="Plus" class="w-full" @click="addToken()">
-                Add token
-              </ButtonUI>
+              <EmptyListUI v-if="!settings.tokens.length">No tokens yet.</EmptyListUI>
             </SettingsGroup>
 
             <SettingsGroup
@@ -1512,9 +1534,9 @@ async function onImportFile(e: Event) {
             </SettingsGroup>
 
             <SettingsGroup
-              v-if="settings.publishing.method !== 'server'"
+              v-if="needsApiOrigin"
               title="Site backend"
-              description="Where a page hosted elsewhere reaches this instance."
+              description="Where this site's forms reach this instance."
             >
               <template #action>
                 <span
@@ -1533,9 +1555,9 @@ async function onImportFile(e: Event) {
               </RowUI>
               <p v-if="apiOriginError" class="text-[9px] text-danger">{{ apiOriginError }}</p>
               <p class="text-[9px] text-muted-foreground">
-                A downloaded or pushed site is static files, so form submissions post back here.
-                This is the public address of this instance. Leave it empty if the site is served
-                from this host.
+                This site has a form, and a downloaded or pushed site is static files — so
+                submissions post back here. This is the public address of this instance. Leave it
+                empty if the site is served from this host.
               </p>
             </SettingsGroup>
 

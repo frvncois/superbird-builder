@@ -22,6 +22,7 @@ import { buildInstanceMap, isNodeHidden, setNodeHidden, type InstanceMapping } f
 import { useAuth } from './useAuth'
 import { useComponentBoard } from './useComponentBoard'
 import type { ComponentDef, ElementNode } from '@/types/editor'
+import { uid } from '@/lib/shared/ids.js'
 
 /** what a page node inside a component instance stands for — see lib/instances */
 export type MasterMapping = InstanceMapping
@@ -134,14 +135,14 @@ export function useComponents() {
     stripExtractedInstanceState(source)
     // the root is a component-typed container: it maps to the `:Name` wrapper
     // itself, so the wrapper can carry shared styles too
-    const root: ElementNode = { id: crypto.randomUUID(), type: name, content: '', children: [cloned] }
-    const def: ComponentDef = { id: crypto.randomUUID(), name, root }
+    const root: ElementNode = { id: uid(), type: name, content: '', children: [cloned] }
+    const def: ComponentDef = { id: uid(), name, root }
 
     // the wrapper takes the extracted block's place, and its ref with it: the
     // instance root is a real page node, so it keeps that address. Refs further
     // in are dropped — they are inside a component now, where a ref would be
     // duplicated across every instance on every page.
-    const wrapper: ElementNode = { id: crypto.randomUUID(), type: name, content: '', children: [source] }
+    const wrapper: ElementNode = { id: uid(), type: name, content: '', children: [source] }
     if (source.ref) wrapper.ref = source.ref
     walkNodes([source], (n) => delete n.ref)
     parent.children.splice(parent.children.indexOf(source), 1, wrapper)

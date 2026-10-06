@@ -112,11 +112,64 @@ Rules that hold in every topology:
   moment a client needs to log in, the instance moves to a public host; that's
   the line.
 
+## Running it
+
+### Docker
+
+```sh
+docker build -t guano .
+docker run -d --name guano -p 4174:4174 -v guano-data:/data guano
+```
+
+`compose.yaml` is the same thing with a volume, a restart policy and a grace
+period long enough for an export to finish. The image declares a healthcheck
+against `/api/health`, which reports `stopping` while the server drains, so an
+orchestrator moves traffic off before the socket closes rather than racing it.
+
+### Health
+
+`GET /api/health` is the one unauthenticated `/api` route — a probe carries no
+credential. It answers 200 when the instance can serve and 503 when it cannot
+(draining, or an unwritable data dir); an empty store on a first run is 200
+`degraded`, so a fresh instance still comes up behind a load balancer. It
+reports no path and no secret.
+
+### One process per data dir
+
+Every lock, rate limiter, session map and cache is in-process. Two Guano
+processes sharing one `GUANO_DATA_DIR` will disagree about all of them — run
+one, and scale by running more instances with their own data, not more workers
+over the same one.
+
+### Shutting down
+
+`SIGTERM` stops accepting, lets work that has already started finish, then
+exits. A publish builds into a staging directory and renames it over the live
+one, so a kill between those renames is what leaves a site with nothing in it.
+A second signal exits immediately. Give the process ~45s to stop.
+
+### The preview port
+
+`PORT + 1` serves the preview site, which renders UNPUBLISHED pages. It is
+token-gated — the url `POST /api/preview` returns carries a signed token, good
+for an hour, which the preview exchanges for a cookie — but do not publish the
+port unless you need to reach previews from another machine.
+
+### HSTS
+
+Terminate TLS at the proxy, and set `Strict-Transport-Security` there. Guano
+does not send it: the header belongs to the origin as a whole, including
+whatever else that hostname serves.
+
 ## Backup
 
 Everything lives in the data dir (default `server/data/`): `store/` (projects,
 drafts), `media/`, `users.json`, `sessions.json`, `site/` (the current export).
-**Backup = copy that directory.** For project content + media only, Settings →
+**Backup = copy that directory.** Settings → Backup → Snapshots keeps the same
+package on the server; the newest ten are kept.
+
+`store.pre-v2/` is a copy taken before the one-way v2 schema migration. It is
+never pruned, and it is safe to delete once an upgrade is verified. For project content + media only, Settings →
 Export project downloads a portable `.zip` you can re-import elsewhere.
 
 ## Environment variables
@@ -129,6 +182,18 @@ Export project downloads a portable `.zip` you can re-import elsewhere.
 | `TRUST_PROXY` | unset | set `1` **only behind a reverse proxy** — rate limiting then keys on the last `X-Forwarded-For` hop instead of the socket address |
 | `PUBLISH_TOKEN` | unset | when set, allows token-authenticated CI publishes via `Authorization: Bearer` |
 | `MEDIA_QUOTA` | 2 GiB | media library size ceiling, in bytes |
+| `STORE_QUOTA` | 512 MiB | project storage ceiling, in bytes |
+| `SNAPSHOT_MAX_BYTES` | 512 MiB | refuses a snapshot above this — the zip is built in memory |
+| `PORT_STRICT` | unset | `1` refuses to walk to the next free port when `PORT` is busy. Worth setting on a real deploy: a silent walk means everything addressing the default port reaches something else |
+| `GUANO_PREVIEW_PORT` | `PORT + 1` | the preview site's port |
+| `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error`. `warn` drops the per-request access line and keeps the warnings |
+| `LOG_JSON` | unset | `1` emits one JSON object per line, for a log shipper |
+| `SHUTDOWN_GRACE_MS` | `0` | how long to keep answering health checks as draining before the socket closes. Set it behind a load balancer so traffic moves off first |
+| `SHUTDOWN_DRAIN_MS` | `10000` | how long to wait for in-flight requests |
+| `SHUTDOWN_CRITICAL_MS` | `30000` | how long to wait for a publish, preview, restore or store write to finish |
+| `GUANO_FSYNC` | `1` | fsync every data write before the rename; `0` trades durability for throughput |
+| `GUANO_STALE_AGE_MS` | 1 hour | how old a leftover staging directory must be before boot sweeps it |
+| `BOOT_TIMEOUT_MS` | `60000` | logs a line naming the stage if boot has not finished; it never gives up |
 
 ## License
 

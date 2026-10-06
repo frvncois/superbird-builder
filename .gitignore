@@ -48,6 +48,8 @@ server/data.backup-*
 
 # e2e
 .e2e-data
+# lifecycle.spec.ts spawns its own servers, one data dir each
+.e2e-lifecycle-*
 test-results
 playwright-report
 

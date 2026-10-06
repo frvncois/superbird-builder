@@ -187,11 +187,80 @@ test('upload_media refuses non-public URLs', async () => {
     'https://10.0.0.5/x.png',
     'https://192.168.1.1/x.png',
     'https://foo.internal/x.png',
+    // IPv6 spellings of the same addresses. These all PASSED: the guard
+    // compared v6 by string prefix, and WHATWG URL normalises
+    // `[::ffff:127.0.0.1]` to `[::ffff:7f00:1]` — the same address in hex — so
+    // the dotted-quad extraction found nothing and no prefix matched. The
+    // IPv4-mapped range is how any v4 address is written as a v6 one, so the
+    // gap covered every private v4 range too.
+    'https://[::1]/x.png',
+    'https://[::ffff:127.0.0.1]/x.png',
+    'https://[::ffff:169.254.169.254]/latest',
+    'https://[::ffff:10.0.0.5]/x.png',
+    'https://[64:ff9b::7f00:1]/x.png', // NAT64
+    'https://[fec0::1]/x.png', // site-local
+    'https://[fe80::1]/x.png', // link-local
+    'https://[fc00::1]/x.png', // unique-local
+    'https://[2002:7f00:1::]/x.png', // 6to4, carrying 127.0.0.1
   ]) {
-    await expect(call('upload_media', { url, name: 'x.png' })).rejects.toThrow(
+    await expect(call('upload_media', { url, name: 'x.png' }), url).rejects.toThrow(
       /public host|https:\/\//,
     )
   }
+})
+
+/**
+ * The guard is duplicated — server/net-guard.mjs for the webhook forward, and
+ * a copy inside the MCP package for upload_media — because the package is
+ * packed with `server/` beside it while in the repo it sits three levels up,
+ * and a static import cannot do that dual-path fallback. The copy's own header
+ * says to change both together; this is what makes that true rather than
+ * aspirational.
+ */
+test('both copies of the outbound guard agree', async () => {
+  const [serverGuard, mcpGuard] = await Promise.all([
+    import('../server/net-guard.mjs'),
+    import('../packages/guano/mcp/tools.mjs'),
+  ])
+  const addresses = [
+    // must be blocked
+    '0.0.0.0',
+    '127.0.0.1',
+    '10.0.0.5',
+    '169.254.169.254',
+    '172.16.0.1',
+    '192.168.1.1',
+    '100.64.0.1',
+    '255.255.255.255',
+    '::',
+    '::1',
+    '::ffff:127.0.0.1',
+    '::ffff:7f00:1',
+    '::ffff:a9fe:a9fe',
+    '64:ff9b::7f00:1',
+    '2002:7f00:1::',
+    'fc00::1',
+    'fd12::1',
+    'fe80::1',
+    'fec0::1',
+    'ff02::1',
+    'not-an-address',
+    '',
+    // must be allowed
+    '8.8.8.8',
+    '1.1.1.1',
+    '93.184.216.34',
+    '2606:4700:4700::1111',
+    '::ffff:8.8.8.8',
+  ]
+  for (const address of addresses) {
+    expect(mcpGuard.isBlockedAddress(address), address).toBe(
+      serverGuard.isBlockedAddress(address),
+    )
+  }
+  // and the shared verdicts are the RIGHT ones, not merely equal
+  expect(serverGuard.isBlockedAddress('::ffff:7f00:1')).toBe(true)
+  expect(serverGuard.isBlockedAddress('8.8.8.8')).toBe(false)
 })
 
 test('GUANO_MCP_FILE_ROOT confines path arguments', async () => {

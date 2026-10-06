@@ -34,6 +34,11 @@ function resolve(value: TooltipValue, modifiers: Partial<Record<string, boolean>
  * for no tooltip; side also via modifier (`v-tooltip.bottom="…"`). Shows after
  * a short delay; a click suppresses it until the pointer leaves (clicking
  * usually opens something).
+ *
+ * Also reachable by KEYBOARD, and described to assistive tech. It used to bind
+ * pointer events only, so a tooltip-only control said nothing to a screen
+ * reader and showed nothing to someone tabbing through — which for an icon
+ * button whose tooltip IS its label meant an unlabelled control.
  */
 export const tooltip: Directive<TooltipEl, TooltipValue> = {
   mounted(el, binding) {
@@ -46,13 +51,16 @@ export const tooltip: Directive<TooltipEl, TooltipValue> = {
         if (!state.text || state.suppressed) return
         state.timer = window.setTimeout(() => {
           state.timer = null
-          if (state.text && !state.suppressed) show(el, state.text, state.side)
+          if (!state.text || state.suppressed) return
+          el.setAttribute('aria-describedby', 'guano-tooltip')
+          show(el, state.text, state.side)
         }, SHOW_DELAY)
       },
       leave() {
         if (state.timer !== null) window.clearTimeout(state.timer)
         state.timer = null
         state.suppressed = false
+        el.removeAttribute('aria-describedby')
         hide(el)
       },
       click() {
@@ -65,6 +73,8 @@ export const tooltip: Directive<TooltipEl, TooltipValue> = {
     el[KEY] = state
     el.addEventListener('mouseenter', state.enter)
     el.addEventListener('mouseleave', state.leave)
+    el.addEventListener('focus', state.enter)
+    el.addEventListener('blur', state.leave)
     el.addEventListener('click', state.click)
   },
 
@@ -88,6 +98,8 @@ export const tooltip: Directive<TooltipEl, TooltipValue> = {
     if (state.timer !== null) window.clearTimeout(state.timer)
     el.removeEventListener('mouseenter', state.enter)
     el.removeEventListener('mouseleave', state.leave)
+    el.removeEventListener('focus', state.enter)
+    el.removeEventListener('blur', state.leave)
     el.removeEventListener('click', state.click)
     useTooltip().hide(el)
     delete el[KEY]

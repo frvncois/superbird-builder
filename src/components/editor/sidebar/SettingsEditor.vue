@@ -187,6 +187,7 @@ watch(activePanel, (panel) => {
       variant="ghost"
       :icon="SAVE_ICONS[status]"
       :aria-label="status === 'error' ? 'Save failed' : SAVE_STATES[status].label"
+      aria-live="polite"
       class="w-7"
       :class="currentId === 'publish-status' ? '!bg-accent/30 text-accent-foreground' : SAVE_COLORS[status]"
       @click="togglePublish"

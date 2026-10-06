@@ -20,6 +20,7 @@ export interface ElementDef {
 
 import { ELEMENTS_DATA } from './shared/elements.js'
 import { isFormControl } from './shared/forms.js'
+import { uid } from './shared/ids.js'
 
 /** the element registry — data lives in the shared plain-JS module so the
  * node exporter (server/export.mjs) consumes the exact same source */
@@ -65,7 +66,7 @@ export function isInstancePart(type: string): boolean {
 }
 
 export function createNode(type: string): ElementNode {
-  return { id: crypto.randomUUID(), type, content: '', children: [] }
+  return { id: uid(), type, content: '', children: [] }
 }
 
 /**

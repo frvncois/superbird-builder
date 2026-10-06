@@ -22,6 +22,7 @@ import EffectsDrawer from '@/components/editor/effects/EffectsDrawer.vue'
 import SitePreview from '@/components/site/SitePreview.vue'
 import ButtonUI from '@/components/ui/ButtonUI.vue'
 import { useEditorShortcuts } from '@/composables/useEditorShortcuts'
+import { useUnloadGuard } from '@/composables/useUnloadGuard'
 import { useEditorBoot } from '@/composables/useEditorBoot'
 import { useAuth } from '@/composables/useAuth'
 import { useViewMode } from '@/composables/useViewMode'
@@ -30,6 +31,9 @@ import LoadingUI from '@/components/ui/LoadingUI.vue'
 // editor-zone globals: keymaps live here (NOT in App.vue) so the public
 // site never boots them. Structural shortcuts self-gate to Build mode.
 useEditorShortcuts()
+// here rather than in main.ts: there is nothing unsaved on /login or /setup,
+// and a guard there would be a bug
+useUnloadGuard()
 
 const { ready, bootError, reloadPage } = useEditorBoot()
 const { canBuild } = useAuth()

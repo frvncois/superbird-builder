@@ -10,8 +10,10 @@ withDefaults(
   defineProps<{
     title?: string
     size?: Size
+    /** alertdialog for a destructive confirm — it interrupts, it does not inform */
+    role?: 'dialog' | 'alertdialog'
   }>(),
-  { size: 'default' },
+  { size: 'default', role: 'dialog' },
 )
 
 defineEmits<{
@@ -25,7 +27,7 @@ defineSlots<{
 </script>
 
 <template>
-  <ModalHost :size="size" @close="$emit('close')">
+  <ModalHost :size="size" :role="role" @close="$emit('close')">
     <ModalHeader v-if="title" :title="title" @close="$emit('close')" />
     <ModalContent>
       <slot />

@@ -254,7 +254,11 @@ const fontStyle = computed(() => ({
       :style="fontStyle"
       @click.capture="onPreviewClick"
     >
-      <div ref="scrollEl" class="h-full overflow-auto">
+      <!-- `custom-scrollbar`: the pane is the one place a native scrollbar
+           would show up inside the site's own white ground, where its track
+           read as a pale gutter down the edge of the page. Same thin
+           transparent-track bar the rest of the chrome uses. -->
+      <div ref="scrollEl" class="custom-scrollbar h-full overflow-auto">
         <div class="flex min-h-full flex-col">
           <EntryScope
             v-if="activeEntry && activeCollection"

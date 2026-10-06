@@ -13,6 +13,7 @@ import {
 import { buildChannelIndex } from '@/lib/shared/channels.js'
 import { buildScopeRoots } from '@/lib/shared/entryScope.js'
 import type { AnimationBinding, ElementNode, Interaction, InteractionBinding } from '@/types/editor'
+import { uid } from '@/lib/shared/ids.js'
 
 /**
  * State keys currently active. A state key is `interactionId:targetId[@scope]`
@@ -552,7 +553,7 @@ export function useInteraction() {
 
   function createInteraction(): Interaction {
     const animation: Interaction = {
-      id: crypto.randomUUID(),
+      id: uid(),
       name: `Interaction ${project.value.interactions.length + 1}`,
       toClasses: '',
       duration: 'duration-300',
@@ -594,7 +595,7 @@ export function useInteraction() {
   function applyTo(node: ElementNode, interactionId: string): InteractionBinding {
     node.interactions ??= []
     const binding: InteractionBinding = {
-      id: crypto.randomUUID(),
+      id: uid(),
       interactionId,
       trigger: 'hover',
       targetId: null,

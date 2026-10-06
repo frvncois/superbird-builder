@@ -7,6 +7,7 @@ import { masterAnimationsTargeting, type OwnedBinding } from './useMasterBinding
 import { countTargetError, validateAnimation } from '@/lib/motion'
 import { isLeafElement } from '@/lib/elements'
 import type { Animation, AnimationBinding, ElementNode } from '@/types/editor'
+import { uid } from '@/lib/shared/ids.js'
 
 // The animation library + per-element bindings — the tween counterpart of
 // useInteraction (class toggling). Same split: the timeline is shared in
@@ -114,11 +115,11 @@ export function useAnimation() {
 
   function createAnimation(): Animation {
     return addAnimation({
-      id: crypto.randomUUID(),
+      id: uid(),
       name: `Animation ${library.value.length + 1}`,
       steps: [
         {
-          id: crypto.randomUUID(),
+          id: uid(),
           tracks: [{ prop: 'opacity', from: 0, to: 1 }],
           duration: 600,
           easing: 'ease-out',
@@ -191,7 +192,7 @@ export function useAnimation() {
     }
     node.animations ??= []
     const binding: AnimationBinding = {
-      id: crypto.randomUUID(),
+      id: uid(),
       animationId,
       trigger: 'appear',
       targetId: null,

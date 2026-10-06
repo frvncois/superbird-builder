@@ -1,5 +1,6 @@
 import { computed, ref } from 'vue'
 import { flushStore } from '@/lib/store'
+import { beginDeliberateNavigation } from './useUnloadGuard'
 
 export type Role = 'admin' | 'editor' | 'contributor'
 
@@ -83,6 +84,7 @@ export function useAuth() {
 
   async function logout() {
     await flushStore() // don't drop in-flight edits
+    beginDeliberateNavigation() // ...and don't warn about what we just flushed
     await fetch('/api/auth/logout', { method: 'POST' }).catch(() => {})
     // hard reload drops all editor singleton state
     window.location.assign('/admin/login')

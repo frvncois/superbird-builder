@@ -10,6 +10,7 @@ import {
 import { setColorTokens } from '@/lib/colors'
 import { setStyleTokens } from '@/lib/styles'
 import type { CustomFont, DesignToken, ProjectSettings } from '@/types/editor'
+import { uid } from '@/lib/shared/ids.js'
 
 let syncStarted = false
 
@@ -35,7 +36,7 @@ export function useSettings() {
   }
 
   function addToken(): DesignToken {
-    const token: DesignToken = { id: crypto.randomUUID(), name: '', value: '#3b82f6' }
+    const token: DesignToken = { id: uid(), name: '', value: '#3b82f6' }
     settings.value.tokens.push(token)
     return token
   }
@@ -86,7 +87,7 @@ export function useSettings() {
 
   function addFont(font: Partial<CustomFont> = {}): CustomFont {
     const entry: CustomFont = {
-      id: crypto.randomUUID(),
+      id: uid(),
       family: font.family ?? '',
       src: font.src ?? '',
       format: font.format,

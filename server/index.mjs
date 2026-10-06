@@ -16,9 +16,21 @@
 //         PUBLISH_TOKEN optionally allows CI publishes)
 
 import { createServer } from 'node:http'
-import { chmod, cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import {
+  access,
+  chmod,
+  cp,
+  mkdir,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises'
+import { constants as FS } from 'node:fs'
 import { existsSync, readFileSync } from 'node:fs'
-import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { extname, join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { exportSite } from './export.mjs'
@@ -30,7 +42,11 @@ import {
 } from './media.mjs'
 import { pushSiteToGitHub } from './github.mjs'
 import { createZip, readZip } from './zip.mjs'
-import { mergeContributorProject, redactSecretsForContributor } from './contributor-merge.mjs'
+import {
+  mergeBranchesMeta,
+  mergeContributorProject,
+  redactSecretsForContributor,
+} from './contributor-merge.mjs'
 import { protectedFieldDelta, readAgentPolicy, writeAgentPolicy } from './agent-policy.mjs'
 import {
   createIntegration,
@@ -51,7 +67,25 @@ import { createDeliverer } from './public/deliver.mjs'
 import { csvFilename, submissionsCsv } from './public/csv.mjs'
 import { allowedOrigins, corsFor, publishedSettingsReader } from './public/cors.mjs'
 import { publicIntegration } from '../src/lib/shared/integrations.js'
-import { DATA_DIR, fail, readDirFiles, send, timingSafeEqualStr, writeAtomic } from './util.mjs'
+import { log, newRequestId } from './log.mjs'
+import {
+  beginRequest,
+  exitRequestedDuringBoot,
+  installShutdown,
+  isShuttingDown,
+  withCritical,
+} from './lifecycle.mjs'
+import {
+  DATA_DIR,
+  fail,
+  readDirFiles,
+  send,
+  swapDir,
+  sweepOrphanTmpFiles,
+  sweepStaleDirs,
+  timingSafeEqualStr,
+  writeAtomic,
+} from './util.mjs'
 import {
   ROLES,
   acceptInvite,
@@ -93,6 +127,9 @@ import {
   updateUser,
   userProfile,
   verifyLogin,
+  makeCredentials,
+  MAX_PASSWORD_LENGTH,
+  verifySecret,
   verifyUserPassword,
   VerifyBusyError,
 } from './auth.mjs'
@@ -101,7 +138,7 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url))
 // data location resolution (env overrides, install-aware default) lives in
 // util.mjs — one home for index/auth/media/export-media
 if (!process.env.GUANO_DATA_DIR && process.env.SB_DATA_DIR) {
-  console.warn('SB_DATA_DIR is deprecated — use GUANO_DATA_DIR')
+  log.warn('SB_DATA_DIR is deprecated — use GUANO_DATA_DIR')
 }
 const SNAPSHOT = join(DATA_DIR, 'published.json')
 const SITE = join(DATA_DIR, 'site')
@@ -144,7 +181,11 @@ const APP_VERSION = (() => {
 
 const PORT = Number(process.env.PORT) || 4174
 const TOKEN = process.env.PUBLISH_TOKEN || ''
-const MAX_BODY = 10 * 1024 * 1024 // data-URL images make snapshots heavy
+const MAX_BODY = 10 * 1024 * 1024
+// Credentials are small. The 10 MB cap belongs to a project blob; applying it
+// to an unauthenticated login means buffering 10 MB before the rate limiter is
+// even consulted.
+const MAX_AUTH_BODY = 4 * 1024 // data-URL images make snapshots heavy
 const IMPORT_CAP = 512 * 1024 * 1024 // project package upload ceiling
 
 // Behind a reverse proxy every socket carries the proxy's address, so rate
@@ -154,6 +195,11 @@ const IMPORT_CAP = 512 * 1024 * 1024 // project package upload ceiling
 // nearest proxy; earlier entries are client-controlled and trivially spoofed.
 // Without a proxy the header must stay ignored, or anyone could mint fresh
 // "IPs" per request and bypass the limiter entirely.
+// What /api/health reports. Written once during boot(); read by the probe.
+// `migrated` can never be false through the socket, because boot() awaits the
+// migration before listening — which is exactly the property worth asserting.
+const bootState = { startedAt: Date.now(), migrated: false }
+
 const TRUST_PROXY = process.env.TRUST_PROXY === '1'
 function clientIp(req) {
   if (TRUST_PROXY) {
@@ -188,12 +234,12 @@ const MIME = {
 }
 
 /** reads a request body with the size cap; null when too large */
-async function readBody(req) {
+async function readBody(req, cap = MAX_BODY) {
   const chunks = []
   let size = 0
   for await (const chunk of req) {
     size += chunk.length
-    if (size > MAX_BODY) return null
+    if (size > cap) return null
     chunks.push(chunk)
   }
   return Buffer.concat(chunks).toString('utf8')
@@ -233,11 +279,19 @@ async function readPublishConfig() {
     stripe: { secretKey: parsed?.stripe?.secretKey ?? '' },
     mailing: { apiKey: parsed?.mailing?.apiKey ?? '' },
     smtp: { password: parsed?.smtp?.password ?? '' },
+    // the key the preview port's access tokens are signed with. Generated on
+    // first preview; rotating it (delete the field) invalidates every open
+    // preview session.
+    preview: { secret: parsed?.preview?.secret ?? '' },
     // private site: the visitor password's scrypt hash + whether the gate is on
     site: {
       enabled: !!parsed?.site?.enabled,
       salt: parsed?.site?.salt ?? '',
       hash: parsed?.site?.hash ?? '',
+      // same per-record cost parameters as a user record: absent means the
+      // scrypt defaults this was written with, so an existing password keeps
+      // verifying after the cost went up
+      ...(parsed?.site?.kdf ? { kdf: parsed.site.kdf } : {}),
     },
     // form submissions: WHERE a notification goes and WHICH integration sends
     // it. Deliberately server-side and admin-only — leads are personal data,
@@ -251,6 +305,22 @@ async function readPublishConfig() {
       retentionDays: Number.isFinite(parsed?.forms?.retentionDays)
         ? parsed.forms.retentionDays
         : 365,
+    },
+    // Disk housekeeping, deliberately NOT folded into `forms`: that number is
+    // a data-protection obligation about other people's personal data, edited
+    // in Settings → Forms. These are about this operator's own bytes.
+    // Nothing here ever prunes store.pre-v2 — it is the only way back from the
+    // one-way schema migration, and putting it on a timer is the wrong instinct.
+    retention: {
+      snapshotKeep: Number.isFinite(parsed?.retention?.snapshotKeep)
+        ? parsed.retention.snapshotKeep
+        : 10,
+      snapshotDays: Number.isFinite(parsed?.retention?.snapshotDays)
+        ? parsed.retention.snapshotDays
+        : 0, // 0 = no age limit, keep-count only
+      variantDays: Number.isFinite(parsed?.retention?.variantDays)
+        ? parsed.retention.variantDays
+        : 30,
     },
   }
 }
@@ -269,6 +339,16 @@ async function readPublishConfig() {
 const submissionStore = createSubmissionStore(FORMS_DIR)
 const formLimits = {
   // a human submitting a form twice in a minute is plausible; five is not
+  perIpMinute: slidingLimiter(5, 60_000),
+  perIpHour: slidingLimiter(30, 3_600_000),
+  perForm: slidingLimiter(120, 3_600_000),
+  site: slidingLimiter(600, 3_600_000),
+}
+
+// The preview's twin of the live endpoint gets its OWN buckets. Sharing them
+// meant an unauthenticated flood on the preview port spent the published
+// site's per-form and site-wide submission budget.
+const previewFormLimits = {
   perIpMinute: slidingLimiter(5, 60_000),
   perIpHour: slidingLimiter(30, 3_600_000),
   perForm: slidingLimiter(120, 3_600_000),
@@ -317,7 +397,7 @@ const handleFormPost = createFormsHandler({
 const handlePreviewFormPost = createFormsHandler({
   manifest: previewForms,
   clientIp,
-  limits: formLimits,
+  limits: previewFormLimits,
   cors: () => ({ ok: true, headers: {} }),
   store: async () => ({ ok: true }),
   deliver: () => {},
@@ -433,6 +513,9 @@ async function handleAuth(req, res, path) {
     if (typeof password !== 'string' || password.length < 8) {
       return fail(res, 400, 'password must be at least 8 characters')
     }
+    if (password.length > MAX_PASSWORD_LENGTH) {
+      return fail(res, 400, `password must be at most ${MAX_PASSWORD_LENGTH} characters`)
+    }
     const user = await createFirstAdmin(email, password, typeof name === 'string' ? name : '')
     if (!user) return fail(res, 403, 'account already exists')
     // seed the project the moment the instance has an owner, so the install is
@@ -492,6 +575,9 @@ async function handleAuth(req, res, path) {
       if (typeof password !== 'string' || password.length < 8) {
         return fail(res, 400, 'password must be at least 8 characters')
       }
+      if (password.length > MAX_PASSWORD_LENGTH) {
+        return fail(res, 400, `password must be at most ${MAX_PASSWORD_LENGTH} characters`)
+      }
       try {
         if (!(await verifyUserPassword(user, currentPassword ?? ''))) {
           return fail(res, 403, 'current password is incorrect')
@@ -524,7 +610,14 @@ async function handleAuth(req, res, path) {
   if (path === '/api/auth/login' && req.method === 'POST') {
     if (needsSetup()) return fail(res, 403, 'no account yet')
     const ip = clientIp(req)
-    const body = await readBody(req)
+    // the per-IP limiter first, so a flood is shed before anything is read.
+    // The per-(ip,email) and per-email buckets still need the body, but the
+    // cheap guard no longer sits behind 10 MB of buffering.
+    if (!loginAllowed(ip, '')) {
+      return fail(res, 429, 'too many attempts — try again later')
+    }
+    const body = await readBody(req, MAX_AUTH_BODY)
+    if (body === null) return fail(res, 400, 'invalid request')
     let email, password
     try {
       ;({ email, password } = JSON.parse(body ?? ''))
@@ -583,7 +676,8 @@ async function handleInvite(req, res, path) {
     return send(res, 200, JSON.stringify({ ...inviteView(invite), projectName: await currentProjectName() }))
   }
   if (accept && req.method === 'POST') {
-    const body = await readBody(req)
+    const body = await readBody(req, MAX_AUTH_BODY)
+    if (body === null) return fail(res, 400, 'invalid request')
     let password
     try {
       ;({ password } = JSON.parse(body ?? ''))
@@ -592,6 +686,9 @@ async function handleInvite(req, res, path) {
     }
     if (typeof password !== 'string' || password.length < 8) {
       return fail(res, 400, 'password must be at least 8 characters')
+    }
+    if (password.length > MAX_PASSWORD_LENGTH) {
+      return fail(res, 400, `password must be at most ${MAX_PASSWORD_LENGTH} characters`)
     }
     const result = await acceptInvite(token, password)
     if (result.error) return fail(res, 400, result.error)
@@ -789,7 +886,7 @@ async function ensureProjectSeeded(name) {
     } catch (err) {
       // in the npm package the bundle always ships; in the repo it is
       // gitignored and built on demand, so a fresh clone lands here
-      console.error(
+      log.error(
         'could not seed the project: the editor-logic bundle is missing — run ' +
           '`npm run build:mcp-runtime`. The editor still creates the project on first open, ' +
           'but a headless (MCP-only) first run will fail until it exists. ' +
@@ -824,6 +921,28 @@ async function readFileOrNull(path) {
 
 const isProjectKey = (key) => key.startsWith('guano-project:')
 const MAIN_PROJECT_KEY = 'guano-project:main'
+const BRANCHES_META_KEY = 'guano-branches'
+
+/**
+ * The keys the product actually uses — an allowlist for WRITES.
+ *
+ * STORE_KEY_RE constrains the characters, not the name, so any well-formed
+ * name could be created and written verbatim. That is how a contributor
+ * reached `guano-branches`: the content merge ran only for project blob keys,
+ * and everything else went straight to disk. Unknown keys are now refused for
+ * every role, so there is no corner of the store outside the schema left for a
+ * writer to park authorization data in.
+ *
+ * Reads are deliberately NOT restricted: a GET of a key that does not exist
+ * already answers with nothing.
+ */
+const KNOWN_STORE_KEYS = new Set([
+  BRANCHES_META_KEY,
+  'guano-published-baseline',
+  'guano-published-info',
+])
+const isKnownStoreKey = (key) =>
+  KNOWN_STORE_KEYS.has(key) || isProjectKey(key) || key.startsWith('guano-base:')
 // A `guano-base:<id>` merge-base snapshot is a FULL project copy — same
 // settings, same secrets, and the structural truth the 3-way merge diffs
 // against. So it needs the same two guards as a project key: redact secrets on
@@ -880,9 +999,94 @@ function broadcastStoreEvent(key, source) {
   for (const client of eventClients) client.write(payload)
 }
 
+/**
+ * GET /api/health — the one unauthenticated /api route.
+ *
+ * An orchestrator probe carries no credential, so requiring one would make the
+ * route useless. That constrains what it may say: no path (filesystem layout
+ * disclosure), no user count, no secret, and nothing from publish.json.
+ *
+ * It must also stay cheap, because something will poll it every second. So it
+ * checks that the data dir is WRITABLE without writing a probe file (which
+ * would be both heavy and a tmp-file leak generator, the bug class the boot
+ * sweep exists to clean up) and that the store dir is READABLE without parsing
+ * a blob (published.json is hundreds of KB; a JSON.parse per probe is real
+ * CPU). Reading the directory proves the mount is alive, which is the question.
+ *
+ * `status` is reported next to the HTTP code rather than derived from it: the
+ * code answers an orchestrator ("should I route here"), the status answers a
+ * human ("what is wrong"). 503 is reserved for the two states that make the
+ * instance unfit to serve — draining, and an unwritable data dir. An empty
+ * store is 200 degraded, or a fresh instance could never come up behind a load
+ * balancer.
+ */
+async function handleHealth(res) {
+  const checks = { dataDir: 'ok', store: 'ok' }
+  try {
+    await access(DATA_DIR, FS.W_OK)
+  } catch {
+    checks.dataDir = 'fail'
+  }
+  try {
+    checks.store = (await readdir(STORE_DIR)).some((f) => f.endsWith('.json')) ? 'ok' : 'empty'
+  } catch {
+    checks.store = checks.dataDir === 'fail' ? 'fail' : 'empty'
+  }
+
+  const stopping = isShuttingDown()
+  const unfit = stopping || checks.dataDir === 'fail'
+  const status = stopping ? 'stopping' : unfit || checks.store === 'empty' ? 'degraded' : 'ok'
+  return send(
+    res,
+    unfit ? 503 : 200,
+    JSON.stringify({
+      status,
+      ok: !unfit,
+      version: APP_VERSION,
+      uptime: Math.round((Date.now() - bootState.startedAt) / 1000),
+      migrated: bootState.migrated,
+      port,
+      previewPort,
+      checks,
+    }),
+    'application/json',
+    { 'cache-control': 'no-store' },
+  )
+}
+
+/** End every open change-feed response.
+ *
+ * These are long-lived by design and never finish on their own, so
+ * server.close() would wait on them for the whole shutdown deadline. Told
+ * explicitly, the editor's EventSource reconnects against the next process. */
+function closeEventClients() {
+  for (const client of eventClients) {
+    try {
+      client.write('event: shutdown\ndata: {}\n\n')
+      client.end()
+    } catch {
+      // already gone — the per-client close handler cleans up the Set
+    }
+  }
+  eventClients.clear()
+}
+
+// One per editor tab is the normal case; a handful covers someone with the
+// editor open in several windows. Unbounded, any authed user — or one API
+// token — could hold open as many as they liked, and each one costs a socket
+// and a heartbeat timer for as long as it is held.
+const MAX_EVENT_CLIENTS_PER_USER = 5
+
 function handleEvents(req, res) {
   const user = requestUser(req)
   if (!user) return fail(res, 401, 'unauthorized')
+  if (isShuttingDown()) return fail(res, 503, 'server is restarting')
+  let held = 0
+  for (const client of eventClients) if (client.guanoUserId === user.id) held++
+  if (held >= MAX_EVENT_CLIENTS_PER_USER) {
+    return fail(res, 429, 'too many open change feeds — close another editor tab')
+  }
+  res.guanoUserId = user.id
   res.writeHead(200, {
     'content-type': 'text/event-stream',
     'cache-control': 'no-cache',
@@ -915,6 +1119,10 @@ const sha256Hex = (s) => createHash('sha256').update(s).digest('hex')
 const storeKeyLocks = new Map()
 
 async function withStoreKeyLock(key, fn) {
+  return withCritical(`store:${key}`, () => withStoreKeyLockInner(key, fn))
+}
+
+async function withStoreKeyLockInner(key, fn) {
   const prior = storeKeyLocks.get(key) ?? Promise.resolve()
   let release
   const held = new Promise((resolve) => {
@@ -971,6 +1179,7 @@ async function handleStore(req, res, path, query) {
 
   const key = decodeURIComponent(path.slice('/api/store/'.length))
   if (!STORE_KEY_RE.test(key)) return fail(res, 400, 'invalid key')
+  if (!isKnownStoreKey(key)) return fail(res, 400, 'unknown key')
 
   if (req.method === 'PUT') {
     const limit = storeWriteAllowed(user.id)
@@ -1023,7 +1232,14 @@ async function handleStore(req, res, path, query) {
       }
 
       let toWrite = body
-      if (user.role === 'contributor' && isProjectBlobKey(key)) {
+      if (user.role === 'contributor' && key === BRANCHES_META_KEY) {
+        // the draft index carries the ownership stamp that gates DELETE, so a
+        // contributor's write to it goes through the same kind of
+        // server-authoritative merge their project writes do
+        const r = mergeBranchesMeta(existing, body, user.id)
+        if (r.error) return fail(res, 403, r.error)
+        toWrite = r.merged
+      } else if (user.role === 'contributor' && isProjectBlobKey(key)) {
         // server-authoritative merge: structure/settings come from the stored
         // copy (or Main for a new draft), only the content allowlist from the
         // contributor's blob — a hand-crafted structural edit is silently dropped
@@ -1039,30 +1255,37 @@ async function handleStore(req, res, path, query) {
     })
   }
   if (req.method === 'DELETE') {
-    // contributors may discard their own drafts — the branch project copy and
-    // its merge-base snapshot — but never the live project (Main) or any other
-    // stored blob (that would be destruction, not editing).
-    if (user.role === 'contributor') {
-      const isDraftKey =
-        (isProjectKey(key) && key !== MAIN_PROJECT_KEY) ||
-        (key.startsWith('guano-base:') && key !== 'guano-base:main')
-      if (!isDraftKey) return fail(res, 403, 'contributors cannot delete stored data')
-      if (!(await ownsDraft(user, key))) {
-        return fail(res, 403, 'contributors can only discard their own drafts')
-      }
-    }
-    // Main is the live project and its history is in-memory client-side only,
-    // so an agent deleting it is unrecoverable — hold it to the same switch
-    // that gates agent writes to Main.
-    if (isAgentRequest(req) && (key === MAIN_PROJECT_KEY || key === 'guano-base:main')) {
-      const policy = await readAgentPolicy()
-      if (!policy.allowMainWrites) return fail(res, 403, AGENT_MAIN_DENIED)
-    }
-    await rm(storeFile(key), { force: true })
-    storeSize.at = 0 // force a recount rather than tracking the freed bytes
-    return send(res, 200, JSON.stringify({ ok: true }))
+    // Inside the same per-key lock as the PUT: this reads the ownership stamp
+    // and then removes a file, and a write landing in that window would be
+    // decided against bytes that are about to go.
+    return withStoreKeyLock(key, () => deleteStoreKey(req, res, user, key))
   }
   return fail(res, 404, 'not found')
+}
+
+async function deleteStoreKey(req, res, user, key) {
+  // contributors may discard their own drafts — the branch project copy and
+  // its merge-base snapshot — but never the live project (Main) or any other
+  // stored blob (that would be destruction, not editing).
+  if (user.role === 'contributor') {
+    const isDraftKey =
+      (isProjectKey(key) && key !== MAIN_PROJECT_KEY) ||
+      (key.startsWith('guano-base:') && key !== 'guano-base:main')
+    if (!isDraftKey) return fail(res, 403, 'contributors cannot delete stored data')
+    if (!(await ownsDraft(user, key))) {
+      return fail(res, 403, 'contributors can only discard their own drafts')
+    }
+  }
+  // Main is the live project and its history is in-memory client-side only,
+  // so an agent deleting it is unrecoverable — hold it to the same switch
+  // that gates agent writes to Main.
+  if (isAgentRequest(req) && (key === MAIN_PROJECT_KEY || key === 'guano-base:main')) {
+    const policy = await readAgentPolicy()
+    if (!policy.allowMainWrites) return fail(res, 403, AGENT_MAIN_DENIED)
+  }
+  await rm(storeFile(key), { force: true })
+  storeSize.at = 0 // force a recount rather than tracking the freed bytes
+  return send(res, 200, JSON.stringify({ ok: true }))
 }
 
 /**
@@ -1165,20 +1388,28 @@ async function handlePreview(req, res) {
     // A preview exports EVERY page, published or not: it is the surface for
     // looking at work in progress, and a draft page you cannot see is the thing
     // you most need to. The live export still drops unpublished pages.
-    const stats = await exportSite(
-      { ...parsed, pages: parsed.pages.map(previewPublished) },
-      PREVIEW,
-      { integrations: await readIntegrations() },
-    )
-    await writeFormsManifest(PREVIEW_FORMS_MANIFEST, stats.forms, parsed)
+    const integrations = await readIntegrations()
+    const stats = await withCritical('preview', async () => {
+      const s = await exportSite(
+        { ...parsed, pages: parsed.pages.map(previewPublished) },
+        PREVIEW,
+        { integrations },
+      )
+      await writeFormsManifest(PREVIEW_FORMS_MANIFEST, s.forms, parsed)
+      return s
+    })
     return send(
       res,
       200,
-      JSON.stringify({ ok: true, ...stats, url: previewOrigin(req) }),
+      JSON.stringify({ ok: true, ...stats, url: await previewOrigin(req) }),
     )
   } catch (err) {
-    console.error(err)
-    return fail(res, 500, `preview export failed: ${err.message}`)
+    // Same rule as the publish catch, which this did not follow: a raw
+    // err.message from the exporter, sharp or the Tailwind compiler carries
+    // filesystem paths, so only an error explicitly marked safe is echoed.
+    log.error(err, { rid: req.rid })
+    if (err?.expose) return fail(res, 502, err.message)
+    return fail(res, 500, `preview export failed (ref ${req.rid}) — check the server logs`)
   }
 }
 
@@ -1187,9 +1418,68 @@ async function handlePreview(req, res) {
 const previewPublished = (page) => (page.status === 'published' ? page : { ...page, status: 'published' })
 
 /** where the preview server answers: same host, PREVIEW_PORT */
-function previewOrigin(req) {
+/**
+ * Access control for the preview port.
+ *
+ * The preview server binds every interface and authenticated nothing, so on
+ * any host without a firewall in front of it every unpublished draft was
+ * public — the one surface in the product that renders work explicitly not
+ * ready to ship.
+ *
+ * A session cookie cannot be the credential here: it is `Secure` by default,
+ * and the preview is plain HTTP on another port, so in the hosted setup (admin
+ * behind HTTPS at a proxy) the browser would never send it. So POST
+ * /api/preview — which already needs a session — mints a short-lived signed
+ * token, the returned URL carries it, and the preview server exchanges it for
+ * a cookie scoped to itself. Opening a preview from the editor keeps working
+ * in every topology; reaching the port cold does not.
+ *
+ * This is NOT the agent publish policy, which the preview deliberately
+ * ignores: seeing your own work should never require shipping it.
+ */
+const PREVIEW_COOKIE = 'guano_preview'
+// An hour to open the link, then eight to work in. The link is handed to a
+// person (the MCP `preview` tool returns it for them to click), so the window
+// has to survive them finishing the sentence they were reading.
+const PREVIEW_TOKEN_TTL_MS = 60 * 60 * 1000
+const PREVIEW_COOKIE_TTL = 8 * 60 * 60 // ...then a working session
+
+let previewSecretCache = null
+async function previewSecret() {
+  if (previewSecretCache) return previewSecretCache
+  const cfg = await readPublishConfig()
+  if (!cfg.preview.secret) {
+    cfg.preview.secret = randomBytes(32).toString('hex')
+    await writeAtomic(PUBLISH_CONFIG, JSON.stringify(cfg))
+  }
+  previewSecretCache = cfg.preview.secret
+  return previewSecretCache
+}
+
+const sign = (secret, value) => createHmac('sha256', secret).update(value).digest('hex')
+
+async function mintPreviewToken() {
+  const exp = String(Date.now() + PREVIEW_TOKEN_TTL_MS)
+  return `${exp}.${sign(await previewSecret(), exp)}`
+}
+
+async function previewTokenValid(raw) {
+  const [exp, mac] = String(raw ?? '').split('.')
+  if (!exp || !mac || !(Number(exp) > Date.now())) return false
+  return timingSafeEqualStr(mac, sign(await previewSecret(), exp))
+}
+
+/** the cookie value — an HMAC of the secret, so rotating it signs everyone out */
+const previewCookie = (secret) => sign(secret, 'preview-cookie')
+
+async function previewUnlocked(req) {
+  const have = parseCookies(req)[PREVIEW_COOKIE] ?? ''
+  return !!have && timingSafeEqualStr(have, previewCookie(await previewSecret()))
+}
+
+async function previewOrigin(req) {
   const host = String(req.headers.host ?? `localhost:${port}`).split(':')[0]
-  return `http://${host}:${previewPort}/`
+  return `http://${host}:${previewPort}/?t=${await mintPreviewToken()}`
 }
 
 async function handlePost(req, res, params) {
@@ -1272,11 +1562,15 @@ async function handlePost(req, res, params) {
   // exported site stays live (atomic swap inside exportSite). Every method
   // exports once, so the local site at `/` refreshes regardless of method.
   try {
-    const stats = await exportSite(parsed, SITE, { integrations: await readIntegrations() })
-    // the manifest the public endpoint validates against, written only after a
-    // successful export — a failed publish must never leave one pointing at
-    // pages that did not ship
-    await writeFormsManifest(FORMS_MANIFEST, stats.forms, parsed)
+    const integrations = await readIntegrations()
+    const stats = await withCritical('publish', async () => {
+      const s = await exportSite(parsed, SITE, { integrations })
+      // the manifest the public endpoint validates against, written only after
+      // a successful export — a failed publish must never leave one pointing
+      // at pages that did not ship
+      await writeFormsManifest(FORMS_MANIFEST, s.forms, parsed)
+      return s
+    })
     if (method === 'zip') {
       const zip = createZip(await readDirFiles(SITE))
       return send(res, 200, zip, 'application/zip', {
@@ -1286,7 +1580,9 @@ async function handlePost(req, res, params) {
       })
     }
     if (method === 'github') {
-      const { commit } = await pushSiteToGitHub(SITE, github)
+      const { commit } = await withCritical('publish:github', () =>
+        pushSiteToGitHub(SITE, github),
+      )
       return send(res, 200, JSON.stringify({ ok: true, ...stats, commit }))
     }
     send(res, 200, JSON.stringify({ ok: true, ...stats }))
@@ -1294,7 +1590,7 @@ async function handlePost(req, res, params) {
     // full detail to the server log only; the client gets a generic
     // message (never leak fs paths / compiler internals in the response) —
     // except errors explicitly marked safe to expose (exporter / github push)
-    console.error(err)
+    log.error(err, { rid: req.rid })
     if (err?.expose) return fail(res, 502, err.message)
     fail(res, 500, 'export failed — check the server logs')
   }
@@ -1330,7 +1626,16 @@ async function handleAgentPolicy(req, res) {
 async function handlePublishConfig(req, res) {
   const user = sessionUser(req)
   if (!user) return fail(res, 401, 'unauthorized')
+  // Reads stay open to editors: the response is `{github:{tokenSet}}`, a
+  // boolean the Publish panel needs and no secret. WRITES are admin only — the
+  // GitHub token is the credential the server signs every push with, so an
+  // editor able to replace it could point the operator's PAT at a repository
+  // they control. The comment on handleAgentPolicy already claimed this route
+  // followed that rule; it did not.
   if (user.role === 'contributor') return fail(res, 403, 'forbidden')
+  if (req.method !== 'GET' && user.role !== 'admin') {
+    return fail(res, 403, 'only an admin can change publishing secrets')
+  }
 
   if (req.method === 'GET') {
     const cfg = await readPublishConfig()
@@ -1689,7 +1994,13 @@ async function siteGate() {
 async function handleSitePassword(req, res) {
   const user = sessionUser(req)
   if (!user) return fail(res, 401, 'unauthorized')
+  // Reads stay open to editors (`{enabled, passwordSet}` — no secret). Setting
+  // it is admin only: it is the one credential shared with visitors, and
+  // changing it signs every one of them out.
   if (user.role === 'contributor') return fail(res, 403, 'forbidden')
+  if (req.method !== 'GET' && user.role !== 'admin') {
+    return fail(res, 403, 'only an admin can change the site password')
+  }
   const shape = (site) => ({ enabled: site.enabled, passwordSet: !!site.hash })
 
   if (req.method === 'GET') return send(res, 200, JSON.stringify(shape(await siteGate())))
@@ -1704,13 +2015,18 @@ async function handleSitePassword(req, res) {
     if (typeof patch?.enabled === 'boolean') cfg.site.enabled = patch.enabled
     if (typeof patch?.password === 'string') {
       const password = patch.password
-      if (password && password.length < 4) return fail(res, 400, 'password must be at least 4 characters')
+      if (password && password.length < 8) {
+        return fail(res, 400, 'password must be at least 8 characters')
+      }
+      if (password.length > MAX_PASSWORD_LENGTH) {
+        return fail(res, 400, `password must be at most ${MAX_PASSWORD_LENGTH} characters`)
+      }
       if (password) {
-        cfg.site.salt = randomBytes(16).toString('hex')
-        cfg.site.hash = scryptSync(password, cfg.site.salt, 64).toString('hex')
+        Object.assign(cfg.site, makeCredentials(password))
       } else {
         cfg.site.salt = ''
         cfg.site.hash = ''
+        delete cfg.site.kdf
       }
     }
     await writeAtomic(PUBLISH_CONFIG, JSON.stringify(cfg))
@@ -1748,16 +2064,32 @@ async function siteGateHandled(req, res, path) {
   // the unlock is answered whether or not a cookie is already held — a stale
   // one must not turn a fresh attempt into a 404 from the static site
   if (path === '/_guano/unlock' && req.method === 'POST') {
-    const ip = req.socket.remoteAddress ?? 'unknown'
-    const limit = unlockAllowed(ip)
+    // clientIp, not the socket address: this was the one limiter in the
+    // codebase that ignored TRUST_PROXY, so behind a proxy every visitor
+    // shared one bucket and ten wrong guesses locked the whole site out.
+    const limit = unlockAllowed(clientIp(req))
     if (!limit.ok) return tooManyRequests(res, limit.retryAfterSeconds, 'attempts'), true
     const form = new URLSearchParams((await readBody(req)) ?? '')
     const password = form.get('password') ?? ''
     const rawNext = form.get('next') ?? '/'
-    const next = rawNext.startsWith('/') && !rawNext.startsWith('//') ? rawNext : '/'
-    const attempt = scryptSync(password, site.salt, 64)
-    const stored = Buffer.from(site.hash, 'hex')
-    if (attempt.length === stored.length && timingSafeEqual(attempt, stored)) {
+    // The same three checks server/site-runtime.js already makes on a form
+    // redirect. `//` alone was not enough: a browser treats `/\` as `//` for
+    // a special scheme, so `next=/\evil.test` sent the visitor off-origin
+    // right after they typed the real password.
+    const next =
+      rawNext.charAt(0) === '/' && rawNext.charAt(1) !== '/' && !rawNext.includes('\\')
+        ? rawNext
+        : '/'
+    // the async, concurrency-capped path. A sync derivation here blocked the
+    // event loop for every wrong guess, which at the current cost is a denial
+    // of service with a handful of requests.
+    let ok = false
+    try {
+      ok = await verifySecret(site, password)
+    } catch {
+      return tooManyRequests(res, 2, 'attempts'), true
+    }
+    if (ok) {
       res.writeHead(303, {
         location: next,
         'set-cookie': `${SITE_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SITE_COOKIE_TTL}${siteCookieSecure}`,
@@ -1842,6 +2174,12 @@ async function buildPackage() {
     files.push({ path: `store/${path}`, data })
   }
   for (const { path, data } of await readDirFiles(MEDIA_DIR)) {
+    // `variants/` is a DERIVED cache: the exporter regenerates any resize from
+    // the original, at the cost of CPU only. Shipping it inflated every backup
+    // by the whole resized-image set for no durable value — and the import
+    // allowlist rejected the entries, so a snapshot taken after any publish
+    // with a resizable raster could not be restored at all.
+    if (path.startsWith('variants/')) continue
     files.push({ path: `media/${path}`, data })
   }
   return createZip(files)
@@ -1856,9 +2194,34 @@ async function handleProjectExport(req, res) {
   })
 }
 
+const SNAPSHOT_MAX_BYTES = Number(process.env.SNAPSHOT_MAX_BYTES) || 512 * 1024 * 1024
+
+/** total bytes under `dir`, by stat — never reads file contents */
+async function dirBytes(dir) {
+  let total = 0
+  try {
+    for (const entry of await readdir(dir, { withFileTypes: true, recursive: true })) {
+      if (!entry.isFile()) continue
+      try {
+        total += (await stat(join(entry.parentPath ?? entry.path, entry.name))).size
+      } catch {
+        /* vanished mid-scan */
+      }
+    }
+  } catch {
+    /* missing dir contributes nothing */
+  }
+  return total
+}
+
 const IMPORT_STORE_RE = /^store\/[A-Za-z0-9_-]{1,100}\.json$/
 const IMPORT_MEDIA_FILE_RE = /^media\/files\/[a-f0-9]{16}$/
 const IMPORT_MEDIA_THUMB_RE = /^media\/thumbs\/[a-f0-9]{16}\.webp$/
+// buildPackage no longer bundles these, but every snapshot taken BEFORE that
+// change contains them, and refusing them would leave those backups
+// permanently unrestorable — the worst possible outcome for a backup feature.
+// The hash here is the exporter's 12-char content hash, not a media id.
+const IMPORT_MEDIA_VARIANT_RE = /^media\/variants\/[a-f0-9]{8,32}-\d{2,5}\.webp$/
 
 /** POST /api/project-import — admin-only full replace from a package. Strict
  * allowlist: any unrecognized entry rejects the whole import. */
@@ -1887,6 +2250,7 @@ async function applyPackage(raw) {
 
   let manifestOk = false
   let hasProject = false
+  const skipped = new Set()
   for (const { path, data } of entries) {
     if (path === 'manifest.json') {
       try {
@@ -1898,7 +2262,7 @@ async function applyPackage(raw) {
           return 'unrecognized package format'
         }
         if (m.format === LEGACY_PACKAGE_FORMAT) {
-          console.log('importing a legacy superbird-package backup (deprecated format)')
+          log.info('importing a legacy superbird-package backup (deprecated format)')
         }
         manifestOk = true
       } catch {
@@ -1920,8 +2284,21 @@ async function applyPackage(raw) {
       } catch {
         return 'invalid media index'
       }
-    } else if (IMPORT_MEDIA_FILE_RE.test(path) || IMPORT_MEDIA_THUMB_RE.test(path)) {
+    } else if (
+      IMPORT_MEDIA_FILE_RE.test(path) ||
+      IMPORT_MEDIA_THUMB_RE.test(path) ||
+      IMPORT_MEDIA_VARIANT_RE.test(path)
+    ) {
       // opaque bytes — id shape already validated by the regex
+    } else if (path.startsWith('media/')) {
+      // An unknown shape UNDER media/ is skipped, not fatal. Failing a whole
+      // restore because the exporter learned to cache a new derived format is
+      // a self-inflicted outage, and skipping is strictly safer than today:
+      // only matched paths are ever joined and written, so this writes nothing
+      // either way. Anything outside store/ and media/ still hard-rejects,
+      // which is what guards against zip-slip and arbitrary writes.
+      log.warn(`import: skipping unrecognized media entry ${path}`)
+      skipped.add(path)
     } else {
       return `unexpected entry: ${path}`
     }
@@ -1929,26 +2306,33 @@ async function applyPackage(raw) {
   if (!manifestOk) return 'package is missing its manifest'
   if (!hasProject) return 'package has no project with pages'
 
-  // stage into a tmp dir, then swap live dirs into place
+  // stage into a tmp dir, then swap live dirs into place. The `finally` is what
+  // keeps a throw anywhere below from stranding a full copy of the store and
+  // media library in the data dir forever.
   const tmp = join(DATA_DIR, `import.tmp-${Date.now()}`)
-  const tmpStore = join(tmp, 'store')
-  const tmpMedia = join(tmp, 'media')
-  await mkdir(tmpStore, { recursive: true })
-  await mkdir(tmpMedia, { recursive: true })
-  for (const { path, data } of entries) {
-    if (path === 'manifest.json') continue
-    const dest = join(tmp, path) // path already allowlisted, safe to join
-    await mkdir(join(dest, '..'), { recursive: true })
-    await writeFile(dest, data)
-  }
+  return await withCritical('restore', async () => {
+   try {
+    const tmpStore = join(tmp, 'store')
+    const tmpMedia = join(tmp, 'media')
+    await mkdir(tmpStore, { recursive: true })
+    await mkdir(tmpMedia, { recursive: true })
+    for (const { path, data } of entries) {
+      if (path === 'manifest.json' || skipped.has(path)) continue
+      const dest = join(tmp, path) // path already allowlisted, safe to join
+      await mkdir(join(dest, '..'), { recursive: true })
+      await writeFile(dest, data)
+    }
 
-  await swapDir(STORE_DIR, tmpStore)
-  await swapDir(MEDIA_DIR, tmpMedia)
-  await rm(tmp, { recursive: true, force: true })
-  await migrateStoreDir() // a legacy backup arrives with old key filenames
-  resetMediaIndexCache() // make imported media visible without a restart
-  resetIntegrationsCache() // the restored store may carry a legacy settings.smtp
-  return null
+    await swapDir(STORE_DIR, tmpStore)
+    await swapDir(MEDIA_DIR, tmpMedia)
+    await migrateStoreDir() // a legacy backup arrives with old key filenames
+    resetMediaIndexCache() // make imported media visible without a restart
+    resetIntegrationsCache() // the restored store may carry a legacy settings.smtp
+    return null
+   } finally {
+    await rm(tmp, { recursive: true, force: true }).catch(() => {})
+   }
+  })
 }
 
 // ---------- 🔒 /api/snapshots (server-kept project packages) ----------
@@ -2000,10 +2384,24 @@ async function handleSnapshots(req, res, path) {
   if (path === '/api/snapshots') {
     if (req.method === 'GET') return send(res, 200, JSON.stringify(await listSnapshots()))
     if (req.method === 'POST') {
+      // createZip builds the whole archive in memory, so a library approaching
+      // the media quota can OOM a small container. Refuse with a number the
+      // operator can act on rather than dying mid-request. Streaming the zip
+      // would lift this, and is a bigger change than it looks.
+      const raw = (await dirBytes(STORE_DIR)) + (await dirBytes(MEDIA_DIR))
+      if (raw > SNAPSHOT_MAX_BYTES) {
+        return fail(
+          res,
+          507,
+          `too large to snapshot in memory (${Math.round(raw / 1e6)} MB of ${Math.round(
+            SNAPSHOT_MAX_BYTES / 1e6,
+          )} MB) — raise SNAPSHOT_MAX_BYTES or use GET /api/project-export`,
+        )
+      }
       const id = new Date().toISOString().replace(/:/g, '-').replace('.', '-')
       await mkdir(BACKUPS_DIR, { recursive: true })
-      const zip = await buildPackage()
-      await writeFile(join(BACKUPS_DIR, `${id}.zip`), zip)
+      const zip = await withCritical('snapshot', () => buildPackage())
+      await writeAtomic(join(BACKUPS_DIR, `${id}.zip`), zip)
       return send(res, 200, JSON.stringify({ id, createdAt: Date.now(), bytes: zip.length, name: '' }))
     }
     return fail(res, 404, 'not found')
@@ -2058,7 +2456,7 @@ async function migrateStoreDir() {
     const to = 'guano-' + f.slice('superbird-'.length)
     if (existsSync(join(STORE_DIR, to))) continue
     await rename(join(STORE_DIR, f), join(STORE_DIR, to))
-    console.log(`store migration: ${f} -> ${to}`)
+    log.info(`store migration: ${f} -> ${to}`)
   }
   await migrateSchema()
   await migrateIntegrations()
@@ -2096,7 +2494,7 @@ async function migrateIntegrations() {
   const created = await seedLegacyIntegrations({ legacySecrets, legacySmtp })
   for (const row of created) {
     // by NAME, never a value
-    console.log(`integrations: carried "${row.name}" across (${row.keys.join(', ')})`)
+    log.info(`integrations: carried "${row.name}" across (${row.keys.join(', ')})`)
   }
 
   // drop the legacy secret namespaces from publish.json once they are stored
@@ -2130,7 +2528,9 @@ async function migrateIntegrations() {
     stripped++
   }
   if (stripped) {
-    console.log(`integrations: removed the legacy settings block from ${stripped} project blob(s)`)
+    log.info(
+      `integrations: removed the legacy settings block from ${stripped} project blob(s)`,
+    )
     storeSize.at = 0 // the blobs changed size; force a recount
   }
 }
@@ -2158,7 +2558,7 @@ async function migrateSchema() {
     // the bundle is gitignored in the repo and built on demand; the editor
     // migrates defensively on load, so a missing bundle delays this, never
     // breaks it
-    console.warn(
+    log.warn(
       'schema migration skipped: the editor-logic bundle is missing — run ' +
         '`npm run build:mcp-runtime`',
     )
@@ -2190,10 +2590,10 @@ async function migrateSchema() {
     try {
       await cp(STORE_DIR, backup, { recursive: true })
       if (existsSync(SNAPSHOT)) await cp(SNAPSHOT, join(backup, 'published.json'))
-      console.log(`schema migration: kept a copy of the store at ${backup}`)
+      log.info(`schema migration: kept a copy of the store at ${backup}`)
     } catch (err) {
       // no backup, no migration: the alternative is an irreversible rewrite
-      console.error(`schema migration ABORTED — could not back up the store: ${err.message}`)
+      log.error(`schema migration ABORTED — could not back up the store: ${err.message}`)
       return
     }
   }
@@ -2202,17 +2602,9 @@ async function migrateSchema() {
     const { report } = migrateProject(project)
     await writeAtomic(file, JSON.stringify(project))
     const line = describeMigration(label, report)
-    if (line) console.log(`schema migration: ${line}`)
+    if (line) log.info(`schema migration: ${line}`)
   }
   storeSize.at = 0 // the blobs shrank; force a recount rather than guess
-}
-
-/** replace `live` with `staged`: move live aside, staged in, drop the old */
-async function swapDir(live, staged) {
-  const old = `${live}.old-${Date.now()}`
-  if (existsSync(live)) await rename(live, old)
-  await rename(staged, live)
-  await rm(old, { recursive: true, force: true })
 }
 
 async function handleStatic(req, res) {
@@ -2246,6 +2638,8 @@ async function handleStatic(req, res) {
       const adminHeaders = {
         ...base,
         'x-frame-options': 'DENY',
+        // never send this instance's URL to a third party on an outbound click
+        'referrer-policy': 'strict-origin-when-cross-origin',
         // APPEND, never replace: a .svg under /admin/ already carries the
         // no-script CSP from headersFor, and dropping it would let a served
         // SVG run script on this origin when navigated to directly
@@ -2309,6 +2703,7 @@ async function serveSiteDir(req, res, root) {
 }
 
 const server = createServer(async (req, res) => {
+  beginRequest(req, res, newRequestId(), clientIp(req))
   try {
     const url = new URL(req.url, 'http://x')
     const path = url.pathname
@@ -2316,6 +2711,13 @@ const server = createServer(async (req, res) => {
     // carries no session and may come from the site's own (different) origin,
     // so it is answered by its own CORS rule rather than the /api same-origin
     // check below. Keeping the two prefixes disjoint is the point.
+    if (path.startsWith('/api/')) {
+      // The store GET returns the whole project blob; nothing under /api is
+      // worth a shared cache holding on to. setHeader, not writeHead, so a
+      // handler with its own opinion (media thumbnails) still overrides it.
+      res.setHeader('cache-control', 'no-store')
+      res.setHeader('referrer-policy', 'strict-origin-when-cross-origin')
+    }
     if (isFormPath(path)) {
       if (await siteGateBlocksForm(req)) {
         return send(res, 401, JSON.stringify({ error: 'this site is private' }), 'application/json', {
@@ -2324,6 +2726,10 @@ const server = createServer(async (req, res) => {
       }
       return await handleFormPost(req, res, path)
     }
+    // Unauthenticated on purpose, and placed here so a probe at 1Hz costs one
+    // string compare rather than a walk down the whole chain. After the public
+    // forms namespace, which stays the first thing read.
+    if (path === '/api/health' && req.method === 'GET') return await handleHealth(res)
     // CSRF defense-in-depth (on top of the SameSite=Lax cookie): every
     // mutating API request must be same-origin. Non-browser clients send no
     // Origin header and pass — the CI bearer publish keeps working.
@@ -2385,8 +2791,13 @@ const server = createServer(async (req, res) => {
     }
     return await handleStatic(req, res)
   } catch (err) {
-    console.error(err)
-    fail(res, 500, 'internal error')
+    log.error(err, { rid: req.rid })
+    // The expose convention lived only in the publish catch, so an exporter or
+    // github error thrown from any other route was flattened into "internal
+    // error". The id is in the body so a user's screenshot can be joined to the
+    // stack trace in the log.
+    if (err?.expose) return fail(res, 502, err.message)
+    fail(res, 500, `internal error (ref ${req.rid})`)
   }
 })
 
@@ -2400,20 +2811,49 @@ const PREVIEW_PORT = Number(process.env.GUANO_PREVIEW_PORT) || 0
 let previewPort = 0
 
 const previewServer = createServer(async (req, res) => {
+  beginRequest(req, res, newRequestId(), clientIp(req))
   try {
-    const path = normalize(decodeURIComponent(new URL(req.url, 'http://x').pathname))
+    const url = new URL(req.url, 'http://x')
+    const path = normalize(decodeURIComponent(url.pathname))
+    // never the editor, and never the API, token or no token
+    if (path === '/admin' || path.startsWith('/admin/') || path.startsWith('/api/')) {
+      return fail(res, 404, 'the preview server serves the exported site only')
+    }
+    // the one-time link from the editor, traded for a cookie so the page's
+    // own asset requests carry it
+    const token = url.searchParams.get('t')
+    if (token && (await previewTokenValid(token))) {
+      const secret = await previewSecret()
+      res.writeHead(303, {
+        location: path,
+        'set-cookie': `${PREVIEW_COOKIE}=${previewCookie(secret)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${PREVIEW_COOKIE_TTL}`,
+        'cache-control': 'no-store',
+        'x-robots-tag': 'noindex',
+      })
+      return res.end()
+    }
+    if (!(await previewUnlocked(req))) {
+      return send(
+        res,
+        401,
+        JSON.stringify({ error: 'open this preview from the editor' }),
+        'application/json',
+        { 'cache-control': 'no-store', 'x-robots-tag': 'noindex' },
+      )
+    }
     // the preview's own form endpoint: it validates exactly as the live one
     // does and then stores and sends NOTHING, so a draft form can be tried out
     // without putting a row in the real list
     if (isFormPath(path)) return await handlePreviewFormPost(req, res, path)
-    // never the editor, and never indexed — this is unfinished work
-    if (path === '/admin' || path.startsWith('/admin/') || path.startsWith('/api/')) {
-      return fail(res, 404, 'the preview server serves the exported site only')
-    }
     await serveSiteDir(req, res, PREVIEW)
   } catch (err) {
-    console.error(err)
-    fail(res, 500, 'internal error')
+    log.error(err, { rid: req.rid })
+    // The expose convention lived only in the publish catch, so an exporter or
+    // github error thrown from any other route was flattened into "internal
+    // error". The id is in the body so a user's screenshot can be joined to the
+    // stack trace in the log.
+    if (err?.expose) return fail(res, 502, err.message)
+    fail(res, 500, `internal error (ref ${req.rid})`)
   }
 })
 
@@ -2428,61 +2868,217 @@ const previewServer = createServer(async (req, res) => {
 const PORT_EXPLICIT = Boolean(process.env.PORT)
 const PORT_STRICT = process.env.PORT_STRICT === '1' || process.env.PORT_STRICT === 'true'
 const PORT_TRIES = PORT_EXPLICIT || PORT_STRICT ? 1 : 10
+const BOOT_TIMEOUT_MS = Number(process.env.BOOT_TIMEOUT_MS) || 60_000
 let port = PORT
 
-server.on('error', (err) => {
-  if (err.code === 'EADDRINUSE') {
-    if (port - PORT + 1 < PORT_TRIES) {
-      port++
-      server.listen(port)
-      return
-    }
-    console.error(
-      PORT_EXPLICIT || PORT_STRICT
-        ? `port ${PORT} is already in use — stop the other process or pick another PORT`
-        : `ports ${PORT}–${port} are all in use — set PORT to a free one`,
-    )
-  } else {
-    console.error(`could not start the server: ${err.message}`)
-  }
-  process.exit(1)
-})
-
-server.listen(port, async () => {
+/**
+ * Everything that must finish before the socket accepts a single request.
+ *
+ * The schema migration is the reason this is not in the listen callback any
+ * more: it is a ONE-WAY rewrite of every blob on the instance, and it used to
+ * run inside an `async` callback nobody awaited — so the server was already
+ * serving while blobs were being rewritten under it, outside the per-key lock.
+ * A request landing in that window could read a half-migrated store.
+ *
+ * A throw here is fatal on purpose. Refusing to start is the correct answer to
+ * "the one-way migration did not complete"; serving an unmigrated store is not.
+ */
+async function boot() {
   // owner-only data dir: one chmod at the root protects every secret beneath
   // (users/sessions/invites/publish.json) even for files written pre-upgrade
   try {
     await mkdir(DATA_DIR, { recursive: true, mode: 0o700 })
     await chmod(DATA_DIR, 0o700)
   } catch (err) {
-    console.warn('could not restrict data dir permissions:', err.message)
+    log.warn('could not restrict data dir permissions:', err.message)
   }
+  await sweepDataDir()
   await migrateStoreDir()
-  // Retention is a real obligation, not housekeeping: submissions are other
-  // people's names and email addresses kept on someone else's server. Pruned
-  // at boot and once a day; `unref` so it never holds the process open.
-  const pruneSubmissions = async () => {
+  bootState.migrated = true
+  await runRetention()
+  // `unref` so a timer never holds the process open against a shutdown
+  setInterval(runRetention, 24 * 60 * 60 * 1000).unref()
+}
+
+/** Remove the debris of a swap that was killed mid-flight. Age-gated — see
+ * sweepStaleDirs: two instances can share a data dir, so a young staging
+ * directory may belong to a publish the other one is running right now. */
+async function sweepDataDir() {
+  try {
+    const dirs = await sweepStaleDirs(DATA_DIR, ['site', 'preview', 'import', 'store', 'media'])
+    const files = await sweepOrphanTmpFiles([DATA_DIR, STORE_DIR, BACKUPS_DIR, FORMS_DIR])
+    if (dirs) log.info(`boot: swept ${dirs} stale temp dir(s)`)
+    if (files) log.info(`boot: swept ${files} orphan temp file(s)`)
+  } catch (err) {
+    log.warn(`boot: sweep failed: ${err.message}`)
+  }
+}
+
+/** Retention is three separate obligations, so three separate try/catches: one
+ * failing must never skip the others. Submissions are other people's names and
+ * email addresses kept on someone else's server; the other two are this
+ * operator's own disk. */
+async function runRetention() {
+  try {
+    const { retentionDays } = (await readPublishConfig()).forms
+    const { pruned } = await submissionStore.prune(retentionDays)
+    if (pruned) log.info(`forms: pruned ${pruned} submission(s) past ${retentionDays} days`)
+  } catch (err) {
+    log.warn('forms: retention prune failed:', err.message)
+  }
+  try {
+    await pruneSnapshots()
+  } catch (err) {
+    log.warn('snapshots: retention prune failed:', err.message)
+  }
+  try {
+    await pruneVariantCache()
+  } catch (err) {
+    log.warn('media: variant cache prune failed:', err.message)
+  }
+}
+
+/** Keep the newest `snapshotKeep`, and of the rest drop anything past
+ * `snapshotDays`. The keep count is floored at 1 whatever the config says: a
+ * retention job that deletes the only restore point is not housekeeping. */
+async function pruneSnapshots() {
+  const { snapshotKeep, snapshotDays } = (await readPublishConfig()).retention
+  const keep = Math.max(1, snapshotKeep)
+  const all = await listSnapshots() // already newest-first
+  const cutoff = snapshotDays > 0 ? Date.now() - snapshotDays * 86_400_000 : null
+  const doomed = all
+    .slice(keep)
+    .filter((s) => cutoff === null || !Number.isFinite(s.createdAt) || s.createdAt < cutoff)
+  for (const snap of doomed) {
+    await rm(join(BACKUPS_DIR, `${snap.id}.zip`), { force: true })
+    await rm(join(BACKUPS_DIR, `${snap.id}.json`), { force: true }) // the name sidecar
+  }
+  if (doomed.length) {
+    log.info(`snapshots: pruned ${doomed.length} snapshot(s) (kept ${all.length - doomed.length})`)
+  }
+}
+
+/**
+ * Evict resized images nothing has read for `variantDays`.
+ *
+ * By ACCESS time, not modification time. A cache hit is a read, so mtime never
+ * moves after the first write and an mtime policy would evict exactly the
+ * files every publish uses. A variant whose original is gone is simply never
+ * read again, so it ages out on its own — which is why this does not need to
+ * hash the library to find orphans (the cache key is a content hash of the
+ * file, not a media id, so there is no cheap mapping back).
+ *
+ * Falls back to mtime where atime is older than mtime, which is what a
+ * `noatime` mount looks like. Being wrong here costs one re-encode, never
+ * correctness — the one prune that can afford to be approximate.
+ */
+async function pruneVariantCache() {
+  const { variantDays } = (await readPublishConfig()).retention
+  if (!variantDays || variantDays <= 0) return
+  const dir = join(MEDIA_DIR, 'variants')
+  let names
+  try {
+    names = await readdir(dir)
+  } catch {
+    return // no cache yet
+  }
+  const cutoff = Date.now() - variantDays * 86_400_000
+  let pruned = 0
+  for (const name of names) {
+    if (!name.endsWith('.webp')) continue
     try {
-      const { retentionDays } = (await readPublishConfig()).forms
-      const { pruned } = await submissionStore.prune(retentionDays)
-      if (pruned) console.log(`forms: pruned ${pruned} submission(s) past ${retentionDays} days`)
-    } catch (err) {
-      console.warn('forms: retention prune failed:', err.message)
+      const st = await stat(join(dir, name))
+      const seen = Math.max(st.atimeMs < st.mtimeMs ? 0 : st.atimeMs, st.mtimeMs)
+      if (seen >= cutoff) continue
+      await rm(join(dir, name), { force: true })
+      pruned++
+    } catch {
+      /* vanished mid-scan — nothing to do */
     }
   }
-  await pruneSubmissions()
-  setInterval(pruneSubmissions, 24 * 60 * 60 * 1000).unref()
+  if (pruned) log.info(`media: pruned ${pruned} cached variant(s) unused for ${variantDays}d`)
+}
+
+/**
+ * Listen on `first`, walking up to `tries` ports when it is busy.
+ *
+ * The retry is a `listen()` INSIDE this promise rather than a re-entry of the
+ * boot path, which is what makes "the one-way migration cannot run twice" true
+ * by construction instead of by discipline.
+ */
+function listenWalking(srv, first, tries) {
+  return new Promise((resolve, reject) => {
+    let attempt = first
+    const onError = (err) => {
+      if (err.code === 'EADDRINUSE' && attempt - first + 1 < tries) {
+        attempt++
+        srv.listen(attempt)
+        return
+      }
+      srv.off('listening', onListening)
+      reject(err)
+    }
+    const onListening = () => {
+      srv.off('error', onError)
+      resolve(srv.address().port)
+    }
+    srv.on('error', onError)
+    srv.once('listening', onListening)
+    srv.listen(attempt)
+  })
+}
+
+async function main() {
+  // A boot that hangs now hangs the socket too, so say which stage is stuck
+  // rather than leaving an operator (or the e2e webServer poll) guessing.
+  const watchdog = setTimeout(() => {
+    log.error(`boot: still running after ${BOOT_TIMEOUT_MS}ms — the socket is NOT open yet`)
+  }, BOOT_TIMEOUT_MS)
+  watchdog.unref()
+  await boot()
+  clearTimeout(watchdog)
+  // a signal that arrived during the migration: let it finish its current
+  // blob (migrateSchema is idempotent, so the next boot resumes), then go
+  if (exitRequestedDuringBoot()) process.exit(0)
+
+  try {
+    port = await listenWalking(server, PORT, PORT_TRIES)
+  } catch (err) {
+    log.error(
+      err.code === 'EADDRINUSE'
+        ? PORT_EXPLICIT || PORT_STRICT
+          ? `port ${PORT} is already in use — stop the other process or pick another PORT`
+          : `ports ${PORT}–${PORT + PORT_TRIES - 1} are all in use — set PORT to a free one`
+        : `could not start the server: ${err.message}`,
+    )
+    process.exit(1)
+  }
+
+  // steady state: the walk is over, so no handler here can exit the process
+  server.on('error', (err) => {
+    if (isShuttingDown()) return
+    log.error(`server error: ${err.message}`)
+  })
+
   // the preview site, on its own port. A failure here is never fatal: it is a
   // convenience, and the editor and the live site must come up regardless.
+  // Registered BEFORE listen, or an immediate EADDRINUSE would be unhandled.
   previewServer.once('error', (err) => {
-    console.warn(`preview server unavailable (${err.message}) — /api/preview will still export`)
+    if (isShuttingDown()) return
+    log.warn(`preview server unavailable (${err.message}) — /api/preview will still export`)
     previewPort = 0
   })
   previewServer.listen(PREVIEW_PORT || port + 1, () => {
     previewPort = previewServer.address().port
   })
+
+  installShutdown({ servers: [server, previewServer], beforeClose: closeEventClients })
+  printBanner()
+}
+
+function printBanner() {
   const base = `http://localhost:${port}`
-  console.log(`
+  log.banner(`
   guano is running${TOKEN ? ' (publish token required)' : ''}
 
   ➜ editor:  ${base}/admin
@@ -2492,7 +3088,7 @@ server.listen(port, async () => {
 ${needsSetup() ? `\n  first run — open ${base}/admin to create your admin account\n` : ''}`)
   // Last thing printed, because it is the thing that will waste your day.
   if (port !== PORT) {
-    console.warn(`  ⚠  PORT ${PORT} WAS BUSY — THIS SERVER IS ON ${port}
+    log.banner(`  ⚠  PORT ${PORT} WAS BUSY — THIS SERVER IS ON ${port}
 
      Another process is still listening on ${PORT}, and everything that
      addresses guano by its default port goes THERE, not here:
@@ -2507,4 +3103,6 @@ ${needsSetup() ? `\n  first run — open ${base}/admin to create your admin acco
        lsof -nP -iTCP:${PORT} -sTCP:LISTEN
 `)
   }
-})
+}
+
+void main()

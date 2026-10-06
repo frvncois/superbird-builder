@@ -1,6 +1,7 @@
 import type { ComponentDef, ElementNode } from '@/types/editor'
 import { walkNodes } from './tree'
 import { buildInstanceMap, resolveInstanceValue } from './instances'
+import { uid } from './shared/ids.js'
 
 /**
  * What an instance node pairing with a given MASTER-SIDE node would inherit for
@@ -54,7 +55,7 @@ export function cloneForMaster(source: ElementNode): {
   const cloned = JSON.parse(JSON.stringify(source)) as ElementNode
   const idMap = new Map<string, string>()
   walkNodes([cloned], (n) => {
-    const next = crypto.randomUUID()
+    const next = uid()
     idMap.set(n.id, next)
     n.id = next
     // refs are PAGE-scope addresses; a master is cloned into every instance on
@@ -127,7 +128,7 @@ export function isComponentType(type: string): boolean {
  *  the holder starts from, copied whole (they are its own from then on) */
 export function createMirror(master: ElementNode): ElementNode {
   const node: ElementNode = {
-    id: crypto.randomUUID(),
+    id: uid(),
     type: master.type,
     content: '',
     children: master.slot ? cloneSlotContent(master.children) : master.children.map(createMirror),
@@ -148,7 +149,7 @@ function cloneSlotContent(nodes: ElementNode[]): ElementNode[] {
   const cloned = JSON.parse(JSON.stringify(nodes)) as ElementNode[]
   const idMap = new Map<string, string>()
   walkNodes(cloned, (n) => {
-    const next = crypto.randomUUID()
+    const next = uid()
     idMap.set(n.id, next)
     n.id = next
     delete n.ref
@@ -534,7 +535,7 @@ export function adoptStructure(
       result.adopted++
     } else {
       node = {
-        id: crypto.randomUUID(),
+        id: uid(),
         type: child.type,
         content: child.content,
         locales: child.locales ? JSON.parse(JSON.stringify(child.locales)) : undefined,

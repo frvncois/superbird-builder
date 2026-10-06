@@ -10,6 +10,7 @@ import type {
   ElementNode,
   InteractionBinding,
 } from '@/types/editor'
+import { uid } from '@/lib/shared/ids.js'
 
 /**
  * The author's unit: ONE effect, which may be a class change, a timeline, or
@@ -128,7 +129,7 @@ export function useEffects() {
     const existing = effectForHalf(kind, halfId)
     if (existing) return existing
     const effect: Effect = {
-      id: crypto.randomUUID(),
+      id: uid(),
       name,
       ...(kind === 'interaction' ? { interactionId: halfId } : { animationId: halfId }),
     }

@@ -15,6 +15,7 @@ import { buildInstanceMap, dependencyOrder, nestedComponentNames } from './insta
 import { resolvePicks } from './shared/instances.js'
 import { mergeAttributeLayers } from './shared/attributes.js'
 import { effectiveClasses } from './variants'
+import { uid } from './shared/ids.js'
 
 /**
  * Whole-project operations on components — rename, duplicate, categorize,
@@ -142,7 +143,7 @@ export function duplicateComponent(project: Project, id: string): ComponentDef |
   // nodes, which resolve globally — so firing one would animate the other.
   const { cloned } = cloneForMaster(def.root)
   cloned.type = name
-  const copy: ComponentDef = { id: crypto.randomUUID(), name, root: cloned }
+  const copy: ComponentDef = { id: uid(), name, root: cloned }
   // the category carries over; `source` deliberately does not — a copy made to
   // be edited is no longer the library entry it came from
   setComponentMeta(copy, { category: def.category, variants: def.variants })
@@ -242,14 +243,14 @@ function bakeMasterState(pairs: Pair[], masterToInstance: Map<string, string>): 
     if (master.interactions?.length) {
       node.interactions = master.interactions.map((b) => ({
         ...deepClone(b),
-        id: crypto.randomUUID(),
+        id: uid(),
         targetId: retarget(b.targetId),
       }))
     }
     if (master.animations?.length) {
       node.animations = master.animations.map((b) => ({
         ...deepClone(b),
-        id: crypto.randomUUID(),
+        id: uid(),
         targetId: retarget(b.targetId),
       }))
     }

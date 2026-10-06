@@ -2,6 +2,7 @@ import { computed, ref } from 'vue'
 import { useProject } from './useProject'
 import { usePage } from './usePage'
 import type { Comment, CommentAnchor } from '@/types/editor'
+import { uid } from '@/lib/shared/ids.js'
 
 export type CommentVisibility = 'all' | 'pending' | 'resolved' | 'none'
 
@@ -65,7 +66,7 @@ export function useComments() {
     y?: number
   }): Comment {
     const comment: Comment = {
-      id: crypto.randomUUID(),
+      id: uid(),
       ...at,
       text: '',
       author: CURRENT_USER,
@@ -95,7 +96,7 @@ export function useComments() {
     const comment = comments.value.find((c) => c.id === id)
     if (comment && text.trim()) {
       comment.replies.push({
-        id: crypto.randomUUID(),
+        id: uid(),
         text: text.trim(),
         author: CURRENT_USER,
         createdAt: Date.now(),

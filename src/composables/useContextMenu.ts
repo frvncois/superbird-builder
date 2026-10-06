@@ -3,6 +3,7 @@ import { useElement } from './useElement'
 import { useStructure } from './useStructure'
 import type { InteractionBinding } from '@/types/editor'
 import { deepClone } from '@/lib/tree'
+import { uid } from '@/lib/shared/ids.js'
 
 const menu = ref<{ x: number; y: number; targetId: string } | null>(null)
 
@@ -93,7 +94,7 @@ export function useContextMenu() {
       // fresh ids so the pasted set never collides with the source's
       target.value.interactions = copiedInteractions.value.map((i) => ({
         ...i,
-        id: crypto.randomUUID(),
+        id: uid(),
       }))
     }
   }
