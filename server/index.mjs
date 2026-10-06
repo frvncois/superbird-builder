@@ -2417,8 +2417,17 @@ const previewServer = createServer(async (req, res) => {
   }
 })
 
+// Walking to the next free port is a convenience that can cost a whole
+// debugging session, so it is opt-out (`PORT_STRICT=1`) and it is LOUD. An
+// older instance squatting the default keeps serving /api and /api/published
+// from the export.mjs cached in ITS heap — so the editor publishes, the MCP
+// publishes, both report success, and the HTML on disk is built by code from
+// another day. Everything that reaches this server by its default address
+// (the Vite proxy, the MCP's GUANO_URL, an open browser tab) goes to the
+// squatter, not to us. See the banner warning below.
 const PORT_EXPLICIT = Boolean(process.env.PORT)
-const PORT_TRIES = PORT_EXPLICIT ? 1 : 10
+const PORT_STRICT = process.env.PORT_STRICT === '1' || process.env.PORT_STRICT === 'true'
+const PORT_TRIES = PORT_EXPLICIT || PORT_STRICT ? 1 : 10
 let port = PORT
 
 server.on('error', (err) => {
@@ -2429,7 +2438,7 @@ server.on('error', (err) => {
       return
     }
     console.error(
-      PORT_EXPLICIT
+      PORT_EXPLICIT || PORT_STRICT
         ? `port ${PORT} is already in use — stop the other process or pick another PORT`
         : `ports ${PORT}–${port} are all in use — set PORT to a free one`,
     )
@@ -2463,7 +2472,6 @@ server.listen(port, async () => {
   }
   await pruneSubmissions()
   setInterval(pruneSubmissions, 24 * 60 * 60 * 1000).unref()
-  if (port !== PORT) console.log(`port ${PORT} was busy — using ${port}`)
   // the preview site, on its own port. A failure here is never fatal: it is a
   // convenience, and the editor and the live site must come up regardless.
   previewServer.once('error', (err) => {
@@ -2482,4 +2490,21 @@ server.listen(port, async () => {
   ➜ preview: http://localhost:${PREVIEW_PORT || port + 1}/
   ➜ data:    ${DATA_DIR}
 ${needsSetup() ? `\n  first run — open ${base}/admin to create your admin account\n` : ''}`)
+  // Last thing printed, because it is the thing that will waste your day.
+  if (port !== PORT) {
+    console.warn(`  ⚠  PORT ${PORT} WAS BUSY — THIS SERVER IS ON ${port}
+
+     Another process is still listening on ${PORT}, and everything that
+     addresses guano by its default port goes THERE, not here:
+       · the Vite dev proxy (vite.config.ts targets localhost:${PORT})
+       · the MCP server (GUANO_URL defaults to http://localhost:${PORT})
+       · any browser tab already open on :${PORT}
+     If that process is an older guano, it publishes and previews with the
+     export code cached in its heap: every write reports success and the
+     HTML on disk is built by a different day's code.
+
+     Stop it and restart here, or set PORT_STRICT=1 to refuse to walk:
+       lsof -nP -iTCP:${PORT} -sTCP:LISTEN
+`)
+  }
 })

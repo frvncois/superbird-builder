@@ -60,3 +60,4 @@ playwright-report
 # throwaway headless probes (CLAUDE.md's `.tmp-test.ts` recipe)
 .tmp-test.ts
 *.tmp-test.ts
+.tmp-*
