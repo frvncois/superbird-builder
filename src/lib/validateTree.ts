@@ -4,6 +4,7 @@ import { BUILTIN_LIST_SOURCES } from './nodeState'
 // the SAME scope/binding resolution the three renderers run, so a field this
 // reports as unknown is a field none of them could have resolved
 import { pagesListScope, resolveBinding, resolveListScope } from './shared/fields.js'
+import { CHANNEL_NAME_RE, isChannelName } from './shared/interactionKeys.js'
 
 /**
  * What is wrong with a page's structure — the only place a human sees that a
@@ -95,6 +96,8 @@ export function validateTree(root: ElementNode, ctx: ValidateContext): TreeDiagn
   const diags: TreeDiagnostic[] = []
   /** every ref seen so far → the node that claimed it */
   const refAt = new Map<string, ElementNode>()
+  /** every channel declared so far → the node that declared it */
+  const channelAt = new Map<string, ElementNode>()
   const collections = ctx.collections
 
   /** the collection an arg presents, resolved the way the renderers resolve it */
@@ -142,6 +145,53 @@ export function validateTree(root: ElementNode, ctx: ValidateContext): TreeDiagn
             `'#${node.ref}' is inside the '${host}' component — refs are page-scope, and a ` +
             `component's structure is copied into every instance. Put the ref on the ` +
             `'${host}' element instead.`,
+        })
+      }
+    }
+
+    if (node.channel !== undefined && node.channel !== '') {
+      // a channel is an address, so a bad name is an address nothing can
+      // reach — and the charset is what keeps it readable in `@name` form
+      if (!isChannelName(node.channel)) {
+        diags.push({
+          nodeId: node.id,
+          message:
+            `'${node.channel}' is not a channel name — lowercase letters, digits and hyphens, ` +
+            `starting with a letter, at most 40 characters (${CHANNEL_NAME_RE.source})`,
+        })
+      } else if (channelAt.has(node.channel)) {
+        // both listeners open, so the overlay appears twice
+        diags.push({
+          nodeId: node.id,
+          message:
+            `channel '${node.channel}' is already declared by another element here — a channel ` +
+            'is site-wide, so two listeners both open and the page shows it twice',
+        })
+      } else {
+        channelAt.set(node.channel, node)
+      }
+      // a REPEAT is the one place it can never work: the listener would be
+      // rendered once per row, and every row would open together
+      const repeat = [...scopes]
+        .reverse()
+        .find((s) => s.type === 'collection-list' || (s.type === 'slider' && !!s.arg))
+      if (repeat) {
+        diags.push({
+          nodeId: node.id,
+          message:
+            `a channel listener inside '${repeat.type}${repeat.arg ? `[${repeat.arg}]` : ''}' ` +
+            'would open once per row — move it outside the list and open the one copy from ' +
+            'every row',
+        })
+      }
+      if (isComponentType(node.type)) {
+        // an instance wrapper renders no element of its own, so the classes a
+        // channel effect applies would land nowhere
+        diags.push({
+          nodeId: node.id,
+          message:
+            `<${node.type}> emits no element of its own, so it cannot listen on a channel — ` +
+            `declare the channel on an element inside ${node.type} instead`,
         })
       }
     }

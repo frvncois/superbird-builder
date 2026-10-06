@@ -26,6 +26,7 @@ import { resolveSliderConfig, SLIDER_DEFAULTS } from '@/lib/shared/slider.js'
 import { collectFormFields, formConfigError } from '@/lib/shared/forms.js'
 import { useEntryField } from '@/composables/useEntryField'
 import { isNodeHidden } from '@/lib/instances'
+import { isComponentType } from '@/lib/components'
 import { useProject } from '@/composables/useProject'
 import { useSettings } from '@/composables/useSettings'
 import { useAuth } from '@/composables/useAuth'
@@ -37,14 +38,14 @@ import { acceptsChildren } from '@/lib/treeOps'
 import { pushMasterStructure } from '@/lib/componentOps'
 import type { CollectionEntry, CollectionField, ElementNode } from '@/types/editor'
 
-const { selectedElement, getElement } = useElement()
+const { selectedElement, getElement, setElementChannel } = useElement()
 // structural writes go through the backend so they land on the page or on a
 // component master, depending on what is being edited
 const { backend } = useStructure()
 const changeElementType = (id: string, type: string) => backend.value.retype(id, type)
 const setElementArg = (id: string, arg: string | null) => backend.value.setArg(id, arg)
 const setElementLink = (id: string, link: string | null) => backend.value.setLink(id, link)
-const { masterFor } = useComponents()
+const { masterFor, editTarget } = useComponents()
 const { activePage, pages } = usePage()
 const { breakpoints } = useProject()
 const { settings } = useSettings()
@@ -95,6 +96,25 @@ const htmlId = computed({
   get: () => selectedElement.value?.htmlId ?? '',
   set: (value: string) => {
     if (selectedElement.value) selectedElement.value.htmlId = value.trim() || undefined
+  },
+})
+
+// --- channel: a site-wide effect target (lib/shared/channels.js) ---
+//
+// Shared state, like classes, so inside an instance it is the component's:
+// `editTarget` is the same redirect Style and Interactions write through.
+// An instance wrapper has none — it emits no element of its own.
+const channelTarget = computed(() => editTarget.value ?? selectedElement.value ?? null)
+const canChannel = computed(
+  () => !!channelTarget.value && !isComponentType(selectedElement.value?.type ?? ''),
+)
+const channelRejected = ref(false)
+const channel = computed({
+  get: () => channelTarget.value?.channel ?? '',
+  set: (value: string) => {
+    const node = channelTarget.value
+    if (!node) return
+    channelRejected.value = !setElementChannel(node, value.trim() || null)
   },
 })
 
@@ -1082,6 +1102,14 @@ const src = computed({
       </RowUI>
       <RowUI label="ID">
         <InputUI ref="idField" v-model="htmlId" placeholder="e.g. hero" class="font-mono" />
+      </RowUI>
+      <RowUI v-if="canChannel" label="Channel">
+        <InputUI
+          v-model="channel"
+          placeholder="e.g. start"
+          class="font-mono"
+          :class="channelRejected && 'text-danger'"
+        />
       </RowUI>
       <RowUI v-if="canLinkEntry" label="Link to entry">
         <ToggleUI v-model="linkToEntry" />

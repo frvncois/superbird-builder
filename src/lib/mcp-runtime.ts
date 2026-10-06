@@ -250,7 +250,18 @@ export {
   interactionStateKey,
   interactionGroupKey,
   isSymmetricTrigger,
+  CHANNEL_NAME_RE,
+  channelName,
+  channelTargetId,
+  isChannelName,
+  isChannelTarget,
 } from './shared/interactionKeys.js'
+
+// --- channels (src/lib/shared/channels.js): a target that is a NAME, so one
+// overlay can be opened from anywhere in the project. The tools need the
+// listener index to answer "does anything listen on @start?" before accepting
+// a binding, and the per-route counts for the `channel-declared-twice` warning.
+export { buildChannelIndex, channelListeners, routeChannelCounts } from './shared/channels.js'
 
 // --- project/page factories (src/lib/factories.ts) — create_page mirrors the
 // editor, and createProject lets the SERVER seed a fresh instance's Main blob

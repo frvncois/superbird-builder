@@ -183,6 +183,33 @@ function fixture() {
                 htmlId: 'header',
                 classes: 'sticky top-0 flex flex-row items-start overflow-visible',
               }),
+              // --- channels: a Header component opens a StartModal
+              // component, two trees that never meet ---
+              node('iHdr', 'Header', {
+                children: [
+                  node('iHdrBar', 'header', {
+                    children: [
+                      node('iHdrBtn', 'button', {
+                        htmlId: 'ch-open',
+                        children: [node('iHdrTxt', 'span')],
+                      }),
+                    ],
+                  }),
+                ],
+              }),
+              node('iMdl', 'StartModal', {
+                children: [
+                  node('iMdlPanel', 'div', {
+                    htmlId: 'ch-modal',
+                    children: [
+                      node('iMdlClose', 'button', {
+                        htmlId: 'ch-close',
+                        children: [node('iMdlTxt', 'span')],
+                      }),
+                    ],
+                  }),
+                ],
+              }),
               // --- §2.1: decorative alt + boolean download ---
               node('img', 'image', { src: 'https://example.com/a.png', attributes: { alt: '' } }),
               node('pdf', 'link', {
@@ -195,7 +222,56 @@ function fixture() {
         ],
       },
     ],
-    components: [],
+    components: [
+      {
+        id: 'c-header',
+        name: 'Header',
+        root: node('mHdr', 'Header', {
+          children: [
+            node('mHdrBar', 'header', {
+              classes: 'flex',
+              children: [
+                node('mHdrBtn', 'button', {
+                  interactions: [
+                    // a CHANNEL target: no node id, no scope — reachable from
+                    // a tree this component has never heard of
+                    { id: 'b11', interactionId: SHOW, trigger: 'click', targetId: '@start', action: 'on' },
+                  ],
+                  children: [node('mHdrTxt', 'span', { content: 'Open start' })],
+                }),
+              ],
+            }),
+          ],
+        }),
+      },
+      {
+        id: 'c-modal',
+        name: 'StartModal',
+        root: node('mMdl', 'StartModal', {
+          children: [
+            node('mMdlPanel', 'div', {
+              channel: 'start',
+              classes: 'fixed top-0 right-0 w-64 h-64 hidden',
+              children: [
+                node('mMdlClose', 'button', {
+                  interactions: [
+                    {
+                      id: 'b12',
+                      interactionId: SHOW,
+                      trigger: 'click',
+                      targetId: '@start',
+                      action: 'off',
+                      closeOn: ['escape'],
+                    },
+                  ],
+                  children: [node('mMdlTxt', 'span', { content: 'Dismiss' })],
+                }),
+              ],
+            }),
+          ],
+        }),
+      },
+    ],
     collections: [],
     interactions: [
       { id: SHOW, name: 'Show', toClasses: 'flex', duration: 'duration-300', easing: 'ease-out' },
@@ -477,6 +553,27 @@ test.describe('interactions', () => {
 
     const inner = /<a href="https:\/\/example\.com\/"[^>]*><div([^>]*)>/.exec(html)![1]!
     expect(inner).not.toMatch(/target=|aria-label=|rel=/)
+  })
+
+  test('a channel reaches a sibling tree: one component opens another', async ({ page }) => {
+    await page.goto('/')
+    // the two components share ONE unscoped state key, so the header's button
+    // and the modal's own close button drive the same effect
+    expect(await classesOf(page, 'ch-modal')).toContain('hidden')
+
+    await page.click('#ch-open')
+    const open = await classesOf(page, 'ch-modal')
+    expect(open).toContain('flex')
+    expect(open).not.toContain('hidden')
+
+    await page.click('#ch-close')
+    expect(await classesOf(page, 'ch-modal')).toContain('hidden')
+
+    // …and Escape, declared on the close binding, dismisses the same effect
+    await page.click('#ch-open')
+    expect(await classesOf(page, 'ch-modal')).toContain('flex')
+    await page.keyboard.press('Escape')
+    expect(await classesOf(page, 'ch-modal')).toContain('hidden')
   })
 
   test('empty and boolean attributes survive sanitization', async () => {

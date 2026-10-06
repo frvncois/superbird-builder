@@ -1662,6 +1662,50 @@ shows the element so you can still select and style it.
 
 with `{ref: "other", trigger: "change", targetRef: "amount"}`.
 
+### Site-wide overlays: channels
+
+A `targetId` names ONE element in ONE tree, so an effect inside a component can never
+reach outside it, and an effect outside can never reach in. That makes a modal opened
+from the header awkward: the overlay had to live inside the header component.
+
+A **channel** is a target that is a NAME. Any element declares one, any binding
+anywhere aims at it:
+
+```html
+<!-- component StartModal -->
+<div data-channel="start" class="fixed inset-0 hidden items-center justify-center">…</div>
+
+<!-- component Header -->
+<button data-ref="open"><span>Get started</span></button>
+```
+
+bind the header's button with `{channel: "start", trigger: "click"}` — sugar for
+`targetId: "@start"`. Declare the channel with `edit_elements {channel: "start"}` (on
+a component, inside the master with `componentId`), or write `data-channel="start"` in
+the HTML. `""` clears it.
+
+Three rules:
+
+- **A channel is site-wide by definition.** Two instances of the component that OPENS
+  one both open the same thing — that is the point. Two instances of the component that
+  LISTENS are a mistake, and `publish` names it (`channel-declared-twice`): both open,
+  so the overlay shows twice. One listener per route.
+- **Never inside a repeat.** A listener in a `collection-list` or a bound `slider` would
+  be rendered once per row and every row would open together; it is refused. Keep ONE
+  overlay outside the list and open it from every row.
+- **Tweens: `click` only.** A click play is the one timeline several triggers share;
+  every other trigger is keyed per binding, so two of them on one channel would run two
+  plays on the same element. Class interactions take every trigger on a channel.
+
+The overlay is bound before it is declared? The bind is refused, naming the fix. Declare
+the channel first.
+
+**Resetting a multi-step flow on open.** Give each step panel its own channel
+(`step-1`, `step-2`, …) and bind the step buttons to those channels in ONE exclusive
+`group`. Then bind the OPEN button to `@step-1` with `action: "on"` in the same group:
+opening the flow turns step 1 on, which turns every other step off. Channel groups are
+unscoped, so the trigger outside the component and the buttons inside share the group.
+
 ## Project settings
 
 `get_settings` / `update_settings` manage the project-level pieces:

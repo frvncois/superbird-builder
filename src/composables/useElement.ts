@@ -2,6 +2,9 @@ import { computed, effectScope, reactive, ref, shallowRef, toRaw, watch } from '
 import { usePage } from './usePage'
 import { findNode, walkNodes } from '@/lib/tree'
 import type { ElementNode } from '@/types/editor'
+import { isChannelName } from '@/lib/shared/interactionKeys.js'
+import { isComponentType } from '@/lib/components'
+import { useProject } from './useProject'
 
 // one definition of where a drop lands, shared with the structure ops
 export type { DropPosition } from '@/lib/treeOps'
@@ -141,6 +144,59 @@ export function useElement() {
     return true
   }
 
+  /**
+   * Declare (or clear) the CHANNEL an element listens on — a site-wide effect
+   * target, so a binding anywhere in the project aimed at `@<name>` lands here.
+   *
+   * Takes the NODE, not an id: on the components board the selection is a
+   * master node, and inside an instance the caller passes the master (a
+   * channel is shared state, like classes — every instance listens).
+   *
+   * Returns whether it wrote, like `setElementRef`: the caller surfaces the
+   * reason rather than the field silently keeping a value nothing can reach.
+   * Refused for a bad name, a second listener in the same tree, an instance
+   * wrapper (it emits no element) and a node inside a repeat (it would open
+   * once per row) — the same rules `validateTree` reports.
+   */
+  function setElementChannel(target: ElementNode, channel: string | null): boolean {
+    if (!target) return false
+    if (!channel) {
+      delete target.channel
+      return true
+    }
+    if (!isChannelName(channel) || isComponentType(target.type)) return false
+    const { project } = useProject()
+    const trees: ElementNode[][] = [
+      ...project.value.pages.map((p) => p.elements),
+      ...project.value.components.map((c) => [c.root]),
+    ]
+    for (const tree of trees) {
+      let holds = false
+      let taken = false
+      let inRepeat = false
+      const visit = (nodes: ElementNode[], repeat: boolean) => {
+        for (const n of nodes) {
+          if (n === target) {
+            holds = true
+            inRepeat = repeat
+          } else if (n.channel === channel) {
+            taken = true
+          }
+          visit(
+            n.children,
+            repeat || n.type === 'collection-list' || (n.type === 'slider' && !!n.arg),
+          )
+        }
+      }
+      visit(tree, false)
+      if (!holds) continue
+      if (taken || inRepeat) return false
+      target.channel = channel
+      return true
+    }
+    return false
+  }
+
   function selectElement(id: string | null) {
     selectedElementId.value = id
     selectionAnchorId.value = id // a plain select collapses any multi-selection
@@ -232,6 +288,7 @@ export function useElement() {
     getElement,
     updateElement,
     setElementRef,
+    setElementChannel,
     selectElement,
     siblingsOf,
     highlightElement,

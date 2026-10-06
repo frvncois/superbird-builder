@@ -2,7 +2,11 @@ import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ELEMENTS } from '@/lib/elements'
 import { usePage } from './usePage'
 import { useCollections } from './useCollections'
-import { useInteraction, type ScopeOf } from './useInteraction'
+import {
+  channelAnimationDrivers,
+  useInteraction,
+  type ScopeOf,
+} from './useInteraction'
 import { useComponents } from './useComponents'
 import { useAnimation, animBindingActiveAt, scopedAnimBindings } from './useAnimation'
 import { bindingScope, entryScopePart } from '@/lib/shared/entryScope.js'
@@ -25,7 +29,12 @@ import {
   sanitizeAttributes,
   withSafeRel,
 } from '@/lib/shared/attributes.js'
-import { DEFAULT_SCROLL_AT } from '@/lib/shared/interactionKeys.js'
+import {
+  DEFAULT_SCROLL_AT,
+  channelTargetId,
+  isChannelName,
+  isChannelTarget,
+} from '@/lib/shared/interactionKeys.js'
 import { useLocale } from './useLocale'
 import { SAFE_SRC } from '@/lib/shared/urls.js'
 import { DEFAULT_ICON_SVG, parseInlineSvg, sanitizeInlineSvg } from '@/lib/shared/svg.js'
@@ -492,6 +501,17 @@ export function useRenderNode(
 
   // --- classes (shared core; renderers append their own chrome) ---
 
+  /**
+   * The channel this element LISTENS on, if any — node state shared like
+   * classes, so inside an instance it is the component master's. A channel
+   * binding reaches it from anywhere in the project, which is what lets one
+   * modal component be opened by a header component on every route.
+   */
+  const listensOn = computed(() => {
+    const declared = (mapping.value ? mapping.value.master : node.value).channel
+    return isChannelName(declared) ? declared : undefined
+  })
+
   const baseClasses = computed(() => {
     // the master's classes inside an instance, with the instance's variant
     // options layered on (lib/variants) — or the node's own
@@ -502,8 +522,9 @@ export function useRenderNode(
           mapping.value.root,
           scopeOfTarget,
           renderBreakpointId.value,
+          listensOn.value,
         )
-      : classesFor(node.value.id, renderBreakpointId.value, scopeOfTarget)
+      : classesFor(node.value.id, renderBreakpointId.value, scopeOfTarget, listensOn.value)
     // parity with the published runtime (int-fxrm): own classes styling the
     // same property as an active interaction's classes are REMOVED, not
     // outweighed — the cascade would pick an arbitrary winner (hidden+flex)
@@ -553,10 +574,12 @@ export function useRenderNode(
    * Mirrors the export's key scope exactly.
    */
   const scopeFor = (ownerId: string, targetId: string) =>
-    bindingScope(
-      mapping.value?.instanceId ?? null,
-      entryScopePart(scopeRoots.value, ownerId, targetId, scope?.entry?.id),
-    )
+    isChannelTarget(targetId)
+      ? undefined
+      : bindingScope(
+          mapping.value?.instanceId ?? null,
+          entryScopePart(scopeRoots.value, ownerId, targetId, scope?.entry?.id),
+        )
 
   /** resolver for the bindings whose effect lands ON this node */
   const scopeOfTarget: ScopeOf = (ownerId) => scopeFor(ownerId, selfOwnerId.value)
@@ -580,6 +603,11 @@ export function useRenderNode(
       : (animTargetIndex.value.get(node.value.id) ?? []),
   )
 
+  /** the CLICK tweens aimed at this node's channel — kept apart from
+   *  `animTargets` because their play is keyed by the channel, not by this
+   *  node's id, so the values are read under a different target */
+  const channelAnimTargets = computed(() => channelAnimationDrivers(listensOn.value))
+
   /** every scope the animations landing on this node key under — one per
    * binding, since the entry part follows the target */
   const animTargetScopes = computed(() => {
@@ -589,11 +617,16 @@ export function useRenderNode(
   })
 
   /** the node's own animated values (element-moving tracks only) */
-  const ownMotionValues = computed(() =>
-    animTargets.value.length
+  const ownMotionValues = computed(() => {
+    const own = animTargets.value.length
       ? motion.valuesForNode(node.value.id, animTargetScopes.value)
-      : undefined,
-  )
+      : undefined
+    if (!channelAnimTargets.value.length) return own
+    // a channel play is keyed by the CHANNEL and is always unscoped
+    const viaChannel = motion.valuesForNode(channelTargetId(listensOn.value!), undefined)
+    if (!viaChannel) return own
+    return own ? { ...own, ...viaChannel } : viaChannel
+  })
 
   /** values this node inherits as the Nth child of a STAGGERED parent —
    * only staggered tracks cascade, so one timeline can move the container
@@ -725,8 +758,13 @@ export function useRenderNode(
       (mapping.value ? mapping.value.master.interactions : node.value.interactions) ?? []
     ).map((b) => bindingStateKey(b, interactionOwnerId.value, scopeOfOwn(b)))
     const targeted = mapping.value
-      ? scopedTargetStateKeys(mapping.value.master.id, mapping.value.root, scopeOfTarget)
-      : targetStateKeys(node.value.id, scopeOfTarget)
+      ? scopedTargetStateKeys(
+          mapping.value.master.id,
+          mapping.value.root,
+          scopeOfTarget,
+          listensOn.value,
+        )
+      : targetStateKeys(node.value.id, scopeOfTarget, listensOn.value)
     return [...new Set([...triggered, ...targeted])]
   })
 

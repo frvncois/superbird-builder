@@ -7,6 +7,7 @@ import { isValidClass } from '../styles'
 import { isAllowedAttribute, sanitizeAttributes } from '../shared/attributes.js'
 import { isRich, sanitizeRich } from '../shared/richtext.js'
 import { SAFE_SRC } from '../shared/urls.js'
+import { isChannelName } from '../shared/interactionKeys.js'
 import {
   validateContext,
   validateTree,
@@ -586,6 +587,19 @@ export function applyHtml(
         case attr === 'data-slot':
           break
 
+        // …and so is the channel: it is declared once, on the master, and
+        // every instance listens. A per-instance override would mean two
+        // listeners for one overlay.
+        case attr === 'data-channel':
+          if ((value || '') !== (node.channel || '')) {
+            refuse(
+              path,
+              `the channel is <${component}>'s, not this instance's — change it with ` +
+                'update_component',
+            )
+          }
+          break
+
         case attr === 'data-icon':
           setIcon(node, value, path)
           break
@@ -708,6 +722,10 @@ export function applyHtml(
           setSlot(node, parsed, path)
           break
 
+        case attr === 'data-channel':
+          setChannel(node, value, isInstance, parsed.tag, path)
+          break
+
         case attr === 'class':
           if (isInstance) {
             refuse(
@@ -804,6 +822,7 @@ export function applyHtml(
     if (!has('data-ref') && node.ref !== undefined) delete node.ref
     if (!has('id') && node.htmlId !== undefined) delete node.htmlId
     if (!has('data-hidden') && node.hidden !== undefined) delete node.hidden
+    if (!has('data-channel') && node.channel !== undefined) delete node.channel
     // only a master write may take a slot away; on a page the flag is the
     // component's, and the serializer prints it, so an echo keeps it
     if (opts.def && !has('data-slot') && node.slot !== undefined) delete node.slot
@@ -990,6 +1009,46 @@ export function applyHtml(
     if (!node.slot) node.slot = true
   }
 
+  /**
+   * `data-channel` declares that this element LISTENS on a channel: every
+   * binding in the project whose target is `@<name>` drives it, wherever it
+   * was declared. Site-wide by definition, so the name is the address and a
+   * malformed one reaches nothing.
+   *
+   * Refused on an instance wrapper for the same reason a class is: the wrapper
+   * emits no element of its own, so the effect's classes would land nowhere
+   * while the write reported success.
+   */
+  function setChannel(
+    node: ElementNode,
+    value: string,
+    isInstance: boolean,
+    tag: string,
+    path: string,
+  ) {
+    if (isInstance) {
+      refuse(
+        path,
+        `<${tag}> emits no element of its own, so it cannot listen on a channel — declare it ` +
+          `on an element inside ${tag} with update_component`,
+      )
+      return
+    }
+    if (value === '') {
+      delete node.channel
+      return
+    }
+    if (!isChannelName(value)) {
+      refuse(
+        path,
+        `'${value}' is not a channel name — lowercase letters, digits and hyphens, starting ` +
+          'with a letter, at most 40 characters',
+      )
+      return
+    }
+    assign(node, 'channel', value)
+  }
+
   /** `data-hidden` is the editor's hide, not the HTML `hidden` attribute: a
    *  bare one means true, and an explicit `false` is how an instance SHOWS a
    *  part its component hides */
@@ -1025,7 +1084,9 @@ export function applyHtml(
 
   /** write only a real change, and let an empty value DELETE the key — which
    *  is what makes a round-trip of an unchanged document byte-identical */
-  function assign<K extends 'classes' | 'content' | 'htmlId' | 'src' | 'arg' | 'ref' | 'link'>(
+  function assign<
+    K extends 'classes' | 'content' | 'htmlId' | 'src' | 'arg' | 'ref' | 'link' | 'channel',
+  >(
     node: ElementNode,
     key: K,
     value: string,

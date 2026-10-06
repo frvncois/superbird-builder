@@ -1787,6 +1787,7 @@ var RESERVED_DATA_ATTRS = /* @__PURE__ */ new Set([
 	"data-tgt",
 	"data-atgt",
 	"data-slider",
+	"data-channel",
 	"data-node-id",
 	"data-id",
 	"data-ref",
@@ -5082,6 +5083,7 @@ function attrsFor(node, ctx, inInstance) {
 	if (node.type === "icon") rest.push(["data-icon", iconName(node)]);
 	if (node.type === "text") rest.push(["data-type", "text"]);
 	if (node.hidden !== void 0) rest.push(["data-hidden", String(node.hidden)]);
+	if (node.channel) rest.push(["data-channel", node.channel]);
 	if (node.slot) rest.push(["data-slot", true]);
 	const implied = impliedAttrs(node.type);
 	for (const [name, value] of Object.entries(node.attributes ?? {})) if (!shared && implied[name] === void 0) rest.push([name, value]);
@@ -5420,6 +5422,101 @@ function decodeEntities(text) {
 	return text.replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16))).replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10))).replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, "\"").replace(/&apos;/g, "'").replace(/&amp;/g, "&");
 }
 //#endregion
+//#region src/lib/shared/interactionKeys.js
+/**
+* The key interaction STATE is held under: one boolean per (interaction, target)
+* within a scope, so any number of triggers drive the same effect.
+* @param {string} interactionId
+* @param {string} targetId the node the classes land on (never null — callers
+*   resolve `binding.targetId ?? ownerId` first)
+* @param {string} [scope] component instance + collection-list repeat isolation
+* @returns {string}
+*/
+function interactionStateKey(interactionId, targetId, scope) {
+	const base = `${interactionId}:${targetId}`;
+	return scope ? `${base}@${scope}` : base;
+}
+/**
+* The key an exclusive GROUP is tracked under. Deliberately scoped to the
+* component INSTANCE only and never to the collection-list repeat: "one
+* accordion open at a time" has to hold ACROSS the repeats of one list (that is
+* the whole point), while two instances of the same component stay independent.
+* @param {string} group author-chosen group name
+* @param {string} [instanceScope] the component instance part of the scope only
+* @returns {string}
+*/
+function interactionGroupKey(group, instanceScope) {
+	return instanceScope ? `${group}@${instanceScope}` : group;
+}
+/** a channel name: lowercase, hyphenated, at most 40 characters */
+var CHANNEL_NAME_RE = /^[a-z][a-z0-9-]{0,39}$/;
+/** `@` names the format already owns, so neither can be a channel */
+var RESERVED_CHANNEL_NAMES = /* @__PURE__ */ new Set(["item", "locale"]);
+/**
+* Is this `targetId` a channel rather than a node id?
+* @param {string|null|undefined} targetId
+* @returns {boolean}
+*/
+function isChannelTarget(targetId) {
+	if (typeof targetId !== "string" || targetId[0] !== "@") return false;
+	const name = targetId.slice(1);
+	return CHANNEL_NAME_RE.test(name) && !RESERVED_CHANNEL_NAMES.has(name);
+}
+/** the name a channel target carries, or null when it is not one */
+function channelName(targetId) {
+	return isChannelTarget(targetId) ? targetId.slice(1) : null;
+}
+/** the stored `targetId` for a channel name */
+function channelTargetId(name) {
+	return `@${name}`;
+}
+/** is this a name an element may declare as its channel? */
+function isChannelName(name) {
+	return typeof name === "string" && CHANNEL_NAME_RE.test(name) && !RESERVED_CHANNEL_NAMES.has(name);
+}
+/** what a trigger does to its target's state. `toggle` is the default. */
+var INTERACTION_ACTIONS = [
+	"toggle",
+	"on",
+	"off"
+];
+/** every trigger an interaction binding can use.
+* hover   — on while the pointer is over the trigger (symmetric, ignores action)
+* click   — on click; honours action
+* appear  — first time the trigger scrolls into view (fires once, never unfires)
+* scrolled— while the page is scrolled past `scrollAt` px (symmetric)
+* change  — an input's checked/non-empty state (symmetric, for conditional fields)
+* load    — on as soon as the page renders, and never off (like appear, without
+*           waiting for the viewport) */
+var INTERACTION_TRIGGERS = [
+	"hover",
+	"click",
+	"appear",
+	"scrolled",
+	"change",
+	"load"
+];
+/** user gestures that dismiss (force OFF) a fired interaction */
+var INTERACTION_CLOSE_ON = ["outside", "escape"];
+/** where a `once` binding remembers its state */
+var INTERACTION_ONCE = ["session", "local"];
+/** default scroll offset (px) for the `scrolled` trigger */
+var DEFAULT_SCROLL_AT = 50;
+/** triggers whose state is derived from a condition and so ignore `action`
+* (firing and unfiring are both driven by the trigger itself). `load` is here
+* too: it has no second direction to force, so an action on it would be a
+* silent no-op. */
+var SYMMETRIC_TRIGGERS = /* @__PURE__ */ new Set([
+	"hover",
+	"scrolled",
+	"change",
+	"load"
+]);
+/** true when the trigger drives state in both directions on its own */
+function isSymmetricTrigger(trigger) {
+	return SYMMETRIC_TRIGGERS.has(trigger);
+}
+//#endregion
 //#region src/lib/shared/fields.js
 /** ids stored on a reference/multi-reference field, always as an array */
 function refIds(entry, fieldName) {
@@ -5609,6 +5706,8 @@ function validateTree(root, ctx) {
 	const diags = [];
 	/** every ref seen so far → the node that claimed it */
 	const refAt = /* @__PURE__ */ new Map();
+	/** every channel declared so far → the node that declared it */
+	const channelAt = /* @__PURE__ */ new Map();
 	const collections = ctx.collections;
 	/** the collection an arg presents, resolved the way the renderers resolve it */
 	const scopeCollectionFor = (outer, arg) => {
@@ -5627,6 +5726,26 @@ function validateTree(root, ctx) {
 			if (host) diags.push({
 				nodeId: node.id,
 				message: `'#${node.ref}' is inside the '${host}' component — refs are page-scope, and a component's structure is copied into every instance. Put the ref on the '${host}' element instead.`
+			});
+		}
+		if (node.channel !== void 0 && node.channel !== "") {
+			if (!isChannelName(node.channel)) diags.push({
+				nodeId: node.id,
+				message: `'${node.channel}' is not a channel name — lowercase letters, digits and hyphens, starting with a letter, at most 40 characters (${CHANNEL_NAME_RE.source})`
+			});
+			else if (channelAt.has(node.channel)) diags.push({
+				nodeId: node.id,
+				message: `channel '${node.channel}' is already declared by another element here — a channel is site-wide, so two listeners both open and the page shows it twice`
+			});
+			else channelAt.set(node.channel, node);
+			const repeat = [...scopes].reverse().find((s) => s.type === "collection-list" || s.type === "slider" && !!s.arg);
+			if (repeat) diags.push({
+				nodeId: node.id,
+				message: `a channel listener inside '${repeat.type}${repeat.arg ? `[${repeat.arg}]` : ""}' would open once per row — move it outside the list and open the one copy from every row`
+			});
+			if (isComponentType(node.type)) diags.push({
+				nodeId: node.id,
+				message: `<${node.type}> emits no element of its own, so it cannot listen on a channel — declare the channel on an element inside ${node.type} instead`
 			});
 		}
 		if (node.type === "list-empty") {
@@ -6082,6 +6201,9 @@ function applyHtml(root, parsed, opts) {
 				setHidden(node, value);
 				break;
 			case attr === "data-slot": break;
+			case attr === "data-channel":
+				if ((value || "") !== (node.channel || "")) refuse(path, `the channel is <${component}>'s, not this instance's — change it with update_component`);
+				break;
 			case attr === "data-icon":
 				setIcon(node, value, path);
 				break;
@@ -6139,6 +6261,9 @@ function applyHtml(root, parsed, opts) {
 			case attr === "data-slot":
 				setSlot(node, parsed, path);
 				break;
+			case attr === "data-channel":
+				setChannel(node, value, isInstance, parsed.tag, path);
+				break;
 			case attr === "class":
 				if (isInstance) refuse(path, `a class on <${parsed.tag}> renders nowhere: an instance wrapper emits no element of its own, and its look is the component's. Style the component instead.`);
 				else setClasses(node, value, path);
@@ -6190,6 +6315,7 @@ function applyHtml(root, parsed, opts) {
 		if (!has("data-ref") && node.ref !== void 0) delete node.ref;
 		if (!has("id") && node.htmlId !== void 0) delete node.htmlId;
 		if (!has("data-hidden") && node.hidden !== void 0) delete node.hidden;
+		if (!has("data-channel") && node.channel !== void 0) delete node.channel;
 		if (opts.def && !has("data-slot") && node.slot !== void 0) delete node.slot;
 		if (!has(SOURCE_TYPES.has(node.type) ? "source" : "data-field") && node.arg !== void 0) delete node.arg;
 		if (isInstance) {
@@ -6317,6 +6443,31 @@ function applyHtml(root, parsed, opts) {
 			return;
 		}
 		if (!node.slot) node.slot = true;
+	}
+	/**
+	* `data-channel` declares that this element LISTENS on a channel: every
+	* binding in the project whose target is `@<name>` drives it, wherever it
+	* was declared. Site-wide by definition, so the name is the address and a
+	* malformed one reaches nothing.
+	*
+	* Refused on an instance wrapper for the same reason a class is: the wrapper
+	* emits no element of its own, so the effect's classes would land nowhere
+	* while the write reported success.
+	*/
+	function setChannel(node, value, isInstance, tag, path) {
+		if (isInstance) {
+			refuse(path, `<${tag}> emits no element of its own, so it cannot listen on a channel — declare it on an element inside ${tag} with update_component`);
+			return;
+		}
+		if (value === "") {
+			delete node.channel;
+			return;
+		}
+		if (!isChannelName(value)) {
+			refuse(path, `'${value}' is not a channel name — lowercase letters, digits and hyphens, starting with a letter, at most 40 characters`);
+			return;
+		}
+		assign(node, "channel", value);
 	}
 	/** `data-hidden` is the editor's hide, not the HTML `hidden` attribute: a
 	*  bare one means true, and an explicit `false` is how an instance SHOWS a
@@ -7644,73 +7795,106 @@ function fieldValueError(field, value) {
 	return null;
 }
 //#endregion
-//#region src/lib/shared/interactionKeys.js
-/**
-* The key interaction STATE is held under: one boolean per (interaction, target)
-* within a scope, so any number of triggers drive the same effect.
-* @param {string} interactionId
-* @param {string} targetId the node the classes land on (never null — callers
-*   resolve `binding.targetId ?? ownerId` first)
-* @param {string} [scope] component instance + collection-list repeat isolation
-* @returns {string}
-*/
-function interactionStateKey(interactionId, targetId, scope) {
-	const base = `${interactionId}:${targetId}`;
-	return scope ? `${base}@${scope}` : base;
+//#region src/lib/shared/channels.js
+/** depth-first over a node list — a local walk so this module stays importable
+*  from the exporter, the browser bundle and the MCP runtime alike */
+function walk(nodes, visit) {
+	for (const node of nodes ?? []) {
+		visit(node);
+		walk(node.children, visit);
+	}
 }
 /**
-* The key an exclusive GROUP is tracked under. Deliberately scoped to the
-* component INSTANCE only and never to the collection-list repeat: "one
-* accordion open at a time" has to hold ACROSS the repeats of one list (that is
-* the whole point), while two instances of the same component stay independent.
-* @param {string} group author-chosen group name
-* @param {string} [instanceScope] the component instance part of the scope only
-* @returns {string}
+* Every binding in the project that targets a channel, grouped by channel name.
+*
+* @param {{pages?: any[], components?: any[]}} project
+* @returns {Map<string, {interactions: {binding: any, ownerId: string, inMaster: boolean}[],
+*                        animations:  {binding: any, ownerId: string, inMaster: boolean}[]}>}
 */
-function interactionGroupKey(group, instanceScope) {
-	return instanceScope ? `${group}@${instanceScope}` : group;
+function buildChannelIndex(project) {
+	const index = /* @__PURE__ */ new Map();
+	const at = (name) => {
+		let entry = index.get(name);
+		if (!entry) index.set(name, entry = {
+			interactions: [],
+			animations: []
+		});
+		return entry;
+	};
+	const collect = (owner, inMaster) => {
+		for (const binding of owner.interactions ?? []) {
+			const name = channelName(binding.targetId);
+			if (name) at(name).interactions.push({
+				binding,
+				ownerId: owner.id,
+				inMaster
+			});
+		}
+		for (const binding of owner.animations ?? []) {
+			const name = channelName(binding.targetId);
+			if (name) at(name).animations.push({
+				binding,
+				ownerId: owner.id,
+				inMaster
+			});
+		}
+	};
+	for (const page of project.pages ?? []) walk(page.elements, (n) => collect(n, false));
+	for (const component of project.components ?? []) walk([component.root], (n) => collect(n, true));
+	return index;
 }
-/** what a trigger does to its target's state. `toggle` is the default. */
-var INTERACTION_ACTIONS = [
-	"toggle",
-	"on",
-	"off"
-];
-/** every trigger an interaction binding can use.
-* hover   — on while the pointer is over the trigger (symmetric, ignores action)
-* click   — on click; honours action
-* appear  — first time the trigger scrolls into view (fires once, never unfires)
-* scrolled— while the page is scrolled past `scrollAt` px (symmetric)
-* change  — an input's checked/non-empty state (symmetric, for conditional fields)
-* load    — on as soon as the page renders, and never off (like appear, without
-*           waiting for the viewport) */
-var INTERACTION_TRIGGERS = [
-	"hover",
-	"click",
-	"appear",
-	"scrolled",
-	"change",
-	"load"
-];
-/** user gestures that dismiss (force OFF) a fired interaction */
-var INTERACTION_CLOSE_ON = ["outside", "escape"];
-/** where a `once` binding remembers its state */
-var INTERACTION_ONCE = ["session", "local"];
-/** default scroll offset (px) for the `scrolled` trigger */
-var DEFAULT_SCROLL_AT = 50;
-/** triggers whose state is derived from a condition and so ignore `action`
-* (firing and unfiring are both driven by the trigger itself). `load` is here
-* too: it has no second direction to force, so an action on it would be a
-* silent no-op. */
-var SYMMETRIC_TRIGGERS = /* @__PURE__ */ new Set([
-	"hover",
-	"scrolled",
-	"change",
-	"load"
-]);
-/** true when the trigger drives state in both directions on its own */
-function isSymmetricTrigger(trigger) {
-	return SYMMETRIC_TRIGGERS.has(trigger);
+/**
+* Every element that DECLARES a channel, grouped by name. A listener may live
+* on a page (the modal placed once per page) or on a component master (the
+* modal IS a component, which is the case worth having) — see
+* `channel-declared-twice` for the one thing that goes wrong.
+*
+* @param {{pages?: any[], components?: any[]}} project
+* @returns {Map<string, {nodeId: string, pageId?: string, pageName?: string,
+*                        componentId?: string, componentName?: string}[]>}
+*/
+function channelListeners(project) {
+	const index = /* @__PURE__ */ new Map();
+	const add = (node, where) => {
+		if (!isChannelName(node.channel)) return;
+		const list = index.get(node.channel) ?? [];
+		list.push({
+			nodeId: node.id,
+			...where
+		});
+		index.set(node.channel, list);
+	};
+	for (const page of project.pages ?? []) walk(page.elements, (n) => add(n, {
+		pageId: page.id,
+		pageName: page.name
+	}));
+	for (const component of project.components ?? []) walk([component.root], (n) => add(n, {
+		componentId: component.id,
+		componentName: component.name
+	}));
+	return index;
+}
+/**
+* How many times each channel is DECLARED on one route — a component master's
+* declaration counts once per instance the route holds, which is exactly the
+* mistake `channel-declared-twice` names. Two listeners on one channel both
+* open, so the page shows the overlay twice.
+*
+* @param {any[][]} trees the node lists the route renders (the page's, plus
+*   any template bodies a `collection-item` embeds)
+* @param {Map<string, {master: any}>} instanceMap the route's instance map —
+*   a mapped node listens on what its MASTER declares, since a channel is
+*   shared state like classes
+* @returns {Map<string, number>}
+*/
+function routeChannelCounts(trees, instanceMap) {
+	const counts = /* @__PURE__ */ new Map();
+	for (const tree of trees) walk(tree, (node) => {
+		const rendered = instanceMap?.get(node.id)?.master ?? node;
+		if (!isChannelName(rendered.channel)) return;
+		counts.set(rendered.channel, (counts.get(rendered.channel) ?? 0) + 1);
+	});
+	return counts;
 }
 //#endregion
-export { APPEAR_MODES, BUILTIN_LIST_SOURCES, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, ELIDED_DATA_URL, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MAX_DEPTH, MAX_INPUT, MAX_SVG_BYTES, MOTION_PROPS, RESERVED_FIELD_NAMES, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, SCHEMA_VERSION, SCROLL_LERP_MAX, SCROLL_LERP_MIN, SLIDER_DEFAULTS, STYLE_SECTIONS, TOKEN_NAME_RE, TRANSITION_DEFAULTS, TRANSITION_PRESET_IDS, VARIANT_NAME_RE, addVariantAxis, addVariantOption, adoptStructure, alignMirrors, alignStructure, applyClass, applyHtml, buildInstanceMap, buildScopeRoots, canNest, cloneForMaster, collectFormFields, collectionRouteBase, compileAnimation, componentReaches, componentUsage, contextFromProject, countLocaleSeo, createBody, createNode, createPage, createProject, customSchemaError, deepClone, defaultBreakpoints, defaultSettings, deleteComponent, dependencyOrder, describeMigration, detachInstance, duplicateComponent, effectiveClasses, entryRoutePath, fieldNameError, fieldValueError, findNode, findParent, fontError, fontFormatForUrl, formConfigError, formEnabled, formName, hasAncestorOfType, hasDetailRoutes, inheritedInstanceValue, interactionGroupKey, interactionStateKey, isAllowedAttribute, isComponentType, isEmittableToken, isEntryScopeRoot, isInstancePart, isInstanceWrapper, isKnownElement, isLeafElement, isLocalizableAttribute, isNodeHidden, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isTranslatableType, isValidClass, isValidToken, lucideNameOf, lucideSvg, masterToHtml, matchClass, mergeAttributeLayers, mergeClassLayers, migrateProject, nestedComponentNames, nodesByShortId, normalizeComponentName, pageToHtml, parseHtml, pickedKeys, purgeLocaleSeo, pushMasterStructure, removeVariantAxis, removeVariantOption, renameComponent, renameVariantAxis, renameVariantOption, resolveInstanceValue, resolveNodeAttributes, resolvePicks, resolveSliderConfig, sameLayerProperty, sameProperty, sameType, sanitizeAttributes, sanitizeInlineSvg, sanitizeRich, setComponentCategory, setComponentMeta, setInstancePick, setNodeHidden, setStyleTokens, setVariantAxes, setVariantClasses, setVariantDefault, shortIds, slugify, stripExtractedInstanceState, tagForType, tokenError, typeForTag, typeOptionsFor, validateAnimation, validateBinding, validateMotionSettings, validateSliderConfig, validateTree, variantKey, walkNodes };
+export { APPEAR_MODES, BUILTIN_LIST_SOURCES, CHANNEL_NAME_RE, DEFAULT_SCROLL_AT, EASINGS, EASING_KEYS, ELEMENTS, ELIDED_DATA_URL, FONT_FORMATS, HEX_RE, INTERACTION_ACTIONS, INTERACTION_CLOSE_ON, INTERACTION_ONCE, INTERACTION_TRIGGERS, MAX_DEPTH, MAX_INPUT, MAX_SVG_BYTES, MOTION_PROPS, RESERVED_FIELD_NAMES, RESERVED_TOKEN_NAMES, SAFE_HREF, SAFE_SRC, SCHEMA_VERSION, SCROLL_LERP_MAX, SCROLL_LERP_MIN, SLIDER_DEFAULTS, STYLE_SECTIONS, TOKEN_NAME_RE, TRANSITION_DEFAULTS, TRANSITION_PRESET_IDS, VARIANT_NAME_RE, addVariantAxis, addVariantOption, adoptStructure, alignMirrors, alignStructure, applyClass, applyHtml, buildChannelIndex, buildInstanceMap, buildScopeRoots, canNest, channelListeners, channelName, channelTargetId, cloneForMaster, collectFormFields, collectionRouteBase, compileAnimation, componentReaches, componentUsage, contextFromProject, countLocaleSeo, createBody, createNode, createPage, createProject, customSchemaError, deepClone, defaultBreakpoints, defaultSettings, deleteComponent, dependencyOrder, describeMigration, detachInstance, duplicateComponent, effectiveClasses, entryRoutePath, fieldNameError, fieldValueError, findNode, findParent, fontError, fontFormatForUrl, formConfigError, formEnabled, formName, hasAncestorOfType, hasDetailRoutes, inheritedInstanceValue, interactionGroupKey, interactionStateKey, isAllowedAttribute, isChannelName, isChannelTarget, isComponentType, isEmittableToken, isEntryScopeRoot, isInstancePart, isInstanceWrapper, isKnownElement, isLeafElement, isLocalizableAttribute, isNodeHidden, isReservedToken, isRich, isStateClass, isSymmetricTrigger, isThemeValue, isTranslatableType, isValidClass, isValidToken, lucideNameOf, lucideSvg, masterToHtml, matchClass, mergeAttributeLayers, mergeClassLayers, migrateProject, nestedComponentNames, nodesByShortId, normalizeComponentName, pageToHtml, parseHtml, pickedKeys, purgeLocaleSeo, pushMasterStructure, removeVariantAxis, removeVariantOption, renameComponent, renameVariantAxis, renameVariantOption, resolveInstanceValue, resolveNodeAttributes, resolvePicks, resolveSliderConfig, routeChannelCounts, sameLayerProperty, sameProperty, sameType, sanitizeAttributes, sanitizeInlineSvg, sanitizeRich, setComponentCategory, setComponentMeta, setInstancePick, setNodeHidden, setStyleTokens, setVariantAxes, setVariantClasses, setVariantDefault, shortIds, slugify, stripExtractedInstanceState, tagForType, tokenError, typeForTag, typeOptionsFor, validateAnimation, validateBinding, validateMotionSettings, validateSliderConfig, validateTree, variantKey, walkNodes };

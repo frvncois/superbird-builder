@@ -57,6 +57,9 @@ export function stripExtractedInstanceState(source: ElementNode): void {
     // the master took the flag with the rest; left here it would shadow a
     // later change to the component's default
     delete n.hidden
+    // the channel is the component's now: a copy left here would be read by
+    // nothing (every renderer takes the master's) and would drift
+    delete n.channel
     delete n.background
     delete n.locales
     delete n.content

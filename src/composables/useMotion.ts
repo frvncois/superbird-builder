@@ -27,8 +27,14 @@ import type { Animation, AnimationBinding } from '@/types/editor'
 // owning a rAF loop.
 
 interface PlayState {
-  /** the resolved target node id (binding.targetId ?? owner) */
+  /** the resolved target node id (binding.targetId ?? owner), or a channel
+   *  target ('@name' — see lib/shared/interactionKeys.js) */
   targetId: string
+  /** the scope this play keys under, carried EXPLICITLY rather than parsed
+   *  back out of the key: a channel target puts an '@' inside the key itself
+   *  ('animId:@start'), so neither the first nor the last '@' is reliably the
+   *  scope separator. A channel play is always unscoped. */
+  scope?: string
   compiled: CompiledAnimation
   /** element-moving tracks vs the ones that cascade over children */
   split: StaggerSplit
@@ -174,6 +180,7 @@ export function useMotion() {
       // past a track's end returns its end value, so overshoot is harmless.
       plays.value.set(key, {
         targetId,
+        scope: opts.scope,
         compiled,
         split,
         time: compiled.duration + maxStagger(split) * 256,
@@ -189,6 +196,7 @@ export function useMotion() {
     const reverse = !!opts.reverse
     plays.value.set(key, {
       targetId,
+      scope: opts.scope,
       compiled,
       split,
       time: reverse ? (existing?.time ?? compiled.duration) : opts.restart === false && existing ? existing.time : 0,
@@ -262,6 +270,7 @@ export function useMotion() {
     const { compiled, split } = compiledFor(animation)
     plays.value.set(key, {
       targetId,
+      scope,
       compiled,
       split,
       time: Math.max(0, Math.min(1, progress)) * compiled.duration,
@@ -287,9 +296,8 @@ export function useMotion() {
    * key under — one per binding, because the entry part follows the target
    * (shared/entryScope.js), so a trigger inside a list and a trigger outside it
    * can drive the same element under different keys. */
-  function inScope(key: string, scope?: MotionScope): boolean {
-    const at = key.indexOf('@')
-    const own = at === -1 ? undefined : key.slice(at + 1)
+  function inScope(play: PlayState, scope?: MotionScope): boolean {
+    const own = play.scope
     return scope instanceof Set ? scope.has(own) : own === scope
   }
 
@@ -302,8 +310,8 @@ export function useMotion() {
     // range wins shared properties — the published runtime orders its frame
     // writes the same way (see src/motion/runtime.ts updateScrub)
     const matching: PlayState[] = []
-    for (const [key, play] of plays.value) {
-      if (play.targetId !== nodeId || !inScope(key, scope)) continue
+    for (const play of plays.value.values()) {
+      if (play.targetId !== nodeId || !inScope(play, scope)) continue
       matching.push(play)
     }
     matching.sort((a, b) => (b.dist ?? 0) - (a.dist ?? 0))
@@ -324,8 +332,8 @@ export function useMotion() {
   ): MotionValues | undefined {
     void tick.value
     let merged: MotionValues | undefined
-    for (const [key, play] of plays.value) {
-      if (play.targetId !== parentId || !play.split.hasStagger || !inScope(key, scope)) continue
+    for (const play of plays.value.values()) {
+      if (play.targetId !== parentId || !play.split.hasStagger || !inScope(play, scope)) continue
       // record the deepest child sampling this cascade — playEnd() extends the
       // clock past compiled.duration by exactly this tail, so the last card
       // finishes instead of freezing part-faded
@@ -348,6 +356,7 @@ export function useMotion() {
     const { compiled, split } = compiledFor(animation)
     plays.value.set(key, {
       targetId,
+      scope,
       compiled,
       split,
       time: 0,

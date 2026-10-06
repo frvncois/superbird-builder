@@ -103,6 +103,10 @@ function attrsFor(node: ElementNode, ctx: Ctx, inInstance: boolean): string[] {
   if (node.type === 'icon') rest.push(['data-icon', iconName(node)])
   if (node.type === 'text') rest.push(['data-type', 'text'])
   if (node.hidden !== undefined) rest.push(['data-hidden', String(node.hidden)])
+  // the channel this element listens on. A CARRIED attribute, not a read-only
+  // annotation like the effect names: a write can change it, so it is inside
+  // the version hash.
+  if (node.channel) rest.push(['data-channel', node.channel])
   // a slot: on a master read it is what declares one; inside an instance it
   // marks where the page's own structure begins
   if (node.slot) rest.push(['data-slot', true])

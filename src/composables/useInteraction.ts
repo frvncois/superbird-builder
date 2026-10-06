@@ -4,10 +4,13 @@ import { useProject } from './useProject'
 import { walkNodes } from '@/lib/tree'
 import { masterInteractionsTargeting } from './useMasterBindings'
 import {
+  channelTargetId,
   interactionGroupKey,
   interactionStateKey,
+  isChannelTarget,
   nextInteractionState,
 } from '@/lib/shared/interactionKeys.js'
+import { buildChannelIndex } from '@/lib/shared/channels.js'
 import { buildScopeRoots } from '@/lib/shared/entryScope.js'
 import type { AnimationBinding, ElementNode, Interaction, InteractionBinding } from '@/types/editor'
 
@@ -90,6 +93,31 @@ const targetIndex = computed(() => {
 })
 
 /**
+ * Every binding in the PROJECT aimed at a channel, grouped by name.
+ *
+ * Project-wide rather than active-page, deliberately: the point of a channel
+ * is that the trigger and the listener need not share a tree, so a modal
+ * component on this page is driven by a header component's binding that the
+ * active page's walk would never see.
+ */
+const channelIndex = computed(() => buildChannelIndex(project.value))
+
+/** the interaction bindings driving a channel, in the shape the renderers use */
+export function channelInteractionDrivers(channel: string | undefined): Driver[] {
+  if (!channel) return []
+  return (channelIndex.value.get(channel)?.interactions ?? []) as Driver[]
+}
+
+/** the CLICK animation bindings driving a channel — the one tween key that can
+ *  be shared, so the only trigger a channel accepts */
+export function channelAnimationDrivers(channel: string | undefined): AnimDriver[] {
+  if (!channel) return []
+  return ((channelIndex.value.get(channel)?.animations ?? []) as AnimDriver[]).filter(
+    (d) => d.binding.trigger === 'click',
+  )
+}
+
+/**
  * node id → the entry scope it renders under, for the active page and every
  * component master (shared/entryScope.js). Mirrors the exporter's index: it is
  * what keeps a row trigger and a shared overlay on ONE state key.
@@ -128,6 +156,18 @@ const effectOptions = computed(() => {
   }
   walkNodes(activePage.value.elements, collect)
   for (const component of project.value.components ?? []) walkNodes([component.root], collect)
+  // channel effects fold project-wide: the close button carrying `closeOn` may
+  // be on another page entirely, and the effect is one effect
+  for (const [name, drivers] of channelIndex.value) {
+    const targetId = channelTargetId(name)
+    for (const { binding } of drivers.interactions) {
+      if (!binding.closeOn?.length && !binding.group) continue
+      const entry = index.get(targetId) ?? { closeOn: new Set<string>() }
+      for (const mode of binding.closeOn ?? []) entry.closeOn.add(mode)
+      if (binding.group && !entry.group) entry.group = binding.group
+      index.set(targetId, entry)
+    }
+  }
   return index
 })
 
@@ -272,20 +312,28 @@ export function useInteraction() {
     nodeId: string,
     breakpointId: string | null = null,
     scopeOf: ScopeOf = () => undefined,
+    channel?: string,
   ): string {
     const targeting = targetIndex.value.get(nodeId)
-    if (!targeting?.length) return ''
+    const onChannel = channelInteractionDrivers(channel)
+    if (!targeting?.length && !onChannel.length) return ''
     const seen = new Set<string>()
     const parts: string[] = []
-    for (const { binding, ownerId } of targeting) {
-      if (!bindingActiveAt(binding, breakpointId)) continue
-      if (seen.has(binding.interactionId)) continue
+    const take = (binding: InteractionBinding, key: string) => {
+      if (!bindingActiveAt(binding, breakpointId)) return
+      if (seen.has(binding.interactionId)) return
       seen.add(binding.interactionId)
       const animation = animationIndex.value.get(binding.interactionId)
-      if (!animation) continue
-      const key = interactionStateKey(binding.interactionId, nodeId, scopeOf(ownerId))
+      if (!animation) return
       const base = `transition-all ${animation.duration} ${animation.easing}`
       parts.push(fired.value.has(key) ? `${base} ${animation.toClasses}` : base)
+    }
+    for (const { binding, ownerId } of targeting ?? []) {
+      take(binding, interactionStateKey(binding.interactionId, nodeId, scopeOf(ownerId)))
+    }
+    // a channel key carries NO scope, whoever declared the binding
+    for (const { binding } of onChannel) {
+      take(binding, interactionStateKey(binding.interactionId, channelTargetId(channel!)))
     }
     return parts.join(' ')
   }
@@ -300,34 +348,44 @@ export function useInteraction() {
     componentRoot: ElementNode,
     scopeOf: ScopeOf,
     breakpointId: string | null = null,
+    channel?: string,
   ): string {
     const seen = new Set<string>()
     const parts: string[] = []
-    // the per-master index, not a walk: this runs once per rendered element
-    for (const { binding, ownerId } of masterInteractionsTargeting(masterId, componentRoot)) {
-      if (!bindingActiveAt(binding, breakpointId)) continue
-      if (seen.has(binding.interactionId)) continue
+    const take = (binding: InteractionBinding, key: string) => {
+      if (!bindingActiveAt(binding, breakpointId)) return
+      if (seen.has(binding.interactionId)) return
       seen.add(binding.interactionId)
       const animation = animationIndex.value.get(binding.interactionId)
-      if (!animation) continue
-      const key = interactionStateKey(binding.interactionId, masterId, scopeOf(ownerId))
+      if (!animation) return
       const base = `transition-all ${animation.duration} ${animation.easing}`
       parts.push(fired.value.has(key) ? `${base} ${animation.toClasses}` : base)
+    }
+    // the per-master index, not a walk: this runs once per rendered element
+    for (const { binding, ownerId } of masterInteractionsTargeting(masterId, componentRoot)) {
+      take(binding, interactionStateKey(binding.interactionId, masterId, scopeOf(ownerId)))
+    }
+    // a master node may listen on a channel too — that is the whole point of
+    // channels, and the key is the same unscoped one every trigger writes
+    for (const { binding } of channelInteractionDrivers(channel)) {
+      take(binding, interactionStateKey(binding.interactionId, channelTargetId(channel!)))
     }
     return parts.join(' ')
   }
 
   /** the state keys whose effect lands on this node — registered for
    * outside-click hit-testing so a click inside an open menu isn't "outside" */
-  function targetStateKeys(nodeId: string, scopeOf: ScopeOf): string[] {
-    const targeting = targetIndex.value.get(nodeId)
-    if (!targeting?.length) return []
+  function targetStateKeys(nodeId: string, scopeOf: ScopeOf, channel?: string): string[] {
+    const targeting = targetIndex.value.get(nodeId) ?? []
     return [
-      ...new Set(
-        targeting.map(({ binding, ownerId }) =>
+      ...new Set([
+        ...targeting.map(({ binding, ownerId }) =>
           interactionStateKey(binding.interactionId, nodeId, scopeOf(ownerId)),
         ),
-      ),
+        ...channelInteractionDrivers(channel).map(({ binding }) =>
+          interactionStateKey(binding.interactionId, channelTargetId(channel!)),
+        ),
+      ]),
     ]
   }
 
@@ -336,10 +394,14 @@ export function useInteraction() {
     masterId: string,
     componentRoot: ElementNode,
     scopeOf: ScopeOf,
+    channel?: string,
   ): string[] {
     const keys = new Set<string>()
     for (const { binding, ownerId } of masterInteractionsTargeting(masterId, componentRoot)) {
       keys.add(interactionStateKey(binding.interactionId, masterId, scopeOf(ownerId)))
+    }
+    for (const { binding } of channelInteractionDrivers(channel)) {
+      keys.add(interactionStateKey(binding.interactionId, channelTargetId(channel!)))
     }
     return [...keys]
   }
@@ -350,7 +412,15 @@ export function useInteraction() {
     ownerId: string,
     scope?: string,
   ): string {
-    return interactionStateKey(binding.interactionId, binding.targetId ?? ownerId, scope)
+    const targetId = binding.targetId ?? ownerId
+    // a channel is site-wide by definition: no instance, no entry. Dropped
+    // HERE as well as in the renderers' scopeFor, so a caller that passes a
+    // scope anyway still writes the key the listener reads.
+    return interactionStateKey(
+      binding.interactionId,
+      targetId,
+      isChannelTarget(targetId) ? undefined : scope,
+    )
   }
 
   /** true when a binding's effect is currently on */
@@ -387,7 +457,12 @@ export function useInteraction() {
     const options = effectOptions.value.get(binding.targetId ?? ownerId)
 
     if (options?.group) {
-      const groupKey = interactionGroupKey(options.group, instanceScope)
+      // a group on a channel-targeting binding is unscoped too, so one group
+      // can span a trigger on the page and a trigger inside a component
+      const groupKey = interactionGroupKey(
+        options.group,
+        isChannelTarget(binding.targetId) ? undefined : instanceScope,
+      )
       if (next) {
         const open = firedGroups.get(groupKey)
         if (open && open !== key) {

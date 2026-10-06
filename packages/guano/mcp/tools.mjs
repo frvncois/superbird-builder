@@ -164,6 +164,14 @@ export function createToolSet({ api, runtime, elicit, hasElicitation = () => nul
     INTERACTION_ONCE,
     INTERACTION_TRIGGERS,
     isSymmetricTrigger,
+    CHANNEL_NAME_RE,
+    channelName,
+    channelTargetId,
+    isChannelName,
+    isChannelTarget,
+    channelListeners,
+    routeChannelCounts,
+    buildChannelIndex,
     SLIDER_DEFAULTS,
     validateSliderConfig,
     formConfigError,
@@ -1405,7 +1413,87 @@ function masterNodeFor(project, page, instanceNode) {
  * translation) apply unchanged. Refs never enter STORED bindings — `targetId`
  * remains the only stored form.
  */
+/**
+ * The raw target a bind argument names: `channel` is sugar for `'@<name>'`, so
+ * an agent never has to know the sentinel spelling. A bad name here is caught
+ * by `resolveBindTarget`'s own '@' check rather than silently becoming a node
+ * id nothing matches.
+ */
+/**
+ * The nearest REPEATING ancestor of a node — a `collection-list` or a bound
+ * `slider`. Not a `collection-item` and not a collection template's body:
+ * those render once per ROUTE, which is exactly what a channel listener wants.
+ */
+function repeatAncestor(roots, nodeId) {
+  let found = null
+  const visit = (nodes, repeat) => {
+    for (const n of nodes ?? []) {
+      if (n.id === nodeId) {
+        found = repeat
+        return true
+      }
+      const opens = n.type === 'collection-list' || (n.type === 'slider' && n.arg) ? n : repeat
+      if (visit(n.children, opens)) return true
+    }
+    return false
+  }
+  visit(roots, null)
+  return found
+}
+
+/** another element in the same tree already declaring this channel */
+function channelTwinIn(roots, channel, exceptId) {
+  let twin = false
+  walkNodes(roots, (n) => {
+    if (n.channel === channel && n.id !== exceptId) twin = true
+  })
+  return twin
+}
+
+function bindTargetArg(bind) {
+  return bind.channel ? `@${bind.channel}` : bind.targetId
+}
+
+/**
+ * `click` is the ONLY tween trigger a channel accepts. A click play is keyed
+ * per (animation, target) — the one tween key that can be shared — while every
+ * other trigger is keyed per binding, so two triggers aimed at one channel
+ * would run two independent timelines on the same element. A scrub aimed at a
+ * shared overlay means nothing at all.
+ */
+function channelAnimationError(trigger, targetId) {
+  if (!isChannelTarget(targetId) || trigger === 'click') return null
+  return (
+    `a '${trigger}' animation cannot target a channel — only 'click' can, because a click play ` +
+    'is the one timeline several triggers share. Target the element itself, or use a class ' +
+    'interaction (those take every trigger on a channel).'
+  )
+}
+
 function resolveBindTarget(project, page, ownerNode, inComponent, rawTarget, rawRef, masterDef = null) {
+  // A CHANNEL target is a name, not a node id, so none of the tree rules below
+  // apply to it: it resolves project-wide, from a page owner and a master
+  // owner alike, which is the whole point — a modal component opened by a
+  // header component could not be expressed any other way.
+  if (isChannelTarget(rawTarget)) {
+    const name = channelName(rawTarget)
+    if (!channelListeners(project).has(name)) {
+      return {
+        error:
+          `no element listens on channel "${name}". Set it on the element the effect should ` +
+          `land on: edit_elements {channel: "${name}"} (or, for a component, inside the ` +
+          'master with componentId). A channel is site-wide — one listener per route.',
+      }
+    }
+    return { targetId: channelTargetId(name) }
+  }
+  if (typeof rawTarget === 'string' && rawTarget.startsWith('@') && rawTarget !== '@item') {
+    return {
+      error:
+        `bind targetId "${rawTarget}" is not a channel name — a channel is '@' plus lowercase ` +
+        `letters, digits and hyphens (${CHANNEL_NAME_RE.source}), e.g. "@start"`,
+    }
+  }
   if (masterDef) {
     // in a master: the target is another element of the SAME component, and
     // the stored id is already the master's
@@ -1474,9 +1562,10 @@ function resolveBindTarget(project, page, ownerNode, inComponent, rawTarget, raw
           return {
             error:
               `bind targetId "${target}" is a master node of component "${comp.name}" — an ` +
-              'effect from outside an instance can never reach inside it (in-instance targets ' +
-              'are scoped per instance). Bind from an element INSIDE the instance, or target ' +
-              'an element outside the component.',
+              'effect from outside an instance can never reach inside it by id (in-instance ' +
+              'targets are scoped per instance). Either bind from an element INSIDE the ' +
+              `instance, or give that element a CHANNEL (edit_elements {componentId} on ` +
+              `${comp.name}, {channel: "…"}) and target "@<channel>" from anywhere.`,
           }
         }
       }
@@ -1490,11 +1579,12 @@ function resolveBindTarget(project, page, ownerNode, inComponent, rawTarget, raw
       return {
         error:
           `bind targetId "${target}" is inside a component instance — an effect from outside ` +
-          'the instance can never reach it (in-instance targets are scoped to the master, per ' +
-          'instance). Bind from an element INSIDE the same instance, or target an element ' +
-          'outside the component. If this is a row opening one shared overlay, the target ' +
-          'belongs OUTSIDE the list and the trigger is a `<div class="contents">` wrapper the ' +
-          'page owns — see get_guide {section: "design-standards"}.',
+          'the instance can never reach it BY ID (in-instance targets are scoped to the ' +
+          'master, per instance). Either bind from an element INSIDE the same instance, or ' +
+          'give the target a CHANNEL on its component and aim at "@<channel>", which is ' +
+          'unscoped and reachable from anywhere. If this is a row opening one shared overlay, ' +
+          'the target belongs OUTSIDE the list and the trigger is a `<div class="contents">` ' +
+          'wrapper the page owns — see get_guide {section: "design-standards"}.',
       }
     }
     return { targetId: target }
@@ -1892,6 +1982,66 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
       }
     }
 
+    // --- channel (listen on a site-wide effect target) ---
+    // Shared state, like classes: on a master it is the component's and every
+    // instance listens, which is what lets the modal BE a component. A mirror
+    // cannot override it, and an instance wrapper cannot carry one at all —
+    // it emits no element, so the effect's classes would land nowhere.
+    if (edit.channel !== undefined) {
+      // the tree the channel is WRITTEN into: a master's own, the inner
+      // component's when the node sits in an instance, else the page's
+      const roots = masterDef
+        ? [masterDef.root]
+        : mapping
+          ? [mapping.def.root]
+          : (page?.elements ?? [])
+      // a repeat on EITHER side puts the listener in one: the master may hold
+      // a list of its own, and a plain page node may sit inside one
+      const repeat =
+        repeatAncestor(roots, sharedNode?.id ?? node.id) ??
+        (page ? repeatAncestor(page.elements ?? [], node.id) : null)
+      if (typeof edit.channel !== 'string') {
+        errors.push('channel must be a string ("" clears it)')
+      } else if (isWrapper) {
+        errors.push(
+          `channel refused: <${node.type}> emits no element of its own — declare the channel ` +
+            `on an element inside ${node.type} (edit_elements {componentId} on ${node.type})`,
+        )
+      } else if (inMirror) {
+        errors.push(
+          `channel refused: the channel is ${mapping.def.name}'s — set it with ` +
+            `edit_elements {componentId} on ${mapping.def.name}`,
+        )
+      } else if (!sharedNode) {
+        errors.push('channel refused: this instance node has no master counterpart (structure diverged)')
+      } else if (edit.channel === '') {
+        if (sharedNode.channel !== undefined) {
+          delete sharedNode.channel
+          applied.push(`channel${onShared}`)
+          changed = true
+        }
+      } else if (!isChannelName(edit.channel)) {
+        errors.push(
+          `channel refused: '${edit.channel}' is not a channel name — lowercase letters, ` +
+            `digits and hyphens, starting with a letter, at most 40 characters`,
+        )
+      } else if (repeat) {
+        errors.push(
+          `channel refused: a listener inside :${repeat.type}${repeat.arg ? `[${repeat.arg}]` : ''} ` +
+            'would open once per row. Move it outside the list and open the one copy from every row.',
+        )
+      } else if (channelTwinIn(roots, edit.channel, sharedNode.id)) {
+        errors.push(
+          `channel refused: '${edit.channel}' is already declared here — a channel is site-wide, ` +
+            'so two listeners both open and the page shows it twice',
+        )
+      } else if (sharedNode.channel !== edit.channel) {
+        sharedNode.channel = edit.channel
+        applied.push(`channel${onShared}`)
+        changed = true
+      }
+    }
+
     // --- icon markup (icon only) ---
     // `icon` names a bundled Lucide icon; `svg` is custom markup. Both land as
     // sanitized markup on `node.svg` — the one thing a renderer ever reads.
@@ -2227,7 +2377,7 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
             errors.push(`interaction refused: ${shape}`)
             continue
           }
-          const resolved = resolveBindTarget(project, page, node, inComponent, bind.targetId, bind.targetRef, masterDef)
+          const resolved = resolveBindTarget(project, page, node, inComponent, bindTargetArg(bind), bind.targetRef, masterDef)
           if (resolved.error) {
             errors.push(resolved.error)
             continue
@@ -2271,9 +2421,14 @@ function applyPageEdits(project, page, edits, locale, defaultLocale, scopeDef = 
             errors.push(`animation refused: ${check.error}`)
             continue
           }
-          const resolved = resolveBindTarget(project, page, node, inComponent, bind.targetId, bind.targetRef, masterDef)
+          const resolved = resolveBindTarget(project, page, node, inComponent, bindTargetArg(bind), bind.targetRef, masterDef)
           if (resolved.error) {
             errors.push(resolved.error)
+            continue
+          }
+          const channelBad = channelAnimationError(bind.trigger, resolved.targetId)
+          if (channelBad) {
+            errors.push(`animation refused: ${channelBad}`)
             continue
           }
           bindTargetNode.animations = bindTargetNode.animations ?? []
@@ -3860,6 +4015,30 @@ function designWarnings(project) {
   // whenever one of them is outside every repeat — but two SIBLING repeats
   // cannot, and a target that is not on the route at all never fires.
   const unreachable = []
+  // a channel is reachable when SOME published route declares it. A listener on
+  // a draft page is legitimate while the site is being built, so this names the
+  // channels nothing published listens on — not every binding one at a time.
+  const listeners = channelListeners(project)
+  const publishedChannels = new Set()
+  for (const page of published) {
+    const mm = buildInstanceMap(project, page)
+    for (const name of routeChannelCounts([page.elements ?? []], mm).keys()) {
+      publishedChannels.add(name)
+    }
+  }
+  // bindings live on pages AND on component masters, so the dead-channel scan
+  // walks the project index rather than each route's tree — a header
+  // component's binding is on no page at all
+  const deadChannels = new Map()
+  for (const [name, drivers] of buildChannelIndex(project)) {
+    if (publishedChannels.has(name)) continue
+    const count = drivers.interactions.length + drivers.animations.length
+    deadChannels.set(
+      name,
+      `@${name} — ${count} binding(s), ` +
+        (listeners.has(name) ? 'listener only on an unpublished page' : 'nothing declares it'),
+    )
+  }
   for (const page of published) {
     const scopeRoots = buildScopeRoots([
       { tree: page.elements ?? [], root: null },
@@ -3871,6 +4050,8 @@ function designWarnings(project) {
     walkNodes(page.elements ?? [], (owner) => {
       for (const b of [...(owner.interactions ?? []), ...(owner.animations ?? [])]) {
         if (!b.targetId) continue
+        // a channel target is project-wide, and already answered above
+        if (isChannelTarget(b.targetId)) continue
         if (!ids.has(b.targetId)) {
           unreachable.push(`${owner.id} → ${b.targetId} (no such element) on page "${page.name}"`)
           continue
@@ -3894,6 +4075,37 @@ function designWarnings(project) {
         'the target is not on the page, or trigger and target sit in two DIFFERENT repeats, ' +
         'where neither can know which row of the other to drive. Target an element in the same ' +
         'row for a per-row effect, or one outside every list for a shared one.',
+    })
+  }
+  if (deadChannels.size) {
+    warnings.push({
+      kind: 'binding-target-unreachable',
+      where: [...deadChannels.values()].slice(0, 6),
+      message:
+        `${deadChannels.size} channel(s) are bound but nothing published listens on them, so ` +
+        'those triggers do nothing. Declare the channel on the element the effect should land ' +
+        'on (edit_elements {channel: "…"}), once per route.',
+    })
+  }
+
+  // 3c-bis. the same channel declared TWICE on one route. A channel is
+  // site-wide by definition, so both listeners open: the overlay appears
+  // twice, usually because the component that LISTENS was placed twice.
+  const twice = []
+  for (const page of published) {
+    const mm = buildInstanceMap(project, page)
+    for (const [name, count] of routeChannelCounts([page.elements ?? []], mm)) {
+      if (count > 1) twice.push(`@${name} ×${count} on page "${page.name}"`)
+    }
+  }
+  if (twice.length) {
+    warnings.push({
+      kind: 'channel-declared-twice',
+      where: twice.slice(0, 6),
+      message:
+        `${twice.length} channel(s) are declared more than once on one route. A channel is ` +
+        'site-wide, so every listener opens together — two instances of the component that ' +
+        'LISTENS is the usual cause. Two instances of the component that OPENS one is fine.',
     })
   }
 
@@ -7324,6 +7536,12 @@ const tools = [
                 type: 'boolean',
                 description: 'componentId only: a container each instance fills (get_guide {section: "slots"})',
               },
+              channel: {
+                type: 'string',
+                description:
+                  'listen on a channel, so any binding anywhere aimed at it lands here. "" ' +
+                  'clears. See get_guide {section: "interactions"}.',
+              },
               icon: {
                 type: 'string',
                 description: 'icon only: a bundled Lucide name from list_icons ("arrow-right"); "" clears',
@@ -7387,6 +7605,10 @@ const tools = [
                       type: 'string',
                       description: "the target's '#ref' without the '#' — an alternative to targetId",
                     },
+                    channel: {
+                      type: 'string',
+                      description: "a channel name — sugar for targetId '@<name>'",
+                    },
                     ...INTERACTION_BINDING_PROPS,
                   },
                   required: ['interactionId', 'trigger'],
@@ -7411,6 +7633,10 @@ const tools = [
                     targetRef: {
                       type: 'string',
                       description: "the target's '#ref' without the '#' — an alternative to targetId",
+                    },
+                    channel: {
+                      type: 'string',
+                      description: "a channel name — sugar for targetId '@<name>'",
                     },
                     action: {
                       type: 'string',
@@ -8678,6 +8904,10 @@ const tools = [
           type: 'string',
           description: "the target's '#ref', without the '#' — an alternative to targetId",
         },
+        channel: {
+          type: 'string',
+          description: "a channel name — sugar for targetId '@<name>'",
+        },
         version: { type: 'string' },
         ...INTERACTION_BINDING_PROPS,
       },
@@ -8717,7 +8947,7 @@ const tools = [
       }
       const shape = interactionBindingError(args)
       if (shape) return { saved: false, reason: 'invalid-binding', message: shape }
-      const resolved = resolveBindTarget(project, page, node, inComponent, args.targetId, args.targetRef)
+      const resolved = resolveBindTarget(project, page, node, inComponent, bindTargetArg(args), args.targetRef)
       if (resolved.error) throw new Error(resolved.error)
       const binding = buildInteractionBinding(args, resolved.targetId)
       bindNode.interactions = bindNode.interactions ?? []

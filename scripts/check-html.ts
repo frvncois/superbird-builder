@@ -418,5 +418,70 @@ const ids = (n: ElementNode) => { const out: string[] = []; walkNodes([n], (x) =
 }
 
 
+// ---------- channels ----------
+//
+// `data-channel` is a CARRIED attribute, not a read-only annotation: a write
+// can change it, so it has to round-trip, be refusable by name, and clear when
+// the agent drops it. The corpus holds no channels, so the cases are built
+// here on purpose.
+{
+  const p = fresh()
+  const res = write(p, '<div data-channel="start" class="hidden" />')
+  ok(res.refused.length === 0 && bodyOf(p).children[0]!.channel === 'start',
+     `a channel lands (refused ${res.refused.length})`)
+
+  // the read prints it, and writing the read back changes nothing
+  const html = pageToHtml(p.pages[0]!, p)
+  ok(/data-channel="start"/.test(html), 'and the read prints it')
+  const before = JSON.stringify(bodyOf(p))
+  const again = write(p, html.replace(/^<body[^>]*>\n/, '').replace(/\n<\/body>$/, ''))
+  ok(JSON.stringify(bodyOf(p)) === before && !again.created && !again.removed,
+     'a round-trip of a channel is a no-op')
+
+  // dropping it clears it — the document is the whole truth
+  write(p, '<div class="hidden" />')
+  ok(bodyOf(p).children[0]!.channel === undefined, 'dropping data-channel clears it')
+
+  // a bad name is refused rather than stored as an address nothing reaches
+  const bad = write(p, '<div data-channel="Start Modal" />')
+  ok(bad.refused.some((r) => /not a channel name/.test(r.message)),
+     `a bad channel name is refused (${bad.refused[0]?.message.slice(0, 60) ?? 'none'})`)
+
+  // and it can never arrive as a custom attribute
+  const reserved = write(p, '<p data-channel-x="1" />')
+  ok(reserved.refused.length === 0, 'a lookalike data-* is still authorable')
+}
+
+// ---------- a channel on an instance wrapper is refused ----------
+{
+  const p = fresh()
+  const def = { id: crypto.randomUUID(), name: 'Modal', root: { id: crypto.randomUUID(), type: 'Modal', content: '', children: [] } }
+  p.components.push(def as never)
+  write(p, '<div class="fixed inset-0 hidden" data-channel="start"><p>Hi</p></div>', def)
+  ok((def.root as never as ElementNode).children[0]!.channel === 'start',
+     'a master declares the channel')
+
+  write(p, '<Modal data-ref="m" />')
+  const html = pageToHtml(p.pages[0]!, p)
+  // an instance's interior shows a node's OWN values only, never what it
+  // inherits — the channel is the component's, exactly like its classes
+  ok(!/data-channel/.test(html.split('<Modal')[1] ?? ''),
+     "an instance's interior does not print the component's channel")
+  const echo = write(p, html.replace(/^<body[^>]*>\n/, '').replace(/\n<\/body>$/, ''))
+  ok(echo.refused.length === 0, `and the round-trip is clean (refused ${echo.refused.length})`)
+  // writing one there is the component's business
+  const changed = write(
+    p,
+    (html.replace(/^<body[^>]*>\n/, '').replace(/\n<\/body>$/, '')).replace('<div', '<div data-channel="other"'),
+  )
+  ok(changed.refused.some((r) => /update_component/.test(r.message)),
+     `changing a channel inside an instance is refused (${changed.refused[0]?.message.slice(0, 60) ?? 'none'})`)
+  // on the wrapper itself it renders nowhere
+  const onWrapper = write(p, '<Modal data-ref="m" data-channel="start" />')
+  ok(onWrapper.refused.some((r) => /emits no element/.test(r.message)),
+     `a channel on an instance wrapper is refused (${onWrapper.refused[0]?.message.slice(0, 60) ?? 'none'})`)
+}
+
+
 console.log(fails ? `\n${fails} FAILURES` : `\nHTML layer OK`)
 process.exit(fails ? 1 : 0)

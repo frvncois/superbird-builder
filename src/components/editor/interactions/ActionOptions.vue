@@ -19,6 +19,8 @@ import ValueFieldUI from '@/components/ui/ValueFieldUI.vue'
 import { useElement } from '@/composables/useElement'
 import { useComponents } from '@/composables/useComponents'
 import { useProject } from '@/composables/useProject'
+import { channelListeners } from '@/lib/shared/channels.js'
+import { channelName, channelTargetId } from '@/lib/shared/interactionKeys.js'
 import { useInteraction } from '@/composables/useInteraction'
 import { useAnimation } from '@/composables/useAnimation'
 import { type EffectPair } from '@/composables/useEffects'
@@ -31,7 +33,7 @@ const props = defineProps<{ pair: EffectPair; owner: ElementNode }>()
 
 const { getElement, highlightElement } = useElement()
 const { findMasterNode } = useComponents()
-const { breakpoints } = useProject()
+const { breakpoints, project } = useProject()
 const interactions = useInteraction()
 const animations = useAnimation()
 const { settings } = useSettings()
@@ -71,11 +73,37 @@ function setAction(value: string | undefined) {
 const hasTarget = computed(
   () => !!primary.value.targetId && primary.value.targetId !== props.owner.id,
 )
+/** a CHANNEL target is a name, not an element — it is reachable from anywhere
+ *  in the project, so there is nothing on this canvas to point at */
+const channel = computed(() => channelName(primary.value.targetId))
 const targetName = computed(() => {
+  if (channel.value) return `@${channel.value}`
   if (!hasTarget.value) return 'this element'
   const node = getElement(primary.value.targetId!) ?? findMasterNode(primary.value.targetId!)
   return node ? (node.ref ? `#${node.ref}` : node.type) : 'Missing'
 })
+
+/** every channel some element in the project declares, for the picker. A
+ *  channel is the answer when the target is not on this page at all: one
+ *  overlay opened from a header component on every route. */
+const channelOptions = computed(() => [
+  { label: 'An element…', value: '' },
+  ...[...channelListeners(project.value).keys()].sort().map((name) => ({
+    label: `@${name}`,
+    value: name,
+  })),
+])
+/** a tween shares one play per (animation, target) only on a CLICK, so that is
+ *  the one trigger a channel accepts — see animationStateKey */
+const channelAllowed = computed(() => !anim.value || anim.value.trigger === 'click')
+function setChannel(name: string | undefined) {
+  if (!name) {
+    resetTarget()
+    return
+  }
+  for (const binding of halves.value) binding.targetId = channelTargetId(name)
+  clearPreview()
+}
 /** by MEMBERSHIP, not identity: a pending pick may be the array this made, and
  *  a computed hands back a fresh array every time it re-evaluates */
 const picking = computed(() => interactions.pendingPicks().some((b) => halves.value.includes(b)))
@@ -153,6 +181,14 @@ function toggleBreakpoint(id: string) {
           variant="icon" size="sm" :icon="X" tooltip="Back to this element"
           class="w-6 shrink-0 text-muted-foreground"
           @click="resetTarget"
+        />
+      </RowUI>
+
+      <RowUI v-if="channelAllowed && channelOptions.length > 1" label="Channel">
+        <SelectUI
+          :model-value="channel ?? ''"
+          :options="channelOptions"
+          @update:model-value="setChannel"
         />
       </RowUI>
 

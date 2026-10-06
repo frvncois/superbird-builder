@@ -40,7 +40,10 @@ import {
   DEFAULT_SCROLL_AT,
   interactionGroupKey,
   interactionStateKey,
+  isChannelName,
+  isChannelTarget,
 } from '../src/lib/shared/interactionKeys.js'
+import { buildChannelIndex } from '../src/lib/shared/channels.js'
 import {
   animationStateKey,
   compileAnimation,
@@ -650,11 +653,19 @@ function attrsFor(node, ctx, bg, { wrapLink = true, extraClass = '' } = {}) {
   // the way the sheet — rendered once, with no entry of its own — keys it.
   // Keyed off the trigger (as this used to be), the button wrote `X@e<row>`
   // while the sheet listened on `X`, so every such click did nothing.
+  //
+  // A CHANNEL target is the one exception, and it is unconditional: no
+  // instance part, no entry part, for a page owner and a master owner alike.
+  // A channel is site-wide by definition — the trigger and the listener are in
+  // different trees, so any scope either side added would be a scope the other
+  // could not reproduce.
   const scopeFor = (ownerId, targetId) =>
-    bindingScope(
-      mapping ? mapping.instanceId : null,
-      entryScopePart(ctx.scopeRoots, ownerId, targetId, ctx.scope?.entry?.id),
-    )
+    isChannelTarget(targetId)
+      ? undefined
+      : bindingScope(
+          mapping ? mapping.instanceId : null,
+          entryScopePart(ctx.scopeRoots, ownerId, targetId, ctx.scope?.entry?.id),
+        )
   const scopedKey = (id, ownerId, targetId) => {
     const scope = scopeFor(ownerId, targetId)
     return scope ? `${id}@${scope}` : id
@@ -682,26 +693,54 @@ function attrsFor(node, ctx, bg, { wrapLink = true, extraClass = '' } = {}) {
       const meta = { t: i.trigger, k: key, s: state }
       if (i.action && i.action !== 'toggle') meta.a = i.action
       if (i.closeOn?.length) meta.c = i.closeOn
-      if (i.group) meta.g = interactionGroupKey(i.group, instanceScope)
+      // a group on a channel-targeting binding is UNSCOPED too, so one group
+      // can span a page trigger and a master trigger — which is what makes the
+      // "opening resets to step 1" recipe work across the component boundary
+      if (i.group) {
+        meta.g = interactionGroupKey(
+          i.group,
+          isChannelTarget(i.targetId) ? undefined : instanceScope,
+        )
+      }
       if (i.once) meta.o = i.once
       if (i.trigger === 'scrolled') meta.at = i.scrollAt ?? DEFAULT_SCROLL_AT
       return meta
     })
     attrs.push(`data-int="${escapeHtml(JSON.stringify(list))}"`)
   }
+  // --- channels: the listener side ---
+  // The element DECLARES a channel and every binding in the project aimed at
+  // that name lands on it — from another component, from another page's tree,
+  // from a master this route renders once. The index is project-wide and built
+  // once (ctx.channels), never "what has rendered so far": a header component
+  // on route B is not in route A's walk, and the listener still has to carry
+  // the key and fill ctx.fx for it.
+  //
+  // The channel is SHARED state, like classes: inside an instance it is the
+  // master's, so a mirror cannot override it.
+  const declaredChannel = (mapping ? mapping.master : node).channel
+  const channel = isChannelName(declaredChannel) ? declaredChannel : null
+  const channelDrivers = channel ? ctx.channels?.get(channel) : null
+  const channelTarget = channel ? `@${channel}` : null
+
   const targets = mapping
     ? scopedTargets(mapping.root, mapping.master.id)
     : (ctx.plainTargets.get(node.id) ?? [])
-  if (targets.length) {
+  // every binding landing here, paired with the key it drives — a plain target
+  // keys by its own scope, a channel binding by nothing at all
+  const driven = targets.map(({ i, ownerId }) => ({ i, key: stateKeyFor(i, ownerId) }))
+  for (const { binding } of channelDrivers?.interactions ?? []) {
+    driven.push({ i: binding, key: interactionStateKey(binding.interactionId, channelTarget) })
+  }
+  if (driven.length) {
     // several bindings can drive one effect on this node — dedupe to the
     // distinct state keys, or its to-classes would be applied once per binding
     // self bindings (no targetId) resolve to the MASTER node inside a component
     // instance — the trigger side keys the effect under selfId, so the target
     // side must too, or the runtime looks up an empty entry under the instance id
-    const targetKeys = [...new Set(targets.map(({ i, ownerId }) => stateKeyFor(i, ownerId)))]
+    const targetKeys = [...new Set(driven.map(({ key }) => key))]
     const baseTokens = classes.split(/\s+/).filter(Boolean)
-    for (const { i, ownerId } of targets) {
-      const key = stateKeyFor(i, ownerId)
+    for (const { i, key } of driven) {
       const to = ctx.anim.get(i.interactionId)?.toClasses ?? ''
       ctx.fx[key] ??= ''
       // Breakpoint gating moved from the binding key to the STATE key, because
@@ -771,13 +810,25 @@ function attrsFor(node, ctx, bg, { wrapLink = true, extraClass = '' } = {}) {
   const animTargets = mapping
     ? scopedAnimTargets(mapping.root, mapping.master.id)
     : (ctx.plainAnimTargets.get(node.id) ?? [])
+  // `data-atgt` is matched by the BINDING key (`meta.k`), not the play key, so
+  // a channel binding's `k` is unscoped on both sides — which is exactly what
+  // `scopeFor` returns for it. Click only (the one shared tween key), so there
+  // is never a first frame to bake here.
+  const animDriven = animTargets.map(({ b, ownerId }) => ({
+    b,
+    key: scopedKey(b.id, ownerId, b.targetId ?? ownerId),
+    bake: true,
+  }))
+  for (const { binding } of channelDrivers?.animations ?? []) {
+    if (binding.trigger !== 'click') continue
+    animDriven.push({ b: binding, key: binding.id, bake: false })
+  }
   const firstFrame = {}
-  if (animTargets.length) {
+  if (animDriven.length) {
     const keys = []
-    for (const { b, ownerId } of animTargets) {
+    for (const { b, key, bake } of animDriven) {
       const animation = ctx.animLib.get(b.animationId)
       if (!animation) continue
-      const key = scopedKey(b.id, ownerId, b.targetId ?? ownerId)
       ctx.animUsed[b.animationId] = animation
       if (b.breakpoints) ctx.animBp[key] = b.breakpoints
       keys.push(key)
@@ -790,7 +841,7 @@ function attrsFor(node, ctx, bg, { wrapLink = true, extraClass = '' } = {}) {
       // forever. Scoped entrances are primed by the runtime instead (a brief
       // natural-state paint inside the scope is the accepted tradeoff, same as
       // staggered children).
-      if ((b.trigger === 'load' || b.trigger === 'appear') && !b.breakpoints) {
+      if (bake && (b.trigger === 'load' || b.trigger === 'appear') && !b.breakpoints) {
         Object.assign(firstFrame, initialStyle(splitByStagger(compileAnimation(animation)).element))
       }
     }
@@ -1264,7 +1315,7 @@ function interpolateEntry(str, entry, locale, defaultLocale) {
   })
 }
 
-function renderPage(route, project, media) {
+function renderPage(route, project, media, channels) {
   const { page, locale, scope, outPath } = route
   const ctx = {
     project,
@@ -1313,6 +1364,7 @@ function renderPage(route, project, media) {
     // which is what the `server` publish method is; a zip/github site is
     // served elsewhere and carries the studio's public origin.
     apiOrigin: apiOriginOf(project),
+    channels,
     rewrite: media.rewrite,
     altFor: media.altFor,
     kindFor: media.kindFor,
@@ -1731,6 +1783,10 @@ export async function exportSite(rawProject, outDir, { integrations } = {}) {
   for (const [rel, buffer] of media.files) await write(rel, buffer)
 
   const routes = enumerateRoutes(project)
+  // Channel bindings are PROJECT-wide, not route-wide: a listener on route A
+  // has to carry the key a trigger declares in a component route B renders.
+  // Built once, outside the route loop, and read by every listener.
+  const channels = buildChannelIndex(project)
   const written = new Set()
   // render before writing: whether any route plays an animation decides
   // whether the tween runtime ships at all
@@ -1741,7 +1797,7 @@ export async function exportSite(rawProject, outDir, { integrations } = {}) {
   for (const route of routes) {
     if (written.has(route.outPath)) continue // page paths win over entry collisions
     written.add(route.outPath)
-    const { html, forms, route: routePath } = renderPage(route, project, media)
+    const { html, forms, route: routePath } = renderPage(route, project, media, channels)
     if (!usesMotion && html.includes('/assets/motion.js')) usesMotion = true
     if (!usesSlider && html.includes('/assets/slider.js')) usesSlider = true
     collectManifest(manifest, forms, routePath, route)

@@ -30,7 +30,10 @@ export interface InteractionBinding {
   /** the saved Interaction (project.interactions) this applies */
   interactionId: string
   trigger: InteractionTrigger
-  /** node the effect applies to; null = the trigger element itself */
+  /** node the effect applies to; null = the trigger element itself.
+   * `'@<name>'` is a CHANNEL (see lib/shared/interactionKeys.js): every element
+   * declaring `channel: '<name>'` listens, wherever in the project it lives,
+   * and the state key carries NO scope — a channel is site-wide by definition. */
   targetId: string | null
   /** breakpoint ids this application is active on; `undefined` = all (the
    * default). Stored in project breakpoint order; omitted when all are on so
@@ -151,7 +154,10 @@ export interface AnimationBinding {
   /** `scrolled` and `change` are symmetric like their class counterparts: the
    * timeline plays forward while the condition holds and rewinds when it stops */
   trigger: 'load' | 'appear' | 'scrub' | 'hover' | 'click' | 'scrolled' | 'change'
-  /** node the animation moves; null = the trigger element itself */
+  /** node the animation moves; null = the trigger element itself.
+   * `'@<name>'` is a CHANNEL — `click` only, because a click play is the one
+   * tween key shared per (animation, target); every other trigger is keyed per
+   * binding, and a scrub aimed at a shared overlay means nothing. */
   targetId: string | null
   /** click only: force the play forward ('on') or backward ('off') instead of
    * toggling it. Together with a click play being keyed by (animation, target)
@@ -221,6 +227,13 @@ export interface ElementNode {
    * down onto mirrors and instance nodes like `arg`/`link`, so every tree
    * knows where the boundary is without consulting the master. */
   slot?: boolean
+  /** this element LISTENS on a channel: any binding anywhere in the project
+   * whose `targetId` is `'@<channel>'` drives it. Node state shared like
+   * classes — on a master every instance listens, which is how the modal gets
+   * to be a component. Site-wide by definition, so two listeners on one route
+   * both open (the publish names that as `channel-declared-twice`), and a
+   * listener inside a repeat is refused outright. */
+  channel?: string
   /** background media (a /media/<id> URL) layered behind the element's content;
    * image → CSS background-image, video → an absolutely-positioned <video> layer.
    * node-only visual state like classes/src */

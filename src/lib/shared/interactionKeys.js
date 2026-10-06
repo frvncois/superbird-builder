@@ -45,6 +45,53 @@ export function interactionGroupKey(group, instanceScope) {
   return instanceScope ? `${group}@${instanceScope}` : group
 }
 
+// ---------- channels ----------
+//
+// A CHANNEL is a target that is a NAME rather than a node id: a binding sets
+// `targetId: "@start"`, and any element anywhere in the project that declares
+// `channel: "start"` listens on it. That is what makes one shared overlay
+// openable from a header component on every route — a node id addresses ONE
+// tree, and a master's binding keys per instance, so before channels the modal
+// had to live inside whatever component opened it.
+//
+// THE RULE: a channel target is UNSCOPED. No component instance, no entry.
+// A channel is site-wide by definition, so attaching either scope would be the
+// same mismatch that made a row button and a shared sheet write two different
+// keys — the trigger would say `X@<instance>` while the listener, rendered
+// somewhere else entirely, listened on `X`.
+
+/** a channel name: lowercase, hyphenated, at most 40 characters */
+export const CHANNEL_NAME_RE = /^[a-z][a-z0-9-]{0,39}$/
+
+/** `@` names the format already owns, so neither can be a channel */
+const RESERVED_CHANNEL_NAMES = new Set(['item', 'locale'])
+
+/**
+ * Is this `targetId` a channel rather than a node id?
+ * @param {string|null|undefined} targetId
+ * @returns {boolean}
+ */
+export function isChannelTarget(targetId) {
+  if (typeof targetId !== 'string' || targetId[0] !== '@') return false
+  const name = targetId.slice(1)
+  return CHANNEL_NAME_RE.test(name) && !RESERVED_CHANNEL_NAMES.has(name)
+}
+
+/** the name a channel target carries, or null when it is not one */
+export function channelName(targetId) {
+  return isChannelTarget(targetId) ? targetId.slice(1) : null
+}
+
+/** the stored `targetId` for a channel name */
+export function channelTargetId(name) {
+  return `@${name}`
+}
+
+/** is this a name an element may declare as its channel? */
+export function isChannelName(name) {
+  return typeof name === 'string' && CHANNEL_NAME_RE.test(name) && !RESERVED_CHANNEL_NAMES.has(name)
+}
+
 /** what a trigger does to its target's state. `toggle` is the default. */
 export const INTERACTION_ACTIONS = ['toggle', 'on', 'off']
 

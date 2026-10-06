@@ -74,6 +74,8 @@ const RESERVED_DATA_ATTRS = new Set([
   'data-atgt',
   // the carousel's config blob and its chrome
   'data-slider',
+  // which channel an element listens on (lib/shared/channels.js)
+  'data-channel',
   // identity the editor and the agent format address nodes by
   'data-node-id',
   'data-id',
