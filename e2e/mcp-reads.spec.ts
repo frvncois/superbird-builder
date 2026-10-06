@@ -244,3 +244,80 @@ test('a structural write says what it did, by name', async () => {
   expect(applied[1]).toContain('wrapped box in div#shell')
   expect(applied[2]).toContain('removed line')
 })
+
+// A SLOT's children are the page's own structure — the resolver leaves them
+// unmapped and every writer treats them as ordinary page nodes. The collapsed
+// read modes did not: both branches returned on the instance row, so anything
+// inside a slot appeared in NO row, while the `html` half of the same response
+// printed it in full. A ref'd instance in a Section's slot was editable by ref
+// and undiscoverable, and a page whose body is one `<Shell><slot>…` came back
+// as a single row for the whole page.
+test.describe('a slot’s contents are page structure, so a read lists them', () => {
+  async function shellWithCards(s: Awaited<ReturnType<typeof mcpSession>>) {
+    await s.call('create_component', {
+      name: 'FeatureCard',
+      html: '<div class="card"><span>Title</span></div>',
+    })
+    await s.call('create_component', {
+      name: 'Shell',
+      html:
+        '<div class="flex flex-col">\n  <header class="border-b"><span>Top</span></header>\n' +
+        '  <main data-slot class="flex-1"><p>Default body</p></main>\n</div>',
+    })
+    const home = await s.home()
+    const written = await s.call('set_page_html', {
+      pageId: home.id,
+      version: home.version,
+      html: pageHtml(
+        '<Shell data-ref="shell">\n  <slot>\n' +
+          '    <h1 data-ref="title">Hello</h1>\n' +
+          '    <FeatureCard data-ref="f-1"><div><span>One</span></div></FeatureCard>\n' +
+          '    <FeatureCard data-ref="f-2"><div><span>Two</span></div></FeatureCard>\n' +
+          '  </slot>\n</Shell>',
+      ),
+    })
+    expect(written.refused ?? []).toEqual([])
+    return home
+  }
+
+  test('"own" collapses the instance but keeps walking its slot', async () => {
+    const s = await mcpSession()
+    const home = await shellWithCards(s)
+    const read = await s.call('get_page', { pageId: home.id, elements: 'own' })
+    const refs = read.elements.map((e: { ref?: string }) => e.ref).filter(Boolean)
+    // the Shell row is there, and so is everything the page put in its slot
+    expect(refs).toContain('shell')
+    expect(refs).toContain('title')
+    expect(refs).toContain('f-1')
+    expect(refs).toContain('f-2')
+    // the Shell's OWN structure stays collapsed — the header is the component's
+    expect(JSON.stringify(read.elements)).not.toContain('header')
+  })
+
+  test('"ref-parts" lists a ref’d instance inside a slot, with its parts', async () => {
+    const s = await mcpSession()
+    const home = await shellWithCards(s)
+    const read = await s.call('get_page', { pageId: home.id, elements: 'ref-parts' })
+    const byRef = new Map(
+      read.elements.map((e: { ref?: string }) => [e.ref, e as { parts?: unknown[] }]),
+    )
+    expect([...byRef.keys()].sort()).toEqual(['f-1', 'f-2', 'shell'])
+    // each card carries the parts an agent fills, so no second read is needed
+    expect(byRef.get('f-1')!.parts!.length).toBeGreaterThan(0)
+    // and the path really addresses it: the row's path is the child-index path
+    const card = read.elements.find((e: { ref?: string }) => e.ref === 'f-1')
+    expect(card.path.split('.').length).toBeGreaterThan(1)
+  })
+
+  test('an edit by ref reaches a card inside the slot', async () => {
+    const s = await mcpSession()
+    const home = await shellWithCards(s)
+    const edit = await s.call('edit_elements', {
+      pageId: home.id,
+      version: (await s.home()).version,
+      edits: [{ ref: 'f-2', part: 'span', content: 'Changed' }],
+    })
+    expect(edit.failed).toBe(0)
+    expect(await s.html()).toContain('Changed')
+  })
+})

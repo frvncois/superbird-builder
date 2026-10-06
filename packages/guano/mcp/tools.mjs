@@ -1202,6 +1202,35 @@ function elementSummary(project, page, opts = {}) {
     walk(wrapper.children, null)
     return parts
   }
+  /**
+   * The SLOT nodes inside an instance, with their true child-index paths.
+   *
+   * A slot's children are the page's own structure — the resolver leaves them
+   * unmapped and every writer treats them as ordinary page nodes — so a read
+   * that collapses an instance must still walk them. It did not: both collapsed
+   * branches `return`ed on the instance row, so a ref'd instance living in a
+   * Section's slot (`<Section data-ref="s"><slot><FeatureCard data-ref="f-1">`)
+   * appeared in NO row of any mode, while the `html` half of the same response
+   * printed it in full. It was editable by ref and undiscoverable.
+   */
+  const slotsIn = (wrapper, base) => {
+    const found = []
+    const walk = (nodes, prefix) => {
+      ;(nodes ?? []).forEach((n, i) => {
+        const path = prefix ? `${prefix}.${i}` : String(i)
+        // stop AT the slot: what is under it is the page's, and that is exactly
+        // what the caller goes on to visit
+        if (n.slot) {
+          found.push({ node: n, path })
+          return
+        }
+        walk(n.children, path)
+      })
+    }
+    walk(wrapper.children, base)
+    return found
+  }
+
   const visit = (nodes, inComponent, prefix) => {
     nodes.forEach((n, i) => {
       const path = prefix === null ? '' : prefix ? `${prefix}.${i}` : String(i)
@@ -1222,6 +1251,8 @@ function elementSummary(project, page, opts = {}) {
             ...(n.variants ? { variants: n.variants } : {}),
             parts: partsOf(n),
           })
+          // its SLOTS still hold page structure, including other ref'd instances
+          for (const slot of slotsIn(n, path)) visit(slot.node.children ?? [], false, slot.path)
           return
         }
         visit(n.children ?? [], n.slot ? false : inComponent || isComponentType(n.type), path)
@@ -1241,7 +1272,11 @@ function elementSummary(project, page, opts = {}) {
           ...(n.hidden !== undefined ? { hidden: n.hidden } : {}),
           ...(mode === 'own' ? { parts: partsOf(n) } : {}),
         })
-        return // collapse the whole instance subtree
+        // collapse the instance's own structure, but NOT a slot's contents:
+        // those are the page's nodes, and a body that is one `<Shell><slot>…`
+        // otherwise came back as a single row for the whole page
+        for (const slot of slotsIn(n, path)) visit(slot.node.children ?? [], false, slot.path)
+        return
       }
       out.push(summarize(n, path))
       visit(n.children ?? [], n.slot ? false : inComponent || isComponentType(n.type), path)
