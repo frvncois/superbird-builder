@@ -86,7 +86,8 @@ keepalive flush is impossible anyway, because keepalive caps a request body at
       namespace. No auth, no store parse, no data-dir path in the body. 503 while
       draining and when the data dir is unwritable; 200 degraded for an empty
       store or a missing preview port, so a fresh instance can come up behind a
-      load balancer. New `e2e/health.spec.ts`.
+      load balancer. Covered by `e2e/lifecycle.spec.ts` rather than a file of
+      its own — it needs the same spawned server.
 - [x] **A-7 Logging migration, index.mjs.** 22 call sites to `log.*`, two to
       `log.banner()`. Add the request id to the 500 body and teach both
       catch-alls the `err.expose` convention the publish path already uses.
@@ -112,40 +113,40 @@ keepalive flush is impossible anyway, because keepalive caps a request body at
 
 ## Phase 2 — Security boundaries
 
-- [ ] **S-1 Store keys.** Known-key allowlist for every role, and an
+- [x] **S-1 Store keys.** Known-key allowlist for every role, and an
       authoritative merge for `guano-branches` so a contributor cannot restamp
       `createdBy` and delete other people's drafts. Put the DELETE branch inside
       `withStoreKeyLock` — it is the one store mutation outside it today.
       *Gates: `store-roles`, `store-agent-security`.*
-- [ ] **S-2 Unlock handler.** Use the proxy-aware `clientIp` so ten bad guesses
+- [x] **S-2 Unlock handler.** Use the proxy-aware `clientIp` so ten bad guesses
       stop locking out every visitor; reject `\` in the redirect exactly as
       `site-runtime.js` already does; move the per-attempt scrypt off the event
       loop. Raise the minimum from 4 to 8 characters.
       *Gate: `store-site-password`, which already asserts the `//` case.*
-- [ ] **S-3 scrypt.** Optional `kdf` on the user record and on `cfg.site`;
+- [x] **S-3 scrypt.** Optional `kdf` on the user record and on `cfg.site`;
       verify with the record's own parameters, defaulting to the legacy
       `N=16384`; new passwords at `N=131072` with `maxmem` raised; rehash on a
       successful login. Cap passwords at 256 characters.
       **Assert the legacy fallback before changing the cost**, or every existing
       password stops verifying.
-- [ ] **S-4 Preview token.** `POST /api/preview` mints a short-lived HMAC; the
+- [x] **S-4 Preview token.** `POST /api/preview` mints a short-lived HMAC; the
       preview server exchanges it for a short-TTL cookie and 401s otherwise.
       Give the preview form handler its own limiters so flooding it cannot spend
       the live site's submission budget.
       *Gate: extend `store-preview` — anonymous access to that port is currently
       unasserted.*
-- [ ] **S-5 SSRF.** Replace the string prefix checks in `server/net-guard.mjs`
+- [x] **S-5 SSRF.** Replace the string prefix checks in `server/net-guard.mjs`
       and the deliberate duplicate in `packages/guano/mcp/tools.mjs` with
       `node:net` BlockList, covering IPv4-mapped, NAT64 and site-local v6.
       *Gate: add the literals to the refusal list in `mcp-tools-security`.*
-- [ ] **S-6 Role gates.** Publish-config and site-password become admin-only,
+- [x] **S-6 Role gates.** Publish-config and site-password become admin-only,
       matching agent-policy. Rate-limit before buffering auth bodies, cap them at
       4 KB, add `no-store` and a referrer policy to `/api`, cap SSE clients per
       user.
-- [ ] **S-7 Auth persistence.** Log every swallowed write failure and return 500
+- [x] **S-7 Auth persistence.** Log every swallowed write failure and return 500
       from the create and invite paths, so a user or token cannot succeed in
       memory and vanish on restart.
-- [ ] **S-8 Dependencies.** `npm audit fix` clears all seven. Bump the MCP SDK to
+- [x] **S-8 Dependencies.** `npm audit fix` clears all seven. Bump the MCP SDK to
       1.32.1 and confirm `sharp` lands on 0.35.5 — it is the only one of the
       seven in a real request path.
 
